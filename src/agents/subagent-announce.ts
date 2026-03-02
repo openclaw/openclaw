@@ -144,15 +144,65 @@ function summarizeJsonForDelivery(rawJson: string): string | undefined {
   return undefined;
 }
 
+function isKnownSubagentCompletionHeader(line: string): boolean {
+  const normalized = line.trim();
+  if (!normalized) {
+    return false;
+  }
+  return /^(?:✅|❌|⏱️)\s*Subagent\s+.+?\s+(?:finished|failed|timed out)\b(?:\s*[.!])?$/i.test(
+    normalized,
+  );
+}
+
+function stripLeadingSubagentTaskSection(text: string): string {
+  const lines = text.split(/\r?\n/);
+  let firstNonEmpty = 0;
+  while (firstNonEmpty < lines.length && !lines[firstNonEmpty]?.trim()) {
+    firstNonEmpty += 1;
+  }
+  if (firstNonEmpty >= lines.length) {
+    return "";
+  }
+  const firstLine = lines[firstNonEmpty]?.trim() ?? "";
+  if (!/^\[Subagent Task\]:/i.test(firstLine)) {
+    return text;
+  }
+
+  // Drop the whole task section. If a RESULT label appears, keep content from there.
+  for (let i = firstNonEmpty + 1; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (/^(?:[-*]\s*)?(?:\*\*)?\s*result\s*(?:\*\*)?\s*:/i.test(line.trim())) {
+      return lines.slice(i).join("\n");
+    }
+    if (!line.trim()) {
+      let nextNonEmpty = i + 1;
+      while (nextNonEmpty < lines.length && !lines[nextNonEmpty]?.trim()) {
+        nextNonEmpty += 1;
+      }
+      return nextNonEmpty < lines.length ? lines.slice(nextNonEmpty).join("\n") : "";
+    }
+  }
+  return "";
+}
+
 function sanitizeCompletionFindings(findings: string): string {
   const trimmed = findings.trim();
   if (!trimmed || trimmed === "(no output)") {
     return "";
   }
-  let message = trimmed
-    .replace(/^✅\s*Subagent[^\n]*\n*/i, "")
-    .replace(/^\[System Message\][\s\S]*?\nResult:\s*/i, "")
-    .trim();
+  let message = trimmed;
+
+  const firstNewline = message.indexOf("\n");
+  const firstLine = firstNewline >= 0 ? message.slice(0, firstNewline) : message;
+  if (isKnownSubagentCompletionHeader(firstLine)) {
+    message = firstNewline >= 0 ? message.slice(firstNewline + 1) : "";
+  }
+
+  const systemWrapperMatch = message.match(/^\[System Message\][\s\S]*?\nResult:\s*/i);
+  if (systemWrapperMatch) {
+    message = message.slice(systemWrapperMatch[0].length);
+  }
+  message = message.trim();
 
   const hasStructuredBootstrapPrefix =
     /^\[Subagent Context\]/i.test(message) || /^#\s*Subagent Context\b/i.test(message);
@@ -161,8 +211,8 @@ function sanitizeCompletionFindings(findings: string): string {
       .replace(/^\[Subagent Context\][^\n]*\n*/i, "")
       .replace(/^#\s*Subagent Context[^\n]*\n*/i, "")
       .replace(/^\s*You are running as a subagent[^\n]*\n*/i, "")
-      .replace(/^\s*\[Subagent Task\]:[^\n]*\n*/i, "")
-      .trim();
+      .trimStart();
+    message = stripLeadingSubagentTaskSection(message).trim();
     if (!message) {
       return "";
     }

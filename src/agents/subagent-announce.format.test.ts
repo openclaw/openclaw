@@ -490,6 +490,139 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.message).toBe("Task completed.");
   });
 
+  it("strips multiline leaked task blocks from structured bootstrap wrappers", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct-bootstrap-multiline",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-bootstrap-multiline",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text:
+                "[Subagent Context] You are running as a subagent.\n\n" +
+                "[Subagent Task]: gather links\n" +
+                "- open docs\n" +
+                "- extract findings\n\n",
+            },
+          ],
+        },
+      ],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-bootstrap-multiline",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    expect(call?.params?.message).toBe("Task completed.");
+  });
+
+  it("keeps legitimate findings that begin with ✅ Subagent", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct-legit-subagent-prefix",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-legit-subagent-prefix",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "✅ Subagent checklist complete for LinkedIn cookies and session persistence.",
+            },
+          ],
+        },
+      ],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-legit-subagent-prefix",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("✅ Subagent checklist complete for LinkedIn cookies and session persistence.");
+    expect(msg).not.toBe("Task completed.");
+  });
+
+  it("strips known completion wrapper header and RESULT label while preserving actual findings", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct-wrapper-result",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-wrapper-result",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text:
+                "✅ Subagent main finished\n" +
+                "[Subagent Context] You are running as a subagent.\n\n" +
+                "[Subagent Task]: extract one answer\n" +
+                "- inspect latest output\n\n" +
+                "RESULT: final answer: session is healthy",
+            },
+          ],
+        },
+      ],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-wrapper-result",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("final answer: session is healthy");
+    expect(msg).not.toContain("✅ Subagent main finished");
+    expect(msg).not.toContain("[Subagent Context]");
+    expect(msg).not.toContain("[Subagent Task]:");
+    expect(msg).not.toContain("RESULT:");
+  });
+
   it("keeps legitimate findings that mention the subagent phrase", async () => {
     sessionStore = {
       "agent:main:subagent:test": {
