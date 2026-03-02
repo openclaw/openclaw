@@ -171,6 +171,42 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
+  it("keeps ASCII file names unchanged for upload payload", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("doc"),
+      fileName: "report.pdf",
+    });
+
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ file_name: "report.pdf" }),
+      }),
+    );
+  });
+
+  it("URL-encodes non-ASCII file names for upload payload", async () => {
+    const originalName = "测试文件—特殊字符（2026-03-02）.md";
+    const expectedEncodedName = encodeURIComponent(originalName).replace(
+      /[!'()*]/g,
+      (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+    );
+
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("doc"),
+      fileName: originalName,
+    });
+
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ file_name: expectedEncodedName }),
+      }),
+    );
+  });
+
   it("uses msg_type=file when replying with mp4", async () => {
     await sendMediaFeishu({
       cfg: {} as any,

@@ -160,6 +160,18 @@ export type SendMediaResult = {
   chatId: string;
 };
 
+function encodeFeishuUploadFileName(fileName: string): string {
+  // Keep ASCII filenames unchanged so existing behavior and display remain stable.
+  // Non-ASCII names can break multipart headers in Feishu upload requests.
+  if (/^[\x20-\x7E]+$/.test(fileName)) {
+    return fileName;
+  }
+  return encodeURIComponent(fileName).replace(
+    /[!'()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
 /**
  * Upload an image to Feishu and get an image_key for sending.
  * Supports: JPEG, PNG, WEBP, GIF, TIFF, BMP, ICO
@@ -235,7 +247,7 @@ export async function uploadFileFeishu(params: {
   const response = await client.im.file.create({
     data: {
       file_type: fileType,
-      file_name: fileName,
+      file_name: encodeFeishuUploadFileName(fileName),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
       file: fileData as any,
       ...(duration !== undefined && { duration }),
