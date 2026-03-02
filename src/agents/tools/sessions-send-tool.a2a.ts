@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import {
+  type GatewayMessageChannel,
+  INTERNAL_MESSAGE_CHANNEL,
+} from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
@@ -32,7 +35,7 @@ export async function runSessionsSendA2AFlow(params: {
     let latestReply = params.roundOneReply;
     if (!primaryReply && params.waitRunId) {
       const waitMs = Math.min(params.announceTimeoutMs, 60_000);
-      const wait = await callGateway<{ status: string }>({
+      const wait = await callGateway<{ status?: string; error?: string }>({
         method: "agent.wait",
         params: {
           runId: params.waitRunId,
@@ -45,6 +48,36 @@ export async function runSessionsSendA2AFlow(params: {
           sessionKey: params.targetSessionKey,
         });
         latestReply = primaryReply;
+      } else if (wait?.status === "error") {
+        const waitError =
+          typeof wait.error === "string" && wait.error.trim() ? wait.error.trim() : "agent error";
+
+        if (params.requesterSessionKey) {
+          try {
+            await callGateway({
+              method: "agent",
+              params: {
+                message:
+                  `[sessions_send delivery failed]\n\n` +
+                  `Message sent to ${params.displayKey} could not be delivered: ${waitError}\n\n` +
+                  `The target agent model may be unavailable or misconfigured. Please verify model settings and retry.`,
+                sessionKey: params.requesterSessionKey,
+                idempotencyKey: crypto.randomUUID(),
+                deliver: false,
+                channel: INTERNAL_MESSAGE_CHANNEL,
+                lane: AGENT_LANE_NESTED,
+              },
+              timeoutMs: 10_000,
+            });
+          } catch (notifyErr) {
+            log.warn("sessions_send failed to notify requester of target failure", {
+              runId: runContextId,
+              targetSessionKey: params.targetSessionKey,
+              error: formatErrorMessage(notifyErr),
+            });
+          }
+        }
+        return;
       }
     }
     if (!latestReply) {

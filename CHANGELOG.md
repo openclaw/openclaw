@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Sessions/Agent-to-agent: `sessions_send` now notifies the requester session when a fire-and-forget (`timeoutSeconds=0`) target run fails (for example model-not-found/misconfigured target model), instead of silently dropping delivery in the background A2A announce flow. Fixes #25198.
 - Security/iOS deep links: require local confirmation (or trusted key) before forwarding `openclaw://agent` requests from iOS to gateway `agent.request`, and strip unkeyed delivery-routing fields to reduce exfiltration risk. This ships in the next npm release. Thanks @GCXWLP for reporting.
 - Security/Export session HTML: escape raw HTML markdown tokens in the exported session viewer, harden tree/header metadata rendering against HTML injection, and sanitize image data-URL MIME types in export output to prevent stored XSS when opening exported HTML files. This ships in the next npm release. Thanks @allsmog for reporting.
 - Security/Session export: harden exported HTML image rendering against data-URL attribute injection by validating image MIME/base64 fields, rejecting malformed base64 input in media ingestion paths, and dropping invalid tool-image payloads.
