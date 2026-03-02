@@ -530,10 +530,20 @@ export async function monitorBlueBubblesProvider(
     path,
     statusSink,
   });
+  const unregisterRoute = registerPluginHttpRoute({
+    path,
+    auth: "plugin",
+    match: "exact",
+    pluginId: "bluebubbles",
+    accountId: account.accountId,
+    log: (message) => logVerbose(core, runtime, message),
+    handler: handleBlueBubblesWebhookRequest,
+  });
 
   return await new Promise((resolve) => {
     const stop = () => {
       unregister();
+      unregisterRoute();
       resolve();
     };
 

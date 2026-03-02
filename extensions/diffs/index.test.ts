@@ -4,9 +4,9 @@ import { createMockServerResponse } from "../../src/test-utils/mock-http-respons
 import plugin from "./index.js";
 
 describe("diffs plugin registration", () => {
-  it("registers the tool, http handler, and prompt guidance hook", () => {
+  it("registers the tool, http route, and prompt guidance hook", () => {
     const registerTool = vi.fn();
-    const registerHttpHandler = vi.fn();
+    const registerHttpRoute = vi.fn();
     const on = vi.fn();
 
     plugin.register?.({
@@ -23,8 +23,7 @@ describe("diffs plugin registration", () => {
       },
       registerTool,
       registerHook() {},
-      registerHttpHandler,
-      registerHttpRoute() {},
+      registerHttpRoute,
       registerChannel() {},
       registerGatewayMethod() {},
       registerCli() {},
@@ -38,7 +37,12 @@ describe("diffs plugin registration", () => {
     });
 
     expect(registerTool).toHaveBeenCalledTimes(1);
-    expect(registerHttpHandler).toHaveBeenCalledTimes(1);
+    expect(registerHttpRoute).toHaveBeenCalledTimes(1);
+    expect(registerHttpRoute.mock.calls[0]?.[0]).toMatchObject({
+      path: "/plugins/diffs",
+      auth: "plugin",
+      match: "prefix",
+    });
     expect(on).toHaveBeenCalledTimes(1);
     expect(on.mock.calls[0]?.[0]).toBe("before_prompt_build");
   });
@@ -47,7 +51,7 @@ describe("diffs plugin registration", () => {
     let registeredTool:
       | { execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown> }
       | undefined;
-    let registeredHttpHandler:
+    let registeredHttpRouteHandler:
       | ((
           req: IncomingMessage,
           res: ReturnType<typeof createMockServerResponse>,
@@ -85,10 +89,9 @@ describe("diffs plugin registration", () => {
         registeredTool = typeof tool === "function" ? undefined : tool;
       },
       registerHook() {},
-      registerHttpHandler(handler) {
-        registeredHttpHandler = handler as typeof registeredHttpHandler;
+      registerHttpRoute(params) {
+        registeredHttpRouteHandler = params.handler as typeof registeredHttpRouteHandler;
       },
-      registerHttpRoute() {},
       registerChannel() {},
       registerGatewayMethod() {},
       registerCli() {},
@@ -109,7 +112,7 @@ describe("diffs plugin registration", () => {
       (result as { details?: Record<string, unknown> } | undefined)?.details?.viewerPath,
     );
     const res = createMockServerResponse();
-    const handled = await registeredHttpHandler?.(
+    const handled = await registeredHttpRouteHandler?.(
       localReq({
         method: "GET",
         url: viewerPath,

@@ -13,7 +13,6 @@ export function createMockPluginRegistry(
       source: "test",
     })),
     tools: [],
-    httpHandlers: [],
     httpRoutes: [],
     channelRegistrations: [],
     gatewayHandlers: {},

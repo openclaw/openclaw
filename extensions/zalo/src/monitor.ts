@@ -653,7 +653,17 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       mediaMaxMb: effectiveMediaMaxMb,
       fetcher,
     });
+    const unregisterRoute = registerPluginHttpRoute({
+      path,
+      auth: "plugin",
+      match: "exact",
+      pluginId: "zalo",
+      accountId: account.accountId,
+      log: (message) => logVerbose(core, runtime, message),
+      handler: handleZaloWebhookRequest,
+    });
     stopHandlers.push(unregister);
+    stopHandlers.push(unregisterRoute);
     abortSignal.addEventListener(
       "abort",
       () => {
