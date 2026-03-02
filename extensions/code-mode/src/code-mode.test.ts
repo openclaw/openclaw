@@ -134,6 +134,21 @@ describe("sandbox", () => {
     expect(result.error).toContain("Path traversal blocked");
   });
 
+  it("blocks nested symlink write where parent does not exist", async () => {
+    // Regression: symlink -> outside, then write to symlink/nonexistent/file.txt
+    // The parent "escape-dir/sub" doesn't exist, so the ancestor walk must
+    // resolve "escape-dir" and detect it points outside the workspace.
+    const symlinkPath = path.join(tmpDir, "escape-dir");
+    await fs.symlink("/tmp", symlinkPath);
+
+    const result = await executeSandboxCode(
+      'await api.writeFile("escape-dir/sub/file.txt", "pwned"); return "wrote"',
+      { workspaceDir: tmpDir },
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Path traversal blocked");
+  });
+
   it("executes shell commands", async () => {
     const result = await executeSandboxCode('return await api.exec("echo hello")', {
       workspaceDir: tmpDir,
@@ -170,7 +185,7 @@ describe("sandbox", () => {
     expect(result.error).toContain("boom");
   });
 
-  it("times out long-running code", async () => {
+  it("times out long-running async code", async () => {
     const result = await executeSandboxCode(
       `
       await new Promise(r => setTimeout(r, 60000));
@@ -178,6 +193,15 @@ describe("sandbox", () => {
     `,
       { workspaceDir: tmpDir, timeoutMs: 500 },
     );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("timed out");
+  }, 10_000);
+
+  it("times out synchronous infinite loops", async () => {
+    const result = await executeSandboxCode("while (true) {}", {
+      workspaceDir: tmpDir,
+      timeoutMs: 500,
+    });
     expect(result.success).toBe(false);
     expect(result.error).toContain("timed out");
   }, 10_000);

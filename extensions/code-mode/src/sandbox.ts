@@ -74,10 +74,21 @@ async function resolveSecurePath(
       const realWorkspace = await fs.realpath(workspaceDir);
 
       if (opts?.isWrite) {
-        // For writes the file may not exist — check parent dir realpath
-        const parentDir = path.dirname(resolved);
-        const realParent = await fs.realpath(parentDir);
-        if (!realParent.startsWith(realWorkspace + path.sep) && realParent !== realWorkspace) {
+        // For writes the file (and intermediate dirs) may not exist —
+        // walk up to the first existing ancestor and realpath-check that.
+        // This prevents symlink-based traversal where mkdir would follow
+        // a symlink and create directories outside the workspace.
+        let ancestor = path.dirname(resolved);
+        while (ancestor !== workspaceDir && ancestor !== path.dirname(ancestor)) {
+          try {
+            await fs.stat(ancestor);
+            break; // exists — check its realpath below
+          } catch {
+            ancestor = path.dirname(ancestor);
+          }
+        }
+        const realAncestor = await fs.realpath(ancestor);
+        if (!realAncestor.startsWith(realWorkspace + path.sep) && realAncestor !== realWorkspace) {
           throw new Error(`Path traversal blocked (symlink): ${userPath}`);
         }
       } else {
@@ -87,11 +98,11 @@ async function resolveSecurePath(
         }
       }
     } catch (err) {
-      // ENOENT is fine (file doesn't exist yet); re-throw traversal errors
+      // Re-throw traversal errors; for ENOENT on reads the subsequent
+      // read call will produce the real error.
       if (err instanceof Error && err.message.startsWith("Path traversal blocked")) {
         throw err;
       }
-      // For ENOENT or other FS errors, the subsequent read/write will produce the real error
     }
   }
 
@@ -336,9 +347,10 @@ export async function executeSandboxCode(
     const wrappedCode = `(async () => {\n${code}\n})()`;
     const script = new vm.Script(wrappedCode, { filename: "execute_code.js" });
 
-    // Run with a timeout race — vm.Script timeout only covers sync execution,
-    // so we use Promise.race to also cover async operations.
-    const execution = script.runInContext(context);
+    // vm `timeout` handles synchronous infinite loops (e.g. `while(true){}`)
+    // that would otherwise block the event loop forever. Promise.race below
+    // covers async code that exceeds the time budget.
+    const execution = script.runInContext(context, { timeout: timeoutMs });
 
     const result = await Promise.race([
       execution,
