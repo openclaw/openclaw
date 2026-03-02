@@ -112,6 +112,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Mattermost/Private channel policy routing: map Mattermost private channel type `P` to group chat type so `groupPolicy`/`groupAllowFrom` gates apply correctly instead of being treated as open public channels. Landed from contributor PR #30891 by @BlueBirdBack. Thanks @BlueBirdBack.
 - Models/Custom provider keys: trim custom provider map keys during normalization so image-capable models remain discoverable when provider keys are configured with leading/trailing whitespace. Landed from contributor PR #31202 by @stakeswky. Thanks @stakeswky.
 - Discord/Agent component interactions: accept Components v2 `cid` payloads alongside legacy `componentId`, and safely decode percent-encoded IDs without throwing on malformed `%` sequences. Landed from contributor PR #29013 by @Jacky1n7. Thanks @Jacky1n7.
 - Matrix/Directory room IDs: preserve original room-ID casing for direct `!roomId` group lookups (without `:server`) so allowlist checks do not fail on case-sensitive IDs. Landed from contributor PR #31201 by @williamos-dev. Thanks @williamos-dev.
