@@ -17,6 +17,7 @@ import {
   tryRecordMessage,
   tryRecordMessagePersistent,
 } from "./dedup.js";
+import { isMentionForwardRequest } from "./mention.js";
 import { fetchBotOpenIdForMonitor } from "./monitor.startup.js";
 import { botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
@@ -177,6 +178,35 @@ function dedupeFeishuDebounceEntriesByMessageId(
   return deduped;
 }
 
+function resolveFeishuDebounceMentions(params: {
+  entries: FeishuMessageEvent[];
+  botOpenId?: string;
+}): FeishuMessageEvent["message"]["mentions"] | undefined {
+  const { entries, botOpenId } = params;
+  if (entries.length === 0) {
+    return undefined;
+  }
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (isMentionForwardRequest(entry, botOpenId)) {
+      // Keep mention-forward semantics scoped to a single source message.
+      return mergeFeishuDebounceMentions([entry]);
+    }
+  }
+  const merged = mergeFeishuDebounceMentions(entries);
+  if (!merged) {
+    return undefined;
+  }
+  const normalizedBotOpenId = botOpenId?.trim();
+  if (!normalizedBotOpenId) {
+    return undefined;
+  }
+  const botMentions = merged.filter(
+    (mention) => mention.id.open_id?.trim() === normalizedBotOpenId,
+  );
+  return botMentions.length > 0 ? botMentions : undefined;
+}
+
 function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
@@ -292,7 +322,10 @@ function registerEventHandlers(
         .map((entry) => resolveDebounceText(entry))
         .filter(Boolean)
         .join("\n");
-      const mergedMentions = mergeFeishuDebounceMentions(freshEntries);
+      const mergedMentions = resolveFeishuDebounceMentions({
+        entries: freshEntries,
+        botOpenId: botOpenIds.get(accountId),
+      });
       if (!combinedText.trim()) {
         await dispatchFeishuMessage({
           ...dispatchEntry,

@@ -5,7 +5,7 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../../src/auto-reply/inbound-debounce.js";
-import type { FeishuMessageEvent } from "./bot.js";
+import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 import * as dedup from "./dedup.js";
 import { monitorSingleAccount } from "./monitor.account.js";
 import { resolveReactionSyntheticEvent, type FeishuReactionCreatedEvent } from "./monitor.js";
@@ -385,7 +385,7 @@ describe("Feishu inbound debounce regressions", () => {
     vi.restoreAllMocks();
   });
 
-  it("preserves both mentions when per-message mention keys collide", async () => {
+  it("keeps bot mention when per-message mention keys collide across non-forward messages", async () => {
     vi.spyOn(dedup, "tryRecordMessage").mockReturnValue(true);
     vi.spyOn(dedup, "tryRecordMessagePersistent").mockResolvedValue(true);
     vi.spyOn(dedup, "hasRecordedMessage").mockReturnValue(false);
@@ -427,8 +427,94 @@ describe("Feishu inbound debounce regressions", () => {
     expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
     const dispatched = getFirstDispatchedEvent();
     const mergedMentions = dispatched.message.mentions ?? [];
-    expect(mergedMentions.some((mention) => mention.id.open_id === "ou_user_a")).toBe(true);
     expect(mergedMentions.some((mention) => mention.id.open_id === "ou_bot")).toBe(true);
+    expect(mergedMentions.some((mention) => mention.id.open_id === "ou_user_a")).toBe(false);
+  });
+
+  it("does not synthesize mention-forward intent across separate messages", async () => {
+    vi.spyOn(dedup, "tryRecordMessage").mockReturnValue(true);
+    vi.spyOn(dedup, "tryRecordMessagePersistent").mockResolvedValue(true);
+    vi.spyOn(dedup, "hasRecordedMessage").mockReturnValue(false);
+    vi.spyOn(dedup, "hasRecordedMessagePersistent").mockResolvedValue(false);
+    const onMessage = await setupDebounceMonitor();
+
+    await onMessage(
+      createTextEvent({
+        messageId: "om_user_mention",
+        text: "@alice first",
+        mentions: [
+          {
+            key: "@_user_1",
+            id: { open_id: "ou_alice" },
+            name: "alice",
+          },
+        ],
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await onMessage(
+      createTextEvent({
+        messageId: "om_bot_mention",
+        text: "@bot second",
+        mentions: [
+          {
+            key: "@_user_1",
+            id: { open_id: "ou_bot" },
+            name: "bot",
+          },
+        ],
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+    const dispatched = getFirstDispatchedEvent();
+    const parsed = parseFeishuMessageEvent(dispatched, "ou_bot");
+    expect(parsed.mentionedBot).toBe(true);
+    expect(parsed.mentionTargets).toBeUndefined();
+    const mergedMentions = dispatched.message.mentions ?? [];
+    expect(mergedMentions.every((mention) => mention.id.open_id === "ou_bot")).toBe(true);
+  });
+
+  it("preserves bot mention signal when the latest merged message has no mentions", async () => {
+    vi.spyOn(dedup, "tryRecordMessage").mockReturnValue(true);
+    vi.spyOn(dedup, "tryRecordMessagePersistent").mockResolvedValue(true);
+    vi.spyOn(dedup, "hasRecordedMessage").mockReturnValue(false);
+    vi.spyOn(dedup, "hasRecordedMessagePersistent").mockResolvedValue(false);
+    const onMessage = await setupDebounceMonitor();
+
+    await onMessage(
+      createTextEvent({
+        messageId: "om_bot_first",
+        text: "@bot first",
+        mentions: [
+          {
+            key: "@_user_1",
+            id: { open_id: "ou_bot" },
+            name: "bot",
+          },
+        ],
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await onMessage(
+      createTextEvent({
+        messageId: "om_plain_second",
+        text: "plain follow-up",
+      }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+    const dispatched = getFirstDispatchedEvent();
+    const parsed = parseFeishuMessageEvent(dispatched, "ou_bot");
+    expect(parsed.mentionedBot).toBe(true);
   });
 
   it("excludes previously processed retries from combined debounce text", async () => {
