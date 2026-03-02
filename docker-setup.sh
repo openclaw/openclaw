@@ -530,6 +530,12 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   else
     echo "WARNING: Sandbox config was partially applied. Check errors above." >&2
     echo "  Skipping gateway restart to avoid exposing Docker socket without a full sandbox policy." >&2
+    if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+      config set agents.defaults.sandbox.mode "off" >/dev/null; then
+      echo "WARNING: Failed to roll back agents.defaults.sandbox.mode to off" >&2
+    else
+      echo "Sandbox mode rolled back to off due to partial sandbox config failure."
+    fi
     if [[ -n "${SANDBOX_COMPOSE_FILE:-}" ]]; then
       rm -f "$SANDBOX_COMPOSE_FILE"
     fi
