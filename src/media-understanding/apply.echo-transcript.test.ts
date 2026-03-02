@@ -68,7 +68,7 @@ let suiteTempMediaRootDir = "";
 async function createTempAudioFile(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(suiteTempMediaRootDir, "case-"));
   const filePath = path.join(dir, "note.ogg");
-  await fs.writeFile(filePath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]));
+  await fs.writeFile(filePath, Buffer.alloc(2048, 0xab));
   return filePath;
 }
 
