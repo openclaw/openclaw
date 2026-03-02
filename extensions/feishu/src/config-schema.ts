@@ -110,6 +110,9 @@ const GroupSessionScopeSchema = z
  * Topic session isolation mode for group chats.
  * - "disabled" (default): All messages in a group share one session
  * - "enabled": Messages in different topics get separate sessions
+ *
+ * Topic routing uses `root_id` when present to keep session continuity and
+ * falls back to `thread_id` when `root_id` is unavailable.
  */
 const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
 const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
