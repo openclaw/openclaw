@@ -26,19 +26,18 @@ export type MessageSentHookContext = {
 export function createMessageSentHookHandler(ctx: MessageSentHookContext) {
   return (payload: ReplyPayload) => {
     const { sessionKey, channelId, accountId, conversationId } = ctx;
-    if (!sessionKey) {
-      return;
-    }
     const content = payload.text ?? "";
-    emitMessageSentHook({
-      sessionKey,
-      to: conversationId ?? "",
-      content,
-      success: true,
-      channelId,
-      accountId,
-      conversationId,
-    });
+    if (sessionKey) {
+      emitMessageSentHook({
+        sessionKey,
+        to: conversationId ?? "",
+        content,
+        success: true,
+        channelId,
+        accountId,
+        conversationId,
+      });
+    }
     const hookRunner = getGlobalHookRunner();
     if (hookRunner?.hasHooks("message_sent")) {
       void hookRunner

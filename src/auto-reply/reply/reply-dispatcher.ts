@@ -169,10 +169,14 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         await options.deliver(normalized, { kind });
         // Fire onDelivered callback after successful delivery (for message:sent hooks).
         // Errors are caught to avoid breaking the delivery chain.
-        try {
-          options.onDelivered?.(normalized, { kind });
-        } catch {
-          // Silently ignore onDelivered errors to avoid breaking the delivery flow.
+        // Note: We use Promise.resolve().then() to handle both sync and async callbacks,
+        // ensuring any rejections are properly caught.
+        if (options.onDelivered) {
+          Promise.resolve()
+            .then(() => options.onDelivered?.(normalized, { kind }))
+            .catch(() => {
+              // Silently ignore onDelivered errors to avoid breaking the delivery flow.
+            });
         }
       })
       .catch((err) => {
