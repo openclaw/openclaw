@@ -4,18 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk";
-import {
-  LoginQRCallbackEventType,
-  Reactions,
-  ThreadType,
-  Zalo,
-  type API,
-  type Credentials,
-  type GroupInfo,
-  type LoginQRCallbackEvent,
-  type Message,
-  type User,
-} from "zca-js";
+import { normalizeZaloReactionIcon } from "./reaction.js";
 import { getZalouserRuntime } from "./runtime.js";
 import type {
   ZaloAuthStatus,
@@ -29,6 +18,17 @@ import type {
   ZcaFriend,
   ZcaUserInfo,
 } from "./types.js";
+import {
+  LoginQRCallbackEventType,
+  ThreadType,
+  Zalo,
+  type API,
+  type Credentials,
+  type GroupInfo,
+  type LoginQRCallbackEvent,
+  type Message,
+  type User,
+} from "./zca-client.js";
 
 const API_LOGIN_TIMEOUT_MS = 20_000;
 const QR_LOGIN_TTL_MS = 3 * 60_000;
@@ -36,6 +36,7 @@ const DEFAULT_QR_START_TIMEOUT_MS = 30_000;
 const DEFAULT_QR_WAIT_TIMEOUT_MS = 120_000;
 const GROUP_INFO_CHUNK_SIZE = 80;
 const GROUP_CONTEXT_CACHE_TTL_MS = 5 * 60_000;
+const GROUP_CONTEXT_CACHE_MAX_ENTRIES = 500;
 
 const apiByProfile = new Map<string, API>();
 const apiInitByProfile = new Map<string, Promise<API>>();
@@ -239,33 +240,6 @@ function buildEventMessage(data: Record<string, unknown>): ZaloEventMessage | un
     cmd: toInteger(data.cmd, 0),
     ts: toStringValue(data.ts) || Date.now(),
   };
-}
-
-function normalizeReactionIcon(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return Reactions.LIKE;
-  }
-  const lower = trimmed.toLowerCase();
-  if (lower === "like" || trimmed === "👍" || trimmed === ":+1:") {
-    return Reactions.LIKE;
-  }
-  if (lower === "heart" || trimmed === "❤️" || trimmed === "<3") {
-    return Reactions.HEART;
-  }
-  if (lower === "haha" || lower === "laugh" || trimmed === "😂") {
-    return Reactions.HAHA;
-  }
-  if (lower === "wow" || trimmed === "😮") {
-    return Reactions.WOW;
-  }
-  if (lower === "cry" || trimmed === "😢") {
-    return Reactions.CRY;
-  }
-  if (lower === "angry" || trimmed === "😡") {
-    return Reactions.ANGRY;
-  }
-  return trimmed;
 }
 
 function extractSendMessageId(result: unknown): string | undefined {
@@ -539,15 +513,39 @@ function readCachedGroupContext(profile: string, groupId: string): ZaloGroupCont
     groupContextCache.delete(key);
     return null;
   }
+  // Bump recency so hot groups stay in cache when enforcing max entries.
+  groupContextCache.delete(key);
+  groupContextCache.set(key, cached);
   return cached.value;
 }
 
+function trimGroupContextCache(now: number): void {
+  for (const [key, value] of groupContextCache) {
+    if (value.expiresAt > now) {
+      continue;
+    }
+    groupContextCache.delete(key);
+  }
+  while (groupContextCache.size > GROUP_CONTEXT_CACHE_MAX_ENTRIES) {
+    const oldestKey = groupContextCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    groupContextCache.delete(oldestKey);
+  }
+}
+
 function writeCachedGroupContext(profile: string, context: ZaloGroupContext): void {
+  const now = Date.now();
   const key = makeGroupContextCacheKey(profile, context.groupId);
+  if (groupContextCache.has(key)) {
+    groupContextCache.delete(key);
+  }
   groupContextCache.set(key, {
     value: context,
-    expiresAt: Date.now() + GROUP_CONTEXT_CACHE_TTL_MS,
+    expiresAt: now + GROUP_CONTEXT_CACHE_TTL_MS,
   });
+  trimGroupContextCache(now);
 }
 
 function clearCachedGroupContext(profile: string): void {
@@ -919,7 +917,7 @@ export async function sendZaloReaction(params: {
     const type = params.isGroup ? ThreadType.Group : ThreadType.User;
     const icon = params.remove
       ? { rType: -1, source: 6, icon: "" }
-      : normalizeReactionIcon(params.emoji);
+      : normalizeZaloReactionIcon(params.emoji);
     await api.addReaction(icon, {
       data: { msgId, cliMsgId },
       threadId,

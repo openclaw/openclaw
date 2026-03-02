@@ -77,9 +77,9 @@ export type ZaloAuthStatus = {
   message: string;
 };
 
-type ZalouserToolConfig = { allow?: string[]; deny?: string[] };
+export type ZalouserToolConfig = { allow?: string[]; deny?: string[] };
 
-type ZalouserGroupConfig = {
+export type ZalouserGroupConfig = {
   allow?: boolean;
   enabled?: boolean;
   requireMention?: boolean;

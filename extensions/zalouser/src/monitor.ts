@@ -18,6 +18,12 @@ import {
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk";
+import {
+  buildZalouserGroupCandidates,
+  findZalouserGroupEntry,
+  isZalouserGroupEntryAllowed,
+} from "./group-policy.js";
+import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
 import { getZalouserRuntime } from "./runtime.js";
 import {
   sendDeliveredZalouser,
@@ -87,17 +93,6 @@ function isSenderAllowed(senderId: string | undefined, allowFrom: string[]): boo
   });
 }
 
-function normalizeGroupSlug(raw?: string | null): string {
-  const trimmed = raw?.trim().toLowerCase() ?? "";
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed
-    .replace(/^#/, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 function isGroupAllowed(params: {
   groupId: string;
   groupName?: string | null;
@@ -108,24 +103,16 @@ function isGroupAllowed(params: {
   if (keys.length === 0) {
     return false;
   }
-  const candidates = [
-    params.groupId,
-    `group:${params.groupId}`,
-    params.groupName ?? "",
-    normalizeGroupSlug(params.groupName ?? ""),
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    const entry = groups[candidate];
-    if (!entry) {
-      continue;
-    }
-    return entry.allow !== false && entry.enabled !== false;
-  }
-  const wildcard = groups["*"];
-  if (wildcard) {
-    return wildcard.allow !== false && wildcard.enabled !== false;
-  }
-  return false;
+  const entry = findZalouserGroupEntry(
+    groups,
+    buildZalouserGroupCandidates({
+      groupId: params.groupId,
+      groupName: params.groupName,
+      includeGroupIdAlias: true,
+      includeWildcard: true,
+    }),
+  );
+  return isZalouserGroupEntryAllowed(entry);
 }
 
 function resolveGroupRequireMention(params: {
@@ -133,21 +120,17 @@ function resolveGroupRequireMention(params: {
   groupName?: string | null;
   groups: Record<string, { allow?: boolean; enabled?: boolean; requireMention?: boolean }>;
 }): boolean {
-  const groups = params.groups ?? {};
-  const candidates = [
-    params.groupId,
-    `group:${params.groupId}`,
-    params.groupName ?? "",
-    normalizeGroupSlug(params.groupName ?? ""),
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    const entry = groups[candidate];
-    if (typeof entry?.requireMention === "boolean") {
-      return entry.requireMention;
-    }
-  }
-  if (typeof groups["*"]?.requireMention === "boolean") {
-    return groups["*"].requireMention;
+  const entry = findZalouserGroupEntry(
+    params.groups ?? {},
+    buildZalouserGroupCandidates({
+      groupId: params.groupId,
+      groupName: params.groupName,
+      includeGroupIdAlias: true,
+      includeWildcard: true,
+    }),
+  );
+  if (typeof entry?.requireMention === "boolean") {
+    return entry.requireMention;
   }
   return true;
 }
@@ -419,11 +402,15 @@ async function processMessage(
     CommandAuthorized: commandAuthorized,
     Provider: "zalouser",
     Surface: "zalouser",
-    MessageSid: message.msgId ?? message.cliMsgId ?? `${message.timestampMs}`,
-    MessageSidFull:
-      message.msgId && message.cliMsgId
-        ? `${message.msgId}:${message.cliMsgId}`
-        : (message.msgId ?? message.cliMsgId ?? undefined),
+    MessageSid: resolveZalouserMessageSid({
+      msgId: message.msgId,
+      cliMsgId: message.cliMsgId,
+      fallback: `${message.timestampMs}`,
+    }),
+    MessageSidFull: formatZalouserMessageSidFull({
+      msgId: message.msgId,
+      cliMsgId: message.cliMsgId,
+    }),
     OriginatingChannel: "zalouser",
     OriginatingTo: `zalouser:${chatId}`,
   });
