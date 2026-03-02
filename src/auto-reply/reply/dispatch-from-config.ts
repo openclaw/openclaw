@@ -106,9 +106,6 @@ export async function dispatchReplyFromConfig(params: {
   const sessionKey = ctx.SessionKey;
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
-  const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
-  const groupId =
-    ctx.From?.includes(":group:") || ctx.From?.includes(":channel:") ? ctx.From : undefined;
 
   const recordProcessed = (
     outcome: "completed" | "skipped" | "error",
@@ -180,6 +177,8 @@ export async function dispatchReplyFromConfig(params: {
           : "";
   const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
   const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+  const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
+  const groupId = isGroup ? conversationId : undefined;
 
   // Trigger plugin hooks (fire-and-forget)
   if (hookRunner?.hasHooks("message_received")) {

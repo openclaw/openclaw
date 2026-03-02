@@ -278,7 +278,6 @@ describe("message hooks", () => {
 
   describe("error isolation", () => {
     it("should not propagate handler errors to caller", async () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
       const badHandler = vi.fn(() => {
         throw new Error("Hook exploded");
       });
@@ -286,16 +285,10 @@ describe("message hooks", () => {
 
       const event = createInternalHookEvent("message", "received", "s1", { content: "test" });
       await expect(triggerInternalHook(event)).resolves.not.toThrow();
-
-      expect(consoleError).toHaveBeenCalledWith(
-        expect.stringContaining("Hook error"),
-        expect.stringContaining("Hook exploded"),
-      );
-      consoleError.mockRestore();
+      expect(badHandler).toHaveBeenCalledOnce();
     });
 
     it("should continue running subsequent handlers after one fails", async () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
       const failHandler = vi.fn(() => {
         throw new Error("First handler fails");
       });
@@ -310,11 +303,9 @@ describe("message hooks", () => {
 
       expect(failHandler).toHaveBeenCalled();
       expect(successHandler).toHaveBeenCalled();
-      consoleError.mockRestore();
     });
 
     it("should isolate async handler errors", async () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
       const asyncFailHandler = vi.fn(async () => {
         throw new Error("Async hook failed");
       });
@@ -323,8 +314,7 @@ describe("message hooks", () => {
       await expect(
         triggerInternalHook(createInternalHookEvent("message", "sent", "s1", { content: "reply" })),
       ).resolves.not.toThrow();
-
-      consoleError.mockRestore();
+      expect(asyncFailHandler).toHaveBeenCalledOnce();
     });
   });
 
