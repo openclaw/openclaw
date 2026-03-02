@@ -52,6 +52,12 @@ const SYSTEM_COMMANDS = [
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
 ];
+const UNKNOWN_PLATFORM_COMMANDS = [
+  ...CANVAS_COMMANDS,
+  ...CAMERA_COMMANDS,
+  ...LOCATION_COMMANDS,
+  NODE_SYSTEM_NOTIFY_COMMAND,
+];
 
 // "High risk" node commands. These can be enabled by explicitly adding them to
 // `gateway.nodes.allowCommands` (and ensuring they're not blocked by denyCommands).
@@ -104,11 +110,19 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ],
   linux: [...SYSTEM_COMMANDS],
   windows: [...SYSTEM_COMMANDS],
-  unknown: [...CANVAS_COMMANDS, ...CAMERA_COMMANDS, ...LOCATION_COMMANDS, ...SYSTEM_COMMANDS],
+  // Fail-safe: unknown metadata should not receive host exec defaults.
+  unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };
 
+function normalizePlatformToken(value?: string): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value.trim().normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
 function normalizePlatformId(platform?: string, deviceFamily?: string): string {
-  const raw = (platform ?? "").trim().toLowerCase();
+  const raw = normalizePlatformToken(platform);
   if (raw.startsWith("ios")) {
     return "ios";
   }
@@ -127,7 +141,7 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): string {
   if (raw.startsWith("linux")) {
     return "linux";
   }
-  const family = (deviceFamily ?? "").trim().toLowerCase();
+  const family = normalizePlatformToken(deviceFamily);
   if (family.includes("iphone") || family.includes("ipad") || family.includes("ios")) {
     return "ios";
   }
