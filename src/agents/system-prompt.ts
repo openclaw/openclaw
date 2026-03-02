@@ -222,6 +222,8 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Serialized prior conversation turns for CLI-backed sessions. */
+  conversationHistory?: string;
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -630,6 +632,10 @@ export function buildAgentSystemPrompt(params: {
       'When the user asks a follow-up question and you lack context (e.g. after context compaction), use sessions_history (sessionKey: "main") to review the full message history before saying you don\'t know. The transcript preserves all messages even after compaction.',
       "",
     );
+  }
+
+  if (params.conversationHistory) {
+    lines.push("## Conversation History", params.conversationHistory, "");
   }
 
   lines.push(

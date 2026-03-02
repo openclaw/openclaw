@@ -28,6 +28,11 @@ import {
   resolveSystemPromptUsage,
   writeCliImages,
 } from "./cli-runner/helpers.js";
+import {
+  appendCliTurnToSession,
+  formatHistoryForPrompt,
+  readSessionHistory,
+} from "./cli-runner/session-history.js";
 import { formatToolStatusLabel, runStreamingCli } from "./cli-runner/streaming.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
@@ -119,6 +124,8 @@ export async function runCliAgent(params: {
   onStreamEvent?: (event: AgentStreamEvent) => void;
   /** Reasoning display level ("off" suppresses thinking events). */
   reasoningLevel?: "off" | "on" | "stream";
+  /** Max user turns of conversation history to include. */
+  historyLimit?: number;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
@@ -159,6 +166,16 @@ export async function runCliAgent(params: {
     sessionAgentId === defaultAgentId
       ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
       : undefined;
+  // Read prior conversation turns from the session JSONL so the
+  // CLI invocation has context from earlier messages.
+  let conversationHistory: string | undefined;
+  try {
+    const turns = await readSessionHistory(params.sessionFile);
+    conversationHistory = formatHistoryForPrompt(turns, params.historyLimit);
+  } catch {
+    log.warn("failed to read session history for CLI context");
+  }
+
   const docsPath = await resolveOpenClawDocsPath({
     workspaceDir,
     argv1: process.argv[1],
@@ -167,6 +184,7 @@ export async function runCliAgent(params: {
   });
   const systemPrompt = buildSystemPrompt({
     workspaceDir,
+    conversationHistory,
     config: params.config,
     defaultThinkLevel: params.thinkLevel,
     extraSystemPrompt,
@@ -442,6 +460,23 @@ export async function runCliAgent(params: {
     });
 
     const text = output.text?.trim();
+
+    // Persist this turn to the session JSONL so subsequent
+    // invocations can read it back as conversation history.
+    if (text) {
+      try {
+        await appendCliTurnToSession({
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
+          workspaceDir,
+          userText: params.prompt,
+          assistantText: text,
+        });
+      } catch (appendErr) {
+        log.warn(`failed to append CLI turn to session: ${String(appendErr)}`);
+      }
+    }
+
     const payloads = text ? [{ text }] : undefined;
 
     return {
