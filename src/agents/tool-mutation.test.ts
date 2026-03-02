@@ -37,6 +37,17 @@ describe("tool mutation helpers", () => {
     expect(readFingerprint).toBeUndefined();
   });
 
+  it("includes file_path targets in mutation fingerprint", () => {
+    const editFingerprint = buildToolActionFingerprint("edit", {
+      file_path: "/tmp/demo.txt",
+      oldText: "a",
+      newText: "b",
+    });
+
+    expect(editFingerprint).toContain("tool=edit");
+    expect(editFingerprint).toContain("file_path=/tmp/demo.txt");
+  });
+
   it("exposes mutation state for downstream payload rendering", () => {
     expect(
       buildToolMutationState("message", { action: "send", to: "telegram:1" }).mutatingAction,

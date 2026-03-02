@@ -21,8 +21,8 @@ describe("createOpenClawCodingTools", () => {
 
       await editTool?.execute("tool-alias-2", {
         file_path: filePath,
-        old_string: "world",
-        new_string: "universe",
+        oldString: "world",
+        newString: "universe",
       });
 
       const result = await readTool?.execute("tool-alias-3", {

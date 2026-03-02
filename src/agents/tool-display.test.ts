@@ -68,7 +68,7 @@ describe("tool display details", () => {
     const editDetail = formatToolDetail(
       resolveToolDisplay({
         name: "edit",
-        args: { path: "/tmp/a.txt", newText: "abcd" },
+        args: { path: "/tmp/a.txt", newString: "abcd" },
       }),
     );
 

@@ -435,10 +435,20 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
     normalized.oldText = normalized.old_string;
     delete normalized.old_string;
   }
+  // oldString → oldText (edit)
+  if ("oldString" in normalized && !("oldText" in normalized)) {
+    normalized.oldText = normalized.oldString;
+    delete normalized.oldString;
+  }
   // new_string → newText (edit)
   if ("new_string" in normalized && !("newText" in normalized)) {
     normalized.newText = normalized.new_string;
     delete normalized.new_string;
+  }
+  // newString → newText (edit)
+  if ("newString" in normalized && !("newText" in normalized)) {
+    normalized.newText = normalized.newString;
+    delete normalized.newString;
   }
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
   // Normalize these for write/edit so content matching and writes stay deterministic.

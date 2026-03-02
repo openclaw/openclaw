@@ -154,6 +154,7 @@ export function buildToolActionFingerprint(
   let hasStableTarget = false;
   for (const key of [
     "path",
+    "file_path",
     "filePath",
     "oldPath",
     "newPath",
