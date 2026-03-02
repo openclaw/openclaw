@@ -96,6 +96,11 @@ export function splitMediaFromOutput(raw: string): {
   if (!trimmedRaw.trim()) {
     return { text: "" };
   }
+  const mayContainMediaToken = /media:/i.test(trimmedRaw);
+  const mayContainAudioTag = trimmedRaw.includes("[[");
+  if (!mayContainMediaToken && !mayContainAudioTag) {
+    return { text: trimmedRaw };
+  }
 
   const media: string[] = [];
   let foundMediaToken = false;

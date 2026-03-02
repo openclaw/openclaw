@@ -469,33 +469,31 @@ async function deliverOutboundPayloadsCore(
       text: normalizedText,
     };
   };
-  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads)
-    .map((payload) => {
-      // Strip HTML tags for plain-text surfaces (WhatsApp, Signal, etc.)
-      // Models occasionally produce <br>, <b>, etc. that render as literal text.
-      // See https://github.com/openclaw/openclaw/issues/31884
-      if (!isPlainTextSurface(channel) || !payload.text) {
-        return payload;
-      }
+  const normalizedPayloads: ReplyPayload[] = [];
+  for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
+    let sanitizedPayload = payload;
+    // Strip HTML tags for plain-text surfaces (WhatsApp, Signal, etc.)
+    // Models occasionally produce <br>, <b>, etc. that render as literal text.
+    // See https://github.com/openclaw/openclaw/issues/31884
+    if (isPlainTextSurface(channel) && payload.text) {
       // Telegram sendPayload uses textMode:"html". Preserve raw HTML in this path.
-      if (channel === "telegram" && payload.channelData) {
-        return payload;
+      if (!(channel === "telegram" && payload.channelData)) {
+        sanitizedPayload = { ...payload, text: sanitizeForPlainText(payload.text) };
       }
-      return { ...payload, text: sanitizeForPlainText(payload.text) };
-    })
-    .flatMap((payload) => {
-      const normalized = normalizePayloadForChannelDelivery(payload, channel);
-      return normalized ? [normalized] : [];
-    });
+    }
+    const normalized = normalizePayloadForChannelDelivery(sanitizedPayload, channel);
+    if (normalized) {
+      normalizedPayloads.push(normalized);
+    }
+  }
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;
   const mirrorGroupId = params.mirror?.groupId;
-  if (
-    hookRunner?.hasHooks("message_sent") &&
-    params.session?.agentId &&
-    !sessionKeyForInternalHooks
-  ) {
+  const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
+  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  const canEmitInternalHook = Boolean(sessionKeyForInternalHooks);
+  if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
       "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
       {
@@ -517,6 +515,9 @@ async function deliverOutboundPayloadsCore(
       error?: string;
       messageId?: string;
     }) => {
+      if (!hasMessageSentHooks && !canEmitInternalHook) {
+        return;
+      }
       const canonical = buildCanonicalSentMessageHookContext({
         to,
         content: params.content,
@@ -529,9 +530,9 @@ async function deliverOutboundPayloadsCore(
         isGroup: mirrorIsGroup,
         groupId: mirrorGroupId,
       });
-      if (hookRunner?.hasHooks("message_sent")) {
+      if (hasMessageSentHooks) {
         fireAndForgetHook(
-          hookRunner.runMessageSent(
+          hookRunner!.runMessageSent(
             toPluginMessageSentEvent(canonical),
             toPluginMessageContext(canonical),
           ),
@@ -541,7 +542,7 @@ async function deliverOutboundPayloadsCore(
           },
         );
       }
-      if (!sessionKeyForInternalHooks) {
+      if (!canEmitInternalHook) {
         return;
       }
       fireAndForgetHook(
@@ -549,7 +550,7 @@ async function deliverOutboundPayloadsCore(
           createInternalHookEvent(
             "message",
             "sent",
-            sessionKeyForInternalHooks,
+            sessionKeyForInternalHooks!,
             toInternalMessageSentContext(canonical),
           ),
         ),
@@ -564,9 +565,9 @@ async function deliverOutboundPayloadsCore(
 
       // Run message_sending plugin hook (may modify content or cancel)
       let effectivePayload = payload;
-      if (hookRunner?.hasHooks("message_sending")) {
+      if (hasMessageSendingHooks) {
         try {
-          const sendingResult = await hookRunner.runMessageSending(
+          const sendingResult = await hookRunner!.runMessageSending(
             {
               to,
               content: payloadSummary.text,
