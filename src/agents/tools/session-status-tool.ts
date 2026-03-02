@@ -29,6 +29,7 @@ import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
+  isCliProvider,
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
@@ -159,7 +160,11 @@ async function resolveModelOverride(params: {
     throw new Error(`Unrecognized model "${raw}".`);
   }
   const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (allowed.allowedKeys.size > 0 && !allowed.allowedKeys.has(key)) {
+  if (
+    allowed.allowedKeys.size > 0 &&
+    !allowed.allowedKeys.has(key) &&
+    !isCliProvider(resolved.ref.provider, params.cfg)
+  ) {
     throw new Error(`Model "${key}" is not allowed.`);
   }
   const isDefault =

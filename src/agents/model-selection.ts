@@ -108,6 +108,9 @@ export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   if (normalized === "codex-cli") {
     return true;
   }
+  if (normalized === "cursor-cli") {
+    return true;
+  }
   const backends = cfg?.agents?.defaults?.cliBackends ?? {};
   return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
 }

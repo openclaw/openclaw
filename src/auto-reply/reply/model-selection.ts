@@ -4,6 +4,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
+  isCliProvider,
   type ModelAliasIndex,
   modelKey,
   normalizeProviderId,
@@ -325,7 +326,11 @@ export async function createModelSelectionState(params: {
     const overrideModel = sessionEntry.modelOverride?.trim();
     if (overrideModel) {
       const key = modelKey(overrideProvider, overrideModel);
-      if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
+      if (
+        allowedModelKeys.size > 0 &&
+        !allowedModelKeys.has(key) &&
+        !isCliProvider(overrideProvider, cfg)
+      ) {
         const { updated } = applyModelOverrideToSessionEntry({
           entry: sessionEntry,
           selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
@@ -356,7 +361,11 @@ export async function createModelSelectionState(params: {
   if (storedOverride?.model && !skipStoredOverride) {
     const candidateProvider = storedOverride.provider || defaultProvider;
     const key = modelKey(candidateProvider, storedOverride.model);
-    if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+    if (
+      allowedModelKeys.size === 0 ||
+      allowedModelKeys.has(key) ||
+      isCliProvider(candidateProvider, cfg)
+    ) {
       provider = candidateProvider;
       model = storedOverride.model;
     }
@@ -431,8 +440,9 @@ export function resolveModelDirectiveSelection(params: {
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
+  cfg?: OpenClawConfig;
 }): { selection?: ModelDirectiveSelection; error?: string } {
-  const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
+  const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys, cfg } = params;
 
   const rawTrimmed = raw.trim();
   const rawLower = rawTrimmed.toLowerCase();
@@ -564,7 +574,11 @@ export function resolveModelDirectiveSelection(params: {
   }
 
   const resolvedKey = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (allowedModelKeys.size === 0 || allowedModelKeys.has(resolvedKey)) {
+  if (
+    allowedModelKeys.size === 0 ||
+    allowedModelKeys.has(resolvedKey) ||
+    (cfg && isCliProvider(resolved.ref.provider, cfg))
+  ) {
     return {
       selection: {
         provider: resolved.ref.provider,
