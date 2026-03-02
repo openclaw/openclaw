@@ -1,5 +1,16 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { vi } from "vitest";
+
+export async function createRebindableDirectoryAlias(params: {
+  aliasPath: string;
+  targetPath: string;
+}): Promise<void> {
+  const aliasPath = path.resolve(params.aliasPath);
+  const targetPath = path.resolve(params.targetPath);
+  await fs.rm(aliasPath, { recursive: true, force: true });
+  await fs.symlink(targetPath, aliasPath, process.platform === "win32" ? "junction" : undefined);
+}
 
 export async function withRealpathSymlinkRebindRace<T>(params: {
   shouldFlip: (realpathInput: string) => boolean;
@@ -17,13 +28,17 @@ export async function withRealpathSymlinkRebindRace<T>(params: {
       if (!flipped && params.shouldFlip(filePath)) {
         flipped = true;
         if (params.timing !== "after-realpath") {
-          await fs.rm(params.symlinkPath, { recursive: true, force: true });
-          await fs.symlink(params.symlinkTarget, params.symlinkPath);
+          await createRebindableDirectoryAlias({
+            aliasPath: params.symlinkPath,
+            targetPath: params.symlinkTarget,
+          });
           return await realRealpath(...args);
         }
         const resolved = await realRealpath(...args);
-        await fs.rm(params.symlinkPath, { recursive: true, force: true });
-        await fs.symlink(params.symlinkTarget, params.symlinkPath);
+        await createRebindableDirectoryAlias({
+          aliasPath: params.symlinkPath,
+          targetPath: params.symlinkTarget,
+        });
         return resolved;
       }
       return await realRealpath(...args);

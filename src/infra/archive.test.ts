@@ -148,40 +148,37 @@ describe("archive utils", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "does not clobber out-of-destination file when parent dir is symlink-rebound during zip extract",
-    async () => {
-      await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
-        const outsideDir = path.join(workDir, "outside");
-        await fs.mkdir(outsideDir, { recursive: true });
-        const slotDir = path.join(extractDir, "slot");
-        await fs.mkdir(slotDir, { recursive: true });
+  it("does not clobber out-of-destination file when parent dir is symlink-rebound during zip extract", async () => {
+    await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
+      const outsideDir = path.join(workDir, "outside");
+      await fs.mkdir(outsideDir, { recursive: true });
+      const slotDir = path.join(extractDir, "slot");
+      await fs.mkdir(slotDir, { recursive: true });
 
-        const outsideTarget = path.join(outsideDir, "target.txt");
-        await fs.writeFile(outsideTarget, "SAFE");
+      const outsideTarget = path.join(outsideDir, "target.txt");
+      await fs.writeFile(outsideTarget, "SAFE");
 
-        const zip = new JSZip();
-        zip.file("slot/target.txt", "owned");
-        await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+      const zip = new JSZip();
+      zip.file("slot/target.txt", "owned");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
 
-        await withRealpathSymlinkRebindRace({
-          shouldFlip: (realpathInput) => realpathInput === slotDir,
-          symlinkPath: slotDir,
-          symlinkTarget: outsideDir,
-          timing: "after-realpath",
-          run: async () => {
-            await expect(
-              extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
-            ).rejects.toMatchObject({
-              code: "destination-symlink-traversal",
-            } satisfies Partial<ArchiveSecurityError>);
-          },
-        });
-
-        await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("SAFE");
+      await withRealpathSymlinkRebindRace({
+        shouldFlip: (realpathInput) => realpathInput === slotDir,
+        symlinkPath: slotDir,
+        symlinkTarget: outsideDir,
+        timing: "after-realpath",
+        run: async () => {
+          await expect(
+            extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+          ).rejects.toMatchObject({
+            code: "destination-symlink-traversal",
+          } satisfies Partial<ArchiveSecurityError>);
+        },
       });
-    },
-  );
+
+      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("SAFE");
+    });
+  });
 
   it("rejects tar path traversal (zip slip)", async () => {
     await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {
