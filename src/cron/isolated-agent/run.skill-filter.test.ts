@@ -95,12 +95,14 @@ vi.mock("../../agents/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn().mockResolvedValue(true),
 }));
 
+const runCliAgentMock = vi.fn();
 vi.mock("../../agents/cli-runner.js", () => ({
-  runCliAgent: vi.fn(),
+  runCliAgent: runCliAgentMock,
 }));
 
+const getCliSessionIdMock = vi.fn().mockReturnValue(undefined);
 vi.mock("../../agents/cli-session.js", () => ({
-  getCliSessionId: vi.fn().mockReturnValue(undefined),
+  getCliSessionId: getCliSessionIdMock,
   setCliSessionId: vi.fn(),
 }));
 
@@ -492,6 +494,84 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       expect(result.error).toBe("invalid model: openai/");
       expect(logWarnMock).not.toHaveBeenCalled();
       expect(runWithModelFallbackMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("CLI session handoff (issue #29774)", () => {
+    it("does not pass stored cliSessionId on fresh isolated runs (isNewSession=true)", async () => {
+      // Simulate a persisted CLI session ID from a previous run.
+      getCliSessionIdMock.mockReturnValue("prev-cli-session-abc");
+      isCliProviderMock.mockReturnValue(true);
+      runCliAgentMock.mockResolvedValue({
+        payloads: [{ text: "output" }],
+        meta: { agentMeta: { sessionId: "new-cli-session-xyz", usage: { input: 5, output: 10 } } },
+      });
+      // Make runWithModelFallback invoke the run callback so the CLI path executes.
+      runWithModelFallbackMock.mockImplementationOnce(
+        async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+          const result = await params.run("claude-cli", "claude-opus-4-6");
+          return { result, provider: "claude-cli", model: "claude-opus-4-6", attempts: [] };
+        },
+      );
+      resolveCronSessionMock.mockReturnValue({
+        storePath: "/tmp/store.json",
+        store: {},
+        sessionEntry: {
+          sessionId: "test-session-fresh",
+          updatedAt: 0,
+          systemSent: false,
+          skillsSnapshot: undefined,
+          // A stored CLI session ID that should NOT be reused on fresh runs.
+          cliSessionIds: { "claude-cli": "prev-cli-session-abc" },
+        },
+        systemSent: false,
+        isNewSession: true,
+      });
+
+      await runCronIsolatedAgentTurn(makeParams());
+
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      // Fresh session: cliSessionId must be undefined, not the stored value.
+      expect(runCliAgentMock.mock.calls[0][0]).toHaveProperty("cliSessionId", undefined);
+    });
+
+    it("reuses stored cliSessionId on continuation runs (isNewSession=false)", async () => {
+      getCliSessionIdMock.mockReturnValue("existing-cli-session-def");
+      isCliProviderMock.mockReturnValue(true);
+      runCliAgentMock.mockResolvedValue({
+        payloads: [{ text: "output" }],
+        meta: {
+          agentMeta: { sessionId: "existing-cli-session-def", usage: { input: 5, output: 10 } },
+        },
+      });
+      runWithModelFallbackMock.mockImplementationOnce(
+        async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+          const result = await params.run("claude-cli", "claude-opus-4-6");
+          return { result, provider: "claude-cli", model: "claude-opus-4-6", attempts: [] };
+        },
+      );
+      resolveCronSessionMock.mockReturnValue({
+        storePath: "/tmp/store.json",
+        store: {},
+        sessionEntry: {
+          sessionId: "test-session-continuation",
+          updatedAt: 0,
+          systemSent: false,
+          skillsSnapshot: undefined,
+          cliSessionIds: { "claude-cli": "existing-cli-session-def" },
+        },
+        systemSent: false,
+        isNewSession: false,
+      });
+
+      await runCronIsolatedAgentTurn(makeParams());
+
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      // Continuation: cliSessionId should be passed through for session resume.
+      expect(runCliAgentMock.mock.calls[0][0]).toHaveProperty(
+        "cliSessionId",
+        "existing-cli-session-def",
+      );
     });
   });
 });
