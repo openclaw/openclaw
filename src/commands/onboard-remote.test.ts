@@ -28,7 +28,7 @@ function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
 }
 
 describe("promptRemoteGatewayConfig", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_ALLOW_PRIVATE_WS"]);
+  const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -127,8 +127,8 @@ describe("promptRemoteGatewayConfig", () => {
     expect(next.gateway?.remote?.token).toBeUndefined();
   });
 
-  it("allows private ws:// only when OPENCLAW_ALLOW_PRIVATE_WS=1", async () => {
-    process.env.OPENCLAW_ALLOW_PRIVATE_WS = "1";
+  it("allows private ws:// only when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", async () => {
+    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
 
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
       if (params.message === "Gateway WebSocket URL") {
