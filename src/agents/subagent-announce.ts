@@ -152,6 +152,9 @@ function sanitizeCompletionFindings(findings: string): string {
     .replace(/^✅\s*Subagent[^\n]*\n*/i, "")
     .replace(/^\[System Message\][\s\S]*?\nResult:\s*/i, "")
     .trim();
+  const withoutResultLabel = message
+    .replace(/^(?:[-*]\s*)?(?:\*\*)?\s*result\s*(?:\*\*)?\s*:\s*/i, "")
+    .trim();
   const lower = message.toLowerCase();
   if (
     message.includes("[Subagent Context]") ||
@@ -160,7 +163,7 @@ function sanitizeCompletionFindings(findings: string): string {
   ) {
     return "";
   }
-  const jsonPayload = tryExtractJsonPayload(message);
+  const jsonPayload = tryExtractJsonPayload(withoutResultLabel);
   if (jsonPayload) {
     const summarized = summarizeJsonForDelivery(jsonPayload);
     if (summarized) {
@@ -168,8 +171,7 @@ function sanitizeCompletionFindings(findings: string): string {
     }
     // Fall through to return original message if JSON parsing failed
   }
-  return message;
-  return message;
+  return withoutResultLabel;
 }
 
 function summarizeDeliveryError(error: unknown): string {

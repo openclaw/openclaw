@@ -401,6 +401,49 @@ describe("subagent announce formatting", () => {
     expect(msg).not.toContain("Convert the result above into your normal assistant voice");
   });
 
+  it("strips leading RESULT label in completion-mode direct delivery", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct-result-label",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-result-label",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "**RESULT:** final answer: 42\nEVIDENCE: https://example.com",
+            },
+          ],
+        },
+      ],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-result-label",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("final answer: 42");
+    expect(msg).toContain("EVIDENCE: https://example.com");
+    expect(msg).not.toContain("RESULT:");
+    expect(msg).not.toContain("**RESULT:**");
+  });
+
   it("suppresses leaked subagent bootstrap text in completion-mode direct delivery", async () => {
     sessionStore = {
       "agent:main:subagent:test": {
