@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
 import {
   cleanupMockRuntimeFixtures,
@@ -10,7 +10,14 @@ import {
 } from "./runtime-internals/test-fixtures.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 
+let sharedFixture: Awaited<ReturnType<typeof createMockRuntimeFixture>> | null = null;
+
+beforeAll(async () => {
+  sharedFixture = await createMockRuntimeFixture();
+});
+
 afterAll(async () => {
+  sharedFixture = null;
   await cleanupMockRuntimeFixtures();
 });
 
@@ -21,13 +28,9 @@ describe("AcpxRuntime", () => {
       createRuntime: async () => fixture.runtime,
       agentId: "codex",
       successPrompt: "contract-pass",
-      errorPrompt: "trigger-error",
       includeControlChecks: false,
       assertSuccessEvents: (events) => {
         expect(events.some((event) => event.type === "done")).toBe(true);
-      },
-      assertErrorOutcome: ({ events, thrown }) => {
-        expect(events.some((event) => event.type === "error") || Boolean(thrown)).toBe(true);
       },
     });
 
@@ -108,34 +111,12 @@ describe("AcpxRuntime", () => {
     expect(promptArgs).toContain("--approve-all");
   });
 
-  it("passes a queue-owner TTL by default to avoid long idle stalls", async () => {
-    const { runtime, logPath } = await createMockRuntimeFixture();
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:codex:acp:ttl-default",
-      agent: "codex",
-      mode: "persistent",
-    });
-
-    for await (const _event of runtime.runTurn({
-      handle,
-      text: "ttl-default",
-      mode: "prompt",
-      requestId: "req-ttl-default",
-    })) {
-      // drain
-    }
-
-    const logs = await readMockRuntimeLogEntries(logPath);
-    const prompt = logs.find((entry) => entry.kind === "prompt");
-    expect(prompt).toBeDefined();
-    const promptArgs = (prompt?.args as string[]) ?? [];
-    const ttlFlagIndex = promptArgs.indexOf("--ttl");
-    expect(ttlFlagIndex).toBeGreaterThanOrEqual(0);
-    expect(promptArgs[ttlFlagIndex + 1]).toBe("0.1");
-  });
-
   it("preserves leading spaces across streamed text deltas", async () => {
-    const { runtime } = await createMockRuntimeFixture();
+    const runtime = sharedFixture?.runtime;
+    expect(runtime).toBeDefined();
+    if (!runtime) {
+      throw new Error("shared runtime fixture missing");
+    }
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:space",
       agent: "codex",
@@ -156,10 +137,28 @@ describe("AcpxRuntime", () => {
 
     expect(textDeltas).toEqual(["alpha", " beta", " gamma"]);
     expect(textDeltas.join("")).toBe("alpha beta gamma");
+
+    // Keep the default queue-owner TTL assertion on a runTurn that already exists.
+    const activeLogPath = process.env.MOCK_ACPX_LOG;
+    expect(activeLogPath).toBeDefined();
+    const logs = await readMockRuntimeLogEntries(String(activeLogPath));
+    const prompt = logs.find(
+      (entry) =>
+        entry.kind === "prompt" && String(entry.sessionName ?? "") === "agent:codex:acp:space",
+    );
+    expect(prompt).toBeDefined();
+    const promptArgs = (prompt?.args as string[]) ?? [];
+    const ttlFlagIndex = promptArgs.indexOf("--ttl");
+    expect(ttlFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(promptArgs[ttlFlagIndex + 1]).toBe("0.1");
   });
 
   it("emits done once when ACP stream repeats stop reason responses", async () => {
-    const { runtime } = await createMockRuntimeFixture();
+    const runtime = sharedFixture?.runtime;
+    expect(runtime).toBeDefined();
+    if (!runtime) {
+      throw new Error("shared runtime fixture missing");
+    }
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:double-done",
       agent: "codex",
@@ -181,7 +180,11 @@ describe("AcpxRuntime", () => {
   });
 
   it("maps acpx error events into ACP runtime error events", async () => {
-    const { runtime } = await createMockRuntimeFixture();
+    const runtime = sharedFixture?.runtime;
+    expect(runtime).toBeDefined();
+    if (!runtime) {
+      throw new Error("shared runtime fixture missing");
+    }
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:456",
       agent: "codex",

@@ -13,6 +13,13 @@ type EnvSnapshot = {
   stateDir: string | undefined;
 };
 
+type SharedHomeRootState = {
+  rootPromise: Promise<string>;
+  nextCaseId: number;
+};
+
+const SHARED_HOME_ROOTS = new Map<string, SharedHomeRootState>();
+
 function snapshotEnv(): EnvSnapshot {
   return {
     home: process.env.HOME,
@@ -76,11 +83,27 @@ function setTempHome(base: string) {
   process.env.HOMEPATH = match[2] || "\\";
 }
 
+async function allocateTempHomeBase(prefix: string): Promise<string> {
+  let state = SHARED_HOME_ROOTS.get(prefix);
+  if (!state) {
+    state = {
+      rootPromise: fs.mkdtemp(path.join(os.tmpdir(), prefix)),
+      nextCaseId: 0,
+    };
+    SHARED_HOME_ROOTS.set(prefix, state);
+  }
+  const root = await state.rootPromise;
+  const base = path.join(root, `case-${state.nextCaseId++}`);
+  await fs.mkdir(base, { recursive: true });
+  return base;
+}
+
 export async function withTempHome<T>(
   fn: (home: string) => Promise<T>,
   opts: { env?: Record<string, EnvValue>; prefix?: string } = {},
 ): Promise<T> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), opts.prefix ?? "openclaw-test-home-"));
+  const prefix = opts.prefix ?? "openclaw-test-home-";
+  const base = await allocateTempHomeBase(prefix);
   const snapshot = snapshotEnv();
   const envKeys = Object.keys(opts.env ?? {});
   for (const key of envKeys) {

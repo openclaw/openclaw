@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import {
@@ -13,7 +13,7 @@ import {
   loadWorkspaceSkillEntries,
 } from "./skills.js";
 
-const tempDirs: string[] = [];
+const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
 let tempHome: TempHomeEnv | null = null;
 
 const resolveTestSkillDirs = (workspaceDir: string) => ({
@@ -21,11 +21,7 @@ const resolveTestSkillDirs = (workspaceDir: string) => ({
   bundledSkillsDir: path.join(workspaceDir, ".bundled"),
 });
 
-const makeWorkspace = async () => {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
-  tempDirs.push(workspaceDir);
-  return workspaceDir;
-};
+const makeWorkspace = async () => await fixtureSuite.createCaseDir("workspace");
 
 const withClearedEnv = <T>(
   keys: string[],
@@ -52,6 +48,7 @@ const withClearedEnv = <T>(
 };
 
 beforeAll(async () => {
+  await fixtureSuite.setup();
   tempHome = await createTempHomeEnv("openclaw-skills-home-");
   await fs.mkdir(path.join(tempHome.home, ".openclaw", "agents", "main", "sessions"), {
     recursive: true,
@@ -63,10 +60,7 @@ afterAll(async () => {
     await tempHome.restore();
     tempHome = null;
   }
-
-  await Promise.all(
-    tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
+  await fixtureSuite.cleanup();
 });
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
