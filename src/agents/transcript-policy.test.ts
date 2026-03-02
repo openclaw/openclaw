@@ -23,6 +23,7 @@ describe("resolveTranscriptPolicy", () => {
       allowBase64Only: true,
       includeCamelCase: true,
     });
+    expect(policy.validateAnthropicTurns).toBe(true);
   });
 
   it("enables sanitizeToolCallIds for Mistral provider", () => {
@@ -34,7 +35,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict9");
   });
 
-  it("disables sanitizeToolCallIds for OpenAI provider", () => {
+  it("disables sanitizeToolCallIds and turn-merging for OpenAI provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openai",
       modelId: "gpt-4o",
@@ -42,9 +43,10 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.sanitizeToolCallIds).toBe(false);
     expect(policy.toolCallIdMode).toBeUndefined();
+    expect(policy.validateAnthropicTurns).toBeFalsy();
   });
 
-  it("enables user-turn merge for strict OpenAI-compatible providers", () => {
+  it("enables turn validation for all non-OpenAI providers", () => {
     const policy = resolveTranscriptPolicy({
       provider: "moonshot",
       modelId: "kimi-k2.5",
@@ -66,12 +68,12 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.sanitizeMode).toBe("full");
   });
 
-  it("keeps OpenRouter on its existing turn-validation path", () => {
+  it("enables turn validation for OpenRouter (proxies strict-alternation models)", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openrouter",
       modelId: "openai/gpt-4.1",
       modelApi: "openai-completions",
     });
-    expect(policy.validateAnthropicTurns).toBe(false);
+    expect(policy.validateAnthropicTurns).toBe(true);
   });
 });
