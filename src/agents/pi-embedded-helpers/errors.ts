@@ -529,6 +529,13 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
+  // Check billing before rate limit: some providers (e.g. Moonshot) return 429
+  // for account suspension / insufficient balance, which causes the rate limit
+  // pattern to match first. Billing errors should take priority.
+  if (isBillingErrorMessage(raw)) {
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+  }
+
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
   if (transientCopy) {
     return transientCopy;
@@ -536,10 +543,6 @@ export function formatAssistantErrorText(
 
   if (isTimeoutErrorMessage(raw)) {
     return "LLM request timed out.";
-  }
-
-  if (isBillingErrorMessage(raw)) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
@@ -652,6 +655,8 @@ const ERROR_PATTERNS = {
     "credit balance",
     "plans & billing",
     "insufficient balance",
+    "exceeded_current_quota_error", // Moonshot: account suspended/quota exceeded
+    "suspended due to", // Moonshot: account suspension message
   ],
   authPermanent: [
     /api[_ ]?key[_ ]?(?:revoked|invalid|deactivated|deleted)/i,
@@ -926,6 +931,11 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isJsonApiInternalServerError(raw)) {
     return "timeout";
   }
+  // Check billing before rate limit: some providers (e.g. Moonshot) use 429 for
+  // account suspension / insufficient balance — billing should take priority.
+  if (isBillingErrorMessage(raw)) {
+    return "billing";
+  }
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";
   }
@@ -934,9 +944,6 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return "format";
-  }
-  if (isBillingErrorMessage(raw)) {
-    return "billing";
   }
   if (isTimeoutErrorMessage(raw)) {
     return "timeout";
