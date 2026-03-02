@@ -23,6 +23,7 @@ function parseOrigin(
 
 export function checkBrowserOrigin(params: {
   requestHost?: string;
+  requestForwardedHost?: string;
   origin?: string;
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
@@ -40,16 +41,22 @@ export function checkBrowserOrigin(params: {
   }
 
   const requestHost = normalizeHostHeader(params.requestHost);
-  if (
-    params.allowHostHeaderOriginFallback === true &&
-    requestHost &&
-    parsedOrigin.host === requestHost
-  ) {
-    return { ok: true };
+  const requestForwardedHost = normalizeHostHeader(params.requestForwardedHost);
+  if (params.allowHostHeaderOriginFallback === true) {
+    if (requestHost && parsedOrigin.host === requestHost) {
+      return { ok: true };
+    }
+    if (requestForwardedHost && parsedOrigin.host === requestForwardedHost) {
+      return { ok: true };
+    }
   }
 
   const requestHostname = resolveHostName(requestHost);
-  if (isLoopbackHost(parsedOrigin.hostname) && isLoopbackHost(requestHostname)) {
+  const requestForwardedHostname = resolveHostName(requestForwardedHost);
+  if (
+    isLoopbackHost(parsedOrigin.hostname) &&
+    (isLoopbackHost(requestHostname) || isLoopbackHost(requestForwardedHostname))
+  ) {
     return { ok: true };
   }
 

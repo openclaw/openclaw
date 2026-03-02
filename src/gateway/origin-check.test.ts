@@ -19,6 +19,25 @@ describe("checkBrowserOrigin", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("accepts forwarded-host matches when legacy host-header fallback is enabled", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "127.0.0.1:18789",
+      requestForwardedHost: "quick-tunnel-abc.trycloudflare.com",
+      origin: "https://quick-tunnel-abc.trycloudflare.com",
+      allowHostHeaderOriginFallback: true,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects forwarded-host matches when legacy host-header fallback is disabled", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "127.0.0.1:18789",
+      requestForwardedHost: "quick-tunnel-abc.trycloudflare.com",
+      origin: "https://quick-tunnel-abc.trycloudflare.com",
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it("accepts loopback host mismatches for dev", () => {
     const result = checkBrowserOrigin({
       requestHost: "127.0.0.1:18789",
