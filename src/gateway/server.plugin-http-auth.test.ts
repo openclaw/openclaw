@@ -554,6 +554,40 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("passes POST webhook routes through root-mounted control ui to plugins", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (req.method !== "POST" || pathname !== "/bluebubbles-webhook") {
+        return false;
+      }
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("plugin-webhook");
+      return true;
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-control-ui-webhook-post-test-",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        controlUiRoot: { kind: "missing" },
+        handlePluginRequest,
+      },
+      run: async (server) => {
+        const response = await sendRequest(server, {
+          path: "/bluebubbles-webhook",
+          method: "POST",
+        });
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe("plugin-webhook");
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
   test("does not let plugin handlers shadow control ui routes", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
