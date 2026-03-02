@@ -155,7 +155,8 @@ describe("web monitor inbox", () => {
   });
 
   it("locks down when no config is present (pairing for unknown senders)", async () => {
-    // No config file => locked-down defaults apply (pairing for unknown senders)
+    // No config file => locked-down defaults apply (pairing for unknown senders).
+    // Pairing reply is only sent to owner (same number); non-owner gets no reply.
     mockLoadConfig.mockReturnValue({});
     upsertPairingRequestMock
       .mockResolvedValueOnce({ code: "PAIRCODE", created: true })
@@ -163,7 +164,7 @@ describe("web monitor inbox", () => {
 
     const { onMessage, listener, sock } = await openInboxMonitor();
 
-    // Message from someone else should be blocked
+    // Message from someone else (+999, not self) should be blocked; no pairing reply to non-owner
     const upsertBlocked = {
       type: "notify",
       messages: [
@@ -182,13 +183,7 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsertBlocked);
     await new Promise((resolve) => setImmediate(resolve));
     expect(onMessage).not.toHaveBeenCalled();
-    expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: expect.stringContaining("Your WhatsApp phone number: +999"),
-    });
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: expect.stringContaining("Pairing code: PAIRCODE"),
-    });
+    expect(sock.sendMessage).not.toHaveBeenCalled();
 
     const upsertBlockedAgain = {
       type: "notify",
@@ -208,7 +203,7 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsertBlockedAgain);
     await new Promise((resolve) => setImmediate(resolve));
     expect(onMessage).not.toHaveBeenCalled();
-    expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    expect(sock.sendMessage).not.toHaveBeenCalled();
 
     // Message from self should be allowed
     const upsertSelf = {

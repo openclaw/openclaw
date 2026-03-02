@@ -164,6 +164,13 @@ async function promptWhatsAppAllowFrom(
   });
 
   if (phoneMode === "personal") {
+    await prompter.note(
+      [
+        "Using your personal number gives OpenClaw access to this WhatsApp account's chats.",
+        "By default we only send access or pairing instructions to your own number (when you message yourself), not to other people who message you.",
+      ].join("\n"),
+      "Warning",
+    );
     return await applyWhatsAppOwnerAllowlist({
       cfg,
       prompter,

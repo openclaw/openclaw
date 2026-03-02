@@ -58,10 +58,41 @@ describe("checkInboundAccessControl pairing grace", () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it("sends pairing replies for live DMs", async () => {
+  it("does not send pairing reply for live DM from non-owner", async () => {
     const result = await runPairingGraceCase(1_000_000 - 10_000);
 
     expect(result.allowed).toBe(false);
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("sends pairing reply for live DM from owner (same number)", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+          allowFrom: ["+15550001111"],
+        },
+      },
+    });
+    const connectedAtMs = 1_000_000;
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550009999",
+      selfE164: "+15550009999",
+      senderE164: "+15550009999",
+      group: false,
+      pushName: "Owner",
+      isFromMe: false,
+      messageTimestampMs: connectedAtMs - 10_000,
+      connectedAtMs,
+      pairingGraceMs: 30_000,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550009999@s.whatsapp.net",
+    });
+
+    // Owner (same number) gets pairing reply and message is allowed through to agent.
+    expect(result.allowed).toBe(true);
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMessageMock).toHaveBeenCalled();
   });
@@ -140,6 +171,8 @@ describe("WhatsApp dmPolicy precedence", () => {
         },
       },
     });
+    // Already had a pairing request (created: false) so we allow through without sending reply.
+    upsertPairingRequestMock.mockResolvedValueOnce({ code: "PAIRCODE", created: false });
 
     const result = await checkInboundAccessControl({
       accountId: "default",
@@ -154,7 +187,7 @@ describe("WhatsApp dmPolicy precedence", () => {
     });
 
     expect(result.allowed).toBe(true);
-    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 });
