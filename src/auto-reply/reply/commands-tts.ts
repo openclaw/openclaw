@@ -1,5 +1,3 @@
-import type { ReplyPayload } from "../types.js";
-import type { CommandHandler } from "./commands-types.js";
 import { logVerbose } from "../../globals.js";
 import {
   getLastTtsAttempt,
@@ -18,6 +16,8 @@ import {
   setTtsProvider,
   textToSpeech,
 } from "../../tts/tts.js";
+import type { ReplyPayload } from "../types.js";
+import type { CommandHandler } from "./commands-types.js";
 
 type ParsedTtsCommand = {
   action: string;
@@ -177,7 +177,12 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     }
 
     const requested = args.trim().toLowerCase();
-    if (requested !== "openai" && requested !== "elevenlabs" && requested !== "edge") {
+    if (
+      requested !== "openai" &&
+      requested !== "elevenlabs" &&
+      requested !== "edge" &&
+      requested !== "gemini"
+    ) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 
