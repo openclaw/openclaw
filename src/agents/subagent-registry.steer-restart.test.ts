@@ -537,7 +537,7 @@ describe("subagent registry steer restarts", () => {
     });
   });
 
-  it("emits subagent_ended when completion cleanup expires with active descendants", async () => {
+  it("keeps completion cleanup pending while descendants are still active", async () => {
     announceSpy.mockResolvedValue(false);
 
     mod.registerSubagentRun({
@@ -574,10 +574,11 @@ describe("subagent registry steer restarts", () => {
       const event = call[0] as { runId?: string; reason?: string };
       return event.runId === "run-parent-expiry" && event.reason === "subagent-complete";
     });
-    expect(parentHookCall).toBeDefined();
+    expect(parentHookCall).toBeUndefined();
     const parent = mod
       .listSubagentRunsForRequester("agent:main:main")
       .find((entry) => entry.runId === "run-parent-expiry");
-    expect(parent?.cleanupCompletedAt).toBeTypeOf("number");
+    expect(parent?.cleanupCompletedAt).toBeUndefined();
+    expect(parent?.cleanupHandled).toBe(false);
   });
 });
