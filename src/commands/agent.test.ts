@@ -734,6 +734,25 @@ describe("agentCommand", () => {
     });
   });
 
+  it("prefers per-model thinking over global thinkingDefault", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        thinkingDefault: "low",
+        models: {
+          "anthropic/claude-opus-4-5": {
+            params: { thinking: "high" },
+          },
+        },
+      });
+
+      await agentCommand({ message: "hi", to: "+1555" }, runtime);
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.thinkLevel).toBe("high");
+    });
+  });
+
   it("prints JSON payload when requested", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
