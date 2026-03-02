@@ -362,12 +362,12 @@ export async function processNapCatEvent(params: {
   runtime: RuntimeEnv;
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
 }): Promise<void> {
+  params.statusSink?.({ lastEventAt: Date.now() });
+
   const inbound = extractNapCatInboundMessage(params.event);
   if (!inbound) {
     return;
   }
-
-  params.statusSink?.({ lastEventAt: Date.now() });
 
   if (isDuplicateInbound(inbound)) {
     return;

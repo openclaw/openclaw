@@ -282,32 +282,33 @@ describe("resolveNapCatCommandAuthorized", () => {
 });
 
 describe("processNapCatEvent", () => {
+  const baseAccount: ResolvedNapCatAccount = {
+    accountId: "default",
+    enabled: true,
+    configured: true,
+    token: "token",
+    tokenSource: "config",
+    apiBaseUrl: "http://127.0.0.1:3000",
+    apiBaseUrlSource: "config",
+    config: {},
+    transport: {
+      http: {
+        enabled: false,
+        host: "127.0.0.1",
+        port: 5715,
+        path: "/onebot",
+        bodyMaxBytes: 1024 * 1024,
+      },
+      ws: {
+        enabled: true,
+        url: "ws://127.0.0.1:3001",
+        reconnectMs: 3000,
+      },
+    },
+  };
+
   it("updates lastEventAt before runtime processing", async () => {
     const patches: Array<Partial<ChannelAccountSnapshot>> = [];
-    const account: ResolvedNapCatAccount = {
-      accountId: "default",
-      enabled: true,
-      configured: true,
-      token: "token",
-      tokenSource: "config",
-      apiBaseUrl: "http://127.0.0.1:3000",
-      apiBaseUrlSource: "config",
-      config: {},
-      transport: {
-        http: {
-          enabled: false,
-          host: "127.0.0.1",
-          port: 5715,
-          path: "/onebot",
-          bodyMaxBytes: 1024 * 1024,
-        },
-        ws: {
-          enabled: true,
-          url: "ws://127.0.0.1:3001",
-          reconnectMs: 3000,
-        },
-      },
-    };
 
     await expect(
       processNapCatEvent({
@@ -320,12 +321,29 @@ describe("processNapCatEvent", () => {
           time: 1_700_000_003,
           message: "hello",
         },
-        account,
+        account: baseAccount,
         config: {} as OpenClawConfig,
         runtime: {} as RuntimeEnv,
         statusSink: (patch) => patches.push(patch),
       }),
     ).rejects.toThrow("NapCat runtime not initialized");
+
+    expect(patches.some((patch) => typeof patch.lastEventAt === "number")).toBe(true);
+  });
+
+  it("updates lastEventAt for non-message events without requiring runtime", async () => {
+    const patches: Array<Partial<ChannelAccountSnapshot>> = [];
+
+    await processNapCatEvent({
+      event: {
+        post_type: "meta_event",
+        sub_type: "heartbeat",
+      },
+      account: baseAccount,
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      statusSink: (patch) => patches.push(patch),
+    });
 
     expect(patches.some((patch) => typeof patch.lastEventAt === "number")).toBe(true);
   });

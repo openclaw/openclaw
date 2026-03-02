@@ -9,7 +9,7 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk";
-import { waitForAbortSignal } from "../../../src/infra/abort-signal.js";
+import { waitForAbortSignal } from "./abort-signal.js";
 import {
   listNapCatAccountIds,
   resolveDefaultNapCatAccountId,
