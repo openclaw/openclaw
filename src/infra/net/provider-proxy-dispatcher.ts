@@ -13,13 +13,13 @@ const PROXY_ENV = "env";
  * - Everything else falls back to the system env proxy (EnvHttpProxyAgent).
  */
 export class ProviderProxyRouter extends Agent {
-  readonly #hostnameMap: Map<string, Dispatcher>;
+  readonly #hostMap: Map<string, Dispatcher>;
   readonly #ownedDispatchers: Dispatcher[];
   readonly #fallback: Dispatcher;
 
-  constructor(hostnameMap: Map<string, Dispatcher>, fallback: Dispatcher, owned: Dispatcher[]) {
+  constructor(hostMap: Map<string, Dispatcher>, fallback: Dispatcher, owned: Dispatcher[]) {
     super();
-    this.#hostnameMap = hostnameMap;
+    this.#hostMap = hostMap;
     this.#fallback = fallback;
     this.#ownedDispatchers = owned;
   }
@@ -27,8 +27,8 @@ export class ProviderProxyRouter extends Agent {
   dispatch(opts: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler): boolean {
     const origin = opts.origin;
     if (origin) {
-      const hostname = extractHostname(typeof origin === "string" ? origin : origin.toString());
-      const target = hostname ? this.#hostnameMap.get(hostname) : undefined;
+      const host = extractHost(typeof origin === "string" ? origin : origin.toString());
+      const target = host ? this.#hostMap.get(host) : undefined;
       if (target) {
         return target.dispatch(opts, handler);
       }
@@ -57,9 +57,10 @@ export class ProviderProxyRouter extends Agent {
   }
 }
 
-function extractHostname(origin: string): string | undefined {
+function extractHost(origin: string): string | undefined {
   try {
-    return new URL(origin).hostname;
+    const url = new URL(origin);
+    return url.host; // hostname:port (port omitted when default for the protocol)
   } catch {
     return undefined;
   }
@@ -79,7 +80,7 @@ export function buildProviderProxyRouter(
     return undefined;
   }
 
-  const hostnameToProxy = new Map<string, string>();
+  const hostToProxy = new Map<string, string>();
   for (const [providerId, providerCfg] of Object.entries(providers)) {
     if (!providerCfg) {
       continue;
@@ -89,42 +90,41 @@ export function buildProviderProxyRouter(
       continue;
     }
 
-    const hostname = extractHostname(providerCfg.baseUrl);
-    if (!hostname) {
+    const host = extractHost(providerCfg.baseUrl);
+    if (!host) {
       logDebug(
-        `[provider-proxy] skipping provider "${providerId}": cannot extract hostname from baseUrl "${providerCfg.baseUrl}"`,
+        `[provider-proxy] skipping provider "${providerId}": cannot extract host from baseUrl "${providerCfg.baseUrl}"`,
       );
       continue;
     }
 
-    const existing = hostnameToProxy.get(hostname);
+    const existing = hostToProxy.get(host);
     if (existing && existing !== proxy) {
       logDebug(
-        `[provider-proxy] hostname "${hostname}" has conflicting proxy values ("${existing}" vs "${proxy}"); last writer wins`,
+        `[provider-proxy] host "${host}" has conflicting proxy values ("${existing}" vs "${proxy}"); last writer wins`,
       );
     }
-    hostnameToProxy.set(hostname, proxy);
+    hostToProxy.set(host, proxy);
   }
 
-  if (hostnameToProxy.size === 0) {
+  if (hostToProxy.size === 0) {
     return undefined;
   }
 
-  const hostnameMap = new Map<string, Dispatcher>();
+  const hostMap = new Map<string, Dispatcher>();
   const owned: Dispatcher[] = [];
-  // Cache dispatchers by proxy URL so multiple hostnames sharing the same proxy reuse a single agent.
   const proxyAgentCache = new Map<string, Dispatcher>();
 
   let directAgent: Agent | undefined;
 
-  for (const [hostname, proxy] of hostnameToProxy) {
+  for (const [host, proxy] of hostToProxy) {
     if (proxy === PROXY_DIRECT) {
       if (!directAgent) {
         directAgent = new Agent();
         owned.push(directAgent);
       }
-      hostnameMap.set(hostname, directAgent);
-      logInfo(`[provider-proxy] ${hostname} → direct (no proxy)`);
+      hostMap.set(host, directAgent);
+      logInfo(`[provider-proxy] ${host} → direct (no proxy)`);
     } else {
       let agent = proxyAgentCache.get(proxy);
       if (!agent) {
@@ -132,13 +132,13 @@ export function buildProviderProxyRouter(
         proxyAgentCache.set(proxy, agent);
         owned.push(agent);
       }
-      hostnameMap.set(hostname, agent);
-      logInfo(`[provider-proxy] ${hostname} → ${proxy}`);
+      hostMap.set(host, agent);
+      logInfo(`[provider-proxy] ${host} → ${proxy}`);
     }
   }
 
   const fallback = new EnvHttpProxyAgent();
-  return new ProviderProxyRouter(hostnameMap, fallback, owned);
+  return new ProviderProxyRouter(hostMap, fallback, owned);
 }
 
 /**

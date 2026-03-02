@@ -160,4 +160,41 @@ describe("ProviderProxyRouter.dispatch", () => {
     const router = buildProviderProxyRouter(cfg);
     expect(router).toBeInstanceOf(ProviderProxyRouter);
   });
+
+  it("routes by host (hostname:port), not hostname alone", () => {
+    const directLocal = makeMockDispatcher();
+    const proxiedLocal = makeMockDispatcher();
+    const fb = makeMockDispatcher();
+    const map = new Map<string, Dispatcher>([
+      ["localhost:11434", directLocal.dispatcher],
+      ["localhost:8080", proxiedLocal.dispatcher],
+    ]);
+    const router = new ProviderProxyRouter(map, fb.dispatcher, [
+      directLocal.dispatcher,
+      proxiedLocal.dispatcher,
+    ]);
+
+    const handler = {} as Dispatcher.DispatchHandler;
+
+    router.dispatch(
+      { origin: "http://localhost:11434", path: "/api/generate", method: "POST" },
+      handler,
+    );
+    expect(directLocal.dispatchFn).toHaveBeenCalledTimes(1);
+    expect(proxiedLocal.dispatchFn).not.toHaveBeenCalled();
+
+    router.dispatch({ origin: "http://localhost:8080", path: "/v1/chat", method: "POST" }, handler);
+    expect(proxiedLocal.dispatchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("distinguishes same hostname with different ports via buildProviderProxyRouter", () => {
+    const cfg: ModelsConfig = {
+      providers: {
+        ollama: minimalProvider("http://localhost:11434", "direct"),
+        localProxy: minimalProvider("http://localhost:8080", "http://127.0.0.1:7890"),
+      },
+    };
+    const router = buildProviderProxyRouter(cfg);
+    expect(router).toBeInstanceOf(ProviderProxyRouter);
+  });
 });

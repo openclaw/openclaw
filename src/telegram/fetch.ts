@@ -1,8 +1,9 @@
 import * as dns from "node:dns";
 import * as net from "node:net";
-import { Agent, setGlobalDispatcher } from "undici";
+import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
+import { ProviderProxyRouter } from "../infra/net/provider-proxy-dispatcher.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -45,16 +46,25 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
     autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
   ) {
     try {
-      setGlobalDispatcher(
-        new Agent({
-          connect: {
-            autoSelectFamily: autoSelectDecision.value,
-            autoSelectFamilyAttemptTimeout: 300,
-          },
-        }),
-      );
-      appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
-      log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
+      // Skip if a ProviderProxyRouter is already installed — overwriting it
+      // would break per-provider proxy routing.
+      if (getGlobalDispatcher() instanceof ProviderProxyRouter) {
+        appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
+        log.info(
+          `skipping global dispatcher replacement (ProviderProxyRouter active); autoSelectFamily=${autoSelectDecision.value}`,
+        );
+      } else {
+        setGlobalDispatcher(
+          new Agent({
+            connect: {
+              autoSelectFamily: autoSelectDecision.value,
+              autoSelectFamilyAttemptTimeout: 300,
+            },
+          }),
+        );
+        appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
+        log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
+      }
     } catch {
       // ignore if setGlobalDispatcher is unavailable
     }

@@ -4,12 +4,18 @@ import { resetTelegramFetchStateForTests, resolveTelegramFetch } from "./fetch.j
 
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
+const getGlobalDispatcher = vi.hoisted(() => vi.fn().mockReturnValue({}));
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
 const AgentCtor = vi.hoisted(() =>
   vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
     this.options = options;
   }),
 );
+const MockProviderProxyRouter = vi.hoisted(() => class MockProviderProxyRouter {});
+
+vi.mock("../infra/net/provider-proxy-dispatcher.js", () => ({
+  ProviderProxyRouter: MockProviderProxyRouter,
+}));
 
 vi.mock("node:net", async () => {
   const actual = await vi.importActual<typeof import("node:net")>("node:net");
@@ -29,6 +35,7 @@ vi.mock("node:dns", async () => {
 
 vi.mock("undici", () => ({
   Agent: AgentCtor,
+  getGlobalDispatcher,
   setGlobalDispatcher,
 }));
 
@@ -38,6 +45,7 @@ afterEach(() => {
   resetTelegramFetchStateForTests();
   setDefaultAutoSelectFamily.mockReset();
   setDefaultResultOrder.mockReset();
+  getGlobalDispatcher.mockReset().mockReturnValue({});
   setGlobalDispatcher.mockReset();
   AgentCtor.mockClear();
   vi.unstubAllEnvs();
@@ -186,5 +194,13 @@ describe("resolveTelegramFetch", () => {
         autoSelectFamilyAttemptTimeout: 300,
       },
     });
+  });
+
+  it("skips setGlobalDispatcher when ProviderProxyRouter is active", async () => {
+    getGlobalDispatcher.mockReturnValue(new MockProviderProxyRouter());
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
   });
 });
