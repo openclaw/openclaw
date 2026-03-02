@@ -9,7 +9,7 @@ import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-iden
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
-import { loadChatHistory } from "./controllers/chat.ts";
+import { loadChatHistory, type ChatState } from "./controllers/chat.ts";
 import {
   applyConfig,
   loadConfig,
@@ -178,6 +178,59 @@ export function renderApp(state: AppViewState) {
             </div>
           `;
         })}
+        ${(() => {
+          const agents = state.agentsList?.agents ?? [];
+          if (agents.length === 0) {
+            return nothing;
+          }
+          const parsed = parseAgentSessionKey(state.sessionKey);
+          const currentAgentId = state.tab === "chat" ? (parsed?.agentId ?? null) : null;
+          const isGroupCollapsed = state.settings.navGroupsCollapsed["Quick Chat"] ?? false;
+          return html`
+            <div class="nav-group ${isGroupCollapsed ? "nav-group--collapsed" : ""}">
+              <button
+                class="nav-label"
+                @click=${() => {
+                  const next = { ...state.settings.navGroupsCollapsed };
+                  next["Quick Chat"] = !isGroupCollapsed;
+                  state.applySettings({ ...state.settings, navGroupsCollapsed: next });
+                }}
+                aria-expanded=${!isGroupCollapsed}
+              >
+                <span class="nav-label__text">Quick Chat</span>
+                <span class="nav-label__chevron">${isGroupCollapsed ? "+" : "−"}</span>
+              </button>
+              <div class="nav-group__items">
+                ${agents.map((agent) => {
+                  const sessionKey = `agent:${agent.id}:main`;
+                  const isActive = currentAgentId === agent.id;
+                  const displayName = agent.identity?.name || agent.name || agent.id;
+                  const emoji = agent.identity?.emoji ?? "";
+                  return html`
+                    <button
+                      class="nav-item ${isActive ? "active" : ""}"
+                      @click=${() => {
+                        state.sessionKey = sessionKey;
+                        state.applySettings({
+                          ...state.settings,
+                          sessionKey,
+                          lastActiveSessionKey: sessionKey,
+                        });
+                        void state.loadAssistantIdentity();
+                        state.setTab("chat");
+                        void loadChatHistory(state as unknown as ChatState);
+                      }}
+                      title=${`Chat with ${displayName}`}
+                    >
+                      <span class="nav-item__icon" aria-hidden="true">${emoji || icons.messageSquare}</span>
+                      <span class="nav-item__text">${displayName}</span>
+                    </button>
+                  `;
+                })}
+              </div>
+            </div>
+          `;
+        })()}
         <div class="nav-group nav-group--links">
           <div class="nav-label nav-label--static">
             <span class="nav-label__text">Resources</span>

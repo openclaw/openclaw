@@ -25,6 +25,7 @@ import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
+import { createGatewayOAuthCallbackHandler } from "./server/oauth-callback.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { createGatewayWebhooksRequestHandler } from "./server/webhooks.js";
 
@@ -135,6 +136,12 @@ export async function createGatewayRuntimeState(params: {
     log: params.logPlugins,
   });
 
+  const logOAuth = params.logHooks.child("oauth");
+  const handleOAuthCallbackRequest = createGatewayOAuthCallbackHandler({
+    deps: params.deps,
+    logOAuth,
+  });
+
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
   const httpServers: HttpServer[] = [];
   const httpBindHosts: string[] = [];
@@ -150,6 +157,7 @@ export async function createGatewayRuntimeState(params: {
       openResponsesConfig: params.openResponsesConfig,
       handleHooksRequest,
       handleWebhooksRequest,
+      handleOAuthCallbackRequest,
       handlePluginRequest,
       resolvedAuth: params.resolvedAuth,
       tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
