@@ -210,7 +210,7 @@ export async function executeSendAction(params: {
       if (!params.ctx.mirror) {
         return;
       }
-      const mirrorText = params.ctx.mirror.text ?? pluginSendAttempt.content;
+      const mirrorText = pluginSendAttempt.content;
       const mirrorMediaUrls =
         params.ctx.mirror.mediaUrls ??
         params.mediaUrls ??
