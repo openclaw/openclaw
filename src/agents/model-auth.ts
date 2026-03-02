@@ -98,7 +98,7 @@ function resolveMissingApiKeyHint(provider: string): string | null {
   if (normalized === "google-vertex") {
     return 'Authenticate with gcloud ADC, or set models.providers.google-vertex.apiKey in config (for example, `openclaw config set models.providers.google-vertex.apiKey "<key>"`).';
   }
-  const envVar = PROVIDER_ENV_API_KEY_MAP[normalized] ?? getEnvApiKey(normalized);
+  const envVar = PROVIDER_ENV_API_KEY_MAP[normalized];
   if (!envVar) {
     return null;
   }
