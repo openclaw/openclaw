@@ -11,43 +11,58 @@ metadata:
 
 # notion
 
-Use the Notion API to create/read/update pages, data sources (databases), and blocks.
+**CRITICAL RULES — READ ALL BEFORE ACTING:**
+1. **There is NO `notion` tool.** Do NOT call `notion(...)` or `notion -> {action: ...}`. That will always fail with "Tool not found".
+2. **Use `exec` with `curl` shell commands.** That is the ONLY way to call the Notion API.
+3. **`NOTION_API_KEY` is already set** in the environment. Do not ask the user for it. Do not say it's missing. Just use `$NOTION_API_KEY` inside your `exec` curl commands.
+4. **NEVER use `web_fetch` for Notion** — private pages always require auth. Use `exec` + `curl` only.
+5. **Extract page ID from Notion URLs:** `https://www.notion.so/workspace/29c84dee9055805eb3abdaf876b1d15f` → ID is `29c84dee9055805eb3abdaf876b1d15f`
 
-## Setup
-
-1. Create an integration at https://notion.so/my-integrations
-2. Copy the API key (starts with `ntn_` or `secret_`)
-3. Store it:
-
+**Correct approach — always do this:**
 ```bash
-mkdir -p ~/.config/notion
-echo "ntn_your_key_here" > ~/.config/notion/api_key
+# exec this shell command:
+curl "https://api.notion.com/v1/pages/PAGE_ID_HERE" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28"
 ```
 
-4. Share target pages/databases with your integration (click "..." → "Connect to" → your integration name)
+Use the Notion API to read/create/update pages, databases, and blocks via `exec` (curl).
 
 ## API Basics
 
 All requests need:
 
 ```bash
-NOTION_KEY=$(cat ~/.config/notion/api_key)
 curl -X GET "https://api.notion.com/v1/..." \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
   -H "Content-Type: application/json"
 ```
 
-> **Note:** The `Notion-Version` header is required. This skill uses `2025-09-03` (latest). In this version, databases are called "data sources" in the API.
+## Finding Databases (IMPORTANT)
+
+When a user gives a page URL but you need a database, **do NOT guess the database ID from the page ID**. Instead:
+
+**Step 1 — Find all accessible databases:**
+```bash
+curl -X POST "https://api.notion.com/v1/search" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
+  -H "Content-Type: application/json" \
+  -d '{"filter": {"value": "database", "property": "object"}}'
+```
+This returns all databases the integration can access, with their `id` and `title`.
+
+**Step 2 — Pick the relevant database** by title and use its `id` to query it.
 
 ## Common Operations
 
-**Search for pages and data sources:**
+**Search for pages:**
 
 ```bash
 curl -X POST "https://api.notion.com/v1/search" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
   -H "Content-Type: application/json" \
   -d '{"query": "page title"}'
 ```
@@ -56,24 +71,24 @@ curl -X POST "https://api.notion.com/v1/search" \
 
 ```bash
 curl "https://api.notion.com/v1/pages/{page_id}" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03"
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28"
 ```
 
 **Get page content (blocks):**
 
 ```bash
 curl "https://api.notion.com/v1/blocks/{page_id}/children" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03"
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28"
 ```
 
-**Create page in a data source:**
+**Create page in a database:**
 
 ```bash
 curl -X POST "https://api.notion.com/v1/pages" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
   -H "Content-Type: application/json" \
   -d '{
     "parent": {"database_id": "xxx"},
@@ -84,12 +99,12 @@ curl -X POST "https://api.notion.com/v1/pages" \
   }'
 ```
 
-**Query a data source (database):**
+**Query a database:**
 
 ```bash
-curl -X POST "https://api.notion.com/v1/data_sources/{data_source_id}/query" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+curl -X POST "https://api.notion.com/v1/databases/{database_id}/query" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
   -H "Content-Type: application/json" \
   -d '{
     "filter": {"property": "Status", "select": {"equals": "Active"}},
@@ -97,12 +112,12 @@ curl -X POST "https://api.notion.com/v1/data_sources/{data_source_id}/query" \
   }'
 ```
 
-**Create a data source (database):**
+**Create a database:**
 
 ```bash
-curl -X POST "https://api.notion.com/v1/data_sources" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+curl -X POST "https://api.notion.com/v1/databases" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
   -H "Content-Type: application/json" \
   -d '{
     "parent": {"page_id": "xxx"},
@@ -119,8 +134,8 @@ curl -X POST "https://api.notion.com/v1/data_sources" \
 
 ```bash
 curl -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
   -H "Content-Type: application/json" \
   -d '{"properties": {"Status": {"select": {"name": "Done"}}}}'
 ```
@@ -129,8 +144,8 @@ curl -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
 
 ```bash
 curl -X PATCH "https://api.notion.com/v1/blocks/{page_id}/children" \
-  -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
+  -H "Notion-Version: 2022-06-28" \
   -H "Content-Type: application/json" \
   -d '{
     "children": [
@@ -154,19 +169,8 @@ Common property formats for database items:
 - **Email:** `{"email": "a@b.com"}`
 - **Relation:** `{"relation": [{"id": "page_id"}]}`
 
-## Key Differences in 2025-09-03
-
-- **Databases → Data Sources:** Use `/data_sources/` endpoints for queries and retrieval
-- **Two IDs:** Each database now has both a `database_id` and a `data_source_id`
-  - Use `database_id` when creating pages (`parent: {"database_id": "..."}`)
-  - Use `data_source_id` when querying (`POST /v1/data_sources/{id}/query`)
-- **Search results:** Databases return as `"object": "data_source"` with their `data_source_id`
-- **Parent in responses:** Pages show `parent.data_source_id` alongside `parent.database_id`
-- **Finding the data_source_id:** Search for the database, or call `GET /v1/data_sources/{data_source_id}`
-
 ## Notes
 
 - Page/database IDs are UUIDs (with or without dashes)
 - The API cannot set database view filters — that's UI-only
 - Rate limit: ~3 requests/second average
-- Use `is_inline: true` when creating data sources to embed them in pages
