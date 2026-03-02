@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import * as schedule from "./schedule.js";
 import { CronService } from "./service.js";
@@ -157,17 +157,14 @@ describe("Cron issue regressions", () => {
   });
 
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-06T10:05:00.000Z"));
   });
 
   afterAll(async () => {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  });
-
-  afterEach(() => {
     vi.useRealTimers();
-    vi.clearAllMocks();
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   it("covers schedule updates and payload patching", async () => {
