@@ -3,9 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { _probeThrottleInternals } from "../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
@@ -215,8 +213,6 @@ describe("runCronIsolatedAgentTurn", () => {
   });
 
   beforeEach(() => {
-    clearRuntimeAuthProfileStoreSnapshots();
-    _probeThrottleInternals.lastProbeAttempt.clear();
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
