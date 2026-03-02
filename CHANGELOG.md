@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Outbound adapters/plugins: add shared `sendPayload` support across direct-text-media, Discord, Slack, WhatsApp, Zalo, and Zalouser with multi-media iteration and chunk-aware text fallback. (#30144) Thanks @nohat.
+- Media understanding/audio echo: add optional `tools.media.audio.echoTranscript` + `echoFormat` to send a pre-agent transcript confirmation message to the originating chat, with echo disabled by default. (#32150) Thanks @AytuncYildizli.
 - Plugin runtime/STT: add `api.runtime.stt.transcribeAudioFile(...)` so extensions can transcribe local audio files through OpenClaw's configured media-understanding audio providers. (#22402) Thanks @benthecarman.
 - Sessions/Attachments: add inline file attachment support for `sessions_spawn` (subagent runtime only) with base64/utf8 encoding, transcript content redaction, lifecycle cleanup, and configurable limits via `tools.sessions_spawn.attachments`. (#16761) Thanks @napetrov.
 - Tools/PDF analysis: add a first-class `pdf` tool with native Anthropic and Google PDF provider support, extraction fallback for non-native models, configurable defaults (`agents.defaults.pdfModel`, `pdfMaxBytesMb`, `pdfMaxPages`), and docs/tests covering routing, validation, and registration. (#31319) Thanks @tyler6204.
