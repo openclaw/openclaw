@@ -208,6 +208,7 @@ describe("whatsapp resolveTarget", () => {
 describe("whatsapp action dispatch", () => {
   it("falls back to inbound MessageSid when messageId is omitted", async () => {
     await whatsappPlugin.actions?.handleAction?.({
+      channel: "whatsapp",
       action: "react",
       params: {
         to: "123@s.whatsapp.net",
@@ -232,6 +233,7 @@ describe("whatsapp action dispatch", () => {
 
   it("prefers explicit messageId over MessageSid fallback", async () => {
     await whatsappPlugin.actions?.handleAction?.({
+      channel: "whatsapp",
       action: "react",
       params: {
         to: "123@s.whatsapp.net",
