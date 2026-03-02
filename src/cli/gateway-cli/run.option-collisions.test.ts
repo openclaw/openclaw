@@ -241,7 +241,7 @@ describe("gateway run option collisions", () => {
         exists: true,
         valid: false,
         path: "/tmp/openclaw-test-missing-config.json",
-        issues: [{ path: "gateway.mode", message: "invalid" }],
+        issues: [{ path: "", message: "JSON5 parse failed: unterminated string" }],
       })
       .mockResolvedValueOnce({
         exists: true,
@@ -259,6 +259,23 @@ describe("gateway run option collisions", () => {
     expect(startGatewayServer).toHaveBeenCalled();
     expect(runtimeErrors).toContain(
       "Recovered invalid config from backup: /tmp/openclaw-test-missing-config.json.bak -> /tmp/openclaw-test-missing-config.json.",
+    );
+  });
+
+  it("does not restore from .bak for plugin validation failures", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      path: "/tmp/openclaw-test-missing-config.json",
+      issues: [{ path: "plugins.allow[0]", message: "plugin not found: foo-plugin" }],
+    });
+
+    await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:1");
+
+    expect(restoreConfigFromBackupFile).not.toHaveBeenCalled();
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(runtimeErrors).toContain(
+      "Gateway start blocked: invalid config at /tmp/openclaw-test-missing-config.json.",
     );
   });
 

@@ -117,20 +117,9 @@ function formatModeErrorList<T extends string>(modes: readonly T[]): string {
 }
 
 function isCorruptionStyleConfigIssue(message: string): boolean {
-  if (message.startsWith("JSON5 parse failed:")) {
-    return true;
-  }
-  if (message.startsWith("Include resolution failed:")) {
-    return false;
-  }
-  if (message.startsWith("Env var substitution failed:")) {
-    return false;
-  }
-  if (message.startsWith("read failed:")) {
-    return false;
-  }
-  // Validation issues include schema/unknown-key failures and should allow rollback.
-  return true;
+  // Only syntax/parse failures are treated as corruption-style failures where
+  // restoring from .bak is safe and expected.
+  return message.startsWith("JSON5 parse failed:");
 }
 
 function shouldAttemptInvalidConfigRollback(
