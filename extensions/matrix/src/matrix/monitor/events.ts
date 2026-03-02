@@ -5,11 +5,20 @@ import { sendReadReceiptMatrix } from "../send.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 
-// Track which clients have had monitor events registered to prevent
-// duplicate listener registration when the plugin loads twice
-// (e.g. bundled channel + extension both try to start).
-// See: https://github.com/openclaw/openclaw/issues/18330
-const registeredClients = new WeakSet<object>();
+const matrixMonitorListenerRegistry = (() => {
+  // Prevent duplicate listener registration when both bundled and extension
+  // paths attempt to start monitors against the same shared client.
+  const registeredClients = new WeakSet<object>();
+  return {
+    tryRegister(client: object): boolean {
+      if (registeredClients.has(client)) {
+        return false;
+      }
+      registeredClients.add(client);
+      return true;
+    },
+  };
+})();
 
 function createSelfUserIdResolver(client: Pick<MatrixClient, "getUserId">) {
   let selfUserId: string | undefined;
@@ -47,11 +56,10 @@ export function registerMatrixMonitorEvents(params: {
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
 }): void {
-  if (registeredClients.has(params.client)) {
-    console.error("[matrix] skipping duplicate listener registration for client");
+  if (!matrixMonitorListenerRegistry.tryRegister(params.client)) {
+    params.logVerboseMessage("matrix: skipping duplicate listener registration for client");
     return;
   }
-  registeredClients.add(params.client);
 
   const {
     client,
