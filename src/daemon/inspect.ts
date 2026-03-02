@@ -110,7 +110,7 @@ function collectSystemdExecStartLines(contents: string): string[] {
   return contents
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter((line) => line.toLowerCase().startsWith("execstart="));
+    .filter((line) => /^execstart\s*=/i.test(line));
 }
 
 /**
