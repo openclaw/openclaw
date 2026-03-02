@@ -463,7 +463,7 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("no api key found")).toBe("auth");
     expect(
       classifyFailoverReason(
-        'No API key found for provider "openai". Set OPENAI_API_KEY or run `openclaw auth add openai` to configure it.',
+        'No API key found for provider "openai". Set OPENAI_API_KEY or run `openclaw models auth add` to configure it.',
       ),
     ).toBe("auth");
     expect(classifyFailoverReason("You have insufficient permissions for this operation.")).toBe(

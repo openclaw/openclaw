@@ -252,7 +252,7 @@ export async function resolveApiKeyForProvider(params: {
     [
       `No API key found for provider "${provider}".`,
       envHint ? `Set ${envHint} or run` : "Run",
-      `${formatCliCommand(`openclaw auth add ${provider}`)} to configure it.`,
+      `${formatCliCommand("openclaw models auth add")} to configure it.`,
     ].join(" "),
   );
 }
