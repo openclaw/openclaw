@@ -87,8 +87,18 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   // back to the configured main session after it comes back up.
   if (opts.notify) {
     const mainSessionKey = resolveMainSessionKeyFromConfig();
-    if (mainSessionKey) {
-      const { deliveryContext, threadId } = extractDeliveryInfo(mainSessionKey);
+    const { deliveryContext, threadId } = extractDeliveryInfo(mainSessionKey);
+
+    const hasRoute = Boolean(deliveryContext?.channel && deliveryContext?.to);
+    if (!hasRoute) {
+      if (!json) {
+        defaultRuntime.log(
+          theme.warn(
+            `--notify requested but main session (${mainSessionKey}) has no delivery target; skipping post-restart notification.`,
+          ),
+        );
+      }
+    } else {
       const note = typeof opts.note === "string" && opts.note.trim() ? opts.note.trim() : null;
       const payload: RestartSentinelPayload = {
         kind: "restart",
@@ -109,12 +119,6 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       } catch {
         // best-effort
       }
-    } else if (!json) {
-      defaultRuntime.log(
-        theme.warn(
-          "--notify requested but no main session is configured; skipping post-restart notification.",
-        ),
-      );
     }
   }
 
