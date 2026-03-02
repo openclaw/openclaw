@@ -223,11 +223,12 @@ enum GatewaySettingsStore {
         defaults.removeObject(forKey: self.lastGatewayStableIDDefaultsKey)
     }
 
-    private static func saveLastGatewayConnectionData(_ payload: LastGatewayConnectionData) {
+    @discardableResult
+    private static func saveLastGatewayConnectionData(_ payload: LastGatewayConnectionData) -> Bool {
         guard let data = try? JSONEncoder().encode(payload),
               let json = String(data: data, encoding: .utf8)
-        else { return }
-        _ = KeychainStore.saveString(
+        else { return false }
+        return KeychainStore.saveString(
             json, service: self.gatewayService, account: self.lastGatewayConnectionAccount)
     }
 
@@ -259,7 +260,7 @@ enum GatewaySettingsStore {
             kind: kind, stableID: stableID, useTLS: useTLS,
             host: kind == .manual ? host : nil,
             port: kind == .manual ? port : nil)
-        self.saveLastGatewayConnectionData(payload)
+        guard self.saveLastGatewayConnectionData(payload) else { return }
         self.removeLastGatewayDefaults(defaults)
     }
 

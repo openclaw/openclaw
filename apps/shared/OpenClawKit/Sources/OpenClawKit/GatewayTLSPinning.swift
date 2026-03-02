@@ -46,7 +46,7 @@ public enum GatewayTLSStore {
             !existing.isEmpty
         else { return }
         if self.keychainLoad(account: stableID) == nil {
-            self.keychainSave(existing, account: stableID)
+            guard self.keychainSave(existing, account: stableID) else { return }
         }
         defaults.removeObject(forKey: legacyKey)
     }
