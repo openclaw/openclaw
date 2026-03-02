@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Outbound adapters/plugins: add shared `sendPayload` support across direct-text-media, Discord, Slack, WhatsApp, Zalo, and Zalouser with multi-media iteration and chunk-aware text fallback. (#30144) Thanks @nohat.
+- Plugin runtime/STT: add `api.runtime.stt.transcribeAudioFile(...)` so extensions can transcribe local audio files through OpenClaw's configured media-understanding audio providers. (#22402) Thanks @benthecarman.
 - Sessions/Attachments: add inline file attachment support for `sessions_spawn` (subagent runtime only) with base64/utf8 encoding, transcript content redaction, lifecycle cleanup, and configurable limits via `tools.sessions_spawn.attachments`. (#16761) Thanks @napetrov.
 - Tools/PDF analysis: add a first-class `pdf` tool with native Anthropic and Google PDF provider support, extraction fallback for non-native models, configurable defaults (`agents.defaults.pdfModel`, `pdfMaxBytesMb`, `pdfMaxPages`), and docs/tests covering routing, validation, and registration. (#31319) Thanks @tyler6204.
 - Zalo Personal plugin (`@openclaw/zalouser`): rebuilt channel runtime to use native `zca-js` integration in-process, removing external CLI transport usage and keeping QR/login + send/listen flows fully inside OpenClaw.
@@ -24,6 +25,11 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - macOS/LaunchAgent security defaults: write `Umask=63` (octal `077`) into generated gateway launchd plists so post-update service reinstalls keep owner-only file permissions by default instead of falling back to system `022`. (#32022) Fixes #31905. Thanks @liuxiaopai-ai.
+- Plugin SDK/runtime hardening: add package export verification in CI/release checks to catch missing runtime exports before publish-time regressions. (#28575) Thanks @Glucksberg.
+- Media understanding/provider HTTP proxy routing: pass a proxy-aware fetch function from `HTTPS_PROXY`/`HTTP_PROXY` env vars into audio/video provider calls (with graceful malformed-proxy fallback) so transcription/video requests honor configured outbound proxies. (#27093) Thanks @mcaxtr.
+- Media understanding/malformed attachment guards: harden attachment selection and decision summary formatting against non-array or malformed attachment payloads to prevent runtime crashes on invalid inbound metadata shapes. (#28024) Thanks @claw9267.
+- Media understanding/audio transcription guard: skip tiny/empty audio files (<1024 bytes) before provider/CLI transcription to avoid noisy invalid-audio failures and preserve clean fallback behavior. (#8388) Thanks @Glucksberg.
+- OpenAI media capabilities: include `audio` in the OpenAI provider capability list so audio transcription models are eligible in media-understanding provider selection. (#12717) Thanks @openjay.
 - Security/Node exec approvals: preserve shell/dispatch-wrapper argv semantics during approval hardening so approved wrapper commands (for example `env sh -c ...`) cannot drift into a different runtime command shape, and add regression coverage for both approval-plan generation and approved runtime execution paths. Thanks @tdjackey for reporting.
 - Browser/Security output boundary hardening: replace check-then-rename output commits with root-bound fd-verified writes, unify install/skills canonical path-boundary checks, and add regression coverage for symlink-rebind race paths across browser output and shared fs-safe write flows. Thanks @tdjackey for reporting.
 - Security/Webhook request hardening: enforce auth-before-body parsing for BlueBubbles and Google Chat webhook handlers, add strict pre-auth body/time budgets for webhook auth paths (including LINE signature verification), and add shared in-flight/request guardrails plus regression tests/lint checks to prevent reintroducing unauthenticated slow-body DoS patterns. Thanks @GCXWLP for reporting.

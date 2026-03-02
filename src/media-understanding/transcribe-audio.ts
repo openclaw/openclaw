@@ -23,7 +23,7 @@ export async function transcribeAudioFile(params: {
 }): Promise<{ text: string | undefined }> {
   const ctx = {
     MediaPath: params.filePath,
-    MediaType: params.mime ?? "audio/wav",
+    MediaType: params.mime,
   };
   const attachments = normalizeMediaAttachments(ctx);
   if (attachments.length === 0) {
