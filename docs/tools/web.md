@@ -190,7 +190,7 @@ which returns AI-synthesized answers backed by live Google Search results with c
 **Environment alternative:** set `GEMINI_API_KEY` in the Gateway environment.
 For a gateway install, put it in `~/.openclaw/.env`.
 
-### Notes
+### Gemini notes
 
 - Citation URLs from Gemini grounding are automatically resolved from Google's
   redirect URLs to direct URLs.
