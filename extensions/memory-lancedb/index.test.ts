@@ -135,6 +135,65 @@ describe("memory plugin e2e", () => {
     expect(config?.autoRecall).toBe(true);
   });
 
+  test("registers memory CLI command alongside ltm command", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const registeredClis: Array<{ registrar: any; opts: any }> = [];
+
+    const mockApi = {
+      id: "memory-lancedb",
+      name: "Memory (LanceDB)",
+      source: "test",
+      config: {},
+      pluginConfig: {
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+          model: "text-embedding-3-small",
+        },
+        dbPath,
+        autoCapture: false,
+        autoRecall: false,
+      },
+      runtime: {
+        tools: {
+          registerMemoryCli: () => {},
+        },
+      },
+      logger: {
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        debug: () => {},
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+      registerTool: () => {},
+      // oxlint-disable-next-line typescript/no-explicit-any
+      registerCli: (registrar: any, opts: any) => {
+        registeredClis.push({ registrar, opts });
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+      registerService: () => {},
+      // oxlint-disable-next-line typescript/no-explicit-any
+      on: () => {},
+      resolvePath: (p: string) => p,
+    };
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    memoryPlugin.register(mockApi as any);
+
+    expect(
+      registeredClis.some(
+        (entry) => Array.isArray(entry.opts?.commands) && entry.opts.commands.includes("ltm"),
+      ),
+    ).toBe(true);
+    expect(
+      registeredClis.some(
+        (entry) => Array.isArray(entry.opts?.commands) && entry.opts.commands.includes("memory"),
+      ),
+    ).toBe(true);
+  });
+
   test("shouldCapture applies real capture rules", async () => {
     const { shouldCapture } = await import("./index.js");
 
