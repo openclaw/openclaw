@@ -314,4 +314,41 @@ describe("packNpmSpecToArchive", () => {
       error: "npm pack failed: network timeout",
     });
   });
+
+  it("selects newest archive by mtime when multiple tgz files exist in cwd", async () => {
+    const cwd = await createTempDir("openclaw-install-source-utils-");
+
+    // Create an older archive first
+    const olderArchive = path.join(cwd, "openclaw-plugin-old-1.0.0.tgz");
+    await fs.writeFile(olderArchive, "old", "utf-8");
+
+    // Set the older file's mtime to 10 seconds in the past
+    const pastTime = new Date(Date.now() - 10_000);
+    await fs.utimes(olderArchive, pastTime, pastTime);
+
+    // Create a newer archive
+    const newerArchive = path.join(cwd, "openclaw-plugin-new-2.0.0.tgz");
+    await fs.writeFile(newerArchive, "new", "utf-8");
+
+    // npm pack returns empty stdout so the fallback dir scan triggers
+    runCommandWithTimeoutMock.mockResolvedValue({
+      stdout: " \n\n",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+
+    const result = await packNpmSpecToArchive({
+      spec: "openclaw-plugin@2.0.0",
+      timeoutMs: 5000,
+      cwd,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // Should pick the newer archive (most recent mtime)
+      expect(result.archivePath).toBe(newerArchive);
+    }
+  });
 });
