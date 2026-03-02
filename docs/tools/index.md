@@ -397,6 +397,26 @@ Notes:
 - Only available when `agents.defaults.imageModel` is configured (primary or fallbacks), or when an implicit image model can be inferred from your default model + configured auth (best-effort pairing).
 - Uses the image model directly (independent of the main chat model).
 
+### `pdf`
+
+Analyze one or more PDF documents.
+
+Core parameters:
+
+- `pdf` (single path or URL)
+- `pdfs` (multiple paths or URLs, up to 10)
+- `prompt` (optional, defaults to "Analyze this PDF document.")
+- `pages` (optional page range like `1-5` or `1,3,7-9`)
+- `model` (optional model override)
+- `maxBytesMb` (optional size cap)
+
+Notes:
+
+- Native PDF provider mode is supported for Anthropic and Google models.
+- Non-native models use PDF extraction fallback, text first, then rasterized page images when needed.
+- `pages` filtering is only supported in extraction fallback mode. Native providers return a clear error when `pages` is set.
+- Defaults are configurable via `agents.defaults.pdfModel`, `agents.defaults.pdfMaxBytesMb`, and `agents.defaults.pdfMaxPages`.
+
 ### `message`
 
 Send messages and channel actions across Discord/Google Chat/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams.
