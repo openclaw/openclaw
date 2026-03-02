@@ -1,5 +1,6 @@
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { note } from "../terminal/note.js";
 
 const TLS_CERT_ERROR_CODES = new Set([
@@ -53,7 +54,6 @@ function extractFailure(error: unknown): {
   const isTlsCertError =
     (code ? TLS_CERT_ERROR_CODES.has(code) : false) ||
     TLS_CERT_ERROR_PATTERNS.some((pattern) => pattern.test(message));
-
   return {
     code,
     message,
@@ -77,6 +77,26 @@ function resolveCertBundlePath(): string | null {
     return null;
   }
   return path.join(prefix, "etc", "openssl@3", "cert.pem");
+}
+
+function hasOpenAICodexOAuthProfile(cfg: OpenClawConfig): boolean {
+  const profiles = cfg.auth?.profiles;
+  if (!profiles) {
+    return false;
+  }
+  return Object.values(profiles).some(
+    (profile) => profile.provider === "openai-codex" && profile.mode === "oauth",
+  );
+}
+
+function shouldRunOpenAIOAuthTlsPrerequisites(params: {
+  cfg: OpenClawConfig;
+  deep?: boolean;
+}): boolean {
+  if (params.deep === true) {
+    return true;
+  }
+  return hasOpenAICodexOAuthProfile(params.cfg);
 }
 
 export async function runOpenAIOAuthTlsPreflight(options?: {
@@ -129,7 +149,13 @@ export function formatOpenAIOAuthTlsPreflightFix(
   return lines.join("\n");
 }
 
-export async function noteOpenAIOAuthTlsPrerequisites(): Promise<void> {
+export async function noteOpenAIOAuthTlsPrerequisites(params: {
+  cfg: OpenClawConfig;
+  deep?: boolean;
+}): Promise<void> {
+  if (!shouldRunOpenAIOAuthTlsPrerequisites(params)) {
+    return;
+  }
   const result = await runOpenAIOAuthTlsPreflight({ timeoutMs: 4000 });
   if (result.ok || result.kind !== "tls-cert") {
     return;
