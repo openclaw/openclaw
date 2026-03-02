@@ -73,6 +73,7 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
     "env",
     "timeoutMs",
     "needsScreenRecording",
+    "wakeOnExit",
     "agentId",
     "sessionKey",
     "runId",
