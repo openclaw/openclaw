@@ -1,5 +1,19 @@
 import { Type, type Static } from "@sinclair/typebox";
 
+const tableCreationProperties = {
+  doc_token: Type.String({ description: "Document token" }),
+  parent_block_id: Type.Optional(
+    Type.String({ description: "Parent block ID (default: document root)" }),
+  ),
+  row_size: Type.Integer({ description: "Table row count", minimum: 1 }),
+  column_size: Type.Integer({ description: "Table column count", minimum: 1 }),
+  column_width: Type.Optional(
+    Type.Array(Type.Number({ minimum: 1 }), {
+      description: "Column widths in px (length should match column_size)",
+    }),
+  ),
+};
+
 export const FeishuDocSchema = Type.Union([
   Type.Object({
     action: Type.Literal("read"),
@@ -59,17 +73,7 @@ export const FeishuDocSchema = Type.Union([
   // Table creation (explicit structure)
   Type.Object({
     action: Type.Literal("create_table"),
-    doc_token: Type.String({ description: "Document token" }),
-    parent_block_id: Type.Optional(
-      Type.String({ description: "Parent block ID (default: document root)" }),
-    ),
-    row_size: Type.Integer({ description: "Table row count", minimum: 1 }),
-    column_size: Type.Integer({ description: "Table column count", minimum: 1 }),
-    column_width: Type.Optional(
-      Type.Array(Type.Number({ minimum: 1 }), {
-        description: "Column widths in px (length should match column_size)",
-      }),
-    ),
+    ...tableCreationProperties,
   }),
   Type.Object({
     action: Type.Literal("write_table_cells"),
@@ -82,17 +86,7 @@ export const FeishuDocSchema = Type.Union([
   }),
   Type.Object({
     action: Type.Literal("create_table_with_values"),
-    doc_token: Type.String({ description: "Document token" }),
-    parent_block_id: Type.Optional(
-      Type.String({ description: "Parent block ID (default: document root)" }),
-    ),
-    row_size: Type.Integer({ description: "Table row count", minimum: 1 }),
-    column_size: Type.Integer({ description: "Table column count", minimum: 1 }),
-    column_width: Type.Optional(
-      Type.Array(Type.Number({ minimum: 1 }), {
-        description: "Column widths in px (length should match column_size)",
-      }),
-    ),
+    ...tableCreationProperties,
     values: Type.Array(Type.Array(Type.String()), {
       description: "2D matrix values[row][col] to write into table cells",
       minItems: 1,

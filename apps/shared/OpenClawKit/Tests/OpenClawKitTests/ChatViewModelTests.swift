@@ -24,6 +24,14 @@ private func waitUntil(
     throw TimeoutError(label: label)
 }
 
+private func chatTextMessage(role: String, text: String, timestamp: Double) -> AnyCodable {
+    AnyCodable([
+        "role": role,
+        "content": [["type": "text", "text": text]],
+        "timestamp": timestamp,
+    ])
+}
+
 private actor TestChatTransportState {
     var historyCallCount: Int = 0
     var sessionsCallCount: Int = 0
@@ -148,11 +156,10 @@ extension TestChatTransportState {
             sessionKey: "main",
             sessionId: sessionId,
             messages: [
-                AnyCodable([
-                    "role": "assistant",
-                    "content": [["type": "text", "text": "final answer"]],
-                    "timestamp": Date().timeIntervalSince1970 * 1000,
-                ]),
+                chatTextMessage(
+                    role: "assistant",
+                    text: "final answer",
+                    timestamp: Date().timeIntervalSince1970 * 1000),
             ],
             thinkingLevel: "off")
 
@@ -225,11 +232,10 @@ extension TestChatTransportState {
             sessionKey: "main",
             sessionId: "sess-main",
             messages: [
-                AnyCodable([
-                    "role": "assistant",
-                    "content": [["type": "text", "text": "from history"]],
-                    "timestamp": Date().timeIntervalSince1970 * 1000,
-                ]),
+                chatTextMessage(
+                    role: "assistant",
+                    text: "from history",
+                    timestamp: Date().timeIntervalSince1970 * 1000),
             ],
             thinkingLevel: "off")
 
@@ -267,27 +273,15 @@ extension TestChatTransportState {
             sessionKey: "main",
             sessionId: "sess-main",
             messages: [
-                AnyCodable([
-                    "role": "user",
-                    "content": [["type": "text", "text": "first"]],
-                    "timestamp": now,
-                ]),
+                chatTextMessage(role: "user", text: "first", timestamp: now),
             ],
             thinkingLevel: "off")
         let history2 = OpenClawChatHistoryPayload(
             sessionKey: "main",
             sessionId: "sess-main",
             messages: [
-                AnyCodable([
-                    "role": "user",
-                    "content": [["type": "text", "text": "first"]],
-                    "timestamp": now,
-                ]),
-                AnyCodable([
-                    "role": "assistant",
-                    "content": [["type": "text", "text": "from external run"]],
-                    "timestamp": now + 1,
-                ]),
+                chatTextMessage(role: "user", text: "first", timestamp: now),
+                chatTextMessage(role: "assistant", text: "from external run", timestamp: now + 1),
             ],
             thinkingLevel: "off")
 
@@ -317,27 +311,15 @@ extension TestChatTransportState {
             sessionKey: "main",
             sessionId: "sess-main",
             messages: [
-                AnyCodable([
-                    "role": "user",
-                    "content": [["type": "text", "text": "hello"]],
-                    "timestamp": now,
-                ]),
+                chatTextMessage(role: "user", text: "hello", timestamp: now),
             ],
             thinkingLevel: "off")
         let history2 = OpenClawChatHistoryPayload(
             sessionKey: "main",
             sessionId: "sess-main",
             messages: [
-                AnyCodable([
-                    "role": "user",
-                    "content": [["type": "text", "text": "hello"]],
-                    "timestamp": now,
-                ]),
-                AnyCodable([
-                    "role": "assistant",
-                    "content": [["type": "text", "text": "world"]],
-                    "timestamp": now + 1,
-                ]),
+                chatTextMessage(role: "user", text: "hello", timestamp: now),
+                chatTextMessage(role: "assistant", text: "world", timestamp: now + 1),
             ],
             thinkingLevel: "off")
 
@@ -427,11 +409,7 @@ extension TestChatTransportState {
             sessionKey: "main",
             sessionId: "sess-main",
             messages: [
-                AnyCodable([
-                    "role": "assistant",
-                    "content": [["type": "text", "text": "resynced after gap"]],
-                    "timestamp": now,
-                ]),
+                chatTextMessage(role: "assistant", text: "resynced after gap", timestamp: now),
             ],
             thinkingLevel: "off")
 

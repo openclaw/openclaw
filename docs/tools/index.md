@@ -174,7 +174,7 @@ Optional plugin tools:
 
 - [Lobster](/tools/lobster): typed workflow runtime with resumable approvals (requires the Lobster CLI on the gateway host).
 - [LLM Task](/tools/llm-task): JSON-only LLM step for structured workflow output (optional schema validation).
-- [Diffs](/tools/diffs): read-only diff viewer and PNG renderer for before/after text or unified patches.
+- [Diffs](/tools/diffs): read-only diff viewer and PNG or PDF file renderer for before/after text or unified patches.
 
 ## Tool inventory
 
@@ -396,6 +396,26 @@ Notes:
 
 - Only available when `agents.defaults.imageModel` is configured (primary or fallbacks), or when an implicit image model can be inferred from your default model + configured auth (best-effort pairing).
 - Uses the image model directly (independent of the main chat model).
+
+### `pdf`
+
+Analyze one or more PDF documents.
+
+Core parameters:
+
+- `pdf` (single path or URL)
+- `pdfs` (multiple paths or URLs, up to 10)
+- `prompt` (optional, defaults to "Analyze this PDF document.")
+- `pages` (optional page range like `1-5` or `1,3,7-9`)
+- `model` (optional model override)
+- `maxBytesMb` (optional size cap)
+
+Notes:
+
+- Native PDF provider mode is supported for Anthropic and Google models.
+- Non-native models use PDF extraction fallback, text first, then rasterized page images when needed.
+- `pages` filtering is only supported in extraction fallback mode. Native providers return a clear error when `pages` is set.
+- Defaults are configurable via `agents.defaults.pdfModel`, `agents.defaults.pdfMaxBytesMb`, and `agents.defaults.pdfMaxPages`.
 
 ### `message`
 
