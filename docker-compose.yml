@@ -1,38 +1,66 @@
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    group_add:
+      - "${OPENCLAW_DOCKER_GID:-124}"
     environment:
       HOME: /home/node
       TERM: xterm-256color
+      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      BRAVE_API_KEY: ${BRAVE_API_KEY}
+      ZAI_API_KEY: ${ZAI_API_KEY}
+      Z_AI_API_KEY: ${Z_AI_API_KEY}
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_SRV_DIR:-/srv/openclaw}:/srv/openclaw
+      - ${OPENCLAW_OPS_WRAPPER_DIR:-/usr/local/sbin}:/usr/local/sbin:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "${OPENCLAW_GATEWAY_BIND_ADDR:-127.0.0.1}:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "${OPENCLAW_GATEWAY_BIND_ADDR:-127.0.0.1}:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
-    command:
-      [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "18789",
-      ]
+    command: ["sh", "-lc", "export PATH=/usr/local/sbin:$PATH && umask 077 && node dist/index.js gateway --bind ${OPENCLAW_GATEWAY_BIND:-lan} --port 18789"]
+
+  opencode:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      ZHIPU_API_KEY: ${ZHIPU_API_KEY}
+      ZAI_API_KEY: ${ZAI_API_KEY}
+    volumes:
+      - ${OPENCLAW_SRV_DIR:-/srv/openclaw}:/srv/openclaw
+    init: true
+    restart: unless-stopped
+    command: ["sh", "-lc", "umask 077 && OPENCODE_SERVER_PASSWORD='${OPENCODE_SERVER_PASSWORD}' opencode serve --hostname 0.0.0.0 --port 39200 --log-level INFO --print-logs"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const net=require('net');const s=net.createConnection(39200,'127.0.0.1');s.on('connect',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),2000);"
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     environment:
       HOME: /home/node
       TERM: xterm-256color
+      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      BRAVE_API_KEY: ${BRAVE_API_KEY}
+      ZAI_API_KEY: ${ZAI_API_KEY}
+      Z_AI_API_KEY: ${Z_AI_API_KEY}
       BROWSER: echo
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
@@ -40,6 +68,7 @@ services:
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_SRV_DIR:-/srv/openclaw}:/srv/openclaw
     stdin_open: true
     tty: true
     init: true
