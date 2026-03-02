@@ -206,6 +206,14 @@ For threat model + hardening guidance (including `openclaw security audit --deep
 - `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths and native prompt image auto-load paths to the workspace directory.
 - Avoid setting `tools.exec.applyPatch.workspaceOnly: false` unless you fully trust who can trigger tool execution.
 
+### Sub-agent delegation hardening
+
+- Keep `sessions_spawn` denied unless you explicitly need delegated runs.
+- Keep `agents.list[].subagents.allowAgents` narrow, and only include agents with sandbox settings you trust.
+- When delegation must stay sandboxed, call `sessions_spawn` with `sandbox: "require"` (default is `inherit`).
+  - `sandbox: "require"` rejects the spawn unless the target child runtime is sandboxed.
+  - This prevents a less-restricted session from delegating work into an unsandboxed child by mistake.
+
 ### Web Interface Safety
 
 OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for **local use only**.
