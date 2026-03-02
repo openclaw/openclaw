@@ -521,6 +521,7 @@ jobs:
 
       # --- Run all checks sequentially (fast gates first) ---
       - name: TS tests (macOS)
+        if: needs.changed-scope.outputs.run_node == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm test
