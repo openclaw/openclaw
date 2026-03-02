@@ -27,7 +27,7 @@ export function registerSlackMessageEvents(params: {
   const resolveThreadBroadcastSenderId = (thread: SlackThreadBroadcastEvent): string | undefined =>
     thread.user ?? thread.message?.user ?? thread.message?.bot_id;
 
-  ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
+  const handleIncomingMessageEvent = async ({ event, body }: { event: unknown; body: unknown }) => {
     try {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
@@ -95,6 +95,18 @@ export function registerSlackMessageEvents(params: {
     } catch (err) {
       ctx.runtime.error?.(danger(`slack handler failed: ${String(err)}`));
     }
+  };
+
+  ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
+    await handleIncomingMessageEvent({ event, body });
+  });
+  // Slack may dispatch channel/group message subscriptions under typed event
+  // names. Register explicit handlers so both delivery styles are supported.
+  ctx.app.event("message.channels", async ({ event, body }: SlackEventMiddlewareArgs) => {
+    await handleIncomingMessageEvent({ event, body });
+  });
+  ctx.app.event("message.groups", async ({ event, body }: SlackEventMiddlewareArgs) => {
+    await handleIncomingMessageEvent({ event, body });
   });
 
   ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
