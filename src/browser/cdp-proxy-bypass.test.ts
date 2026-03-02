@@ -1,7 +1,12 @@
 import http from "node:http";
 import https from "node:https";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getDirectAgentForCdp, hasProxyEnv, withNoProxyForLocalhost } from "./cdp-proxy-bypass.js";
+import {
+  getDirectAgentForCdp,
+  hasProxyEnv,
+  withNoProxyForCdpUrl,
+  withNoProxyForLocalhost,
+} from "./cdp-proxy-bypass.js";
 
 describe("cdp-proxy-bypass", () => {
   describe("getDirectAgentForCdp", () => {
@@ -273,6 +278,42 @@ describe("withNoProxyForLocalhost preserves user-configured NO_PROXY", () => {
       // After call completes, user's NO_PROXY must still be intact
       expect(process.env.NO_PROXY).toBe(userNoProxy);
       expect(process.env.no_proxy).toBe(userNoProxy);
+    } finally {
+      delete process.env.HTTP_PROXY;
+      delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
+    }
+  });
+});
+
+describe("withNoProxyForCdpUrl", () => {
+  it("does not mutate NO_PROXY for non-loopback CDP URLs", async () => {
+    process.env.HTTP_PROXY = "http://proxy:8080";
+    delete process.env.NO_PROXY;
+    delete process.env.no_proxy;
+    try {
+      await withNoProxyForCdpUrl("https://browserless.example/chrome?token=abc", async () => {
+        expect(process.env.NO_PROXY).toBeUndefined();
+        expect(process.env.no_proxy).toBeUndefined();
+      });
+    } finally {
+      delete process.env.HTTP_PROXY;
+      delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
+    }
+  });
+
+  it("does not overwrite external NO_PROXY changes made during execution", async () => {
+    process.env.HTTP_PROXY = "http://proxy:8080";
+    delete process.env.NO_PROXY;
+    delete process.env.no_proxy;
+    try {
+      await withNoProxyForCdpUrl("http://127.0.0.1:9222", async () => {
+        process.env.NO_PROXY = "externally-set";
+        process.env.no_proxy = "externally-set";
+      });
+      expect(process.env.NO_PROXY).toBe("externally-set");
+      expect(process.env.no_proxy).toBe("externally-set");
     } finally {
       delete process.env.HTTP_PROXY;
       delete process.env.NO_PROXY;
