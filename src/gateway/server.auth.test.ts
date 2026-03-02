@@ -121,6 +121,13 @@ const NODE_CLIENT = {
   mode: GATEWAY_CLIENT_MODES.NODE,
 };
 
+const BACKEND_GATEWAY_CLIENT = {
+  id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+  version: "1.0.0",
+  platform: "node",
+  mode: GATEWAY_CLIENT_MODES.BACKEND,
+};
+
 async function expectHelloOkServerVersion(port: number, expectedVersion: string) {
   const ws = await openWs(port);
   try {
@@ -253,7 +260,13 @@ async function sendRawConnectReq(
     id?: string;
     ok?: boolean;
     payload?: Record<string, unknown> | null;
-    error?: { message?: string };
+    error?: {
+      message?: string;
+      details?: {
+        code?: string;
+        reason?: string;
+      };
+    };
   }>(ws, isConnectResMessage(params.id));
 }
 
@@ -548,6 +561,10 @@ describe("gateway server auth/connect", () => {
       });
       expect(connectRes.ok).toBe(false);
       expect(connectRes.error?.message ?? "").toContain("device signature invalid");
+      expect(connectRes.error?.details?.code).toBe(
+        ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID,
+      );
+      expect(connectRes.error?.details?.reason).toBe("device-signature");
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     });
 
@@ -610,6 +627,58 @@ describe("gateway server auth/connect", () => {
       });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("must have required property 'nonce'");
+      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    });
+
+    test("returns nonce-required detail code when nonce is blank", async () => {
+      const ws = await openWs(port);
+      const token = resolveGatewayTokenOrEnv();
+      const nonce = await readConnectChallengeNonce(ws);
+      const { device } = await createSignedDevice({
+        token,
+        scopes: ["operator.admin"],
+        clientId: TEST_OPERATOR_CLIENT.id,
+        clientMode: TEST_OPERATOR_CLIENT.mode,
+        nonce,
+      });
+
+      const connectRes = await sendRawConnectReq(ws, {
+        id: "c-blank-nonce",
+        token,
+        device: { ...device, nonce: "   " },
+      });
+      expect(connectRes.ok).toBe(false);
+      expect(connectRes.error?.message ?? "").toContain("device nonce required");
+      expect(connectRes.error?.details?.code).toBe(
+        ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED,
+      );
+      expect(connectRes.error?.details?.reason).toBe("device-nonce-missing");
+      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    });
+
+    test("returns nonce-mismatch detail code when nonce does not match challenge", async () => {
+      const ws = await openWs(port);
+      const token = resolveGatewayTokenOrEnv();
+      const nonce = await readConnectChallengeNonce(ws);
+      const { device } = await createSignedDevice({
+        token,
+        scopes: ["operator.admin"],
+        clientId: TEST_OPERATOR_CLIENT.id,
+        clientMode: TEST_OPERATOR_CLIENT.mode,
+        nonce,
+      });
+
+      const connectRes = await sendRawConnectReq(ws, {
+        id: "c-wrong-nonce",
+        token,
+        device: { ...device, nonce: `${nonce}-stale` },
+      });
+      expect(connectRes.ok).toBe(false);
+      expect(connectRes.error?.message ?? "").toContain("device nonce mismatch");
+      expect(connectRes.error?.details?.code).toBe(
+        ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH,
+      );
+      expect(connectRes.error?.details?.reason).toBe("device-nonce-mismatch");
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     });
 
@@ -1726,6 +1795,39 @@ describe("gateway server auth/connect", () => {
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
     } else {
       process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+    }
+  });
+
+  test("allows local gateway backend shared-auth connections without device pairing", async () => {
+    const { server, ws, prevToken } = await startServerWithClient("secret");
+    try {
+      const localBackend = await connectReq(ws, {
+        token: "secret",
+        client: BACKEND_GATEWAY_CLIENT,
+      });
+      expect(localBackend.ok).toBe(true);
+    } finally {
+      ws.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
+  test("requires pairing for gateway backend clients when connection is not local-direct", async () => {
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    ws.close();
+    const wsRemoteLike = await openWs(port, { host: "gateway.example" });
+    try {
+      const remoteLikeBackend = await connectReq(wsRemoteLike, {
+        token: "secret",
+        client: BACKEND_GATEWAY_CLIENT,
+      });
+      expect(remoteLikeBackend.ok).toBe(false);
+      expect(remoteLikeBackend.error?.message ?? "").toContain("pairing required");
+    } finally {
+      wsRemoteLike.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
     }
   });
 

@@ -496,7 +496,10 @@ describeLive("live models (profile keys)", () => {
               throw new Error(msg || "model returned error with no message");
             }
 
-            if (ok.text.length === 0 && model.provider === "google") {
+            if (
+              ok.text.length === 0 &&
+              (model.provider === "google" || model.provider === "google-gemini-cli")
+            ) {
               skipped.push({
                 model: id,
                 reason: "no text returned (likely unavailable model id)",

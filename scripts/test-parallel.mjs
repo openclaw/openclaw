@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
 // (especially under GitHub Actions + Git Bash). Use `shell: true` and let the shell resolve pnpm.
@@ -103,6 +102,8 @@ const useVmForks =
   process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
   (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks && !lowMemLocalHost);
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
+const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
+const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
 const runs = [
   ...(useVmForks
     ? [
@@ -136,28 +137,36 @@ const runs = [
           args: ["vitest", "run", "--config", "vitest.unit.config.ts"],
         },
       ]),
-  {
-    name: "extensions",
-    args: [
-      "vitest",
-      "run",
-      "--config",
-      "vitest.extensions.config.ts",
-      ...(useVmForks ? ["--pool=vmForks"] : []),
-    ],
-  },
-  {
-    name: "gateway",
-    args: [
-      "vitest",
-      "run",
-      "--config",
-      "vitest.gateway.config.ts",
-      // Gateway tests are sensitive to vmForks behavior (global state + env stubs).
-      // Keep them on process forks for determinism even when other suites use vmForks.
-      "--pool=forks",
-    ],
-  },
+  ...(includeExtensionsSuite
+    ? [
+        {
+          name: "extensions",
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.extensions.config.ts",
+            ...(useVmForks ? ["--pool=vmForks"] : []),
+          ],
+        },
+      ]
+    : []),
+  ...(includeGatewaySuite
+    ? [
+        {
+          name: "gateway",
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.gateway.config.ts",
+            // Gateway tests are sensitive to vmForks behavior (global state + env stubs).
+            // Keep them on process forks for determinism even when other suites use vmForks.
+            "--pool=forks",
+          ],
+        },
+      ]
+    : []),
 ];
 const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
 const configuredShardCount =
@@ -313,49 +322,9 @@ const maxOldSpaceSizeMb = (() => {
   return null;
 })();
 
-function resolveReportDir() {
-  const raw = process.env.OPENCLAW_VITEST_REPORT_DIR?.trim();
-  if (!raw) {
-    return null;
-  }
-  try {
-    fs.mkdirSync(raw, { recursive: true });
-  } catch {
-    return null;
-  }
-  return raw;
-}
-
-function buildReporterArgs(entry, extraArgs) {
-  const reportDir = resolveReportDir();
-  if (!reportDir) {
-    return [];
-  }
-
-  // Vitest supports both `--shard 1/2` and `--shard=1/2`. We use it in the
-  // split-arg form, so we need to read the next arg to avoid overwriting reports.
-  const shardIndex = extraArgs.findIndex((arg) => arg === "--shard");
-  const inlineShardArg = extraArgs.find(
-    (arg) => typeof arg === "string" && arg.startsWith("--shard="),
-  );
-  const shardValue =
-    shardIndex >= 0 && typeof extraArgs[shardIndex + 1] === "string"
-      ? extraArgs[shardIndex + 1]
-      : typeof inlineShardArg === "string"
-        ? inlineShardArg.slice("--shard=".length)
-        : "";
-  const shardSuffix = shardValue
-    ? `-shard${String(shardValue).replaceAll("/", "of").replaceAll(" ", "")}`
-    : "";
-
-  const outputFile = path.join(reportDir, `vitest-${entry.name}${shardSuffix}.json`);
-  return ["--reporter=default", "--reporter=json", "--outputFile", outputFile];
-}
-
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
     const maxWorkers = maxWorkersForRun(entry.name);
-    const reporterArgs = buildReporterArgs(entry, extraArgs);
     // vmForks with a single worker has shown cross-file leakage in extension suites.
     // Fall back to process forks when we intentionally clamp that lane to one worker.
     const entryArgs =
@@ -368,11 +337,10 @@ const runOnce = (entry, extraArgs = []) =>
           "--maxWorkers",
           String(maxWorkers),
           ...silentArgs,
-          ...reporterArgs,
           ...windowsCiArgs,
           ...extraArgs,
         ]
-      : [...entryArgs, ...silentArgs, ...reporterArgs, ...windowsCiArgs, ...extraArgs];
+      : [...entryArgs, ...silentArgs, ...windowsCiArgs, ...extraArgs];
     const nodeOptions = process.env.NODE_OPTIONS ?? "";
     const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
       (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
