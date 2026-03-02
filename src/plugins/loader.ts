@@ -176,7 +176,7 @@ function createPluginRecord(params: {
     cliCommands: [],
     services: [],
     commands: [],
-    httpRoutes: 0,
+    httpHandlers: 0,
     hookCount: 0,
     configSchema: params.configSchema,
     configUiHints: undefined,
@@ -365,11 +365,6 @@ function warnAboutUntrackedLoadedPlugins(params: {
   }
 }
 
-function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): void {
-  setActivePluginRegistry(registry, cacheKey);
-  initializeGlobalHookRunner(registry);
-}
-
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   // Test env: default-disable plugins unless explicitly configured.
   // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
@@ -385,7 +380,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = registryCache.get(cacheKey);
     if (cached) {
-      activatePluginRegistry(cached, cacheKey);
+      setActivePluginRegistry(cached, cacheKey);
       return cached;
     }
   }
@@ -538,9 +533,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       absolutePath: candidate.source,
       rootPath: pluginRoot,
       boundaryLabel: "plugin root",
-      // Discovery stores rootDir as realpath but source may still be a lexical alias
-      // (e.g. /var/... vs /private/var/... on macOS). Canonical boundary checks
-      // still enforce containment; skip lexical pre-check to avoid false escapes.
+      rejectHardlinks: candidate.origin !== "bundled",
       skipLexicalRootCheck: true,
     });
     if (!opened.ok) {
@@ -692,7 +685,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     registryCache.set(cacheKey, registry);
   }
-  activatePluginRegistry(registry, cacheKey);
+  setActivePluginRegistry(registry, cacheKey);
+  initializeGlobalHookRunner(registry);
   return registry;
 }
 
