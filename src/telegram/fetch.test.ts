@@ -37,6 +37,15 @@ vi.mock("undici", () => ({
 
 const originalFetch = globalThis.fetch;
 
+function expectEnvProxyAgentConstructorCall(params: { nth: number; autoSelectFamily: boolean }) {
+  expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(params.nth, {
+    connect: {
+      autoSelectFamily: params.autoSelectFamily,
+      autoSelectFamilyAttemptTimeout: 300,
+    },
+  });
+}
+
 afterEach(() => {
   resetTelegramFetchStateForTests();
   setDefaultAutoSelectFamily.mockReset();
@@ -157,12 +166,7 @@ describe("resolveTelegramFetch", () => {
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledWith({
-      connect: {
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-    });
+    expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
   });
 
   it("keeps an existing proxy-like global dispatcher", async () => {
@@ -204,18 +208,8 @@ describe("resolveTelegramFetch", () => {
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: false } });
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
-    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(1, {
-      connect: {
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-    });
-    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(2, {
-      connect: {
-        autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-    });
+    expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
+    expectEnvProxyAgentConstructorCall({ nth: 2, autoSelectFamily: false });
   });
 
   it("retries once with ipv4 fallback when fetch fails with network timeout/unreachable", async () => {
@@ -248,18 +242,8 @@ describe("resolveTelegramFetch", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
-    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(1, {
-      connect: {
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-    });
-    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(2, {
-      connect: {
-        autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-    });
+    expectEnvProxyAgentConstructorCall({ nth: 1, autoSelectFamily: true });
+    expectEnvProxyAgentConstructorCall({ nth: 2, autoSelectFamily: false });
   });
 
   it("retries with ipv4 fallback once per request, not once per process", async () => {

@@ -215,6 +215,18 @@ describe("resolveTelegramAccount allowFrom precedence", () => {
 });
 
 describe("resolveTelegramAccount groups inheritance (#30673)", () => {
+  const createMultiAccountGroupsConfig = (): OpenClawConfig => ({
+    channels: {
+      telegram: {
+        groups: { "-100123": { requireMention: false } },
+        accounts: {
+          default: { botToken: "123:default" },
+          dev: { botToken: "456:dev" },
+        },
+      },
+    },
+  });
+
   it("inherits channel-level groups in single-account setup", () => {
     const resolved = resolveTelegramAccount({
       cfg: {
@@ -235,17 +247,7 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
 
   it("does NOT inherit channel-level groups to secondary account in multi-account setup", () => {
     const resolved = resolveTelegramAccount({
-      cfg: {
-        channels: {
-          telegram: {
-            groups: { "-100123": { requireMention: false } },
-            accounts: {
-              default: { botToken: "123:default" },
-              dev: { botToken: "456:dev" },
-            },
-          },
-        },
-      },
+      cfg: createMultiAccountGroupsConfig(),
       accountId: "dev",
     });
 
@@ -254,17 +256,7 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
 
   it("does NOT inherit channel-level groups to default account in multi-account setup", () => {
     const resolved = resolveTelegramAccount({
-      cfg: {
-        channels: {
-          telegram: {
-            groups: { "-100123": { requireMention: false } },
-            accounts: {
-              default: { botToken: "123:default" },
-              dev: { botToken: "456:dev" },
-            },
-          },
-        },
-      },
+      cfg: createMultiAccountGroupsConfig(),
       accountId: "default",
     });
 
