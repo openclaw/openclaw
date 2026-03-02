@@ -516,7 +516,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(replies).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps loading thread history when thread session already exists in store", async () => {
+  it("skips thread history when thread session already exists in store", async () => {
     const { storePath } = makeTmpStorePath();
     const cfg = {
       session: { store: storePath },
@@ -538,19 +538,13 @@ describe("slack prepareSlackMessage inbound contract", () => {
       JSON.stringify({ [threadKeys.sessionKey]: { updatedAt: Date.now() } }, null, 2),
     );
 
-    const replies = vi
-      .fn()
-      .mockResolvedValueOnce({
-        messages: [{ text: "starter", user: "U2", ts: "200.000" }],
-      })
-      .mockResolvedValueOnce({
-        messages: [
-          { text: "starter", user: "U2", ts: "200.000" },
-          { text: "assistant follow-up", bot_id: "B1", ts: "200.500" },
-          { text: "user follow-up", user: "U1", ts: "200.800" },
-          { text: "current message", user: "U1", ts: "201.000" },
-        ],
-      });
+    // Only the thread-starter lookup (first replies call) should happen.
+    // The history fetch (second replies call) must be skipped for existing sessions
+    // because the session transcript already contains prior context — re-injecting
+    // history on every subsequent turn wastes tokens unnecessarily.
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [{ text: "starter", user: "U2", ts: "200.000" }],
+    });
     const slackCtx = createThreadSlackCtx({ cfg, replies });
     slackCtx.resolveUserName = async () => ({ name: "Alice" });
     slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
@@ -563,10 +557,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.IsFirstThreadTurn).toBeUndefined();
-    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant follow-up");
-    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("user follow-up");
-    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
-    expect(replies).toHaveBeenCalledTimes(2);
+    // ThreadHistoryBody must be absent — the session already has context
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toBeFalsy();
+    // Only one Slack API call: thread starter lookup; no history fetch
+    expect(replies).toHaveBeenCalledTimes(1);
   });
 
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {

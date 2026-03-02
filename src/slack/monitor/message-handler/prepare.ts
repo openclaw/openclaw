@@ -544,15 +544,17 @@ export async function prepareSlackMessage(params: {
       threadLabel = `Slack thread ${roomLabel}`;
     }
 
-    // Fetch full thread history for new thread sessions
-    // This provides context of previous messages (including bot replies) in the thread
-    // Use the thread session key (not base session key) to determine if this is a new session
+    // Fetch full thread history for new thread sessions only.
+    // Once a session exists (threadSessionPreviousTimestamp is set) its transcript
+    // already contains the prior turns, so re-injecting history on every message
+    // would bloat every subsequent request with redundant context tokens.
+    // Use the thread session key (not base session key) to determine if this is a new session.
     const threadInitialHistoryLimit = account.config?.thread?.initialHistoryLimit ?? 20;
     threadSessionPreviousTimestamp = readSessionUpdatedAt({
       storePath,
       sessionKey, // Thread-specific session key
     });
-    if (threadInitialHistoryLimit > 0) {
+    if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
       const threadHistory = await resolveSlackThreadHistory({
         channelId: message.channel,
         threadTs,
