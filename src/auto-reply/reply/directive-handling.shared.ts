@@ -1,6 +1,6 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
-import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
+import type { ElevatedLevel, PlanLevel, ReasoningLevel } from "./directives.js";
 
 export const formatDirectiveAck = (text: string): string => {
   return prefixSystemMessage(text);
@@ -33,12 +33,20 @@ export const formatReasoningEvent = (level: ReasoningLevel) => {
   return "Reasoning OFF — hide <think>.";
 };
 
+export const formatPlanEvent = (level: PlanLevel) => {
+  if (level === "on") {
+    return "Plan ON — read-only analysis mode (mutating tools disabled).";
+  }
+  return "Plan OFF — mutating tools enabled.";
+};
+
 export function enqueueModeSwitchEvents(params: {
   enqueueSystemEvent: (text: string, meta: { sessionKey: string; contextKey: string }) => void;
   sessionEntry: { elevatedLevel?: string | null; reasoningLevel?: string | null };
   sessionKey: string;
   elevatedChanged?: boolean;
   reasoningChanged?: boolean;
+  planChanged?: boolean;
 }): void {
   if (params.elevatedChanged) {
     const nextElevated = (params.sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
@@ -52,6 +60,14 @@ export function enqueueModeSwitchEvents(params: {
     params.enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
       sessionKey: params.sessionKey,
       contextKey: "mode:reasoning",
+    });
+  }
+  if (params.planChanged) {
+    const nextPlan = ((params.sessionEntry as { planMode?: string | null }).planMode ??
+      "off") as PlanLevel;
+    params.enqueueSystemEvent(formatPlanEvent(nextPlan), {
+      sessionKey: params.sessionKey,
+      contextKey: "mode:plan",
     });
   }
 }

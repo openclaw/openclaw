@@ -35,6 +35,7 @@ const builtinSlashCommands = (() => {
     "think",
     "verbose",
     "reasoning",
+    "plan",
     "elevated",
     "exec",
     "model",
@@ -106,6 +107,7 @@ export async function handleInlineActions(params: {
   resolvedThinkLevel: ThinkLevel | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
+  resolvedPlanMode: "on" | "off";
   resolvedElevatedLevel: ElevatedLevel;
   resolveDefaultThinkingLevel: Awaited<
     ReturnType<typeof createModelSelectionState>
@@ -145,6 +147,7 @@ export async function handleInlineActions(params: {
     resolvedThinkLevel,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
+    resolvedPlanMode,
     resolvedElevatedLevel,
     resolveDefaultThinkingLevel,
     provider,
@@ -318,6 +321,7 @@ export async function handleInlineActions(params: {
       resolvedThinkLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,
+      resolvedPlanMode,
       resolvedElevatedLevel,
       resolveDefaultThinkingLevel,
       isGroup,
@@ -352,6 +356,7 @@ export async function handleInlineActions(params: {
       resolvedThinkLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,
+      resolvedPlanMode,
       resolvedElevatedLevel,
       resolveDefaultThinkingLevel,
       provider,

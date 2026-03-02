@@ -22,7 +22,13 @@ import type { MediaUnderstandingDecision } from "../../media-understanding/types
 import { normalizeGroupActivation } from "../group-activation.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type {
+  ElevatedLevel,
+  PlanLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
@@ -42,6 +48,7 @@ export async function buildStatusReply(params: {
   resolvedThinkLevel?: ThinkLevel;
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
+  resolvedPlanMode: PlanLevel;
   resolvedElevatedLevel?: ElevatedLevel;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
   isGroup: boolean;
@@ -62,6 +69,7 @@ export async function buildStatusReply(params: {
     resolvedThinkLevel,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
+    resolvedPlanMode,
     resolvedElevatedLevel,
     resolveDefaultThinkingLevel,
     isGroup,
@@ -145,17 +153,21 @@ export async function buildStatusReply(params: {
     selectedModel: model,
     sessionEntry,
   });
+  const effectiveSessionEntry = {
+    ...sessionEntry,
+    planMode: sessionEntry?.planMode ?? resolvedPlanMode,
+  } as SessionEntry;
   const selectedModelAuth = resolveModelAuthLabel({
     provider,
     cfg,
-    sessionEntry,
+    sessionEntry: effectiveSessionEntry,
     agentDir: statusAgentDir,
   });
   const activeModelAuth = modelRefs.activeDiffers
     ? resolveModelAuthLabel({
         provider: modelRefs.active.provider,
         cfg,
-        sessionEntry,
+        sessionEntry: effectiveSessionEntry,
         agentDir: statusAgentDir,
       })
     : selectedModelAuth;
@@ -174,7 +186,7 @@ export async function buildStatusReply(params: {
       elevatedDefault: agentDefaults.elevatedDefault,
     },
     agentId: statusAgentId,
-    sessionEntry,
+    sessionEntry: effectiveSessionEntry,
     sessionKey,
     parentSessionKey,
     sessionScope,

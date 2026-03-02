@@ -129,6 +129,7 @@ function baseParams(
     resolvedThinkLevel: "high",
     resolvedVerboseLevel: "off",
     resolvedReasoningLevel: "off",
+    resolvedPlanMode: "off",
     resolvedElevatedLevel: "off",
     elevatedEnabled: false,
     elevatedAllowed: false,

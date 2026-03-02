@@ -144,6 +144,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     resolvedThinkLevel: params.resolvedThinkLevel,
     resolvedVerboseLevel: params.resolvedVerboseLevel,
     resolvedReasoningLevel: params.resolvedReasoningLevel,
+    resolvedPlanMode: params.resolvedPlanMode,
     resolvedElevatedLevel: params.resolvedElevatedLevel,
     resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
     isGroup: params.isGroup,

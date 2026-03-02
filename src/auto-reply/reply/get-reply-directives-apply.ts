@@ -152,6 +152,7 @@ export async function applyInlineDirectiveOverrides(params: {
       currentThinkLevel: resolvedDefaultThinkLevel,
       currentVerboseLevel,
       currentReasoningLevel,
+      currentPlanLevel,
       currentElevatedLevel,
     } = await resolveCurrentDirectiveLevels({
       sessionEntry,
@@ -164,6 +165,7 @@ export async function applyInlineDirectiveOverrides(params: {
       currentThinkLevel,
       currentVerboseLevel,
       currentReasoningLevel,
+      currentPlanLevel,
       currentElevatedLevel,
       surface: ctx.Surface,
     });
@@ -182,6 +184,7 @@ export async function applyInlineDirectiveOverrides(params: {
         resolvedThinkLevel: resolvedDefaultThinkLevel,
         resolvedVerboseLevel: currentVerboseLevel ?? "off",
         resolvedReasoningLevel: currentReasoningLevel ?? "off",
+        resolvedPlanMode: currentPlanLevel ?? "off",
         resolvedElevatedLevel,
         resolveDefaultThinkingLevel: async () => resolvedDefaultThinkLevel,
         isGroup,
@@ -203,6 +206,7 @@ export async function applyInlineDirectiveOverrides(params: {
     directives.hasThinkDirective ||
     directives.hasVerboseDirective ||
     directives.hasReasoningDirective ||
+    directives.hasPlanDirective ||
     directives.hasElevatedDirective ||
     directives.hasExecDirective ||
     directives.hasModelDirective ||

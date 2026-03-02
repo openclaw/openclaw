@@ -1,5 +1,6 @@
 export {
   extractElevatedDirective,
+  extractPlanDirective,
   extractReasoningDirective,
   extractThinkDirective,
   extractVerboseDirective,

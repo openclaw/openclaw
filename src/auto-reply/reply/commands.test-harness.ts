@@ -41,6 +41,7 @@ export function buildCommandTestParams(
     defaultGroupActivation: () => "mention",
     resolvedVerboseLevel: "off",
     resolvedReasoningLevel: "off",
+    resolvedPlanMode: "off",
     resolveDefaultThinkingLevel: async () => undefined,
     provider: "whatsapp",
     model: "test-model",

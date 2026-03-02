@@ -57,6 +57,29 @@ import {
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
+const PLAN_READ_ONLY_MUTATING_TOOLS = new Set([
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "bash",
+  "process",
+  "message",
+  "sessions_send",
+  "cron",
+  "gateway",
+  "canvas",
+  "nodes",
+  "session_status",
+]);
+
+function applyPlanReadOnlyMode(tools: AnyAgentTool[], readOnlyPlanMode?: boolean): AnyAgentTool[] {
+  if (!readOnlyPlanMode) {
+    return tools;
+  }
+  return tools.filter((tool) => !PLAN_READ_ONLY_MUTATING_TOOLS.has(tool.name));
+}
+
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
   return normalized === "openai" || normalized === "openai-codex";
@@ -236,6 +259,8 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** If true, enforce read-only plan mode by removing mutating tools. */
+  readOnlyPlanMode?: boolean;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -523,7 +548,8 @@ export function createOpenClawCodingTools(options?: {
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   // Provider-specific cleaning: Gemini needs constraint keywords stripped, but Anthropic expects them.
-  const normalized = subagentFiltered.map((tool) =>
+  const planFiltered = applyPlanReadOnlyMode(subagentFiltered, options?.readOnlyPlanMode);
+  const normalized = planFiltered.map((tool) =>
     normalizeToolParameters(tool, { modelProvider: options?.modelProvider }),
   );
   const withHooks = normalized.map((tool) =>

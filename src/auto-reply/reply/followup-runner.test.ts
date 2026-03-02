@@ -68,6 +68,7 @@ const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
       model: "claude",
       thinkLevel: "low",
       verboseLevel: "off",
+      planMode: "off",
       elevatedLevel: "off",
       bashElevated: {
         enabled: false,

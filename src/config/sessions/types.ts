@@ -96,6 +96,9 @@ export type SessionEntry = {
   thinkingLevel?: string;
   verboseLevel?: string;
   reasoningLevel?: string;
+  planMode?: string;
+  toolProfile?: string;
+  previousToolProfile?: string;
   elevatedLevel?: string;
   ttsAuto?: TtsAutoMode;
   execHost?: string;

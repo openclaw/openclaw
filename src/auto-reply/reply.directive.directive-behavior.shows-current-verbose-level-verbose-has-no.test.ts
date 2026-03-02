@@ -1,7 +1,7 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore } from "../config/sessions.js";
+import { loadSessionStore, saveSessionStore } from "../config/sessions.js";
 import {
   AUTHORIZED_WHATSAPP_COMMAND,
   assertElevatedOffStatusReply,
@@ -136,6 +136,10 @@ describe("directive behavior", () => {
       expect(reasoningText).toContain("Current reasoning level: off");
       expect(reasoningText).toContain("Options: on, off, stream.");
 
+      const planText = await runCommand(home, "/plan");
+      expect(planText).toContain("Current plan mode: off");
+      expect(planText).toContain("Options: on, off.");
+
       const elevatedText = replyText(await runElevatedCommand(home, "/elevated"));
       expect(elevatedText).toContain("Current elevated level: on");
       expect(elevatedText).toContain("Options: on, off, ask, full.");
@@ -159,6 +163,76 @@ describe("directive behavior", () => {
         "Options: host=sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
       );
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("persists /plan toggles across /status and /plan", async () => {
+    await withTempHome(async (home) => {
+      const storePath = sessionStorePath(home);
+
+      const onStatusText = await runCommand(home, "/plan on\n/status");
+      expect(onStatusText).toContain("Plan mode enabled (read-only analysis mode).");
+      expect(onStatusText).toContain("Plan: on");
+
+      const onLevelText = await runCommand(home, "/plan");
+      expect(onLevelText).toContain("Current plan mode: on");
+      expect(loadSessionStore(storePath)["agent:main:main"]?.planMode).toBe("on");
+      expect(loadSessionStore(storePath)["agent:main:main"]?.toolProfile).toBe("plan");
+
+      await runCommand(home, "/plan off");
+      const offStatusText = await runCommand(home, "/status");
+      expect(offStatusText).not.toContain("Plan: on");
+      expect(loadSessionStore(storePath)["agent:main:main"]?.planMode).toBeUndefined();
+      expect(loadSessionStore(storePath)["agent:main:main"]?.toolProfile).toBeUndefined();
+      expect(loadSessionStore(storePath)["agent:main:main"]?.previousToolProfile).toBeUndefined();
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("restores previous tool profile when /plan is toggled off", async () => {
+    await withTempHome(async (home) => {
+      const storePath = sessionStorePath(home);
+
+      await runCommand(home, "/status");
+      const store = loadSessionStore(storePath);
+      const entry = store["agent:main:main"];
+      expect(entry).toBeDefined();
+      if (entry) {
+        entry.toolProfile = "strict";
+      }
+      await saveSessionStore(storePath, store);
+
+      await runCommand(home, "/plan on");
+      const onStore = loadSessionStore(storePath);
+      expect(onStore["agent:main:main"]?.toolProfile).toBe("plan");
+      expect(onStore["agent:main:main"]?.previousToolProfile).toBe("strict");
+
+      await runCommand(home, "/plan off");
+      const offStore = loadSessionStore(storePath);
+      expect(offStore["agent:main:main"]?.toolProfile).toBe("strict");
+      expect(offStore["agent:main:main"]?.previousToolProfile).toBeUndefined();
+      expect(offStore["agent:main:main"]?.planMode).toBeUndefined();
+    });
+  });
+
+  it("does not clear non-plan toolProfile on idempotent /plan off", async () => {
+    await withTempHome(async (home) => {
+      const storePath = sessionStorePath(home);
+
+      await runCommand(home, "/status");
+      const store = loadSessionStore(storePath);
+      const entry = store["agent:main:main"];
+      expect(entry).toBeDefined();
+      if (entry) {
+        entry.toolProfile = "strict";
+      }
+      await saveSessionStore(storePath, store);
+
+      await runCommand(home, "/plan off");
+      const offStore = loadSessionStore(storePath);
+      expect(offStore["agent:main:main"]?.toolProfile).toBe("strict");
+      expect(offStore["agent:main:main"]?.previousToolProfile).toBeUndefined();
+      expect(offStore["agent:main:main"]?.planMode).toBeUndefined();
     });
   });
   it("persists elevated toggles across /status and /elevated", async () => {

@@ -2,10 +2,17 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
+import type {
+  ElevatedLevel,
+  PlanLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "./directives.js";
 import {
   extractElevatedDirective,
   extractExecDirective,
+  extractPlanDirective,
   extractReasoningDirective,
   extractStatusDirective,
   extractThinkDirective,
@@ -26,6 +33,9 @@ export type InlineDirectives = {
   hasReasoningDirective: boolean;
   reasoningLevel?: ReasoningLevel;
   rawReasoningLevel?: string;
+  hasPlanDirective: boolean;
+  planLevel?: PlanLevel;
+  rawPlanLevel?: string;
   hasElevatedDirective: boolean;
   elevatedLevel?: ElevatedLevel;
   rawElevatedLevel?: string;
@@ -87,18 +97,24 @@ export function parseInlineDirectives(
     hasDirective: hasReasoningDirective,
   } = extractReasoningDirective(verboseCleaned);
   const {
+    cleaned: planCleaned,
+    planLevel,
+    rawLevel: rawPlanLevel,
+    hasDirective: hasPlanDirective,
+  } = extractPlanDirective(reasoningCleaned);
+  const {
     cleaned: elevatedCleaned,
     elevatedLevel,
     rawLevel: rawElevatedLevel,
     hasDirective: hasElevatedDirective,
   } = options?.disableElevated
     ? {
-        cleaned: reasoningCleaned,
+        cleaned: planCleaned,
         elevatedLevel: undefined,
         rawLevel: undefined,
         hasDirective: false,
       }
-    : extractElevatedDirective(reasoningCleaned);
+    : extractElevatedDirective(planCleaned);
   const {
     cleaned: execCleaned,
     execHost,
@@ -154,6 +170,9 @@ export function parseInlineDirectives(
     hasReasoningDirective,
     reasoningLevel,
     rawReasoningLevel,
+    hasPlanDirective,
+    planLevel,
+    rawPlanLevel,
     hasElevatedDirective,
     elevatedLevel,
     rawElevatedLevel,
@@ -202,6 +221,7 @@ export function isDirectiveOnly(params: {
     !directives.hasThinkDirective &&
     !directives.hasVerboseDirective &&
     !directives.hasReasoningDirective &&
+    !directives.hasPlanDirective &&
     !directives.hasElevatedDirective &&
     !directives.hasExecDirective &&
     !directives.hasModelDirective &&

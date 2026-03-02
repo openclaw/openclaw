@@ -7,7 +7,13 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type {
+  ElevatedLevel,
+  PlanLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands.js";
@@ -39,6 +45,7 @@ export type ReplyDirectiveContinuation = {
   resolvedThinkLevel: ThinkLevel | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
+  resolvedPlanMode: PlanLevel;
   resolvedElevatedLevel: ElevatedLevel;
   execOverrides?: ExecOverrides;
   blockStreamingEnabled: boolean;
@@ -229,6 +236,7 @@ export async function resolveReplyDirectives(params: {
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||
     parsedDirectives.hasReasoningDirective ||
+    parsedDirectives.hasPlanDirective ||
     parsedDirectives.hasElevatedDirective ||
     parsedDirectives.hasExecDirective ||
     parsedDirectives.hasModelDirective ||
@@ -261,6 +269,7 @@ export async function resolveReplyDirectives(params: {
         hasThinkDirective: false,
         hasVerboseDirective: false,
         hasReasoningDirective: false,
+        hasPlanDirective: false,
         hasStatusDirective: false,
         hasModelDirective: false,
         hasQueueDirective: false,
@@ -349,6 +358,8 @@ export async function resolveReplyDirectives(params: {
     directives.reasoningLevel ??
     (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
     "off";
+  const resolvedPlanMode: PlanLevel =
+    directives.planLevel ?? (sessionEntry?.planMode as PlanLevel | undefined) ?? "off";
   const resolvedElevatedLevel = elevatedAllowed
     ? (directives.elevatedLevel ??
       (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
@@ -480,6 +491,7 @@ export async function resolveReplyDirectives(params: {
       resolvedThinkLevel: resolvedThinkLevelWithDefault,
       resolvedVerboseLevel,
       resolvedReasoningLevel,
+      resolvedPlanMode,
       resolvedElevatedLevel,
       execOverrides,
       blockStreamingEnabled,

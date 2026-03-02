@@ -612,6 +612,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "plan",
+      nativeName: "plan",
+      description: "Toggle read-only analysis mode.",
+      textAlias: "/plan",
+      category: "options",
+      args: [
+        {
+          name: "mode",
+          description: "on or off",
+          type: "string",
+          choices: ["on", "off"],
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "elevated",
       nativeName: "elevated",
       description: "Toggle elevated mode.",
@@ -741,6 +757,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
   registerAlias(commands, "think", "/thinking", "/t");
   registerAlias(commands, "verbose", "/v");
   registerAlias(commands, "reasoning", "/reason");
+  registerAlias(commands, "plan", "/p");
   registerAlias(commands, "elevated", "/elev");
   registerAlias(commands, "steer", "/tell");
 

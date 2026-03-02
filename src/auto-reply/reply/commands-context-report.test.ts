@@ -17,6 +17,7 @@ function makeParams(commandBodyNormalized: string, truncated: boolean): HandleCo
     elevated: { allowed: false },
     resolvedThinkLevel: "off",
     resolvedReasoningLevel: "off",
+    resolvedPlanMode: "off",
     sessionEntry: {
       totalTokens: 123,
       inputTokens: 100,

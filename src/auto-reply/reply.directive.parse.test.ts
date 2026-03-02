@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractElevatedDirective,
   extractExecDirective,
+  extractPlanDirective,
   extractQueueDirective,
   extractReasoningDirective,
   extractReplyToTag,
@@ -47,6 +48,18 @@ describe("directive parsing", () => {
     const res = extractReasoningDirective("/reasoning stream please");
     expect(res.hasDirective).toBe(true);
     expect(res.reasoningLevel).toBe("stream");
+  });
+
+  it("matches plan directive", () => {
+    const res = extractPlanDirective("/plan on please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.planLevel).toBe("on");
+  });
+
+  it("matches /p plan alias", () => {
+    const res = extractPlanDirective("/p on please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.planLevel).toBe("on");
   });
 
   it("matches elevated with leading space", () => {
@@ -110,6 +123,14 @@ describe("directive parsing", () => {
     const res = extractReasoningDirective("/reasoning:");
     expect(res.hasDirective).toBe(true);
     expect(res.reasoningLevel).toBeUndefined();
+    expect(res.rawLevel).toBeUndefined();
+    expect(res.cleaned).toBe("");
+  });
+
+  it("matches plan with no argument", () => {
+    const res = extractPlanDirective("/plan:");
+    expect(res.hasDirective).toBe(true);
+    expect(res.planLevel).toBeUndefined();
     expect(res.rawLevel).toBeUndefined();
     expect(res.cleaned).toBe("");
   });

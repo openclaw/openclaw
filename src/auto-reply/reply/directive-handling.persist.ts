@@ -20,7 +20,7 @@ import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides
 import { resolveProfileOverride } from "./directive-handling.auth.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { enqueueModeSwitchEvents } from "./directive-handling.shared.js";
-import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
+import type { ElevatedLevel, PlanLevel, ReasoningLevel } from "./directives.js";
 
 export async function persistInlineDirectives(params: {
   directives: InlineDirectives;
@@ -79,6 +79,8 @@ export async function persistInlineDirectives(params: {
       elevatedAllowed;
     let reasoningChanged =
       directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
+    const prevPlanLevel = (sessionEntry.planMode as PlanLevel | undefined) ?? "off";
+    let planChanged = false;
     let updated = false;
 
     if (directives.hasThinkDirective && directives.thinkLevel) {
@@ -100,6 +102,25 @@ export async function persistInlineDirectives(params: {
         reasoningChanged ||
         (directives.reasoningLevel !== prevReasoningLevel &&
           directives.reasoningLevel !== undefined);
+      updated = true;
+    }
+    if (directives.hasPlanDirective && directives.planLevel) {
+      if (directives.planLevel === "on") {
+        if (sessionEntry.toolProfile && sessionEntry.toolProfile !== "plan") {
+          sessionEntry.previousToolProfile = sessionEntry.toolProfile;
+        }
+        sessionEntry.toolProfile = "plan";
+        sessionEntry.planMode = "on";
+      } else {
+        if (sessionEntry.previousToolProfile) {
+          sessionEntry.toolProfile = sessionEntry.previousToolProfile;
+        } else if (sessionEntry.toolProfile === "plan") {
+          delete sessionEntry.toolProfile;
+        }
+        delete sessionEntry.previousToolProfile;
+        delete sessionEntry.planMode;
+      }
+      planChanged = directives.planLevel !== prevPlanLevel;
       updated = true;
     }
     if (
@@ -206,6 +227,7 @@ export async function persistInlineDirectives(params: {
         sessionKey,
         elevatedChanged,
         reasoningChanged,
+        planChanged,
       });
     }
   }

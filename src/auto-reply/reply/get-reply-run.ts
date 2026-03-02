@@ -26,6 +26,7 @@ import {
   type ElevatedLevel,
   formatXHighModelHint,
   normalizeThinkLevel,
+  type PlanLevel,
   type ReasoningLevel,
   supportsXHighThinking,
   type ThinkLevel,
@@ -140,6 +141,7 @@ type RunPreparedReplyParams = {
   resolvedThinkLevel: ThinkLevel | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
+  resolvedPlanMode: PlanLevel;
   resolvedElevatedLevel: ElevatedLevel;
   execOverrides?: ExecOverrides;
   elevatedEnabled: boolean;
@@ -224,6 +226,7 @@ export async function runPreparedReply(
     resolvedThinkLevel,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
+    resolvedPlanMode,
     resolvedElevatedLevel,
     execOverrides,
     abortedLastRun,
@@ -499,6 +502,7 @@ export async function runPreparedReply(
       thinkLevel: resolvedThinkLevel,
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
+      planMode: resolvedPlanMode,
       elevatedLevel: resolvedElevatedLevel,
       execOverrides,
       bashElevated: {
