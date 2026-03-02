@@ -100,6 +100,23 @@ describe("thread-level session keys", () => {
     expect(sessionKey).toContain(":thread:1770408530.000000");
   });
 
+  it("keeps top-level channel turns thread-scoped when replyToMode=first", async () => {
+    const ctx = buildCtx({ replyToMode: "first" });
+    ctx.resolveUserName = async () => ({ name: "Dora" });
+    const account = createSlackTestAccount({ replyToMode: "first" });
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account,
+      message: buildChannelMessage({ ts: "1770408531.000000" }),
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    const sessionKey = prepared!.ctxPayload.SessionKey as string;
+    expect(sessionKey).toContain(":thread:1770408531.000000");
+  });
+
   it("does not add thread suffix for DMs when replyToMode=off", async () => {
     const ctx = buildCtx({ replyToMode: "off" });
     ctx.resolveUserName = async () => ({ name: "Carol" });
