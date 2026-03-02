@@ -20,6 +20,15 @@ export type SessionFreshness = {
 export const DEFAULT_RESET_MODE: SessionResetMode = "daily";
 export const DEFAULT_RESET_AT_HOUR = 4;
 
+/**
+ * Type-aware default reset mode.  Direct/DM sessions reset daily (fresh
+ * start each day), while group and thread sessions default to idle-based
+ * reset so ongoing conversations retain context across days.
+ */
+function defaultResetModeForType(resetType: SessionResetType): SessionResetMode {
+  return resetType === "direct" ? "daily" : "idle";
+}
+
 const THREAD_SESSION_MARKERS = [":thread:", ":topic:"];
 const GROUP_SESSION_MARKERS = [":group:", ":channel:"];
 
@@ -100,7 +109,9 @@ export function resolveSessionResetPolicy(params: {
   const mode =
     typeReset?.mode ??
     baseReset?.mode ??
-    (!hasExplicitReset && legacyIdleMinutes != null ? "idle" : DEFAULT_RESET_MODE);
+    (!hasExplicitReset && legacyIdleMinutes != null
+      ? "idle"
+      : defaultResetModeForType(params.resetType));
   const atHour = normalizeResetAtHour(
     typeReset?.atHour ?? baseReset?.atHour ?? DEFAULT_RESET_AT_HOUR,
   );
