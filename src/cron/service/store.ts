@@ -92,12 +92,17 @@ function normalizePayloadKind(payload: Record<string, unknown>) {
 function inferPayloadIfMissing(raw: Record<string, unknown>) {
   const message = typeof raw.message === "string" ? raw.message.trim() : "";
   const text = typeof raw.text === "string" ? raw.text.trim() : "";
+  const command = typeof raw.command === "string" ? raw.command.trim() : "";
   if (message) {
     raw.payload = { kind: "agentTurn", message };
     return true;
   }
   if (text) {
     raw.payload = { kind: "systemEvent", text };
+    return true;
+  }
+  if (command) {
+    raw.payload = { kind: "systemEvent", text: command };
     return true;
   }
   return false;
@@ -209,6 +214,12 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   if ("provider" in raw) {
     delete raw.provider;
   }
+  if ("command" in raw) {
+    delete raw.command;
+  }
+  if ("timeout" in raw) {
+    delete raw.timeout;
+  }
 }
 
 async function getFileMtimeMs(path: string): Promise<number | null> {
@@ -245,6 +256,26 @@ export async function ensureLoaded(
     const state = raw.state;
     if (!state || typeof state !== "object" || Array.isArray(state)) {
       raw.state = {};
+      mutated = true;
+    }
+
+    const rawId = typeof raw.id === "string" ? raw.id.trim() : "";
+    const legacyJobId = typeof raw.jobId === "string" ? raw.jobId.trim() : "";
+    if (!rawId && legacyJobId) {
+      raw.id = legacyJobId;
+      mutated = true;
+    } else if (rawId && raw.id !== rawId) {
+      raw.id = rawId;
+      mutated = true;
+    }
+    if ("jobId" in raw) {
+      delete raw.jobId;
+      mutated = true;
+    }
+
+    if (typeof raw.schedule === "string") {
+      const expr = raw.schedule.trim();
+      raw.schedule = { kind: "cron", expr };
       mutated = true;
     }
 
@@ -323,7 +354,9 @@ export async function ensureLoaded(
       "channel" in raw ||
       "to" in raw ||
       "bestEffortDeliver" in raw ||
-      "provider" in raw;
+      "provider" in raw ||
+      "command" in raw ||
+      "timeout" in raw;
     if (hadLegacyTopLevelFields) {
       stripLegacyTopLevelFields(raw);
       mutated = true;
@@ -428,6 +461,21 @@ export async function ensureLoaded(
 
     const payloadKind =
       payloadRecord && typeof payloadRecord.kind === "string" ? payloadRecord.kind : "";
+    const normalizedSessionTarget =
+      typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
+    if (normalizedSessionTarget === "main" || normalizedSessionTarget === "isolated") {
+      if (raw.sessionTarget !== normalizedSessionTarget) {
+        raw.sessionTarget = normalizedSessionTarget;
+        mutated = true;
+      }
+    } else {
+      const inferredSessionTarget = payloadKind === "agentTurn" ? "isolated" : "main";
+      if (raw.sessionTarget !== inferredSessionTarget) {
+        raw.sessionTarget = inferredSessionTarget;
+        mutated = true;
+      }
+    }
+
     const sessionTarget =
       typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
     const isIsolatedAgentTurn =
