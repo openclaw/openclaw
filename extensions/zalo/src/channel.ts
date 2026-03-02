@@ -323,7 +323,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         }
         return lastResult;
       }
-      return zaloPlugin.outbound!.sendText!({ ...ctx });
+      return zaloPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
     },
     sendText: async ({ to, text, accountId, cfg }) => {
       const result = await sendMessageZalo(to, text, {

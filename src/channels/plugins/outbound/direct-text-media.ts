@@ -112,7 +112,7 @@ export function createDirectTextMediaOutbound<
         }
         return lastResult;
       }
-      return outbound.sendText!({ ...ctx });
+      return outbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
     },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
       return await sendDirect({
