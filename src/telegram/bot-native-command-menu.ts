@@ -106,15 +106,7 @@ export function syncTelegramMenuCommands(params: {
 }): void {
   const { bot, runtime, commandsToRegister } = params;
   const sync = async () => {
-    // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
-    if (typeof bot.api.deleteMyCommands === "function") {
-      await withTelegramApiErrorLogging({
-        operation: "deleteMyCommands",
-        runtime,
-        fn: () => bot.api.deleteMyCommands(),
-      }).catch(() => {});
-    }
-
+    // Use one menu write per sync attempt to reduce startup API pressure.
     if (commandsToRegister.length === 0) {
       return;
     }

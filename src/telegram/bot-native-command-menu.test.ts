@@ -60,7 +60,7 @@ describe("bot-native-command-menu", () => {
     expect(result.issues).toEqual([]);
   });
 
-  it("deletes stale commands before setting new menu", async () => {
+  it("sets menu commands without delete preflight", async () => {
     const callOrder: string[] = [];
     const deleteMyCommands = vi.fn(async () => {
       callOrder.push("delete");
@@ -84,7 +84,27 @@ describe("bot-native-command-menu", () => {
       expect(setMyCommands).toHaveBeenCalled();
     });
 
-    expect(callOrder).toEqual(["delete", "set"]);
+    expect(deleteMyCommands).not.toHaveBeenCalled();
+    expect(callOrder).toEqual(["set"]);
+  });
+
+  it("skips command sync API calls when no commands are provided", () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: {
+          deleteMyCommands,
+          setMyCommands,
+        },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: {} as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+      commandsToRegister: [],
+    });
+
+    expect(deleteMyCommands).not.toHaveBeenCalled();
+    expect(setMyCommands).not.toHaveBeenCalled();
   });
 
   it("retries with fewer commands on BOT_COMMANDS_TOO_MUCH", async () => {
