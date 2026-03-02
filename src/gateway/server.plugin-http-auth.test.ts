@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import type { HooksConfigResolved } from "./hooks.js";
+import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
 import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
 import { createGatewayHttpServer, createHooksRequestHandler } from "./server-http.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -29,18 +29,11 @@ function createRequest(params: {
   authorization?: string;
   method?: string;
 }): IncomingMessage {
-  const headers: Record<string, string> = {
-    host: "localhost:18789",
-  };
-  if (params.authorization) {
-    headers.authorization = params.authorization;
-  }
-  return {
-    method: params.method ?? "GET",
-    url: params.path,
-    headers,
-    socket: { remoteAddress: "127.0.0.1" },
-  } as IncomingMessage;
+  return createGatewayRequest({
+    path: params.path,
+    authorization: params.authorization,
+    method: params.method,
+  });
 }
 
 function createResponse(): {
@@ -144,25 +137,6 @@ function expectUnauthorizedResponse(
 ): void {
   expect(response.res.statusCode, label).toBe(401);
   expect(response.getBody(), label).toContain("Unauthorized");
-}
-
-function createHooksConfig(): HooksConfigResolved {
-  return {
-    basePath: "/hooks",
-    token: "hook-secret",
-    maxBodyBytes: 1024,
-    mappings: [],
-    agentPolicy: {
-      defaultAgentId: "main",
-      knownAgentIds: new Set(["main"]),
-      allowedAgentIds: undefined,
-    },
-    sessionPolicy: {
-      allowRequestSessionKey: false,
-      defaultSessionKey: undefined,
-      allowedSessionKeyPrefixes: undefined,
-    },
-  };
 }
 
 function canonicalizePluginPath(pathname: string): string {
