@@ -125,20 +125,15 @@ describe("enableConsoleCapture", () => {
     expect(log).toHaveBeenCalledWith(payload);
   });
 
-  it("swallows async EPIPE on stdout", () => {
+  it.each([
+    { name: "stdout", stream: process.stdout },
+    { name: "stderr", stream: process.stderr },
+  ])("swallows async EPIPE on $name", ({ stream }) => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
     enableConsoleCapture();
     const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
     epipe.code = "EPIPE";
-    expect(() => process.stdout.emit("error", epipe)).not.toThrow();
-  });
-
-  it("swallows async EPIPE on stderr", () => {
-    setLoggerOverride({ level: "info", file: tempLogPath() });
-    enableConsoleCapture();
-    const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
-    epipe.code = "EPIPE";
-    expect(() => process.stderr.emit("error", epipe)).not.toThrow();
+    expect(() => stream.emit("error", epipe)).not.toThrow();
   });
 
   it("rethrows non-EPIPE errors on stdout", () => {

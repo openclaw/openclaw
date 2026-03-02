@@ -1,37 +1,26 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { CronService } from "./service.js";
+import type { ChannelId } from "../channels/plugins/types.js";
+import { CronService, type CronServiceDeps } from "./service.js";
+import {
+  createCronStoreHarness,
+  createNoopLogger,
+  withCronServiceForTest,
+} from "./service.test-harness.js";
 
-const noopLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
-
-async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-delivery-"));
-  return {
-    storePath: path.join(dir, "cron", "jobs.json"),
-    cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
-    },
-  };
-}
+const noopLogger = createNoopLogger();
+const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-delivery-" });
 
 type DeliveryMode = "none" | "announce";
 
 type DeliveryOverride = {
   mode: DeliveryMode;
-  channel?: string;
+  channel?: ChannelId | "last";
   to?: string;
 };
 
 async function withCronService(
   params: {
-    runIsolatedAgentJob?: () => Promise<{ status: "ok"; summary: string; delivered?: boolean }>;
+    runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
   },
   run: (context: {
     cron: CronService;
@@ -39,27 +28,15 @@ async function withCronService(
     requestHeartbeatNow: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
 ) {
-  const store = await makeStorePath();
-  const enqueueSystemEvent = vi.fn();
-  const requestHeartbeatNow = vi.fn();
-  const cron = new CronService({
-    cronEnabled: true,
-    storePath: store.storePath,
-    log: noopLogger,
-    enqueueSystemEvent,
-    requestHeartbeatNow,
-    runIsolatedAgentJob:
-      params.runIsolatedAgentJob ??
-      (vi.fn(async () => ({ status: "ok", summary: "done" })) as never),
-  });
-
-  await cron.start();
-  try {
-    await run({ cron, enqueueSystemEvent, requestHeartbeatNow });
-  } finally {
-    cron.stop();
-    await store.cleanup();
-  }
+  await withCronServiceForTest(
+    {
+      makeStorePath,
+      logger: noopLogger,
+      cronEnabled: true,
+      runIsolatedAgentJob: params.runIsolatedAgentJob,
+    },
+    run,
+  );
 }
 
 async function addIsolatedAgentTurnJob(
@@ -73,6 +50,7 @@ async function addIsolatedAgentTurnJob(
 ) {
   return cron.add({
     name: params.name,
+    enabled: true,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
     sessionTarget: "isolated",
     wakeMode: params.wakeMode,
@@ -80,7 +58,7 @@ async function addIsolatedAgentTurnJob(
       kind: "agentTurn",
       message: "hello",
       ...params.payload,
-    },
+    } as unknown as { kind: "agentTurn"; message: string },
     ...(params.delivery
       ? {
           delivery: params.delivery as unknown as {
@@ -129,7 +107,7 @@ describe("CronService delivery plan consistency", () => {
     await withCronService(
       {
         runIsolatedAgentJob: vi.fn(async () => ({
-          status: "ok",
+          status: "ok" as const,
           summary: "done",
           delivered: true,
         })),

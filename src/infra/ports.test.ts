@@ -22,7 +22,7 @@ const describeUnix = process.platform === "win32" ? describe.skip : describe;
 describe("ports helpers", () => {
   it("ensurePortAvailable rejects when port busy", async () => {
     const server = net.createServer();
-    await new Promise((resolve) => server.listen(0, resolve));
+    await new Promise<void>((resolve) => server.listen(0, () => resolve()));
     const port = (server.address() as net.AddressInfo).port;
     await expect(ensurePortAvailable(port)).rejects.toBeInstanceOf(PortInUseError);
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -91,7 +91,7 @@ describe("ports helpers", () => {
 
 describeUnix("inspectPortUsage", () => {
   beforeEach(() => {
-    runCommandWithTimeoutMock.mockReset();
+    runCommandWithTimeoutMock.mockClear();
   });
 
   it("reports busy when lsof is missing but loopback listener exists", async () => {

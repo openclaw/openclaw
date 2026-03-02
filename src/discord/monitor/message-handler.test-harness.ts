@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 export async function createBaseDiscordMessageContext(
   overrides: Record<string, unknown> = {},
@@ -67,6 +68,7 @@ export async function createBaseDiscordMessageContext(
       sessionKey: "agent:main:discord:guild:g1",
       mainSessionKey: "agent:main:main",
     },
+    threadBindings: createNoopThreadBindingManager("default"),
     ...overrides,
   } as unknown as DiscordMessagePreflightContext;
 }

@@ -1,12 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runWithModelFallback } from "../../agents/model-fallback.js";
 
 // ---------- mocks ----------
 
 const buildWorkspaceSkillSnapshotMock = vi.fn();
+const resolveAgentConfigMock = vi.fn();
 const resolveAgentSkillsFilterMock = vi.fn();
+const getModelRefStatusMock = vi.fn().mockReturnValue({ allowed: false });
+const isCliProviderMock = vi.fn().mockReturnValue(false);
+const resolveAllowedModelRefMock = vi.fn();
+const resolveConfiguredModelRefMock = vi.fn();
+const resolveHooksGmailModelMock = vi.fn();
+const resolveThinkingDefaultMock = vi.fn();
+const logWarnMock = vi.fn();
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentConfig: vi.fn().mockReturnValue(undefined),
+  resolveAgentConfig: resolveAgentConfigMock,
   resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
   resolveAgentModelFallbacksOverride: vi.fn().mockReturnValue(undefined),
   resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/workspace"),
@@ -30,14 +39,18 @@ vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn().mockResolvedValue({ models: [] }),
 }));
 
-vi.mock("../../agents/model-selection.js", () => ({
-  getModelRefStatus: vi.fn().mockReturnValue({ allowed: false }),
-  isCliProvider: vi.fn().mockReturnValue(false),
-  resolveAllowedModelRef: vi.fn().mockReturnValue({ ref: { provider: "openai", model: "gpt-4" } }),
-  resolveConfiguredModelRef: vi.fn().mockReturnValue({ provider: "openai", model: "gpt-4" }),
-  resolveHooksGmailModel: vi.fn().mockReturnValue(null),
-  resolveThinkingDefault: vi.fn().mockReturnValue(undefined),
-}));
+vi.mock("../../agents/model-selection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/model-selection.js")>();
+  return {
+    ...actual,
+    getModelRefStatus: getModelRefStatusMock,
+    isCliProvider: isCliProviderMock,
+    resolveAllowedModelRef: resolveAllowedModelRefMock,
+    resolveConfiguredModelRef: resolveConfiguredModelRefMock,
+    resolveHooksGmailModel: resolveHooksGmailModelMock,
+    resolveThinkingDefault: resolveThinkingDefaultMock,
+  };
+});
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: vi.fn().mockResolvedValue({
@@ -49,6 +62,8 @@ vi.mock("../../agents/model-fallback.js", () => ({
     model: "gpt-4",
   }),
 }));
+
+const runWithModelFallbackMock = vi.mocked(runWithModelFallback);
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: vi.fn().mockResolvedValue({
@@ -80,12 +95,14 @@ vi.mock("../../agents/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn().mockResolvedValue(true),
 }));
 
+const runCliAgentMock = vi.fn();
 vi.mock("../../agents/cli-runner.js", () => ({
-  runCliAgent: vi.fn(),
+  runCliAgent: runCliAgentMock,
 }));
 
+const getCliSessionIdMock = vi.fn().mockReturnValue(undefined);
 vi.mock("../../agents/cli-session.js", () => ({
-  getCliSessionId: vi.fn().mockReturnValue(undefined),
+  getCliSessionId: getCliSessionIdMock,
   setCliSessionId: vi.fn(),
 }));
 
@@ -102,13 +119,18 @@ vi.mock("../../cli/outbound-send-deps.js", () => ({
 vi.mock("../../config/sessions.js", () => ({
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("main:default"),
   resolveSessionTranscriptPath: vi.fn().mockReturnValue("/tmp/transcript.jsonl"),
+  setSessionRuntimeModel: vi.fn(),
   updateSessionStore: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../routing/session-key.js", () => ({
-  buildAgentMainSessionKey: vi.fn().mockReturnValue("agent:default:cron:test"),
-  normalizeAgentId: vi.fn((id: string) => id),
-}));
+vi.mock("../../routing/session-key.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../routing/session-key.js")>();
+  return {
+    ...actual,
+    buildAgentMainSessionKey: vi.fn().mockReturnValue("agent:default:cron:test"),
+    normalizeAgentId: vi.fn((id: string) => id),
+  };
+});
 
 vi.mock("../../infra/agent-events.js", () => ({
   registerAgentRunContext: vi.fn(),
@@ -123,7 +145,7 @@ vi.mock("../../infra/skills-remote.js", () => ({
 }));
 
 vi.mock("../../logger.js", () => ({
-  logWarn: vi.fn(),
+  logWarn: (...args: unknown[]) => logWarnMock(...args),
 }));
 
 vi.mock("../../security/external-content.js", () => ({
@@ -205,7 +227,15 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       resolvedSkills: [],
       version: 42,
     });
+    resolveAgentConfigMock.mockReturnValue(undefined);
     resolveAgentSkillsFilterMock.mockReturnValue(undefined);
+    resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4" });
+    resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-4" } });
+    resolveHooksGmailModelMock.mockReturnValue(null);
+    resolveThinkingDefaultMock.mockReturnValue(undefined);
+    getModelRefStatusMock.mockReturnValue({ allowed: false });
+    isCliProviderMock.mockReturnValue(false);
+    logWarnMock.mockReset();
     // Fresh session object per test — prevents mutation leaking between tests
     resolveCronSessionMock.mockReturnValue({
       storePath: "/tmp/store.json",
@@ -312,6 +342,16 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     ]);
   });
 
+  it("forces a fresh session for isolated cron runs", async () => {
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("ok");
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      forceNew: true,
+    });
+  });
+
   it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue([" weather ", "meme-factory", "weather"]);
     resolveCronSessionMock.mockReturnValue({
@@ -341,5 +381,197 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
     expect(result.status).toBe("ok");
     expect(buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  describe("model fallbacks", () => {
+    const defaultFallbacks = [
+      "anthropic/claude-opus-4-6",
+      "google-gemini-cli/gemini-3-pro-preview",
+      "nvidia/deepseek-ai/deepseek-v3.2",
+    ];
+
+    async function expectPrimaryOverridePreservesDefaults(modelOverride: unknown) {
+      resolveAgentConfigMock.mockReturnValue({ model: modelOverride });
+      const result = await runCronIsolatedAgentTurn(
+        makeParams({
+          cfg: {
+            agents: {
+              defaults: {
+                model: { primary: "openai-codex/gpt-5.3-codex", fallbacks: defaultFallbacks },
+              },
+            },
+          },
+          agentId: "scout",
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+      const callCfg = runWithModelFallbackMock.mock.calls[0][0].cfg;
+      const model = callCfg?.agents?.defaults?.model as
+        | { primary?: string; fallbacks?: string[] }
+        | undefined;
+      expect(model?.primary).toBe("anthropic/claude-sonnet-4-5");
+      expect(model?.fallbacks).toEqual(defaultFallbacks);
+    }
+
+    it("preserves defaults when agent overrides primary as string", async () => {
+      await expectPrimaryOverridePreservesDefaults("anthropic/claude-sonnet-4-5");
+    });
+
+    it("preserves defaults when agent overrides primary in object form", async () => {
+      await expectPrimaryOverridePreservesDefaults({ primary: "anthropic/claude-sonnet-4-5" });
+    });
+
+    it("applies payload.model override when model is allowed", async () => {
+      resolveAllowedModelRefMock.mockReturnValueOnce({
+        ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      });
+
+      const result = await runCronIsolatedAgentTurn(
+        makeParams({
+          job: makeJob({
+            payload: { kind: "agentTurn", message: "test", model: "anthropic/claude-sonnet-4-6" },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(logWarnMock).not.toHaveBeenCalled();
+      expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+      const runParams = runWithModelFallbackMock.mock.calls[0][0];
+      expect(runParams.provider).toBe("anthropic");
+      expect(runParams.model).toBe("claude-sonnet-4-6");
+    });
+
+    it("falls back to agent defaults when payload.model is not allowed", async () => {
+      resolveAllowedModelRefMock.mockReturnValueOnce({
+        error: "model not allowed: anthropic/claude-sonnet-4-6",
+      });
+
+      const result = await runCronIsolatedAgentTurn(
+        makeParams({
+          cfg: {
+            agents: {
+              defaults: {
+                model: { primary: "openai-codex/gpt-5.3-codex", fallbacks: defaultFallbacks },
+              },
+            },
+          },
+          job: makeJob({
+            payload: { kind: "agentTurn", message: "test", model: "anthropic/claude-sonnet-4-6" },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(logWarnMock).toHaveBeenCalledWith(
+        "cron: payload.model 'anthropic/claude-sonnet-4-6' not allowed, falling back to agent defaults",
+      );
+      expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+      const callCfg = runWithModelFallbackMock.mock.calls[0][0].cfg;
+      const model = callCfg?.agents?.defaults?.model as
+        | { primary?: string; fallbacks?: string[] }
+        | undefined;
+      expect(model?.primary).toBe("openai-codex/gpt-5.3-codex");
+      expect(model?.fallbacks).toEqual(defaultFallbacks);
+    });
+
+    it("returns an error when payload.model is invalid", async () => {
+      resolveAllowedModelRefMock.mockReturnValueOnce({
+        error: "invalid model: openai/",
+      });
+
+      const result = await runCronIsolatedAgentTurn(
+        makeParams({
+          job: makeJob({
+            payload: { kind: "agentTurn", message: "test", model: "openai/" },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe("error");
+      expect(result.error).toBe("invalid model: openai/");
+      expect(logWarnMock).not.toHaveBeenCalled();
+      expect(runWithModelFallbackMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("CLI session handoff (issue #29774)", () => {
+    it("does not pass stored cliSessionId on fresh isolated runs (isNewSession=true)", async () => {
+      // Simulate a persisted CLI session ID from a previous run.
+      getCliSessionIdMock.mockReturnValue("prev-cli-session-abc");
+      isCliProviderMock.mockReturnValue(true);
+      runCliAgentMock.mockResolvedValue({
+        payloads: [{ text: "output" }],
+        meta: { agentMeta: { sessionId: "new-cli-session-xyz", usage: { input: 5, output: 10 } } },
+      });
+      // Make runWithModelFallback invoke the run callback so the CLI path executes.
+      runWithModelFallbackMock.mockImplementationOnce(
+        async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+          const result = await params.run("claude-cli", "claude-opus-4-6");
+          return { result, provider: "claude-cli", model: "claude-opus-4-6", attempts: [] };
+        },
+      );
+      resolveCronSessionMock.mockReturnValue({
+        storePath: "/tmp/store.json",
+        store: {},
+        sessionEntry: {
+          sessionId: "test-session-fresh",
+          updatedAt: 0,
+          systemSent: false,
+          skillsSnapshot: undefined,
+          // A stored CLI session ID that should NOT be reused on fresh runs.
+          cliSessionIds: { "claude-cli": "prev-cli-session-abc" },
+        },
+        systemSent: false,
+        isNewSession: true,
+      });
+
+      await runCronIsolatedAgentTurn(makeParams());
+
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      // Fresh session: cliSessionId must be undefined, not the stored value.
+      expect(runCliAgentMock.mock.calls[0][0]).toHaveProperty("cliSessionId", undefined);
+    });
+
+    it("reuses stored cliSessionId on continuation runs (isNewSession=false)", async () => {
+      getCliSessionIdMock.mockReturnValue("existing-cli-session-def");
+      isCliProviderMock.mockReturnValue(true);
+      runCliAgentMock.mockResolvedValue({
+        payloads: [{ text: "output" }],
+        meta: {
+          agentMeta: { sessionId: "existing-cli-session-def", usage: { input: 5, output: 10 } },
+        },
+      });
+      runWithModelFallbackMock.mockImplementationOnce(
+        async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+          const result = await params.run("claude-cli", "claude-opus-4-6");
+          return { result, provider: "claude-cli", model: "claude-opus-4-6", attempts: [] };
+        },
+      );
+      resolveCronSessionMock.mockReturnValue({
+        storePath: "/tmp/store.json",
+        store: {},
+        sessionEntry: {
+          sessionId: "test-session-continuation",
+          updatedAt: 0,
+          systemSent: false,
+          skillsSnapshot: undefined,
+          cliSessionIds: { "claude-cli": "existing-cli-session-def" },
+        },
+        systemSent: false,
+        isNewSession: false,
+      });
+
+      await runCronIsolatedAgentTurn(makeParams());
+
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      // Continuation: cliSessionId should be passed through for session resume.
+      expect(runCliAgentMock.mock.calls[0][0]).toHaveProperty(
+        "cliSessionId",
+        "existing-cli-session-def",
+      );
+    });
   });
 });

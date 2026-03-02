@@ -15,6 +15,7 @@ export {
 export type { SessionReferenceResolution } from "./sessions-resolution.js";
 export {
   isRequesterSpawnedSessionVisible,
+  isResolvedSessionVisibleToRequester,
   listSpawnedSessionKeys,
   looksLikeSessionId,
   looksLikeSessionKey,
@@ -23,6 +24,7 @@ export {
   resolveMainSessionAlias,
   resolveSessionReference,
   shouldResolveSessionIdInput,
+  shouldVerifyRequesterSpawnedSessionVisibility,
 } from "./sessions-resolution.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
@@ -127,7 +129,7 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
       return true;
     }
     const role = (msg as { role?: unknown }).role;
-    return role !== "toolResult";
+    return role !== "toolResult" && role !== "tool";
   });
 }
 

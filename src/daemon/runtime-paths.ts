@@ -19,6 +19,12 @@ function getPathModule(platform: NodeJS.Platform) {
   return platform === "win32" ? path.win32 : path.posix;
 }
 
+function isNodeExecPath(execPath: string, platform: NodeJS.Platform): boolean {
+  const pathModule = getPathModule(platform);
+  const base = pathModule.basename(execPath).toLowerCase();
+  return base === "node" || base === "node.exe";
+}
+
 function normalizeForCompare(input: string, platform: NodeJS.Platform): string {
   const pathModule = getPathModule(platform);
   const normalized = pathModule.normalize(input).replaceAll("\\", "/");
@@ -160,8 +166,9 @@ export async function resolvePreferredNodePath(params: {
 
   // Prefer the node that is currently running `openclaw gateway install`.
   // This respects the user's active version manager (fnm/nvm/volta/etc.).
+  const platform = params.platform ?? process.platform;
   const currentExecPath = params.execPath ?? process.execPath;
-  if (currentExecPath) {
+  if (currentExecPath && isNodeExecPath(currentExecPath, platform)) {
     const execFileImpl = params.execFile ?? execFileAsync;
     const version = await resolveNodeVersion(currentExecPath, execFileImpl);
     if (isSupportedNodeVersion(version)) {

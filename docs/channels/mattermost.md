@@ -70,7 +70,6 @@ Mattermost responds to DMs automatically. Channel behavior is controlled by `cha
 
 - `oncall` (default): respond only when @mentioned in channels.
 - `onmessage`: respond to every channel message.
-- `always`: respond to every message in channels (same channel behavior as `onmessage`).
 - `onchar`: respond when a message starts with a trigger prefix.
 
 Config example:
@@ -90,25 +89,6 @@ Notes:
 
 - `onchar` still responds to explicit @mentions.
 - `channels.mattermost.requireMention` is honored for legacy configs but `chatmode` is preferred.
-- Current limitation: due to Mattermost plugin event behavior (`#11797`), `chatmode: "onmessage"` and
-  `chatmode: "always"` may still require explicit group mention override to respond without @mentions.
-  Use:
-
-```json5
-{
-  channels: {
-    mattermost: {
-      groupPolicy: "open",
-      groups: {
-        "*": { requireMention: false },
-      },
-    },
-  },
-}
-```
-
-Reference: [Bug: Mattermost plugin does not receive channel message events via WebSocket #11797](https://github.com/open-webui/open-webui/issues/11797).
-Related fix scope: [fix(mattermost): honor chatmode mention fallback in group mention gating #14995](https://github.com/open-webui/open-webui/pull/14995).
 
 ## Access control (DMs)
 
@@ -121,8 +101,10 @@ Related fix scope: [fix(mattermost): honor chatmode mention fallback in group me
 ## Channels (groups)
 
 - Default: `channels.mattermost.groupPolicy = "allowlist"` (mention-gated).
-- Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs or `@username`).
+- Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs recommended).
+- `@username` matching is mutable and only enabled when `channels.mattermost.dangerouslyAllowNameMatching: true`.
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
+- Runtime note: if `channels.mattermost` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 ## Targets for outbound delivery
 
@@ -133,6 +115,26 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 - `@username` for a DM (resolved via the Mattermost API)
 
 Bare IDs are treated as channels.
+
+## Reactions (message tool)
+
+- Use `message action=react` with `channel=mattermost`.
+- `messageId` is the Mattermost post id.
+- `emoji` accepts names like `thumbsup` or `:+1:` (colons are optional).
+- Set `remove=true` (boolean) to remove a reaction.
+- Reaction add/remove events are forwarded as system events to the routed agent session.
+
+Examples:
+
+```
+message action=react channel=mattermost target=channel:<channelId> messageId=<postId> emoji=thumbsup
+message action=react channel=mattermost target=channel:<channelId> messageId=<postId> emoji=thumbsup remove=true
+```
+
+Config:
+
+- `channels.mattermost.actions.reactions`: enable/disable reaction actions (default true).
+- Per-account override: `channels.mattermost.accounts.<id>.actions.reactions`.
 
 ## Multi-account
 
@@ -153,7 +155,6 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
 
 ## Troubleshooting
 
-- No replies in channels: ensure the bot is in the channel and use the mode behavior correctly: mention it (`oncall`), use a trigger prefix (`onchar`), or use `onmessage`/`always` with:
-  `channels.mattermost.groups["*"].requireMention = false` (and typically `groupPolicy: "open"`).
+- No replies in channels: ensure the bot is in the channel and mention it (oncall), use a trigger prefix (onchar), or set `chatmode: "onmessage"`.
 - Auth errors: check the bot token, base URL, and whether the account is enabled.
 - Multi-account issues: env vars only apply to the `default` account.

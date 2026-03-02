@@ -124,4 +124,28 @@ describe("resolveNodeIdFromCandidates", () => {
       resolveNodeIdFromCandidates([{ nodeId: "mac-abcdef" }, { nodeId: "mac-abc999" }], "mac-abc"),
     ).toThrow(/ambiguous node: mac-abc.*matches:/);
   });
+
+  it("prefers a unique connected node when names are duplicated", () => {
+    expect(
+      resolveNodeIdFromCandidates(
+        [
+          { nodeId: "ios-old", displayName: "iPhone", connected: false },
+          { nodeId: "ios-live", displayName: "iPhone", connected: true },
+        ],
+        "iphone",
+      ),
+    ).toBe("ios-live");
+  });
+
+  it("stays ambiguous when multiple connected nodes match", () => {
+    expect(() =>
+      resolveNodeIdFromCandidates(
+        [
+          { nodeId: "ios-a", displayName: "iPhone", connected: true },
+          { nodeId: "ios-b", displayName: "iPhone", connected: true },
+        ],
+        "iphone",
+      ),
+    ).toThrow(/ambiguous node: iphone.*matches:/);
+  });
 });

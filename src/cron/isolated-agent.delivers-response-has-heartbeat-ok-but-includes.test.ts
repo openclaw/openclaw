@@ -12,51 +12,123 @@ import {
 } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
+async function createTelegramDeliveryFixture(home: string): Promise<{
+  storePath: string;
+  deps: CliDeps;
+}> {
+  const storePath = await writeSessionStore(home, {
+    lastProvider: "telegram",
+    lastChannel: "telegram",
+    lastTo: "123",
+  });
+  const deps: CliDeps = {
+    sendMessageSlack: vi.fn(),
+    sendMessageWhatsApp: vi.fn(),
+    sendMessageTelegram: vi.fn().mockResolvedValue({
+      messageId: "t1",
+      chatId: "123",
+    }),
+    sendMessageDiscord: vi.fn(),
+    sendMessageSignal: vi.fn(),
+    sendMessageIMessage: vi.fn(),
+  };
+  return { storePath, deps };
+}
+
+function mockEmbeddedAgentPayloads(payloads: Array<{ text: string; mediaUrl?: string }>) {
+  vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+    payloads,
+    meta: {
+      durationMs: 5,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  });
+}
+
+async function runTelegramAnnounceTurn(params: {
+  home: string;
+  storePath: string;
+  deps: CliDeps;
+  cfg?: ReturnType<typeof makeCfg>;
+  signal?: AbortSignal;
+}) {
+  return runCronIsolatedAgentTurn({
+    cfg: params.cfg ?? makeCfg(params.home, params.storePath),
+    deps: params.deps,
+    job: {
+      ...makeJob({
+        kind: "agentTurn",
+        message: "do it",
+      }),
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    },
+    message: "do it",
+    sessionKey: "cron:job-1",
+    signal: params.signal,
+    lane: "cron",
+  });
+}
+
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
     setupIsolatedAgentTurnMocks({ fast: true });
   });
 
-  it("handles media heartbeat delivery and announce cleanup modes", async () => {
+  it("does not fan out telegram cron delivery across allowFrom entries", async () => {
     await withTempCronHome(async (home) => {
-      const storePath = await writeSessionStore(home, {
-        lastProvider: "telegram",
-        lastChannel: "telegram",
-        lastTo: "123",
-      });
-      const deps: CliDeps = {
-        sendMessageWhatsApp: vi.fn(),
-        sendMessageTelegram: vi.fn().mockResolvedValue({
-          messageId: "t1",
-          chatId: "123",
-        }),
-        sendMessageDiscord: vi.fn(),
-        sendMessageSignal: vi.fn(),
-        sendMessageIMessage: vi.fn(),
-      };
+      const { storePath, deps } = await createTelegramDeliveryFixture(home);
+      mockEmbeddedAgentPayloads([
+        { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
+      ]);
 
-      // Media should still be delivered even if text is just HEARTBEAT_OK.
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-        payloads: [{ text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" }],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+      const cfg = makeCfg(home, storePath, {
+        channels: {
+          telegram: {
+            botToken: "tok",
+            allowFrom: ["111", "222", "333"],
+          },
         },
       });
 
-      const mediaRes = await runCronIsolatedAgentTurn({
-        cfg: makeCfg(home, storePath),
+      const res = await runCronIsolatedAgentTurn({
+        cfg,
         deps,
         job: {
           ...makeJob({
             kind: "agentTurn",
-            message: "do it",
+            message: "deliver once",
           }),
           delivery: { mode: "announce", channel: "telegram", to: "123" },
         },
-        message: "do it",
+        message: "deliver once",
         sessionKey: "cron:job-1",
         lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(true);
+      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
+      expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
+        "123",
+        "HEARTBEAT_OK",
+        expect.objectContaining({ accountId: undefined }),
+      );
+    });
+  });
+
+  it("handles media heartbeat delivery and announce cleanup modes", async () => {
+    await withTempCronHome(async (home) => {
+      const { storePath, deps } = await createTelegramDeliveryFixture(home);
+
+      // Media should still be delivered even if text is just HEARTBEAT_OK.
+      mockEmbeddedAgentPayloads([
+        { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
+      ]);
+
+      const mediaRes = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
       });
 
       expect(mediaRes.status).toBe("ok");
@@ -65,13 +137,7 @@ describe("runCronIsolatedAgentTurn", () => {
 
       vi.mocked(runSubagentAnnounceFlow).mockClear();
       vi.mocked(deps.sendMessageTelegram).mockClear();
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-        payloads: [{ text: "HEARTBEAT_OK 🦞" }],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
+      mockEmbeddedAgentPayloads([{ text: "HEARTBEAT_OK 🦞" }]);
 
       const cfg = makeCfg(home, storePath);
       cfg.agents = {
@@ -130,6 +196,89 @@ describe("runCronIsolatedAgentTurn", () => {
         | undefined;
       expect(deleteArgs?.cleanup).toBe("delete");
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
+  });
+
+  it("skips structured outbound delivery when timeout abort is already set", async () => {
+    await withTempCronHome(async (home) => {
+      const { storePath, deps } = await createTelegramDeliveryFixture(home);
+      const controller = new AbortController();
+      controller.abort("cron: job execution timed out");
+
+      mockEmbeddedAgentPayloads([
+        { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
+      ]);
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        signal: controller.signal,
+      });
+
+      expect(res.status).toBe("error");
+      expect(res.error).toContain("timed out");
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    });
+  });
+
+  it("uses a unique announce childRunId for each cron run", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, {
+        lastProvider: "telegram",
+        lastChannel: "telegram",
+        lastTo: "123",
+      });
+      const deps: CliDeps = {
+        sendMessageSlack: vi.fn(),
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "final summary" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const cfg = makeCfg(home, storePath);
+      const job = makeJob({ kind: "agentTurn", message: "do it" });
+      job.delivery = { mode: "announce", channel: "last" };
+
+      await runCronIsolatedAgentTurn({
+        cfg,
+        deps,
+        job,
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await runCronIsolatedAgentTurn({
+        cfg,
+        deps,
+        job,
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+      const firstArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
+        | { childRunId?: string }
+        | undefined;
+      const secondArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[1]?.[0] as
+        | { childRunId?: string }
+        | undefined;
+      expect(firstArgs?.childRunId).toBeTruthy();
+      expect(secondArgs?.childRunId).toBeTruthy();
+      expect(secondArgs?.childRunId).not.toBe(firstArgs?.childRunId);
     });
   });
 });

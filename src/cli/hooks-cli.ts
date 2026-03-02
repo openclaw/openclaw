@@ -26,6 +26,11 @@ import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import {
+  buildNpmInstallRecordFields,
+  resolvePinnedNpmInstallRecordForCli,
+} from "./npm-resolution.js";
+import { promptYesNo } from "./prompt.js";
 
 export type HooksListOptions = {
   json?: boolean;
@@ -176,6 +181,25 @@ function createInstallLogger() {
 
 function logGatewayRestartHint() {
   defaultRuntime.log("Restart the gateway to load hooks.");
+}
+
+function logIntegrityDriftWarning(
+  hookId: string,
+  drift: {
+    resolution: { resolvedSpec?: string };
+    spec: string;
+    expectedIntegrity: string;
+    actualIntegrity: string;
+  },
+) {
+  const specLabel = drift.resolution.resolvedSpec ?? drift.spec;
+  defaultRuntime.log(
+    theme.warn(
+      `Integrity drift detected for "${hookId}" (${specLabel})` +
+        `\nExpected: ${drift.expectedIntegrity}` +
+        `\nActual:   ${drift.actualIntegrity}`,
+    ),
+  );
 }
 
 async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
@@ -550,7 +574,8 @@ export function registerHooksCli(program: Command): void {
     .description("Install a hook pack (path, archive, or npm spec)")
     .argument("<path-or-spec>", "Path to a hook pack or npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
-    .action(async (raw: string, opts: { link?: boolean }) => {
+    .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
+    .action(async (raw: string, opts: { link?: boolean; pin?: boolean }) => {
       const resolved = resolveUserPath(raw);
       const cfg = loadConfig();
 
@@ -658,13 +683,19 @@ export function registerHooksCli(program: Command): void {
       }
 
       let next = enableInternalHookEntries(cfg, result.hooks);
+      const installRecord = resolvePinnedNpmInstallRecordForCli(
+        raw,
+        Boolean(opts.pin),
+        result.targetDir,
+        result.version,
+        result.npmResolution,
+        defaultRuntime.log,
+        theme.warn,
+      );
 
       next = recordHookInstall(next, {
         hookId: result.hookPackId,
-        source: "npm",
-        spec: raw,
-        installPath: result.targetDir,
-        version: result.version,
+        ...installRecord,
         hooks: result.hooks,
       });
       await writeConfigFile(next);
@@ -721,6 +752,11 @@ export function registerHooksCli(program: Command): void {
             mode: "update",
             dryRun: true,
             expectedHookPackId: hookId,
+            expectedIntegrity: record.integrity,
+            onIntegrityDrift: async (drift) => {
+              logIntegrityDriftWarning(hookId, drift);
+              return true;
+            },
             logger: createInstallLogger(),
           });
           if (!probe.ok) {
@@ -742,6 +778,11 @@ export function registerHooksCli(program: Command): void {
           spec: record.spec,
           mode: "update",
           expectedHookPackId: hookId,
+          expectedIntegrity: record.integrity,
+          onIntegrityDrift: async (drift) => {
+            logIntegrityDriftWarning(hookId, drift);
+            return await promptYesNo(`Continue updating "${hookId}" with this artifact?`);
+          },
           logger: createInstallLogger(),
         });
         if (!result.ok) {
@@ -752,10 +793,12 @@ export function registerHooksCli(program: Command): void {
         const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
         nextCfg = recordHookInstall(nextCfg, {
           hookId,
-          source: "npm",
-          spec: record.spec,
-          installPath: result.targetDir,
-          version: nextVersion,
+          ...buildNpmInstallRecordFields({
+            spec: record.spec,
+            installPath: result.targetDir,
+            version: nextVersion,
+            resolution: result.npmResolution,
+          }),
           hooks: result.hooks,
         });
         updatedCount += 1;

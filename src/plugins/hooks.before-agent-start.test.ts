@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
-import type { PluginHookBeforeAgentStartResult, TypedPluginHookRegistration } from "./types.js";
+import type { PluginHookBeforeAgentStartResult, PluginHookRegistration } from "./types.js";
 
 function addBeforeAgentStartHook(
   registry: PluginRegistry,
@@ -22,7 +22,7 @@ function addBeforeAgentStartHook(
     handler,
     priority,
     source: "test",
-  } as TypedPluginHookRegistration);
+  } as PluginHookRegistration);
 }
 
 const stubCtx = {
@@ -39,25 +39,26 @@ describe("before_agent_start hook merger", () => {
     registry = createEmptyPluginRegistry();
   });
 
-  it("returns modelOverride from a single plugin", async () => {
-    addBeforeAgentStartHook(registry, "plugin-a", () => ({
-      modelOverride: "llama3.3:8b",
-    }));
-
+  const runWithSingleHook = async (result: PluginHookBeforeAgentStartResult, priority?: number) => {
+    addBeforeAgentStartHook(registry, "plugin-a", () => result, priority);
     const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+    return await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
+  };
 
-    expect(result?.modelOverride).toBe("llama3.3:8b");
+  const expectSingleModelOverride = async (modelOverride: string) => {
+    const result = await runWithSingleHook({ modelOverride });
+    expect(result?.modelOverride).toBe(modelOverride);
+    return result;
+  };
+
+  it("returns modelOverride from a single plugin", async () => {
+    await expectSingleModelOverride("llama3.3:8b");
   });
 
   it("returns providerOverride from a single plugin", async () => {
-    addBeforeAgentStartHook(registry, "plugin-a", () => ({
+    const result = await runWithSingleHook({
       providerOverride: "ollama",
-    }));
-
-    const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
-
+    });
     expect(result?.providerOverride).toBe("ollama");
   });
 
@@ -153,14 +154,7 @@ describe("before_agent_start hook merger", () => {
   });
 
   it("modelOverride without providerOverride leaves provider undefined", async () => {
-    addBeforeAgentStartHook(registry, "plugin-a", () => ({
-      modelOverride: "llama3.3:8b",
-    }));
-
-    const runner = createHookRunner(registry);
-    const result = await runner.runBeforeAgentStart({ prompt: "hello" }, stubCtx);
-
-    expect(result?.modelOverride).toBe("llama3.3:8b");
+    const result = await expectSingleModelOverride("llama3.3:8b");
     expect(result?.providerOverride).toBeUndefined();
   });
 

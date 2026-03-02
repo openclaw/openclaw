@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
+import * as mediaFetch from "../../media/fetch.js";
 import type { SavedMedia } from "../../media/store.js";
 import * as mediaStore from "../../media/store.js";
+import { mockPinnedHostnameResolution } from "../../test-helpers/ssrf.js";
+import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import {
   fetchWithSlackAuth,
   resolveSlackAttachmentContent,
@@ -11,7 +14,7 @@ import {
 
 // Store original fetch
 const originalFetch = globalThis.fetch;
-let mockFetch: ReturnType<typeof vi.fn>;
+let mockFetch: ReturnType<typeof vi.fn<FetchMock>>;
 const createSavedMedia = (filePath: string, contentType: string): SavedMedia => ({
   id: "saved-media-id",
   path: filePath,
@@ -22,8 +25,10 @@ const createSavedMedia = (filePath: string, contentType: string): SavedMedia => 
 describe("fetchWithSlackAuth", () => {
   beforeEach(() => {
     // Create a new mock for each test
-    mockFetch = vi.fn();
-    globalThis.fetch = mockFetch as typeof fetch;
+    mockFetch = vi.fn<FetchMock>(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(),
+    );
+    globalThis.fetch = withFetchPreconnect(mockFetch);
   });
 
   afterEach(() => {
@@ -169,16 +174,8 @@ describe("fetchWithSlackAuth", () => {
 describe("resolveSlackMedia", () => {
   beforeEach(() => {
     mockFetch = vi.fn();
-    globalThis.fetch = mockFetch as typeof fetch;
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
-      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-      const addresses = ["93.184.216.34"];
-      return {
-        hostname: normalized,
-        addresses,
-        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-      };
-    });
+    globalThis.fetch = withFetchPreconnect(mockFetch);
+    mockPinnedHostnameResolution();
   });
 
   afterEach(() => {
@@ -247,6 +244,52 @@ describe("resolveSlackMedia", () => {
 
     expect(result).toBeNull();
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects HTML auth pages for non-HTML files", async () => {
+    const saveMediaBufferMock = vi.spyOn(mediaStore, "saveMediaBuffer");
+    mockFetch.mockResolvedValueOnce(
+      new Response("<!DOCTYPE html><html><body>login</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+    );
+
+    const result = await resolveSlackMedia({
+      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toBeNull();
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("allows expected HTML uploads", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/page.html", "text/html"),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response("<!doctype html><html><body>ok</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+
+    const result = await resolveSlackMedia({
+      files: [
+        {
+          url_private: "https://files.slack.com/page.html",
+          name: "page.html",
+          mimetype: "text/html",
+        },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.[0]?.path).toBe("/tmp/page.html");
   });
 
   it("overrides video/* MIME to audio/* for slack_audio voice messages", async () => {
@@ -365,8 +408,9 @@ describe("resolveSlackMedia", () => {
       return createSavedMedia("/tmp/unknown", "application/octet-stream");
     });
 
-    mockFetch.mockImplementation(async (input) => {
-      const url = String(input);
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url.includes("/a.jpg")) {
         return new Response(Buffer.from("image a"), {
           status: 200,
@@ -429,10 +473,84 @@ describe("resolveSlackMedia", () => {
   });
 });
 
+describe("Slack media SSRF policy", () => {
+  const originalFetchLocal = globalThis.fetch;
+
+  beforeEach(() => {
+    mockFetch = vi.fn();
+    globalThis.fetch = withFetchPreconnect(mockFetch);
+    mockPinnedHostnameResolution();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetchLocal;
+    vi.restoreAllMocks();
+  });
+
+  it("passes ssrfPolicy with Slack CDN allowedHostnames and allowRfc2544BenchmarkRange to file downloads", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from("img"), { status: 200, headers: { "content-type": "image/jpeg" } }),
+    );
+
+    const spy = vi.spyOn(mediaFetch, "fetchRemoteMedia");
+
+    await resolveSlackMedia({
+      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024,
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+      }),
+    );
+
+    const policy = spy.mock.calls[0][0].ssrfPolicy;
+    expect(policy?.allowedHostnames).toEqual(
+      expect.arrayContaining(["*.slack.com", "*.slack-edge.com", "*.slack-files.com"]),
+    );
+  });
+
+  it("passes ssrfPolicy to forwarded attachment image downloads", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/fwd.jpg", "image/jpeg"),
+    );
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {
+      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+      return {
+        hostname: normalized,
+        addresses: ["93.184.216.34"],
+        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses: ["93.184.216.34"] }),
+      };
+    });
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from("fwd"), { status: 200, headers: { "content-type": "image/jpeg" } }),
+    );
+
+    const spy = vi.spyOn(mediaFetch, "fetchRemoteMedia");
+
+    await resolveSlackAttachmentContent({
+      attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024,
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+      }),
+    );
+  });
+});
+
 describe("resolveSlackAttachmentContent", () => {
   beforeEach(() => {
     mockFetch = vi.fn();
-    globalThis.fetch = mockFetch as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(mockFetch);
     vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {
       const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
       const addresses = ["93.184.216.34"];
@@ -528,6 +646,11 @@ describe("resolveSlackAttachmentContent", () => {
         },
       ],
     });
+    const firstCall = mockFetch.mock.calls[0];
+    expect(firstCall?.[0]).toBe("https://files.slack.com/forwarded.jpg");
+    const firstInit = firstCall?.[1];
+    expect(firstInit?.redirect).toBe("manual");
+    expect(new Headers(firstInit?.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
   });
 });
 

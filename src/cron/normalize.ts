@@ -8,6 +8,7 @@ import {
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
 import { inferLegacyName } from "./service/normalize.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import type { CronJobCreate, CronJobPatch } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
@@ -24,6 +25,9 @@ function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const rawKind = typeof schedule.kind === "string" ? schedule.kind.trim().toLowerCase() : "";
   const kind = rawKind === "at" || rawKind === "every" || rawKind === "cron" ? rawKind : undefined;
+  const exprRaw = typeof schedule.expr === "string" ? schedule.expr.trim() : "";
+  const legacyCronRaw = typeof schedule.cron === "string" ? schedule.cron.trim() : "";
+  const normalizedExpr = exprRaw || legacyCronRaw;
   const atMsRaw = schedule.atMs;
   const atRaw = schedule.at;
   const atString = typeof atRaw === "string" ? atRaw.trim() : "";
@@ -47,7 +51,7 @@ function coerceSchedule(schedule: UnknownRecord) {
       next.kind = "at";
     } else if (typeof schedule.everyMs === "number") {
       next.kind = "every";
-    } else if (typeof schedule.expr === "string") {
+    } else if (normalizedExpr) {
       next.kind = "cron";
     }
   }
@@ -59,6 +63,22 @@ function coerceSchedule(schedule: UnknownRecord) {
   }
   if ("atMs" in next) {
     delete next.atMs;
+  }
+
+  if (normalizedExpr) {
+    next.expr = normalizedExpr;
+  } else if ("expr" in next) {
+    delete next.expr;
+  }
+  if ("cron" in next) {
+    delete next.cron;
+  }
+
+  const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
+  if (staggerMs !== undefined) {
+    next.staggerMs = staggerMs;
+  } else if ("staggerMs" in next) {
+    delete next.staggerMs;
   }
 
   return next;
@@ -131,7 +151,7 @@ function coercePayload(payload: UnknownRecord) {
   }
   if ("timeoutSeconds" in next) {
     if (typeof next.timeoutSeconds === "number" && Number.isFinite(next.timeoutSeconds)) {
-      next.timeoutSeconds = Math.max(1, Math.floor(next.timeoutSeconds));
+      next.timeoutSeconds = Math.max(0, Math.floor(next.timeoutSeconds));
     } else {
       delete next.timeoutSeconds;
     }
@@ -174,6 +194,16 @@ function coerceDelivery(delivery: UnknownRecord) {
     } else {
       delete next.to;
     }
+  }
+  if (typeof delivery.accountId === "string") {
+    const trimmed = delivery.accountId.trim();
+    if (trimmed) {
+      next.accountId = trimmed;
+    } else {
+      delete next.accountId;
+    }
+  } else if ("accountId" in next && typeof next.accountId !== "string") {
+    delete next.accountId;
   }
   return next;
 }
@@ -419,6 +449,19 @@ export function normalizeCronJobInput(
       !("deleteAfterRun" in next)
     ) {
       next.deleteAfterRun = true;
+    }
+    if ("schedule" in next && isRecord(next.schedule) && next.schedule.kind === "cron") {
+      const schedule = next.schedule as UnknownRecord;
+      const explicit = normalizeCronStaggerMs(schedule.staggerMs);
+      if (explicit !== undefined) {
+        schedule.staggerMs = explicit;
+      } else {
+        const expr = typeof schedule.expr === "string" ? schedule.expr : "";
+        const defaultStaggerMs = resolveDefaultCronStaggerMs(expr);
+        if (defaultStaggerMs !== undefined) {
+          schedule.staggerMs = defaultStaggerMs;
+        }
+      }
     }
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";

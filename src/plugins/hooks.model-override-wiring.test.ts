@@ -16,7 +16,7 @@ import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
-  TypedPluginHookRegistration,
+  PluginHookRegistration,
 } from "./types.js";
 
 function addBeforeModelResolveHook(
@@ -34,7 +34,7 @@ function addBeforeModelResolveHook(
     handler,
     priority,
     source: "test",
-  } as TypedPluginHookRegistration);
+  } as PluginHookRegistration);
 }
 
 function addBeforePromptBuildHook(
@@ -52,7 +52,7 @@ function addBeforePromptBuildHook(
     handler,
     priority,
     source: "test",
-  } as TypedPluginHookRegistration);
+  } as PluginHookRegistration);
 }
 
 function addLegacyBeforeAgentStartHook(
@@ -67,7 +67,7 @@ function addLegacyBeforeAgentStartHook(
     handler,
     priority,
     source: "test",
-  } as TypedPluginHookRegistration);
+  } as PluginHookRegistration);
 }
 
 const stubCtx: PluginHookAgentContext = {

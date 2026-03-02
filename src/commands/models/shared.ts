@@ -12,6 +12,8 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../../config/config.js";
+import { toAgentModelListLike } from "../../config/model-input.js";
+import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 
 export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
@@ -59,15 +61,20 @@ export const isLocalBaseUrl = (baseUrl: string) => {
   }
 };
 
-export async function updateConfig(
-  mutator: (cfg: OpenClawConfig) => OpenClawConfig,
-): Promise<OpenClawConfig> {
+export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     const issues = snapshot.issues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
-  const next = mutator(snapshot.config);
+  return snapshot.config;
+}
+
+export async function updateConfig(
+  mutator: (cfg: OpenClawConfig) => OpenClawConfig,
+): Promise<OpenClawConfig> {
+  const config = await loadValidConfigOrThrow();
+  const next = mutator(config);
   await writeConfigFile(next);
   return next;
 }
@@ -159,7 +166,8 @@ export function mergePrimaryFallbackConfig(
   existing: PrimaryFallbackConfig | undefined,
   patch: { primary?: string; fallbacks?: string[] },
 ): PrimaryFallbackConfig {
-  const next: PrimaryFallbackConfig = { ...existing };
+  const base = existing && typeof existing === "object" ? existing : undefined;
+  const next: PrimaryFallbackConfig = { ...base };
   if (patch.primary !== undefined) {
     next.primary = patch.primary;
   }
@@ -183,9 +191,9 @@ export function applyDefaultModelPrimaryUpdate(params: {
   }
 
   const defaults = params.cfg.agents?.defaults ?? {};
-  const existing = (defaults as Record<string, unknown>)[params.field] as
-    | PrimaryFallbackConfig
-    | undefined;
+  const existing = toAgentModelListLike(
+    (defaults as Record<string, unknown>)[params.field] as AgentModelConfig | undefined,
+  );
 
   return {
     ...params.cfg,
