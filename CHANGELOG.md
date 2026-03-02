@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security/Node exec approvals: preserve shell/dispatch-wrapper argv semantics during approval hardening so approved wrapper commands (for example `env sh -c ...`) cannot drift into a different runtime command shape, and add regression coverage for both approval-plan generation and approved runtime execution paths. Thanks @tdjackey for reporting.
 - Sandbox/Bootstrap context boundary hardening: reject symlink/hardlink alias bootstrap seed files that resolve outside the source workspace and switch post-compaction `AGENTS.md` context reads to boundary-verified file opens, preventing host file content from being injected via workspace aliasing. Thanks @tdjackey for reporting.
 - Browser/Security output boundary hardening: replace check-then-rename output commits with root-bound fd-verified writes, unify install/skills canonical path-boundary checks, and add regression coverage for symlink-rebind race paths across browser output and shared fs-safe write flows. Thanks @tdjackey for reporting.
 - Gateway/Security hardening: tie loopback-origin dev allowance to actual local socket clients (not Host header claims), add explicit warnings/metrics when `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback` accepts websocket origins, harden safe-regex detection for quantified ambiguous alternation patterns (for example `(a|aa)+`), and bound large regex-evaluation inputs for session-filter and log-redaction paths.
