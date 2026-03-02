@@ -388,6 +388,12 @@ function shouldProbePrimaryDuringCooldown(params: {
 
   // Also probe on a regular cadence so recovered primaries are promoted
   // even when cooldown metadata is stale or overly conservative.
+  // Skip the regular cadence check when no prior probe has been recorded
+  // (lastProbe === 0) — on the first call we should respect active cooldowns
+  // and only probe near expiry (handled above).
+  if (lastProbe === 0) {
+    return false;
+  }
   return params.now - lastProbe >= params.regularProbeIntervalMs;
 }
 

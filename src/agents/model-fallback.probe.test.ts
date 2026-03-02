@@ -115,6 +115,13 @@ describe("runWithModelFallback – probe logic", () => {
     const expiresIn30Min = NOW + 30 * 60 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
 
+    // Simulate a prior probe that happened long enough ago to trigger the
+    // regular cadence.  Without this, first-call guard skips the probe.
+    _probeThrottleInternals.lastProbeAttempt.set(
+      "openai",
+      NOW - _probeThrottleInternals.DEFAULT_REGULAR_PROBE_INTERVAL_MS - 1,
+    );
+
     const run = vi.fn().mockResolvedValue("probed-ok");
 
     const result = await runWithModelFallback({
