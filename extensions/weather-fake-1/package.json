@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/weather-fake-1",
+  "version": "2026.2.25",
+  "description": "OpenClaw demo weather plugin with deterministic fake data",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/weather-fake-1",
+      "localPath": "extensions/weather-fake-1",
+      "defaultChoice": "local"
+    }
+  }
+}

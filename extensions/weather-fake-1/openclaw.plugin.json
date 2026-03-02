@@ -1,0 +1,10 @@
+{
+  "id": "weather-fake-1",
+  "name": "Weather Fake 1",
+  "description": "Demo weather extension with deterministic fake data.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
