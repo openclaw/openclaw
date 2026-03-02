@@ -142,13 +142,21 @@ async function execSystemctl(
   return await execFileUtf8("systemctl", args);
 }
 
-async function isSystemctlPresent(): Promise<boolean> {
-  try {
-    const res = await execFileUtf8("command", ["-v", "systemctl"]);
-    return res.code === 0;
-  } catch {
+function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
+  return (result.stderr || result.stdout || "").trim();
+}
+
+function isSystemctlMissing(detail: string): boolean {
+  if (!detail) {
     return false;
   }
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("not found") ||
+    normalized.includes("no such file or directory") ||
+    normalized.includes("spawn systemctl enoent") ||
+    normalized.includes("spawn systemctl eacces")
+  );
 }
 
 export async function isSystemdUserServiceAvailable(): Promise<boolean> {
@@ -179,16 +187,12 @@ export async function isSystemdUserServiceAvailable(): Promise<boolean> {
 }
 
 async function assertSystemdAvailable() {
-  const present = await isSystemctlPresent();
-  if (!present) {
-    throw new Error("systemctl not found; systemd is not available on this system.");
-  }
   const res = await execSystemctl(["--user", "status"]);
   if (res.code === 0) {
     return;
   }
-  const detail = res.stderr || res.stdout;
-  if (detail.toLowerCase().includes("not found")) {
+  const detail = readSystemctlDetail(res);
+  if (isSystemctlMissing(detail)) {
     throw new Error("systemctl not available; systemd user services are required on Linux.");
   }
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
@@ -202,12 +206,6 @@ export async function installSystemdService({
   environment,
   description,
 }: GatewayServiceInstallArgs): Promise<{ unitPath: string }> {
-  const present = await isSystemctlPresent();
-  if (!present) {
-    throw new Error(
-      "systemctl not found; cannot install systemd service. This operation is not supported in containerized environments.",
-    );
-  }
   await assertSystemdAvailable();
 
   const unitPath = resolveSystemdUnitPath(env);
@@ -276,17 +274,6 @@ export async function uninstallSystemdService({
   env,
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
-  const present = await isSystemctlPresent();
-  if (!present) {
-    const unitPath = resolveSystemdUnitPath(env);
-    try {
-      await fs.unlink(unitPath);
-      stdout.write(`${formatLine("Removed systemd service file", unitPath)}\n`);
-    } catch {
-      stdout.write(`Systemd service file not found at ${unitPath}\n`);
-    }
-    return;
-  }
   await assertSystemdAvailable();
   const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
   const unitName = `${serviceName}.service`;
@@ -342,10 +329,6 @@ export async function restartSystemdService({
 }
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
-  const present = await isSystemctlPresent();
-  if (!present) {
-    return false;
-  }
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
@@ -355,19 +338,12 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
 export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime> {
-  const present = await isSystemctlPresent();
-  if (!present) {
-    return {
-      status: "unknown",
-      detail: "systemctl not found; systemd is not available on this system.",
-    };
-  }
   try {
     await assertSystemdAvailable();
   } catch (err) {
     return {
       status: "unknown",
-      detail: String(err),
+      detail: err instanceof Error ? err.message : String(err),
     };
   }
   const serviceName = resolveSystemdServiceName(env);
@@ -413,8 +389,7 @@ async function isSystemctlAvailable(): Promise<boolean> {
   if (res.code === 0) {
     return true;
   }
-  const detail = (res.stderr || res.stdout).toLowerCase();
-  return !detail.includes("not found");
+  return !isSystemctlMissing(readSystemctlDetail(res));
 }
 
 export async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
