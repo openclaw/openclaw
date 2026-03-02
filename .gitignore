@@ -100,6 +100,11 @@ package-lock.json
 .agent/
 skills-lock.json
 
+# Work-specific skills (corporate, not for public repo)
+skills/crp/
+skills/m365/
+skills/outlook/
+
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
 
