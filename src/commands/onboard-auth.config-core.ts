@@ -301,16 +301,19 @@ export function applyXiaomiConfig(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyQiniuProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const models = { ...(cfg.models?.models ?? {}) };
+  const models = { ...cfg.agents?.defaults?.models };
   models[QINIU_DEFAULT_MODEL_REF] = {
     ...models[QINIU_DEFAULT_MODEL_REF],
     alias: models[QINIU_DEFAULT_MODEL_REF]?.alias ?? "Qiniu",
   };
   const defaultProvider = buildQiniuProvider();
-  return applyProviderConfig(cfg, {
-    models,
+  const resolvedApi = defaultProvider.api ?? "openai-completions";
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
     providerId: "qiniu",
-    provider: defaultProvider,
+    api: resolvedApi,
+    baseUrl: defaultProvider.baseUrl,
+    defaultModels: defaultProvider.models ?? [],
     defaultModelId: QINIU_DEFAULT_MODEL_ID,
   });
 }
