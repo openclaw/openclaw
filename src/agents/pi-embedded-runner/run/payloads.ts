@@ -9,6 +9,8 @@ import {
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
   getApiErrorPayloadFingerprint,
+  isOverloadedErrorMessage,
+  isRateLimitErrorMessage,
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
@@ -152,7 +154,14 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
   const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
   const genericErrorText = "The AI service returned an error. Please try again.";
-  if (errorText) {
+  // Suppress transient API errors (rate limit, overload) when configured.
+  // Billing/auth errors are never suppressed as they require user action.
+  const rawMsgForSuppress = params.lastAssistant?.errorMessage?.trim() ?? "";
+  const isTransientApiError =
+    isRateLimitErrorMessage(rawMsgForSuppress) || isOverloadedErrorMessage(rawMsgForSuppress);
+  const suppressApiError =
+    Boolean(params.config?.messages?.suppressApiErrors) && isTransientApiError;
+  if (errorText && !suppressApiError) {
     replyItems.push({ text: errorText, isError: true });
   }
 

@@ -6,6 +6,7 @@ import {
   buildPayloads,
   expectSinglePayloadText,
   expectSingleToolErrorPayload,
+  type BuildPayloadParams,
 } from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads", () => {
@@ -383,6 +384,60 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSingleToolErrorPayload(payloads, {
       title: "Browser",
       detail: "connection timeout",
+    });
+  });
+
+  describe("suppressApiErrors", () => {
+    const rateLimitJson =
+      '{"type":"error","error":{"type":"rate_limit_error","message":"Rate limit reached for model"},"request_id":"req_abc123"}';
+    const overloadedJson =
+      '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
+    const billingJson = "insufficient credits";
+
+    const makeErrorAssistant = (errorMessage: string): AssistantMessage =>
+      makeAssistantMessageFixture({
+        stopReason: "error",
+        errorMessage,
+        content: [{ type: "text", text: errorMessage }],
+      });
+
+    it("suppresses rate limit errors when suppressApiErrors is true", () => {
+      const payloads = buildPayloads({
+        lastAssistant: makeErrorAssistant(rateLimitJson),
+        config: { messages: { suppressApiErrors: true } } as BuildPayloadParams["config"],
+      });
+
+      expect(payloads).toHaveLength(0);
+    });
+
+    it("suppresses overload errors when suppressApiErrors is true", () => {
+      const payloads = buildPayloads({
+        lastAssistant: makeErrorAssistant(overloadedJson),
+        config: { messages: { suppressApiErrors: true } } as BuildPayloadParams["config"],
+      });
+
+      expect(payloads).toHaveLength(0);
+    });
+
+    it("does not suppress rate limit errors when suppressApiErrors is false", () => {
+      const payloads = buildPayloads({
+        lastAssistant: makeErrorAssistant(rateLimitJson),
+        config: { messages: { suppressApiErrors: false } } as BuildPayloadParams["config"],
+      });
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.isError).toBe(true);
+    });
+
+    it("does not suppress billing errors even when suppressApiErrors is true", () => {
+      const payloads = buildPayloads({
+        lastAssistant: makeErrorAssistant(billingJson),
+        config: { messages: { suppressApiErrors: true } } as BuildPayloadParams["config"],
+      });
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.isError).toBe(true);
+      expect(payloads[0]?.text).toContain("billing error");
     });
   });
 });
