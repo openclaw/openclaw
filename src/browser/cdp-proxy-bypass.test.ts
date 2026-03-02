@@ -20,6 +20,11 @@ describe("cdp-proxy-bypass", () => {
       expect(agent).toBeInstanceOf(https.Agent);
     });
 
+    it("returns https.Agent for https://127.0.0.1 URLs", () => {
+      const agent = getDirectAgentForCdp("https://127.0.0.1:9222/json/version");
+      expect(agent).toBeInstanceOf(https.Agent);
+    });
+
     it("returns http.Agent for ws://[::1] URLs", () => {
       const agent = getDirectAgentForCdp("ws://[::1]:9222");
       expect(agent).toBeInstanceOf(http.Agent);
