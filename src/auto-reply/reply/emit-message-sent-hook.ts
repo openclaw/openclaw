@@ -27,7 +27,15 @@ export function emitMessageSentHookForReply(
   payload: ReplyPayload,
   hookCtx: MessageSentHookContext,
 ): void {
+  // Skip hook for reasoning payloads and empty payloads that were likely
+  // suppressed by the channel deliverer (e.g. Discord drops reasoning blocks).
+  if (payload.isReasoning) {
+    return;
+  }
   const content = payload.text ?? "";
+  if (!content && !payload.mediaUrl && !payload.mediaUrls?.length) {
+    return;
+  }
   const { sessionKey, channelId, accountId, to } = hookCtx;
 
   try {

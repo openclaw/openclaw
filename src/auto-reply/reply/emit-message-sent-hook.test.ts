@@ -62,7 +62,7 @@ describe("emitMessageSentHookForReply", () => {
     expect(triggerInternalHook).not.toHaveBeenCalled();
   });
 
-  it("uses empty string for content when payload has no text", () => {
+  it("skips hooks for empty payloads (no text, no media)", () => {
     emitMessageSentHookForReply(
       {},
       {
@@ -72,12 +72,20 @@ describe("emitMessageSentHookForReply", () => {
       },
     );
 
-    expect(createInternalHookEvent).toHaveBeenCalledWith(
-      "message",
-      "sent",
-      "test-key",
-      expect.objectContaining({ content: "" }),
+    expect(createInternalHookEvent).not.toHaveBeenCalled();
+  });
+
+  it("skips hooks for reasoning payloads", () => {
+    emitMessageSentHookForReply(
+      { text: "thinking...", isReasoning: true },
+      {
+        sessionKey: "test-key",
+        channelId: "discord",
+        to: "user123",
+      },
     );
+
+    expect(createInternalHookEvent).not.toHaveBeenCalled();
   });
 
   it("emits plugin hook when hookRunner has message_sent hooks", () => {
