@@ -50,6 +50,13 @@ describe("buildSlackDebounceKey", () => {
     expect(keyB).toBe("slack:default:C123:1709000000.000200:U456");
   });
 
+  it("keeps top-level DMs channel-scoped to preserve short-message batching", () => {
+    const dmA = makeMessage({ channel: "D123", ts: "1709000000.000100" });
+    const dmB = makeMessage({ channel: "D123", ts: "1709000000.000200" });
+    expect(buildSlackDebounceKey(dmA, accountId)).toBe("slack:default:D123:U456");
+    expect(buildSlackDebounceKey(dmB, accountId)).toBe("slack:default:D123:U456");
+  });
+
   it("falls back to bare channel when no timestamp is available", () => {
     const msg = makeMessage({ ts: undefined, event_ts: undefined });
     expect(buildSlackDebounceKey(msg, accountId)).toBe("slack:default:C123:U456");
