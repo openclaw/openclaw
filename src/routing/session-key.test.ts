@@ -4,7 +4,11 @@ import {
   getSubagentDepth,
   isCronSessionKey,
 } from "../sessions/session-key-utils.js";
-import { classifySessionKeyShape } from "./session-key.js";
+import {
+  classifySessionKeyShape,
+  parseAgentSessionKey,
+  toAgentStoreSessionKey,
+} from "./session-key.js";
 
 describe("classifySessionKeyShape", () => {
   it("classifies empty keys as missing", () => {
@@ -91,5 +95,23 @@ describe("deriveSessionChatType", () => {
     expect(deriveSessionChatType("agent:main:main")).toBe("unknown");
     expect(deriveSessionChatType("agent:main")).toBe("unknown");
     expect(deriveSessionChatType("")).toBe("unknown");
+  });
+});
+
+describe("session key canonicalization", () => {
+  it("parses agent keys case-insensitively and returns lowercase tokens", () => {
+    expect(parseAgentSessionKey("AGENT:Main:Hook:Webhook:42")).toEqual({
+      agentId: "main",
+      rest: "hook:webhook:42",
+    });
+  });
+
+  it("does not double-prefix already-qualified agent keys", () => {
+    expect(
+      toAgentStoreSessionKey({
+        agentId: "main",
+        requestKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:main");
   });
 });

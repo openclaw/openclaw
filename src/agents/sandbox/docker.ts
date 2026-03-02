@@ -65,6 +65,21 @@ export function execDockerRaw(
       if (signal) {
         signal.removeEventListener("abort", handleAbort);
       }
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        const friendly = Object.assign(
+          new Error(
+            'Sandbox mode requires Docker, but the "docker" command was not found in PATH. Install Docker (and ensure "docker" is available), or set `agents.defaults.sandbox.mode=off` to disable sandboxing.',
+          ),
+          { code: "INVALID_CONFIG", cause: error },
+        );
+        reject(friendly);
+        return;
+      }
       reject(error);
     });
 
@@ -267,6 +282,7 @@ export function buildSandboxCreateArgs(params: {
   bindSourceRoots?: string[];
   allowSourcesOutsideAllowedRoots?: boolean;
   allowReservedContainerTargets?: boolean;
+  allowContainerNamespaceJoin?: boolean;
 }) {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
   validateSandboxSecurity({
@@ -278,6 +294,9 @@ export function buildSandboxCreateArgs(params: {
     allowReservedContainerTargets:
       params.allowReservedContainerTargets ??
       params.cfg.dangerouslyAllowReservedContainerTargets === true,
+    dangerouslyAllowContainerNamespaceJoin:
+      params.allowContainerNamespaceJoin ??
+      params.cfg.dangerouslyAllowContainerNamespaceJoin === true,
   });
 
   const createdAtMs = params.createdAtMs ?? Date.now();

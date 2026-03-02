@@ -9,6 +9,7 @@ export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc
 export type CommandResolution = {
   rawExecutable: string;
   resolvedPath?: string;
+  resolvedRealPath?: string;
   executableName: string;
   effectiveArgv?: string[];
   wrapperChain?: string[];
@@ -86,6 +87,17 @@ function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS
   return undefined;
 }
 
+function tryResolveRealpath(filePath: string | undefined): string | undefined {
+  if (!filePath) {
+    return undefined;
+  }
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveCommandResolution(
   command: string,
   cwd?: string,
@@ -96,10 +108,12 @@ export function resolveCommandResolution(
     return null;
   }
   const resolvedPath = resolveExecutablePath(rawExecutable, cwd, env);
+  const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
   return {
     rawExecutable,
     resolvedPath,
+    resolvedRealPath,
     executableName,
     effectiveArgv: [rawExecutable],
     wrapperChain: [],
@@ -119,10 +133,12 @@ export function resolveCommandResolutionFromArgv(
     return null;
   }
   const resolvedPath = resolveExecutablePath(rawExecutable, cwd, env);
+  const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
   return {
     rawExecutable,
     resolvedPath,
+    resolvedRealPath,
     executableName,
     effectiveArgv,
     wrapperChain: plan.wrappers,
@@ -223,7 +239,17 @@ export function matchAllowlist(
   entries: ExecAllowlistEntry[],
   resolution: CommandResolution | null,
 ): ExecAllowlistEntry | null {
-  if (!entries.length || !resolution?.resolvedPath) {
+  if (!entries.length) {
+    return null;
+  }
+  // A bare "*" wildcard allows any parsed executable command.
+  // Check it before the resolvedPath guard so unresolved PATH lookups still
+  // match (for example platform-specific executables without known extensions).
+  const bareWild = entries.find((e) => e.pattern?.trim() === "*");
+  if (bareWild && resolution) {
+    return bareWild;
+  }
+  if (!resolution?.resolvedPath) {
     return null;
   }
   const resolvedPath = resolution.resolvedPath;

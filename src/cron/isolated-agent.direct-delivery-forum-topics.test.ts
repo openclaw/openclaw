@@ -1,5 +1,5 @@
 import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import {
   createCliDeps,
@@ -56,6 +56,10 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
 
       expect(res.status).toBe("ok");
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
+        | { expectsCompletionMessage?: boolean }
+        | undefined;
+      expect(announceArgs?.expectsCompletionMessage).toBe(true);
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });

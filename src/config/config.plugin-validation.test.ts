@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./config.js";
 
 async function writePluginFixture(params: {
@@ -31,27 +32,44 @@ async function writePluginFixture(params: {
 }
 
 describe("config plugin validation", () => {
-  const fixtureRoot = path.join(os.tmpdir(), "openclaw-config-plugin-validation");
-  let caseIndex = 0;
+  let fixtureRoot = "";
+  let suiteHome = "";
+  const envSnapshot = {
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+    OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
+  };
 
-  function createCaseHome() {
-    const home = path.join(fixtureRoot, `case-${caseIndex++}`);
-    return fs.mkdir(home, { recursive: true }).then(() => home);
-  }
-
-  const validateInHome = (home: string, raw: unknown) => {
-    process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+  const validateInSuite = (raw: unknown) => {
+    process.env.OPENCLAW_STATE_DIR = path.join(suiteHome, ".openclaw");
     return validateConfigObjectWithPlugins(raw);
   };
 
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-plugin-validation-"));
+    suiteHome = path.join(fixtureRoot, "home");
+    await fs.mkdir(suiteHome, { recursive: true });
+    process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = "10000";
+    clearPluginManifestRegistryCache();
+  });
+
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+    clearPluginManifestRegistryCache();
+    if (envSnapshot.OPENCLAW_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = envSnapshot.OPENCLAW_STATE_DIR;
+    }
+    if (envSnapshot.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS === undefined) {
+      delete process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS;
+    } else {
+      process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = envSnapshot.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS;
+    }
   });
 
   it("rejects missing plugin load paths", async () => {
-    const home = await createCaseHome();
-    const missingPath = path.join(home, "missing-plugin");
-    const res = validateInHome(home, {
+    const missingPath = path.join(suiteHome, "missing-plugin");
+    const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       plugins: { enabled: false, load: { paths: [missingPath] } },
     });
@@ -65,24 +83,23 @@ describe("config plugin validation", () => {
     }
   });
 
-  it("rejects missing plugin ids in entries", async () => {
-    const home = await createCaseHome();
-    const res = validateInHome(home, {
+  it("warns for missing plugin ids in entries instead of failing validation", async () => {
+    const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       plugins: { enabled: false, entries: { "missing-plugin": { enabled: true } } },
     });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues).toContainEqual({
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toContainEqual({
         path: "plugins.entries.missing-plugin",
-        message: "plugin not found: missing-plugin",
+        message:
+          "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
       });
     }
   });
 
   it("rejects missing plugin ids in allow/deny/slots", async () => {
-    const home = await createCaseHome();
-    const res = validateInHome(home, {
+    const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       plugins: {
         enabled: false,
@@ -103,9 +120,49 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("warns for removed legacy plugin ids instead of failing validation", async () => {
+    const removedId = "google-antigravity-auth";
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: false,
+        entries: { [removedId]: { enabled: true } },
+        allow: [removedId],
+        deny: [removedId],
+        slots: { memory: removedId },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toEqual(
+        expect.arrayContaining([
+          {
+            path: `plugins.entries.${removedId}`,
+            message:
+              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.allow",
+            message:
+              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.deny",
+            message:
+              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.slots.memory",
+            message:
+              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+          },
+        ]),
+      );
+    }
+  });
+
   it("surfaces plugin config diagnostics", async () => {
-    const home = await createCaseHome();
-    const pluginDir = path.join(home, "bad-plugin");
+    const pluginDir = path.join(suiteHome, "bad-plugin");
     await writePluginFixture({
       dir: pluginDir,
       id: "bad-plugin",
@@ -119,7 +176,7 @@ describe("config plugin validation", () => {
       },
     });
 
-    const res = validateInHome(home, {
+    const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       plugins: {
         enabled: true,
@@ -139,8 +196,7 @@ describe("config plugin validation", () => {
   });
 
   it("accepts known plugin ids", async () => {
-    const home = await createCaseHome();
-    const res = validateInHome(home, {
+    const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       plugins: { enabled: false, entries: { discord: { enabled: true } } },
     });
@@ -148,8 +204,7 @@ describe("config plugin validation", () => {
   });
 
   it("accepts channels.modelByChannel", async () => {
-    const home = await createCaseHome();
-    const res = validateInHome(home, {
+    const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       channels: {
         modelByChannel: {
@@ -163,8 +218,7 @@ describe("config plugin validation", () => {
   });
 
   it("accepts plugin heartbeat targets", async () => {
-    const home = await createCaseHome();
-    const pluginDir = path.join(home, "bluebubbles-plugin");
+    const pluginDir = path.join(suiteHome, "bluebubbles-plugin");
     await writePluginFixture({
       dir: pluginDir,
       id: "bluebubbles-plugin",
@@ -172,7 +226,7 @@ describe("config plugin validation", () => {
       schema: { type: "object" },
     });
 
-    const res = validateInHome(home, {
+    const res = validateInSuite({
       agents: { defaults: { heartbeat: { target: "bluebubbles" } }, list: [{ id: "pi" }] },
       plugins: { enabled: false, load: { paths: [pluginDir] } },
     });
@@ -180,8 +234,7 @@ describe("config plugin validation", () => {
   });
 
   it("rejects unknown heartbeat targets", async () => {
-    const home = await createCaseHome();
-    const res = validateInHome(home, {
+    const res = validateInSuite({
       agents: { defaults: { heartbeat: { target: "not-a-channel" } }, list: [{ id: "pi" }] },
     });
     expect(res.ok).toBe(false);
@@ -190,6 +243,32 @@ describe("config plugin validation", () => {
         path: "agents.defaults.heartbeat.target",
         message: "unknown heartbeat target: not-a-channel",
       });
+    }
+  });
+
+  it("accepts heartbeat directPolicy enum values", async () => {
+    const res = validateInSuite({
+      agents: {
+        defaults: { heartbeat: { target: "last", directPolicy: "block" } },
+        list: [{ id: "pi", heartbeat: { directPolicy: "allow" } }],
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid heartbeat directPolicy values", async () => {
+    const res = validateInSuite({
+      agents: {
+        defaults: { heartbeat: { directPolicy: "maybe" } },
+        list: [{ id: "pi" }],
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      const hasIssue = res.issues.some(
+        (issue) => issue.path === "agents.defaults.heartbeat.directPolicy",
+      );
+      expect(hasIssue).toBe(true);
     }
   });
 });

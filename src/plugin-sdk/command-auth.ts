@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
 
 export type ResolveSenderCommandAuthorizationParams = {
   cfg: OpenClawConfig;
@@ -6,6 +7,7 @@ export type ResolveSenderCommandAuthorizationParams = {
   isGroup: boolean;
   dmPolicy: string;
   configuredAllowFrom: string[];
+  configuredGroupAllowFrom?: string[];
   senderId: string;
   isSenderAllowed: (senderId: string, allowFrom: string[]) => boolean;
   readAllowFromStore: () => Promise<string[]>;
@@ -21,6 +23,7 @@ export async function resolveSenderCommandAuthorization(
 ): Promise<{
   shouldComputeAuth: boolean;
   effectiveAllowFrom: string[];
+  effectiveGroupAllowFrom: string[];
   senderAllowedForCommands: boolean;
   commandAuthorized: boolean | undefined;
 }> {
@@ -31,14 +34,30 @@ export async function resolveSenderCommandAuthorization(
     (params.dmPolicy !== "open" || shouldComputeAuth)
       ? await params.readAllowFromStore().catch(() => [])
       : [];
-  const effectiveAllowFrom = [...params.configuredAllowFrom, ...storeAllowFrom];
+  const access = resolveDmGroupAccessWithLists({
+    isGroup: params.isGroup,
+    dmPolicy: params.dmPolicy,
+    groupPolicy: "allowlist",
+    allowFrom: params.configuredAllowFrom,
+    groupAllowFrom: params.configuredGroupAllowFrom ?? [],
+    storeAllowFrom,
+    isSenderAllowed: (allowFrom) => params.isSenderAllowed(params.senderId, allowFrom),
+  });
+  const effectiveAllowFrom = access.effectiveAllowFrom;
+  const effectiveGroupAllowFrom = access.effectiveGroupAllowFrom;
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-  const senderAllowedForCommands = params.isSenderAllowed(params.senderId, effectiveAllowFrom);
+  const senderAllowedForCommands = params.isSenderAllowed(
+    params.senderId,
+    params.isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,
+  );
+  const ownerAllowedForCommands = params.isSenderAllowed(params.senderId, effectiveAllowFrom);
+  const groupAllowedForCommands = params.isSenderAllowed(params.senderId, effectiveGroupAllowFrom);
   const commandAuthorized = shouldComputeAuth
     ? params.resolveCommandAuthorizedFromAuthorizers({
         useAccessGroups,
         authorizers: [
-          { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
+          { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+          { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
         ],
       })
     : undefined;
@@ -46,6 +65,7 @@ export async function resolveSenderCommandAuthorization(
   return {
     shouldComputeAuth,
     effectiveAllowFrom,
+    effectiveGroupAllowFrom,
     senderAllowedForCommands,
     commandAuthorized,
   };

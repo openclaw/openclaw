@@ -31,6 +31,42 @@ function capToolResultSize(msg: AgentMessage): AgentMessage {
   });
 }
 
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizePersistedToolResultName(
+  message: AgentMessage,
+  fallbackName?: string,
+): AgentMessage {
+  if ((message as { role?: unknown }).role !== "toolResult") {
+    return message;
+  }
+  const toolResult = message as Extract<AgentMessage, { role: "toolResult" }>;
+  const rawToolName = (toolResult as { toolName?: unknown }).toolName;
+  const normalizedToolName = trimNonEmptyString(rawToolName);
+  if (normalizedToolName) {
+    if (rawToolName === normalizedToolName) {
+      return toolResult;
+    }
+    return { ...toolResult, toolName: normalizedToolName };
+  }
+
+  const normalizedFallback = trimNonEmptyString(fallbackName);
+  if (normalizedFallback) {
+    return { ...toolResult, toolName: normalizedFallback };
+  }
+
+  if (typeof rawToolName === "string") {
+    return { ...toolResult, toolName: "unknown" };
+  }
+  return toolResult;
+}
+
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
@@ -150,9 +186,10 @@ export function installSessionToolResultGuard(
       if (id) {
         pending.delete(id);
       }
+      const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
-      const capped = capToolResultSize(persistMessage(nextMessage));
+      const capped = capToolResultSize(persistMessage(normalizedToolResult));
       const persisted = applyBeforeWriteHook(
         persistToolResult(capped, {
           toolCallId: id ?? undefined,
@@ -166,8 +203,15 @@ export function installSessionToolResultGuard(
       return originalAppend(persisted as never);
     }
 
+    // Skip tool call extraction for aborted/errored assistant messages.
+    // When stopReason is "error" or "aborted", the tool_use blocks may be incomplete
+    // and should not have synthetic tool_results created. Creating synthetic results
+    // for incomplete tool calls causes API 400 errors:
+    // "unexpected tool_use_id found in tool_result blocks"
+    // This matches the behavior in repairToolUseResultPairing (session-transcript-repair.ts)
+    const stopReason = (nextMessage as { stopReason?: string }).stopReason;
     const toolCalls =
-      nextRole === "assistant"
+      nextRole === "assistant" && stopReason !== "aborted" && stopReason !== "error"
         ? extractToolCallsFromAssistant(nextMessage as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 
