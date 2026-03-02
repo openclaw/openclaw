@@ -1,4 +1,5 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk";
 
 export type MiniMaxRegion = "cn" | "global";
 
@@ -49,15 +50,8 @@ type TokenResult =
   | TokenPending
   | { status: "error"; message: string };
 
-function toFormUrlEncoded(data: Record<string, string>): string {
-  return Object.entries(data)
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join("&");
-}
-
 function generatePkce(): { verifier: string; challenge: string; state: string } {
-  const verifier = randomBytes(32).toString("base64url");
-  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const { verifier, challenge } = generatePkceVerifierChallenge();
   const state = randomBytes(16).toString("base64url");
   return { verifier, challenge, state };
 }

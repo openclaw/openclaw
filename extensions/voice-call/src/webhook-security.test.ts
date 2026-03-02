@@ -86,6 +86,18 @@ function twilioSignature(params: { authToken: string; url: string; postBody: str
   return crypto.createHmac("sha1", params.authToken).update(dataToSign).digest("base64");
 }
 
+function expectReplayResultPair(
+  first: { ok: boolean; isReplay?: boolean; verifiedRequestKey?: string },
+  second: { ok: boolean; isReplay?: boolean; verifiedRequestKey?: string },
+) {
+  expect(first.ok).toBe(true);
+  expect(first.isReplay).toBeFalsy();
+  expect(first.verifiedRequestKey).toBeTruthy();
+  expect(second.ok).toBe(true);
+  expect(second.isReplay).toBe(true);
+  expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
+}
+
 describe("verifyPlivoWebhook", () => {
   it("accepts valid V2 signature", () => {
     const authToken = "test-auth-token";
@@ -196,12 +208,7 @@ describe("verifyPlivoWebhook", () => {
     const first = verifyPlivoWebhook(ctx, authToken);
     const second = verifyPlivoWebhook(ctx, authToken);
 
-    expect(first.ok).toBe(true);
-    expect(first.isReplay).toBeFalsy();
-    expect(first.verifiedRequestKey).toBeTruthy();
-    expect(second.ok).toBe(true);
-    expect(second.isReplay).toBe(true);
-    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
+    expectReplayResultPair(first, second);
   });
 
   it("returns a stable request key when verification is skipped", () => {
@@ -245,12 +252,7 @@ describe("verifyTelnyxWebhook", () => {
     const first = verifyTelnyxWebhook(ctx, pemPublicKey);
     const second = verifyTelnyxWebhook(ctx, pemPublicKey);
 
-    expect(first.ok).toBe(true);
-    expect(first.isReplay).toBeFalsy();
-    expect(first.verifiedRequestKey).toBeTruthy();
-    expect(second.ok).toBe(true);
-    expect(second.isReplay).toBe(true);
-    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
+    expectReplayResultPair(first, second);
   });
 
   it("returns a stable request key when verification is skipped", () => {

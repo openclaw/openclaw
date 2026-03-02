@@ -2,6 +2,7 @@ import type { ChannelAccountSnapshot, ChannelPlugin, OpenClawConfig } from "open
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
+  buildProbeChannelStatusSummary,
   collectBlueBubblesStatusIssues,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
@@ -356,16 +357,8 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       lastError: null,
     },
     collectStatusIssues: collectBlueBubblesStatusIssues,
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      baseUrl: snapshot.baseUrl ?? null,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
     probeAccount: async ({ account, timeoutMs }) =>
       probeBlueBubbles({
         baseUrl: account.baseUrl,

@@ -1,6 +1,7 @@
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
+  buildProbeChannelStatusSummary,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
@@ -393,16 +394,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
           },
         ];
       }),
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      baseUrl: snapshot.baseUrl ?? null,
-      running: snapshot.running ?? false,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) =>
+      buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
     probeAccount: async ({ account, timeoutMs, cfg }) => {
       try {
         const auth = await resolveMatrixAuth({

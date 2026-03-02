@@ -2,8 +2,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-const probeFeishuMock = vi.hoisted(() => vi.fn());
+import { probeFeishuMock } from "./monitor.test-mocks.js";
 
 vi.mock("@larksuiteoapi/node-sdk", () => ({
   adaptDefault: vi.fn(
@@ -12,15 +11,6 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
       res.end("ok");
     },
   ),
-}));
-
-vi.mock("./probe.js", () => ({
-  probeFeishu: probeFeishuMock,
-}));
-
-vi.mock("./client.js", () => ({
-  createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
-  createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
 }));
 
 import {
