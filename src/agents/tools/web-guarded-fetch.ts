@@ -2,6 +2,8 @@ import {
   fetchWithSsrFGuard,
   type GuardedFetchOptions,
   type GuardedFetchResult,
+  withStrictGuardedFetchMode,
+  withTrustedEnvProxyGuardedFetchMode,
 } from "../../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 
@@ -12,7 +14,7 @@ const WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
 
 type WebToolGuardedFetchOptions = Omit<
   GuardedFetchOptions,
-  "proxy" | "dangerouslyAllowEnvProxyWithoutPinnedDns"
+  "mode" | "proxy" | "dangerouslyAllowEnvProxyWithoutPinnedDns"
 > & {
   timeoutSeconds?: number;
   useEnvProxy?: boolean;
@@ -36,16 +38,15 @@ export async function fetchWithWebToolsNetworkGuard(
   params: WebToolGuardedFetchOptions,
 ): Promise<GuardedFetchResult> {
   const { timeoutSeconds, useEnvProxy, ...rest } = params;
-  return fetchWithSsrFGuard({
+  const resolved = {
     ...rest,
     timeoutMs: resolveTimeoutMs({ timeoutMs: rest.timeoutMs, timeoutSeconds }),
-    ...(useEnvProxy
-      ? {
-          proxy: "env",
-          dangerouslyAllowEnvProxyWithoutPinnedDns: true,
-        }
-      : {}),
-  });
+  };
+  return fetchWithSsrFGuard(
+    useEnvProxy
+      ? withTrustedEnvProxyGuardedFetchMode(resolved)
+      : withStrictGuardedFetchMode(resolved),
+  );
 }
 
 async function withWebToolsNetworkGuard<T>(

@@ -30,6 +30,7 @@ import { listenGatewayHttpServer } from "./server/http-listen.js";
 import {
   createGatewayPluginRequestHandler,
   shouldEnforceGatewayAuthForPluginPath,
+  type PluginRoutePathContext,
 } from "./server/plugins-http.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -118,8 +119,8 @@ export async function createGatewayRuntimeState(params: {
     registry: params.pluginRegistry,
     log: params.logPlugins,
   });
-  const shouldEnforcePluginGatewayAuth = (requestPath: string): boolean => {
-    return shouldEnforceGatewayAuthForPluginPath(params.pluginRegistry, requestPath);
+  const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
+    return shouldEnforceGatewayAuthForPluginPath(params.pluginRegistry, pathContext);
   };
 
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
