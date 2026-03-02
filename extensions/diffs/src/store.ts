@@ -345,7 +345,7 @@ function normalizeTtlMs(value?: number): number {
   return Math.min(rounded, MAX_TTL_MS);
 }
 
-function isExpired(meta: DiffArtifactMeta): boolean {
+function isExpired(meta: { expiresAt: string }): boolean {
   const expiresAt = Date.parse(meta.expiresAt);
   if (!Number.isFinite(expiresAt)) {
     return true;

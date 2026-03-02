@@ -143,6 +143,39 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
     await expect(fs.readFile(pdfPath, "utf8")).resolves.toContain("%PDF-1.7");
   });
+
+  it("fails fast when maxPixels is still exceeded at scale 1", async () => {
+    const pages: Array<{
+      close: ReturnType<typeof vi.fn>;
+      screenshot: ReturnType<typeof vi.fn>;
+      pdf: ReturnType<typeof vi.fn>;
+    }> = [];
+    const browser = createMockBrowser(pages);
+    launchMock.mockResolvedValue(browser);
+    const { PlaywrightDiffScreenshotter } = await import("./browser.js");
+
+    const screenshotter = new PlaywrightDiffScreenshotter({
+      config: createConfig(),
+      browserIdleMs: 1_000,
+    });
+
+    await expect(
+      screenshotter.screenshotHtml({
+        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
+        outputPath,
+        theme: "dark",
+        image: {
+          format: "png",
+          qualityPreset: "standard",
+          scale: 1,
+          maxWidth: 960,
+          maxPixels: 10,
+        },
+      }),
+    ).rejects.toThrow("Diff frame did not render within image size limits.");
+    expect(pages).toHaveLength(1);
+    expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
+  });
 });
 
 function createConfig(): OpenClawConfig {
@@ -184,7 +217,7 @@ function createMockPage() {
     route: vi.fn(async () => {}),
     setContent: vi.fn(async () => {}),
     waitForFunction: vi.fn(async () => {}),
-    evaluate: vi.fn(async () => {}),
+    evaluate: vi.fn(async () => 1),
     emulateMedia: vi.fn(async () => {}),
     locator: vi.fn(() => ({
       waitFor: vi.fn(async () => {}),

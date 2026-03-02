@@ -210,18 +210,21 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
         const cssHeight = Math.max(bottom - y, 1);
         const estimatedPixels = cssWidth * cssHeight * dpr * dpr;
 
-        if (estimatedPixels > params.image.maxPixels && currentScale > 1) {
-          const maxScaleForPixels = Math.sqrt(params.image.maxPixels / (cssWidth * cssHeight));
-          const reducedScale = Math.max(
-            1,
-            Math.round(Math.min(currentScale, maxScaleForPixels) * 100) / 100,
-          );
-          if (reducedScale < currentScale - 0.01 && attempt < maxRetries) {
-            await page.close().catch(() => {});
-            page = undefined;
-            currentScale = reducedScale;
-            continue;
+        if (estimatedPixels > params.image.maxPixels) {
+          if (currentScale > 1) {
+            const maxScaleForPixels = Math.sqrt(params.image.maxPixels / (cssWidth * cssHeight));
+            const reducedScale = Math.max(
+              1,
+              Math.round(Math.min(currentScale, maxScaleForPixels) * 100) / 100,
+            );
+            if (reducedScale < currentScale - 0.01 && attempt < maxRetries) {
+              await page.close().catch(() => {});
+              page = undefined;
+              currentScale = reducedScale;
+              continue;
+            }
           }
+          throw new Error(IMAGE_SIZE_LIMIT_ERROR);
         }
 
         await page.screenshot({
