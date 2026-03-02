@@ -5,6 +5,7 @@ import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
   readJsonBodyWithLimit,
+  registerPluginHttpRoute,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
   isDangerousNameMatchingEnabled,
@@ -66,6 +67,7 @@ type WebhookTarget = {
 };
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
+const WEBHOOK_ROUTE_PLUGIN_ID = "googlechat";
 
 function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, message: string) {
   if (core.logging.shouldLogVerbose()) {
@@ -99,7 +101,23 @@ function warnDeprecatedUsersEmailEntries(
 }
 
 export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => void {
-  return registerWebhookTarget(webhookTargets, target).unregister;
+  const registered = registerWebhookTarget(webhookTargets, target, {
+    onFirstTargetForPath: (path) =>
+      registerPluginHttpRoute({
+        path,
+        pluginId: WEBHOOK_ROUTE_PLUGIN_ID,
+        source: "googlechat-webhook",
+        handler: async (req, res) => {
+          const handled = await handleGoogleChatWebhookRequest(req, res);
+          if (!handled && !res.headersSent) {
+            res.statusCode = 404;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("Not Found");
+          }
+        },
+      }),
+  });
+  return registered.unregister;
 }
 
 function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | undefined {

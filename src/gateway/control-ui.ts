@@ -193,6 +193,12 @@ function respondNotFound(res: ServerResponse) {
   res.end("Not Found");
 }
 
+function respondMethodNotAllowed(res: ServerResponse) {
+  res.statusCode = 405;
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.end("Method Not Allowed");
+}
+
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", contentTypeForExt(ext));
@@ -298,13 +304,10 @@ export function handleControlUiHttpRequest(
     if (!isReadMethod && opts?.shouldBypassPath?.(pathname)) {
       return false;
     }
-  }
-
-  if (!isReadMethod) {
-    res.statusCode = 405;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Method Not Allowed");
-    return true;
+    if (!isReadMethod) {
+      respondMethodNotAllowed(res);
+      return true;
+    }
   }
 
   if (basePath) {
@@ -318,19 +321,10 @@ export function handleControlUiHttpRequest(
     if (!pathname.startsWith(`${basePath}/`)) {
       return false;
     }
-  }
-
-  // Method guard must run AFTER path checks so that POST requests to non-UI
-  // paths (channel webhooks etc.) fall through to later handlers.  When no
-  // basePath is configured the SPA catch-all would otherwise 405 every POST.
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    if (!basePath) {
-      return false;
+    if (!isReadMethod) {
+      respondMethodNotAllowed(res);
+      return true;
     }
-    res.statusCode = 405;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Method Not Allowed");
-    return true;
   }
 
   applyControlUiSecurityHeaders(res);

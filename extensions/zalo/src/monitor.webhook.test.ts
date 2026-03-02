@@ -2,6 +2,8 @@ import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
+import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import {
   clearZaloWebhookSecurityStateForTest,
   getZaloWebhookRateLimitStateSizeForTest,
@@ -64,6 +66,25 @@ function registerTarget(params: {
 describe("handleZaloWebhookRequest", () => {
   afterEach(() => {
     clearZaloWebhookSecurityStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("registers an exact webhook route while a target is active", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+    const unregister = registerTarget({ path: "/hook" });
+
+    try {
+      expect(registry.httpRoutes).toContainEqual(
+        expect.objectContaining({
+          pluginId: "zalo",
+          path: "/hook",
+        }),
+      );
+    } finally {
+      unregister();
+      expect(registry.httpRoutes).toHaveLength(0);
+    }
   });
 
   it("returns 400 for non-object payloads", async () => {

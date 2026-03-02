@@ -45,6 +45,7 @@ describe("handleControlUiHttpRequest", () => {
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
     basePath?: string;
+    shouldBypassPath?: (pathname: string) => boolean;
   }) {
     const { res, end } = makeMockHttpResponse();
     const handled = handleControlUiHttpRequest(
@@ -52,6 +53,7 @@ describe("handleControlUiHttpRequest", () => {
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
+        ...(params.shouldBypassPath ? { shouldBypassPath: params.shouldBypassPath } : {}),
         root: { kind: "resolved", path: params.rootPath },
       },
     );
@@ -356,16 +358,32 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("falls through POST requests when basePath is empty", async () => {
+  it("falls through POST requests for explicit bypass paths when basePath is empty", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { handled, end } = runControlUiRequest({
           url: "/webhook/bluebubbles",
           method: "POST",
           rootPath: tmp,
+          shouldBypassPath: (pathname) => pathname === "/webhook/bluebubbles",
         });
         expect(handled).toBe(false);
         expect(end).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("returns 405 for POST requests to root-mounted paths without an explicit bypass", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { handled, res, end } = runControlUiRequest({
+          url: "/webhook/bluebubbles",
+          method: "POST",
+          rootPath: tmp,
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(405);
+        expect(end).toHaveBeenCalledWith("Method Not Allowed");
       },
     });
   });
@@ -382,6 +400,21 @@ describe("handleControlUiHttpRequest", () => {
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(405);
         expect(end).toHaveBeenCalledWith("Method Not Allowed");
+      },
+    });
+  });
+
+  it("falls through POST requests outside configured basePath", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { handled, end } = runControlUiRequest({
+          url: "/bluebubbles-webhook",
+          method: "POST",
+          rootPath: tmp,
+          basePath: "/openclaw",
+        });
+        expect(handled).toBe(false);
+        expect(end).not.toHaveBeenCalled();
       },
     });
   });
