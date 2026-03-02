@@ -49,7 +49,10 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const isDashScope = model.provider === "dashscope" || isDashScopeCompatibleEndpoint(baseUrl);
   const isVectortara = model.provider === "vectortara" || baseUrl.includes("vectortara.com");
 
-  if ((!isZai && !isMoonshot && !isDashScope && !isVectortara) || !isOpenAiCompletionsModel(model)) {
+  if (
+    (!isZai && !isMoonshot && !isDashScope && !isVectortara) ||
+    !isOpenAiCompletionsModel(model)
+  ) {
     return model;
   }
 

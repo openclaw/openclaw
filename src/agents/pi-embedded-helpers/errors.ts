@@ -167,7 +167,13 @@ export function isDeveloperRoleUnsupportedErrorMessage(raw?: string): boolean {
   // Example:
   //   ValidationException: messages: Unexpected role "developer". Allowed roles are "user" or "assistant"
   if (lower.includes("unexpected role") && lower.includes("developer")) {
-    if (lower.includes("allowed roles") && lower.includes("user") && lower.includes("assistant")) return true;
+    if (
+      lower.includes("allowed roles") &&
+      lower.includes("user") &&
+      lower.includes("assistant")
+    ) {
+      return true;
+    }
     // Some gateways omit the "Allowed roles" suffix.
     return true;
   }
@@ -529,7 +535,10 @@ export function formatAssistantErrorText(
   if (isDeveloperRoleUnsupportedErrorMessage(raw)) {
     const provider = typeof msg.provider === "string" ? msg.provider.trim() : "";
     const model = typeof msg.model === "string" ? msg.model.trim() : "";
-    const diagParts = [provider ? `provider=${provider}` : null, model ? `model=${model}` : null]
+    const diagParts = [
+      provider ? `provider=${provider}` : null,
+      model ? `model=${model}` : null,
+    ]
       .filter(Boolean)
       .join(" ");
     const diag = diagParts ? ` (${diagParts})` : "";
