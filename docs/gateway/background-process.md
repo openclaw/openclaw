@@ -19,7 +19,7 @@ Key parameters:
 - `background` (bool): background immediately
 - `timeout` (seconds, default 1800): kill the process after this timeout
 - `elevated` (bool): run on host if elevated mode is enabled/allowed
-- `wakeOnExit` (bool, default false): trigger an immediate session event run after enqueueing a background exec completion event
+- `wakeOnExit` (bool, default false): trigger an immediate session event run after enqueueing a background exec completion event (currently supported only for `agent:` session keys)
 - Need a real TTY? Set `pty: true`.
 - `workdir`, `env`
 
@@ -50,6 +50,8 @@ Config (preferred):
 - `tools.exec.notifyOnExit` (default true): enqueue a system event when a backgrounded exec exits.
   By default this also requests a heartbeat wake (legacy behavior).
   If `wakeOnExit=true` is set on the run, completion wakes switch to immediate session-event runs instead of heartbeat.
+  Immediate wake is currently supported only for `agent:` session keys; non-agent keys still enqueue the completion event and are handled on later turns/heartbeats.
+  Non-agent immediate wake support is intentionally deferred for now and open to future contributions.
   Completion events include `session=<id>` so follow-up turns can call `process poll/log` for full output.
 - `tools.exec.notifyOnExitEmptySuccess` (default false): when true, also enqueue completion events for successful backgrounded runs that produced no output.
 

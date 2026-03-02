@@ -9,6 +9,7 @@ import { CommandLane } from "../process/lanes.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import { isAgentScopedSessionKey } from "./session-event-target.js";
 import { hasSystemEvents } from "./system-events.js";
 
 const DEFAULT_COALESCE_MS = 250;
@@ -37,10 +38,6 @@ let runTimerDueAt: number | null = null;
 let runTimerKind: WakeTimerKind | null = null;
 let running = false;
 let scheduled = false;
-
-function shouldUseSessionScopedEventRun(sessionKey?: string): boolean {
-  return typeof sessionKey === "string" && sessionKey.trim().toLowerCase().startsWith("agent:");
-}
 
 function normalizePendingTarget(value?: string): string | undefined {
   const trimmed = typeof value === "string" ? value.trim() : "";
@@ -252,7 +249,7 @@ async function runSessionEventOnce(params: {
   }
 
   const { cfg, canonicalKey, entry } = loadSessionEntry(sessionKey);
-  if (!shouldUseSessionScopedEventRun(canonicalKey)) {
+  if (!isAgentScopedSessionKey(canonicalKey)) {
     return { status: "skipped", reason: "non-agent-session" };
   }
   const candidateSessionKeys = resolveSessionEventQueueKeys([canonicalKey, sessionKey]);

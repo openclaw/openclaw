@@ -10,6 +10,7 @@ import { buildOutboundSessionContext } from "../infra/outbound/session-context.j
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { registerApnsToken } from "../infra/push-apns.js";
 import { requestSessionEventRun } from "../infra/session-event-run.js";
+import { isAgentScopedSessionKey } from "../infra/session-event-target.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -585,6 +586,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
       if (wakeOnExit) {
         if (evt.event === "exec.finished") {
+          if (!isAgentScopedSessionKey(sessionKeyRaw)) {
+            ctx.logGateway.warn(
+              `exec wakeOnExit ignored for non-agent session key node=${nodeId}${runId ? ` id=${runId}` : ""} sessionKey=${sessionKeyRaw}`,
+            );
+            return;
+          }
           // Known limitation: runs originating from internal webchat sessions may not emit
           // routable outbound replies because webchat is not supported by route-reply.
           requestSessionEventRun({ source: "exec-event", sessionKey: sessionKeyRaw });

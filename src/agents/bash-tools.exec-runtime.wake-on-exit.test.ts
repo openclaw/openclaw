@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { enqueueSystemEventMock, requestSessionEventRunMock, requestHeartbeatNowMock } = vi.hoisted(
-  () => ({
+const { enqueueSystemEventMock, requestSessionEventRunMock, requestHeartbeatNowMock, logWarnMock } =
+  vi.hoisted(() => ({
     enqueueSystemEventMock: vi.fn(() => true),
     requestSessionEventRunMock: vi.fn(),
     requestHeartbeatNowMock: vi.fn(),
-  }),
-);
+    logWarnMock: vi.fn(),
+  }));
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
@@ -16,6 +16,9 @@ vi.mock("../infra/session-event-run.js", () => ({
 }));
 vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: requestHeartbeatNowMock,
+}));
+vi.mock("../logger.js", () => ({
+  logWarn: logWarnMock,
 }));
 
 import { markBackgrounded, resetProcessRegistryForTests } from "./bash-process-registry.js";
@@ -36,7 +39,10 @@ function stringifyEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   return out;
 }
 
-async function runBackgroundExec(wakeOnExit: boolean): Promise<string> {
+async function runBackgroundExec(
+  wakeOnExit: boolean,
+  sessionKey = "agent:main:main",
+): Promise<string> {
   const run = await runExecProcess({
     command: delayedCommand,
     workdir: process.cwd(),
@@ -48,7 +54,7 @@ async function runBackgroundExec(wakeOnExit: boolean): Promise<string> {
     notifyOnExit: true,
     wakeOnExit,
     notifyOnExitEmptySuccess: true,
-    sessionKey: "agent:main:main",
+    sessionKey,
     timeoutSec: 5,
   });
   markBackgrounded(run.session);
@@ -62,6 +68,7 @@ describe("exec wakeOnExit", () => {
     enqueueSystemEventMock.mockReturnValue(true);
     requestSessionEventRunMock.mockReset();
     requestHeartbeatNowMock.mockReset();
+    logWarnMock.mockReset();
     resetProcessRegistryForTests();
   });
 
@@ -87,6 +94,17 @@ describe("exec wakeOnExit", () => {
       agentId: undefined,
     });
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("warns and skips immediate wake for non-agent background exits when wakeOnExit is true", async () => {
+    await runBackgroundExec(true, "global");
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("immediate wake is only supported for agent-scoped session keys"),
+    );
   });
 
   it("does not trigger wake when enqueueing an exec event fails", () => {
@@ -122,5 +140,18 @@ describe("exec wakeOnExit", () => {
       sessionKey: "agent:main:main",
       agentId: undefined,
     });
+  });
+
+  it("warns and skips immediate wake when emitExecSystemEvent uses non-agent session keys", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "global",
+      wakeOnExit: true,
+    });
+
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("immediate wake is only supported for agent-scoped session keys"),
+    );
   });
 });

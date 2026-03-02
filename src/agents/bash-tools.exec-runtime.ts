@@ -6,6 +6,7 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { mergePathPrepend } from "../infra/path-prepend.js";
 import { requestSessionEventRun } from "../infra/session-event-run.js";
+import { isAgentScopedSessionKey } from "../infra/session-event-target.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -207,6 +208,12 @@ function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CH
 }
 
 function requestExecEventWake(opts: { sessionKey: string; agentId?: string }) {
+  if (!isAgentScopedSessionKey(opts.sessionKey)) {
+    logWarn(
+      `exec wakeOnExit: immediate wake is only supported for agent-scoped session keys; skipping session key=${opts.sessionKey}`,
+    );
+    return;
+  }
   requestSessionEventRun({
     source: "exec-event",
     sessionKey: opts.sessionKey,
