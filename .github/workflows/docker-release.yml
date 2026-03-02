@@ -184,5 +184,5 @@ jobs:
       - name: Deploy to K8s
         run: |
           kubectl rollout restart deployment/bot-gateway -n hanzo
-          kubectl rollout status deployment/bot-gateway -n hanzo --timeout=120s
+          kubectl rollout status deployment/bot-gateway -n hanzo --timeout=300s
           echo "Deploy complete: bot-gateway restarted on hanzo-k8s"
