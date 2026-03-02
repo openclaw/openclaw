@@ -281,6 +281,70 @@ export function detectCategory(text: string): MemoryCategory {
 }
 
 // ============================================================================
+// Chunked recall: split long prompts to stay under embedding token limits
+// ============================================================================
+
+// text-embedding-3-small has an 8192-token limit.
+// UTF-8 byte length is always >= token count, so 7000 bytes guarantees < 8192 tokens.
+const RECALL_MAX_BYTES = 7000;
+const RECALL_MAX_CHUNKS = 10;
+
+/**
+ * Split text into chunks that fit within the embedding model's input limit.
+ * Prefers splitting at paragraph, line, or word boundaries.
+ */
+function splitForRecall(text: string, maxBytes = RECALL_MAX_BYTES): string[] {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let start = 0;
+
+  while (start < text.length && chunks.length < RECALL_MAX_CHUNKS) {
+    // Binary search for the rightmost position within byte limit
+    let lo = start + 1;
+    let hi = Math.min(text.length, start + maxBytes);
+    let best = start + 1;
+
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (Buffer.byteLength(text.slice(start, mid), "utf8") <= maxBytes) {
+        best = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+
+    // Try to break at a natural boundary (paragraph > line > space)
+    if (best < text.length) {
+      const slice = text.slice(start, best);
+      const halfLen = slice.length * 0.5;
+      const paraBrk = slice.lastIndexOf("\n\n");
+      const lineBrk = slice.lastIndexOf("\n");
+      const spaceBrk = slice.lastIndexOf(" ");
+
+      if (paraBrk > halfLen) {
+        best = start + paraBrk + 2;
+      } else if (lineBrk > halfLen) {
+        best = start + lineBrk + 1;
+      } else if (spaceBrk > halfLen) {
+        best = start + spaceBrk + 1;
+      }
+    }
+
+    const chunk = text.slice(start, best).trim();
+    if (chunk) {
+      chunks.push(chunk);
+    }
+    start = best;
+  }
+
+  return chunks;
+}
+
+// ============================================================================
 // Plugin Definition
 // ============================================================================
 
@@ -539,6 +603,8 @@ const memoryPlugin = {
     // ========================================================================
 
     // Auto-recall: inject relevant memories before agent starts
+    // Uses chunked multi-query to handle conversations that exceed the
+    // embedding model's token limit (8192 for text-embedding-3-small).
     if (cfg.autoRecall) {
       api.on("before_agent_start", async (event) => {
         if (!event.prompt || event.prompt.length < 5) {
@@ -546,18 +612,39 @@ const memoryPlugin = {
         }
 
         try {
-          const vector = await embeddings.embed(event.prompt);
-          const results = await db.search(vector, 3, 0.3);
+          const chunks = splitForRecall(event.prompt);
 
-          if (results.length === 0) {
+          // Embed each chunk and search sequentially to avoid rate limits
+          const allResults: MemorySearchResult[] = [];
+          for (const chunk of chunks) {
+            const vector = await embeddings.embed(chunk);
+            const results = await db.search(vector, 3, 0.3);
+            allResults.push(...results);
+          }
+
+          // Deduplicate by memory ID, keeping highest similarity score
+          const bestById = new Map<string, MemorySearchResult>();
+          for (const r of allResults) {
+            const existing = bestById.get(r.entry.id);
+            if (!existing || r.score > existing.score) {
+              bestById.set(r.entry.id, r);
+            }
+          }
+
+          // Sort by score descending, take top 5
+          const deduplicated = [...bestById.values()].sort((a, b) => b.score - a.score).slice(0, 5);
+
+          if (deduplicated.length === 0) {
             return;
           }
 
-          api.logger.info?.(`memory-lancedb: injecting ${results.length} memories into context`);
+          api.logger.info?.(
+            `memory-lancedb: injecting ${deduplicated.length} memories (from ${chunks.length} chunk${chunks.length > 1 ? "s" : ""})`,
+          );
 
           return {
             prependContext: formatRelevantMemoriesContext(
-              results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
+              deduplicated.map((r) => ({ category: r.entry.category, text: r.entry.text })),
             ),
           };
         } catch (err) {
