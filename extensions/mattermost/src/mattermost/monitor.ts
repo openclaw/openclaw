@@ -760,7 +760,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               }
               await sendMessageMattermost(to, chunk, {
                 accountId: account.accountId,
-                replyToId: threadRootId,
+                // Prefer threadRootId (the actual thread root post) over payload.replyToId,
+                // because Mattermost requires root_id to reference the root post — a post
+                // that itself has a root_id cannot be used as root_id (#30977).
+                replyToId: threadRootId || payload.replyToId,
               });
             }
           } else {
@@ -771,7 +774,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               await sendMessageMattermost(to, caption, {
                 accountId: account.accountId,
                 mediaUrl,
-                replyToId: threadRootId,
+                // Prefer threadRootId over payload.replyToId (see #30977).
+                replyToId: threadRootId || payload.replyToId,
               });
             }
           }
