@@ -242,13 +242,18 @@ export { chunkTextForOutbound } from "./text-chunking.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
 export { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
 export {
+  applyWindowsSpawnProgramPolicy,
   materializeWindowsSpawnProgram,
   resolveWindowsExecutablePath,
+  resolveWindowsSpawnProgramCandidate,
   resolveWindowsSpawnProgram,
 } from "./windows-spawn.js";
 export type {
+  ResolveWindowsSpawnProgramCandidateParams,
   ResolveWindowsSpawnProgramParams,
+  WindowsSpawnCandidateResolution,
   WindowsSpawnInvocation,
+  WindowsSpawnProgramCandidate,
   WindowsSpawnProgram,
   WindowsSpawnResolution,
 } from "./windows-spawn.js";
