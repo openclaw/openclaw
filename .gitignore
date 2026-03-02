@@ -82,8 +82,11 @@ apps/ios/*.mobileprovision
 docs/.local/
 IDENTITY.md
 USER.md
+SOUL.md
+AGENTs.md
 .tgz
 .idea
+/Brain/*.md
 
 # local tooling
 .serena/
@@ -130,3 +133,4 @@ Qwen2.5-VL-7B-Instruct
 # Ignore windows nul device file
 nul
 /assets/NFD/Hakua
+*db
