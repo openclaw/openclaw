@@ -39,6 +39,18 @@ function copySchemaMeta(from: Record<string, unknown>, to: Record<string, unknow
   }
 }
 
+// Resolve variant type from string or single-element array
+// Per JSON Schema spec, type: "string" and type: ["string"] are equivalent
+function resolveVariantType(type: unknown): string | null {
+  if (typeof type === "string") {
+    return type;
+  }
+  if (Array.isArray(type) && type.length === 1 && typeof type[0] === "string") {
+    return type[0];
+  }
+  return null;
+}
+
 // Check if an anyOf/oneOf array contains only literal values that can be flattened.
 // TypeBox Type.Literal generates { const: "value", type: "string" }.
 // Some schemas may use { enum: ["value"], type: "string" }.
@@ -66,7 +78,7 @@ function tryFlattenLiteralAnyOf(variants: unknown[]): { type: string; enum: unkn
       return null;
     }
 
-    const variantType = typeof v.type === "string" ? v.type : null;
+    const variantType = resolveVariantType(v.type);
     if (!variantType) {
       return null;
     }
