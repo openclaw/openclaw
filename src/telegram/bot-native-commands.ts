@@ -324,10 +324,14 @@ export const registerTelegramNativeCommands = ({
     nativeEnabled && nativeSkillsEnabled
       ? resolveAgentRoute({ cfg, channel: "telegram", accountId })
       : null;
-  const boundAgentIds = boundRoute ? [boundRoute.agentId] : null;
+  if (nativeEnabled && nativeSkillsEnabled && !boundRoute) {
+    runtime.log?.(
+      "nativeSkillsEnabled is true but no agent route is bound for this Telegram account; skill commands will not appear in the native menu.",
+    );
+  }
   const skillCommands =
-    nativeEnabled && nativeSkillsEnabled
-      ? listSkillCommandsForAgents(boundAgentIds ? { cfg, agentIds: boundAgentIds } : { cfg })
+    nativeEnabled && nativeSkillsEnabled && boundRoute
+      ? listSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
       : [];
   const nativeCommands = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, {

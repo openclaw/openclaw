@@ -294,6 +294,38 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it("falls back to default agent for pagination callbacks without agent suffix", async () => {
+    onSpy.mockClear();
+    listSkillCommandsForAgents.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-no-suffix",
+        data: "commands_page_2",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 14,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      agentIds: ["main"],
+    });
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks pagination callbacks when allowlist rejects sender", async () => {
     onSpy.mockClear();
     editMessageTextSpy.mockClear();
