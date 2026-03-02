@@ -61,6 +61,7 @@ export function hasProxyEnv(): boolean {
 let noProxyRefCount = 0;
 let savedNoProxy: string | undefined;
 let savedNoProxyLower: string | undefined;
+let appliedNoProxy: string | undefined;
 
 const LOOPBACK_ENTRIES = "localhost,127.0.0.1,[::1]";
 let noProxyDidModify = false;
@@ -73,8 +74,27 @@ function noProxyAlreadyCoversLocalhost(): boolean {
 }
 
 export async function withNoProxyForLocalhost<T>(fn: () => Promise<T>): Promise<T> {
-  if (!hasProxyEnv()) {
-    return fn();
+  return await withNoProxyForCdpUrl("http://127.0.0.1", fn);
+}
+
+function isLoopbackCdpUrl(url: string): boolean {
+  try {
+    return isLoopbackHost(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Scoped NO_PROXY bypass for loopback CDP URLs.
+ *
+ * This wrapper only mutates env vars for loopback destinations. On restore,
+ * it avoids clobbering external NO_PROXY changes that happened while calls
+ * were in-flight.
+ */
+export async function withNoProxyForCdpUrl<T>(url: string, fn: () => Promise<T>): Promise<T> {
+  if (!isLoopbackCdpUrl(url) || !hasProxyEnv()) {
+    return await fn();
   }
 
   const isFirst = noProxyRefCount === 0;
@@ -87,6 +107,7 @@ export async function withNoProxyForLocalhost<T>(fn: () => Promise<T>): Promise<
     const extended = current ? `${current},${LOOPBACK_ENTRIES}` : LOOPBACK_ENTRIES;
     process.env.NO_PROXY = extended;
     process.env.no_proxy = extended;
+    appliedNoProxy = extended;
     noProxyDidModify = true;
   }
 
@@ -95,18 +116,26 @@ export async function withNoProxyForLocalhost<T>(fn: () => Promise<T>): Promise<
   } finally {
     noProxyRefCount--;
     if (noProxyRefCount === 0 && noProxyDidModify) {
-      if (savedNoProxy !== undefined) {
-        process.env.NO_PROXY = savedNoProxy;
-      } else {
-        delete process.env.NO_PROXY;
-      }
-      if (savedNoProxyLower !== undefined) {
-        process.env.no_proxy = savedNoProxyLower;
-      } else {
-        delete process.env.no_proxy;
+      const currentNoProxy = process.env.NO_PROXY;
+      const currentNoProxyLower = process.env.no_proxy;
+      const untouched =
+        currentNoProxy === appliedNoProxy &&
+        (currentNoProxyLower === appliedNoProxy || currentNoProxyLower === undefined);
+      if (untouched) {
+        if (savedNoProxy !== undefined) {
+          process.env.NO_PROXY = savedNoProxy;
+        } else {
+          delete process.env.NO_PROXY;
+        }
+        if (savedNoProxyLower !== undefined) {
+          process.env.no_proxy = savedNoProxyLower;
+        } else {
+          delete process.env.no_proxy;
+        }
       }
       savedNoProxy = undefined;
       savedNoProxyLower = undefined;
+      appliedNoProxy = undefined;
       noProxyDidModify = false;
     }
   }
