@@ -1,6 +1,9 @@
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("commands/agent");
 import {
   listAgentIds,
   resolveAgentDir,
@@ -12,8 +15,9 @@ import {
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
 import { runCliAgent } from "../agents/cli-runner.js";
-import { getCliSessionId } from "../agents/cli-session.js";
+import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { FailoverError } from "../agents/failover-error.js";
 import { formatAgentInternalEventsForPrompt } from "../agents/internal-events.js";
 import { AGENT_LANE_SUBAGENT } from "../agents/lanes.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
@@ -23,6 +27,7 @@ import {
   isCliProvider,
   modelKey,
   normalizeModelRef,
+  normalizeProviderId,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
@@ -89,7 +94,8 @@ type OverrideFieldClearedByDelete =
   | "authProfileOverrideCompactionCount"
   | "fallbackNoticeSelectedModel"
   | "fallbackNoticeActiveModel"
-  | "fallbackNoticeReason";
+  | "fallbackNoticeReason"
+  | "claudeCliSessionId";
 
 const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "providerOverride",
@@ -100,6 +106,7 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "fallbackNoticeSelectedModel",
   "fallbackNoticeActiveModel",
   "fallbackNoticeReason",
+  "claudeCliSessionId",
 ];
 
 async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
@@ -162,6 +169,8 @@ function runAgentAttempt(params: {
   agentDir: string;
   onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => void;
   primaryProvider: string;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
 }) {
   const senderIsOwner = params.opts.senderIsOwner ?? true;
   const effectivePrompt = resolveFallbackRetryPrompt({
@@ -187,6 +196,94 @@ function runAgentAttempt(params: {
       cliSessionId,
       images: params.isFallbackRetry ? undefined : params.opts.images,
       streamParams: params.opts.streamParams,
+    }).catch(async (err) => {
+      // Handle CLI session expired error
+      if (
+        err instanceof FailoverError &&
+        err.reason === "session_expired" &&
+        cliSessionId &&
+        params.sessionKey &&
+        params.sessionStore &&
+        params.storePath
+      ) {
+        log.warn(
+          `CLI session expired, clearing from session store: provider=${params.providerOverride} sessionKey=${params.sessionKey}`,
+        );
+
+        // Clear the expired session ID from the session store
+        const entry = params.sessionStore[params.sessionKey];
+        if (entry) {
+          const updatedEntry = { ...entry };
+          if (params.providerOverride === "claude-cli") {
+            delete updatedEntry.claudeCliSessionId;
+          }
+          if (updatedEntry.cliSessionIds) {
+            const normalizedProvider = normalizeProviderId(params.providerOverride);
+            const newCliSessionIds = { ...updatedEntry.cliSessionIds };
+            delete newCliSessionIds[normalizedProvider];
+            updatedEntry.cliSessionIds = newCliSessionIds;
+          }
+          updatedEntry.updatedAt = Date.now();
+
+          await persistSessionEntry({
+            sessionStore: params.sessionStore,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            entry: updatedEntry,
+          });
+
+          // Update the session entry reference
+          params.sessionEntry = updatedEntry;
+        }
+
+        // Retry with no session ID (will create a new session)
+        return runCliAgent({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          agentId: params.sessionAgentId,
+          sessionFile: params.sessionFile,
+          workspaceDir: params.workspaceDir,
+          config: params.cfg,
+          prompt: effectivePrompt,
+          provider: params.providerOverride,
+          model: params.modelOverride,
+          thinkLevel: params.resolvedThinkLevel,
+          timeoutMs: params.timeoutMs,
+          runId: params.runId,
+          extraSystemPrompt: params.opts.extraSystemPrompt,
+          cliSessionId: undefined, // No session ID to force new session
+          images: params.isFallbackRetry ? undefined : params.opts.images,
+          streamParams: params.opts.streamParams,
+        }).then(async (result) => {
+          // Update session store with new CLI session ID if available
+          if (
+            result.meta.agentMeta?.sessionId &&
+            params.sessionKey &&
+            params.sessionStore &&
+            params.storePath
+          ) {
+            const entry = params.sessionStore[params.sessionKey];
+            if (entry) {
+              const updatedEntry = { ...entry };
+              setCliSessionId(
+                updatedEntry,
+                params.providerOverride,
+                result.meta.agentMeta.sessionId,
+              );
+              updatedEntry.updatedAt = Date.now();
+
+              await persistSessionEntry({
+                sessionStore: params.sessionStore,
+                sessionKey: params.sessionKey,
+                storePath: params.storePath,
+                entry: updatedEntry,
+              });
+            }
+          }
+          return result;
+        });
+      }
+      throw err;
     });
   }
 
@@ -766,6 +863,8 @@ export async function agentCommand(
             resolvedVerboseLevel,
             agentDir,
             primaryProvider: provider,
+            sessionStore,
+            storePath,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (
