@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-team-id.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
+const BASH_ARGS = process.platform === "win32" ? [SCRIPT] : ["--noprofile", "--norc", SCRIPT];
 const BASE_PATH = process.env.PATH ?? "/usr/bin:/bin";
 const BASE_LANG = process.env.LANG ?? "C";
 let fixtureRoot = "";
@@ -34,7 +35,7 @@ function runScript(
     ...extraEnv,
   };
   try {
-    const stdout = execFileSync(BASH_BIN, [SCRIPT], {
+    const stdout = execFileSync(BASH_BIN, BASH_ARGS, {
       env,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
