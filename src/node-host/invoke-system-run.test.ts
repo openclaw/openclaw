@@ -4,7 +4,11 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { saveExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
-import { handleSystemRunInvoke, formatSystemRunAllowlistMissMessage } from "./invoke-system-run.js";
+import {
+  handleSystemRunInvoke,
+  formatSystemRunAllowlistMissMessage,
+  type HandleSystemRunInvokeOptions,
+} from "./invoke-system-run.js";
 
 describe("formatSystemRunAllowlistMissMessage", () => {
   it("returns legacy allowlist miss message by default", () => {
@@ -181,12 +185,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       resolveExecAsk: () => params.ask ?? "off",
       isCmdExeInvocation: () => false,
       sanitizeEnv: () => undefined,
-      runCommand,
-      runViaMacAppExecHost,
-      sendNodeEvent,
+      runCommand: runCommand as HandleSystemRunInvokeOptions["runCommand"],
+      runViaMacAppExecHost:
+        runViaMacAppExecHost as HandleSystemRunInvokeOptions["runViaMacAppExecHost"],
+      sendNodeEvent: sendNodeEvent as HandleSystemRunInvokeOptions["sendNodeEvent"],
       buildExecEventPayload: (payload) => payload,
-      sendInvokeResult,
-      sendExecFinishedEvent,
+      sendInvokeResult: sendInvokeResult as HandleSystemRunInvokeOptions["sendInvokeResult"],
+      sendExecFinishedEvent:
+        sendExecFinishedEvent as HandleSystemRunInvokeOptions["sendExecFinishedEvent"],
       preferMacAppExecHost: params.preferMacAppExecHost,
     });
 
