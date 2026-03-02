@@ -187,6 +187,13 @@ describe("external-content security", () => {
         ["\u2039", "\u203A"], // single angle quotation marks
         ["\u27E8", "\u27E9"], // mathematical angle brackets
         ["\uFE64", "\uFE65"], // small less-than/greater-than signs
+        ["\u00AB", "\u00BB"], // guillemets (double angle quotation marks)
+        ["\u300A", "\u300B"], // CJK double angle brackets
+        ["\u27EA", "\u27EB"], // mathematical double angle brackets
+        ["\u27EC", "\u27ED"], // white tortoise shell brackets
+        ["\u27EE", "\u27EF"], // flattened parentheses
+        ["\u276C", "\u276D"], // medium angle bracket ornaments
+        ["\u276E", "\u276F"], // heavy angle quotation ornaments
       ];
 
       for (const [left, right] of bracketPairs) {
