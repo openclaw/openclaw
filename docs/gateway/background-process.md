@@ -48,6 +48,7 @@ Config (preferred):
 - `tools.exec.timeoutSec` (default 1800)
 - `tools.exec.cleanupMs` (default 1800000)
 - `tools.exec.notifyOnExit` (default true): enqueue a system event when a backgrounded exec exits.
+  Completion events include `session=<id>` so follow-up turns can call `process poll/log` for full output.
 - `tools.exec.notifyOnExitEmptySuccess` (default false): when true, also enqueue completion events for successful backgrounded runs that produced no output.
 
 ## process tool

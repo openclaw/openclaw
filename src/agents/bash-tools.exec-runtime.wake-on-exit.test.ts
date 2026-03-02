@@ -30,7 +30,7 @@ function stringifyEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   return out;
 }
 
-async function runBackgroundExec(wakeOnExit: boolean) {
+async function runBackgroundExec(wakeOnExit: boolean): Promise<string> {
   const run = await runExecProcess({
     command: delayedCommand,
     workdir: process.cwd(),
@@ -47,6 +47,7 @@ async function runBackgroundExec(wakeOnExit: boolean) {
   });
   markBackgrounded(run.session);
   await run.promise;
+  return run.session.id;
 }
 
 describe("exec wakeOnExit", () => {
@@ -58,9 +59,10 @@ describe("exec wakeOnExit", () => {
   });
 
   it("does not trigger a session event run for background exits when wakeOnExit is false", async () => {
-    await runBackgroundExec(false);
+    const sessionId = await runBackgroundExec(false);
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventMock.mock.calls[0]?.[0]).toContain(`session=${sessionId}`);
     expect(requestSessionEventRunMock).not.toHaveBeenCalled();
   });
 

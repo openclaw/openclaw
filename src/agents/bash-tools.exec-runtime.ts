@@ -248,9 +248,10 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
     return;
   }
+  const sessionLabel = `session=${session.id}`;
   const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+    ? `Exec ${status} (${sessionLabel}, ${exitLabel}) :: ${output}`
+    : `Exec ${status} (${sessionLabel}, ${exitLabel})`;
   const queued = enqueueSystemEvent(summary, { sessionKey });
   if (!queued) {
     return;

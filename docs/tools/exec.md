@@ -52,6 +52,7 @@ Notes:
 ## Config
 
 - `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event on exit.
+  Completion events include `session=<id>` so follow-up turns can fetch full output with `process poll/log`.
 - `tools.exec.approvalRunningNoticeMs` (default: 10000): emit a single “running” notice when an approval-gated exec runs longer than this (0 disables).
 - `tools.exec.host` (default: `sandbox`)
 - `tools.exec.security` (default: `deny` for sandbox, `allowlist` for gateway + node when unset)
