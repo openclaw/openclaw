@@ -177,9 +177,10 @@ describe("applyJobPatch", () => {
       },
     });
 
-    expect(job.payload.kind).toBe("agentTurn");
-    if (job.payload.kind === "agentTurn") {
-      expect(job.payload.lightContext).toBe(true);
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.lightContext).toBe(true);
     }
   });
 
