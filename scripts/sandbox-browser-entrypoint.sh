@@ -40,12 +40,17 @@ CHROME_ARGS+=(
   "--user-data-dir=${HOME}/.chrome"
   "--no-first-run"
   "--no-default-browser-check"
+  "--disable-3d-apis"
   "--disable-dev-shm-usage"
   "--disable-background-networking"
+  "--disable-extensions"
   "--disable-features=TranslateUI"
   "--disable-breakpad"
   "--disable-crash-reporter"
+  "--disable-software-rasterizer"
+  "--no-zygote"
   "--metrics-recording-only"
+  "--renderer-process-limit=2"
 )
 
 if [[ "${ALLOW_NO_SANDBOX}" == "1" ]]; then
