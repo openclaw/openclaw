@@ -117,6 +117,8 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   }
   const rendered = marked.parse(`${truncated.text}${suffix}`, {
     renderer: htmlEscapeRenderer,
+    gfm: true,
+    breaks: true,
   }) as string;
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
