@@ -1,5 +1,9 @@
 import { readFileSync } from "node:fs";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "openclaw/plugin-sdk/account-id";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
@@ -78,8 +82,13 @@ function resolveAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountCon
 }
 
 function mergeIrcAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.irc ?? {}) as IrcAccountConfig & {
+  const {
+    accounts: _ignored,
+    defaultAccount: _ignoredDefaultAccount,
+    ...base
+  } = (cfg.channels?.irc ?? {}) as IrcAccountConfig & {
     accounts?: unknown;
+    defaultAccount?: unknown;
   };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   const merged: IrcAccountConfig = { ...base, ...account };
@@ -155,6 +164,13 @@ export function listIrcAccountIds(cfg: CoreConfig): string[] {
 }
 
 export function resolveDefaultIrcAccountId(cfg: CoreConfig): string {
+  const preferred = normalizeOptionalAccountId(cfg.channels?.irc?.defaultAccount);
+  if (
+    preferred &&
+    listIrcAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
+  ) {
+    return preferred;
+  }
   const ids = listIrcAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
