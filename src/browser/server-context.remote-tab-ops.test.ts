@@ -24,6 +24,8 @@ function makeState(
     resolved: {
       enabled: true,
       controlPort: 18791,
+      cdpPortRangeStart: 18800,
+      cdpPortRangeEnd: 18899,
       cdpProtocol: profile === "remote" ? "https" : "http",
       cdpHost: profile === "remote" ? "browserless.example" : "127.0.0.1",
       cdpIsLoopback: profile !== "remote",
