@@ -1064,6 +1064,26 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, null] as const)(
+    "skips outbound send when final payload text is %s and has no media",
+    async (emptyText) => {
+      setupDraftStreams({ answerMessageId: 999 });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver(
+          { text: emptyText as unknown as string },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      });
+      deliverReplies.mockResolvedValue({ delivered: true });
+
+      await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+      expect(deliverReplies).not.toHaveBeenCalled();
+      expect(editMessageTelegram).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps reasoning and answer streaming in separate preview lanes", async () => {
     const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 999,
