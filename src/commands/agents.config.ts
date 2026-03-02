@@ -10,6 +10,7 @@ import {
   loadAgentIdentityFromWorkspace,
   parseIdentityMarkdown as parseIdentityMarkdownFile,
 } from "../agents/identity-file.js";
+import type { SandboxConfig } from "../agents/sandbox/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
@@ -26,6 +27,9 @@ export type AgentSummary = {
   bindingDetails?: string[];
   routes?: string[];
   providers?: string[];
+  toolDeny?: string[];
+  execBlocked?: boolean;
+  sandbox?: Pick<SandboxConfig, "mode" | "scope">;
   isDefault: boolean;
 };
 

@@ -1,4 +1,8 @@
+import { resolveAgentConfig } from "../agents/agent-scope.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { isToolAllowed } from "../agents/sandbox/tool-policy.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { AgentBinding } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -18,6 +22,25 @@ type AgentsListOptions = {
   json?: boolean;
   bindings?: boolean;
 };
+
+function normalizeToolDenyEntries(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function resolveConfiguredToolDeny(cfg: OpenClawConfig, agentId: string): string[] {
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  const agentDeny = normalizeToolDenyEntries(agentConfig?.tools?.sandbox?.tools?.deny);
+  if (agentDeny.length > 0) {
+    return agentDeny;
+  }
+  return normalizeToolDenyEntries(cfg.tools?.sandbox?.tools?.deny);
+}
 
 function formatSummary(summary: AgentSummary) {
   const defaultTag = summary.isDefault ? " (default)" : "";
@@ -49,6 +72,15 @@ function formatSummary(summary: AgentSummary) {
   lines.push(`  Agent dir: ${shortenHomePath(summary.agentDir)}`);
   if (summary.model) {
     lines.push(`  Model: ${summary.model}`);
+  }
+  const execStatus = summary.execBlocked ? "exec blocked" : "exec allowed";
+  if (summary.execBlocked && summary.toolDeny && summary.toolDeny.length > 0) {
+    lines.push(`  Tools: ${execStatus} (${summary.toolDeny.join(", ")} denied)`);
+  } else {
+    lines.push(`  Tools: ${execStatus}`);
+  }
+  if (summary.sandbox) {
+    lines.push(`  Sandbox: ${summary.sandbox.mode} (scope: ${summary.sandbox.scope})`);
   }
   lines.push(`  Routing rules: ${summary.bindings}`);
 
@@ -118,6 +150,14 @@ export async function agentsListCommand(
     if (providerLines.length > 0) {
       summary.providers = providerLines;
     }
+
+    const sandbox = resolveSandboxConfigForAgent(cfg, summary.id);
+    summary.toolDeny = resolveConfiguredToolDeny(cfg, summary.id);
+    summary.execBlocked = !isToolAllowed(sandbox.tools, "exec");
+    summary.sandbox = {
+      mode: sandbox.mode,
+      scope: sandbox.scope,
+    };
   }
 
   if (opts.json) {
