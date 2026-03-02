@@ -71,6 +71,30 @@ function setCachedSessionTitleFields(cacheKey: string, stat: fs.Stats, value: Se
   }
 }
 
+/**
+ * Read message entries from a session transcript file (async).
+ * Returns only `parsed.message` from lines with `type === "message"`.
+ * Used by before_reset hook dispatch to extract session history.
+ */
+export async function readSessionMessagesAsync(sessionFile: string): Promise<unknown[]> {
+  const content = await fs.promises.readFile(sessionFile, "utf-8");
+  const messages: unknown[] = [];
+  for (const line of content.split("\n")) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed.type === "message" && parsed.message) {
+        messages.push(parsed.message);
+      }
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return messages;
+}
+
 export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,

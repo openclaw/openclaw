@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import { readSessionMessagesAsync } from "../../gateway/session-utils.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -95,25 +95,7 @@ export async function emitResetCommandHooks(params: {
     // Fire-and-forget: read old session messages and run hook
     void (async () => {
       try {
-        const messages: unknown[] = [];
-        if (sessionFile) {
-          const content = await fs.readFile(sessionFile, "utf-8");
-          for (const line of content.split("\n")) {
-            if (!line.trim()) {
-              continue;
-            }
-            try {
-              const entry = JSON.parse(line);
-              if (entry.type === "message" && entry.message) {
-                messages.push(entry.message);
-              }
-            } catch {
-              // skip malformed lines
-            }
-          }
-        } else {
-          logVerbose("before_reset: no session file available, firing hook with empty messages");
-        }
+        const messages = sessionFile ? await readSessionMessagesAsync(sessionFile) : [];
         await hookRunner.runBeforeReset(
           { sessionFile, messages, reason: params.action },
           {

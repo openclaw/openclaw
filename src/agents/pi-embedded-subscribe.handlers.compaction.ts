@@ -75,7 +75,7 @@ export function handleAutoCompactionEnd(
             messageCount: ctx.params.session.messages?.length ?? 0,
             compactedCount: ctx.getCompactionCount(),
           },
-          {},
+          { sessionKey: ctx.params.sessionKey },
         )
         .catch((err) => {
           ctx.log.warn(`after_compaction hook failed: ${String(err)}`);

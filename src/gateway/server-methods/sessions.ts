@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
@@ -45,6 +45,7 @@ import {
   readSessionPreviewItemsFromTranscript,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
+  readSessionMessagesAsync,
   resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
@@ -471,6 +472,33 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
     );
     await triggerInternalHook(hookEvent);
+
+    // Fire before_reset plugin hook (fire-and-forget) so plugins can extract
+    // memories before session history is lost. Previously this only fired from
+    // the /new /reset command path (commands-core.ts) but not from the gateway
+    // RPC path (#22790). Fire-and-forget matches commands-core.ts behavior.
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("before_reset")) {
+      const sessionFile = entry?.sessionFile;
+      void (async () => {
+        try {
+          const messages = sessionFile ? await readSessionMessagesAsync(sessionFile) : [];
+          const agentId = target.agentId ?? "main";
+          await hookRunner.runBeforeReset(
+            { sessionFile, messages, reason: commandReason },
+            {
+              agentId,
+              sessionKey: target.canonicalKey ?? key,
+              sessionId: entry?.sessionId,
+              workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+            },
+          );
+        } catch (err) {
+          logVerbose(`sessions.reset: before_reset hook failed: ${String(err)}`);
+        }
+      })();
+    }
+
     const mutationCleanupError = await cleanupSessionBeforeMutation({
       cfg,
       key,
