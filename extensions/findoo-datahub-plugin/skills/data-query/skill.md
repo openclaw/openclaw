@@ -1,61 +1,56 @@
 ---
 name: fin-data-query
-description: "Generic data query — directly call any of the 162 financial data endpoints by source and endpoint name. Fallback tool when specialized tools don't cover the data need."
-metadata: { "openclaw": { "emoji": "🔍", "requires": { "extensions": ["fin-data-hub"] } } }
+description: "Generic DataHub query — directly call any of 172 financial data endpoints by path. Fallback when specialized tools don't cover the data need."
+metadata: { "openclaw": { "emoji": "🔍", "requires": { "extensions": ["findoo-datahub-plugin"] } } }
 ---
 
 # Data Query (Fallback)
 
-Use the **fin_query** tool from the fin-data-hub plugin as a generic fallback to access any of the 162 data endpoints directly.
+Use the **fin_query** tool as a generic fallback to access any of the 172 DataHub endpoints directly (works out of the box).
 
 ## When to Use
 
-- When other specialized tools (fin_stock, fin_index, fin_macro, fin_derivatives, fin_crypto, fin_market) don't cover the specific data need
-- When you need to call a raw API endpoint by name
-- When querying less common data points not exposed through the specialized tools
+- When specialized tools (fin_stock, fin_index, fin_macro, fin_derivatives, fin_crypto, fin_market) don't cover the specific data need
+- When querying less common endpoints
 
-## Available Sources
+## DataHub Categories
 
-| source          | Description                         | Coverage                                                                             |
-| --------------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
-| `china_equity`  | A-share equity data via Tushare     | ~80 endpoints: daily, income, balance, cashflow, moneyflow, holders, dividends, etc. |
-| `global_equity` | HK/US equity via Tushare + Polygon  | ~30 endpoints: hk_daily, us_daily, polygon OHLCV/financials/options                  |
-| `crypto_cex`    | CEX market data via CCXT proxy      | ~7 endpoints: ohlcv, ticker, orderbook, trades, funding_rate                         |
-| `defi`          | DeFi protocol data via DefiLlama    | ~10 endpoints: protocols, tvl, chains, yields, stablecoins, fees, dex_volumes        |
-| `crypto_market` | Crypto market intel via CoinGecko   | ~6 endpoints: coin_market, coin_historical, coin_info, categories, trending, global  |
-| `macro_global`  | Macro data via Tushare + World Bank | ~20 endpoints: gdp, cpi, shibor, lpr, treasury, wb_gdp, wb_population                |
+| Category        | Endpoints | Coverage                                                      |
+| --------------- | --------- | ------------------------------------------------------------- |
+| `equity/*`      | 83        | A-share, HK, US — prices, fundamentals, ownership, money flow |
+| `crypto/*`      | 23        | CEX market data, CoinGecko, DeFi via DefiLlama                |
+| `economy/*`     | 21        | China macro, rates, FX, World Bank                            |
+| `derivatives/*` | 13        | Futures, options, convertible bonds                           |
+| `index/*`       | 12        | Index data, thematic indices                                  |
+| `etf/*`         | 9         | ETF prices, NAV, fund data                                    |
+| `currency/*`    | 3         | FX historical, search, snapshots                              |
+| `news/*`        | 1         | Company news                                                  |
 
 ## Example Calls
 
 ```
-# A-share specific endpoint
-fin_query(source="china_equity", endpoint="daily_basic", params={"ts_code": "600519.SH"})
+# ETF fund manager info
+fin_query(path="etf/fund/manager", params={"symbol": "110011"})
 
-# Polygon US equity options
-fin_query(source="global_equity", endpoint="option_chain", params={"symbol": "AAPL"})
+# Currency historical
+fin_query(path="currency/price/historical", params={"symbol": "USDCNH"})
 
-# CCXT exchange-specific query
-fin_query(source="crypto_cex", endpoint="ohlcv", params={"symbol": "SOL/USDT", "exchange": "bybit", "timeframe": "4h"})
+# Company news
+fin_query(path="news/company", params={"symbol": "AAPL"})
 
-# DefiLlama protocol detail
-fin_query(source="defi", endpoint="protocol_tvl", params={"slug": "uniswap"})
-
-# CoinGecko category data
-fin_query(source="crypto_market", endpoint="coin_categories", params={})
-
-# World Bank custom indicator
-fin_query(source="macro_global", endpoint="wb_indicator", params={"country": "CN", "indicator": "NY.GDP.PCAP.CD"})
+# Coverage metadata — see all available endpoints
+fin_query(path="coverage/providers")
+fin_query(path="coverage/commands")
 ```
 
 ## When to Prefer Specialized Tools
 
-| Data Need                   | Use This Instead  |
+| Data Need                   | Use Instead       |
 | --------------------------- | ----------------- |
 | Stock quote / financials    | `fin_stock`       |
 | Index / ETF / Fund          | `fin_index`       |
 | GDP / CPI / interest rates  | `fin_macro`       |
 | Futures / options / CB      | `fin_derivatives` |
-| Crypto prices / DeFi TVL    | `fin_crypto`      |
+| Crypto / DeFi               | `fin_crypto`      |
 | Dragon-tiger / market radar | `fin_market`      |
-
-Use `fin_query` only when the above tools don't have the specific endpoint you need.
+| Simple OHLCV (CCXT/Yahoo)   | `fin_data_ohlcv`  |

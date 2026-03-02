@@ -1,76 +1,69 @@
 ---
 name: fin-crypto-defi
-description: "Crypto & DeFi data — CEX market data (K-lines/tickers/orderbook/funding from 100+ exchanges), DeFi protocol TVL/yields/stablecoins/DEX volumes, CoinGecko market cap/trending."
-metadata: { "openclaw": { "emoji": "🪙", "requires": { "extensions": ["fin-data-hub"] } } }
+description: "Crypto & DeFi data — CEX market data (tickers/orderbook/funding), DeFi protocol TVL/yields/stablecoins/DEX volumes, CoinGecko market cap/trending. All via DataHub."
+metadata: { "openclaw": { "emoji": "🪙", "requires": { "extensions": ["findoo-datahub-plugin"] } } }
 ---
 
 # Crypto & DeFi
 
-Use the **fin_crypto** tool from the fin-data-hub plugin for cryptocurrency and DeFi analysis.
+Use the **fin_crypto** tool for cryptocurrency and DeFi analysis via DataHub (works out of the box). For simple OHLCV data, use **fin_data_ohlcv** instead.
 
 ## When to Use
 
-- "BTC最新价格" / "Bitcoin price on Binance"
-- "ETH K线" / "Ethereum candlestick chart"
-- "BTC永续资金费率" / "BTC perpetual funding rate"
-- "DeFi TVL排行" / "DeFi protocol TVL ranking"
+- "BTC最新价格" / "Bitcoin ticker"
+- "ETH永续资金费率" / "funding rate"
+- "DeFi TVL排行" / "DeFi protocol ranking"
 - "Aave收益率" / "DeFi yield opportunities"
 - "USDT发行量" / "stablecoin market cap"
 - "币圈热搜" / "trending coins"
-- "全球加密市场总览" / "crypto global market cap"
 
-## Available query_types
+## CEX Market Data
 
-### CEX Market Data (via CCXT — 100+ exchanges)
+| endpoint              | Description            | Example                                                         |
+| --------------------- | ---------------------- | --------------------------------------------------------------- |
+| `market/ticker`       | Single ticker snapshot | `fin_crypto(endpoint="market/ticker", symbol="BTC/USDT")`       |
+| `market/tickers`      | All tickers            | `fin_crypto(endpoint="market/tickers")`                         |
+| `market/orderbook`    | Order book depth       | `fin_crypto(endpoint="market/orderbook", symbol="BTC/USDT")`    |
+| `market/trades`       | Recent trades          | `fin_crypto(endpoint="market/trades", symbol="BTC/USDT")`       |
+| `market/funding_rate` | Perpetual funding rate | `fin_crypto(endpoint="market/funding_rate", symbol="BTC/USDT")` |
 
-| query_type     | Description               | Example                                                                                 |
-| -------------- | ------------------------- | --------------------------------------------------------------------------------------- |
-| `ohlcv`        | K-line / candlestick data | `fin_crypto(query_type="ohlcv", symbol="BTC/USDT", exchange="binance", timeframe="1d")` |
-| `ticker`       | Single ticker snapshot    | `fin_crypto(query_type="ticker", symbol="ETH/USDT", exchange="okx")`                    |
-| `tickers`      | All tickers on exchange   | `fin_crypto(query_type="tickers", exchange="binance")`                                  |
-| `orderbook`    | Order book depth          | `fin_crypto(query_type="orderbook", symbol="BTC/USDT", exchange="binance")`             |
-| `trades`       | Recent trades             | `fin_crypto(query_type="trades", symbol="BTC/USDT", exchange="binance")`                |
-| `funding_rate` | Perpetual funding rate    | `fin_crypto(query_type="funding_rate", symbol="BTC/USDT:USDT", exchange="binance")`     |
-| `search`       | Search trading pairs      | `fin_crypto(query_type="search", symbol="SOL")`                                         |
+## CoinGecko Market Intelligence
 
-### CoinGecko Market Intelligence
+| endpoint            | Description            | Example                                                    |
+| ------------------- | ---------------------- | ---------------------------------------------------------- |
+| `coin/market`       | Market cap ranking     | `fin_crypto(endpoint="coin/market", limit=20)`             |
+| `coin/historical`   | Coin historical data   | `fin_crypto(endpoint="coin/historical", symbol="bitcoin")` |
+| `coin/info`         | Coin detail info       | `fin_crypto(endpoint="coin/info", symbol="ethereum")`      |
+| `coin/categories`   | Category rankings      | `fin_crypto(endpoint="coin/categories")`                   |
+| `coin/trending`     | Trending / hot coins   | `fin_crypto(endpoint="coin/trending")`                     |
+| `coin/global_stats` | Global market overview | `fin_crypto(endpoint="coin/global_stats")`                 |
 
-| query_type        | Description            | Example                                                      |
-| ----------------- | ---------------------- | ------------------------------------------------------------ |
-| `coin_market`     | Market cap ranking     | `fin_crypto(query_type="coin_market", limit=20)`             |
-| `coin_historical` | Coin historical data   | `fin_crypto(query_type="coin_historical", symbol="bitcoin")` |
-| `coin_info`       | Coin detail info       | `fin_crypto(query_type="coin_info", symbol="ethereum")`      |
-| `coin_categories` | Category rankings      | `fin_crypto(query_type="coin_categories")`                   |
-| `coin_trending`   | Trending / hot coins   | `fin_crypto(query_type="coin_trending")`                     |
-| `coin_global`     | Global market overview | `fin_crypto(query_type="coin_global")`                       |
+## DeFi Protocol Data (DefiLlama)
 
-### DeFi Protocol Data (via DefiLlama)
+| endpoint              | Description                 | Example                                                      |
+| --------------------- | --------------------------- | ------------------------------------------------------------ |
+| `defi/protocols`      | Protocol TVL ranking        | `fin_crypto(endpoint="defi/protocols", limit=20)`            |
+| `defi/tvl_historical` | Full TVL history            | `fin_crypto(endpoint="defi/tvl_historical")`                 |
+| `defi/protocol_tvl`   | Single protocol TVL history | `fin_crypto(endpoint="defi/protocol_tvl", symbol="aave")`    |
+| `defi/chains`         | Blockchain TVL comparison   | `fin_crypto(endpoint="defi/chains")`                         |
+| `defi/yields`         | Yield farming opportunities | `fin_crypto(endpoint="defi/yields")`                         |
+| `defi/stablecoins`    | Stablecoin market data      | `fin_crypto(endpoint="defi/stablecoins")`                    |
+| `defi/fees`           | Protocol fees/revenue       | `fin_crypto(endpoint="defi/fees")`                           |
+| `defi/dex_volumes`    | DEX trading volumes         | `fin_crypto(endpoint="defi/dex_volumes")`                    |
+| `defi/coin_prices`    | DeFi token prices           | `fin_crypto(endpoint="defi/coin_prices", symbol="ethereum")` |
 
-| query_type         | Description                 | Example                                                        |
-| ------------------ | --------------------------- | -------------------------------------------------------------- |
-| `defi_protocols`   | Protocol TVL ranking        | `fin_crypto(query_type="defi_protocols", limit=20)`            |
-| `defi_tvl`         | Single protocol TVL history | `fin_crypto(query_type="defi_tvl", symbol="aave")`             |
-| `defi_chains`      | Blockchain TVL comparison   | `fin_crypto(query_type="defi_chains")`                         |
-| `defi_yields`      | Yield farming opportunities | `fin_crypto(query_type="defi_yields", chain="ethereum")`       |
-| `defi_stablecoins` | Stablecoin market data      | `fin_crypto(query_type="defi_stablecoins")`                    |
-| `defi_fees`        | Protocol fees/revenue       | `fin_crypto(query_type="defi_fees")`                           |
-| `defi_dex_volumes` | DEX trading volumes         | `fin_crypto(query_type="defi_dex_volumes")`                    |
-| `defi_coin_prices` | DeFi token prices           | `fin_crypto(query_type="defi_coin_prices", symbol="ethereum")` |
+## Simple OHLCV (via CCXT)
 
-## Multi-step Analysis Pattern
+Use **fin_data_ohlcv** for simple crypto candlestick data via CCXT:
 
-For a crypto market overview:
+```
+fin_data_ohlcv(symbol="BTC/USDT", market="crypto", timeframe="1d")
+```
 
-1. `fin_crypto(coin_global)` — total market cap, BTC dominance, 24h volume
-2. `fin_crypto(coin_market)` — top coins by market cap
-3. `fin_crypto(coin_trending)` — what's hot right now
-4. `fin_crypto(defi_protocols)` — DeFi TVL leaders
-5. `fin_crypto(defi_chains)` — which chains are growing
+## Market Overview Pattern
 
-For a specific token deep-dive:
-
-1. `fin_crypto(ticker)` — current price on target exchange
-2. `fin_crypto(ohlcv)` — price chart and volume trend
-3. `fin_crypto(coin_info)` — project fundamentals
-4. `fin_crypto(defi_tvl)` — protocol TVL trend (if DeFi token)
-5. `fin_crypto(funding_rate)` — market sentiment via futures
+1. `fin_crypto(coin/global_stats)` — total market cap, BTC dominance
+2. `fin_crypto(coin/market)` — top coins by market cap
+3. `fin_crypto(coin/trending)` — what's hot
+4. `fin_crypto(defi/protocols)` — DeFi TVL leaders
+5. `fin_crypto(defi/chains)` — which chains are growing

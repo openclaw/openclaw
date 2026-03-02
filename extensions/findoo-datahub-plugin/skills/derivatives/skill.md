@@ -1,12 +1,12 @@
 ---
 name: fin-derivatives
-description: "Derivatives analysis — futures (holdings/settlement/warehouse receipts/term structure), options (chains with Greeks/IV), convertible bonds (conversion value/premium)."
-metadata: { "openclaw": { "emoji": "📉", "requires": { "extensions": ["fin-data-hub"] } } }
+description: "Derivatives analysis — futures (holdings/settlement/warehouse/term structure), options (chains/Greeks/IV), convertible bonds. All via DataHub."
+metadata: { "openclaw": { "emoji": "📉", "requires": { "extensions": ["findoo-datahub-plugin"] } } }
 ---
 
 # Derivatives Analysis
 
-Use the **fin_derivatives** tool from the fin-data-hub plugin for futures, options, and convertible bond analysis.
+Use the **fin_derivatives** tool for futures, options, and convertible bond analysis via DataHub (works out of the box).
 
 ## When to Use
 
@@ -14,43 +14,40 @@ Use the **fin_derivatives** tool from the fin-data-hub plugin for futures, optio
 - "IF2501 结算价" / "futures settlement"
 - "铜仓单变化" / "warehouse receipts"
 - "AAPL期权链" / "option chains with Greeks"
-- "隐含波动率曲面" / "IV surface"
 - "可转债转股溢价率" / "CB conversion premium"
 
-## Available query_types
+## Available Endpoints
 
-| query_type           | Description               | Example                                                                                     |
-| -------------------- | ------------------------- | ------------------------------------------------------------------------------------------- |
-| `futures_historical` | Futures historical OHLCV  | `fin_derivatives(symbol="RB2501.SHF", query_type="futures_historical")`                     |
-| `futures_info`       | Futures contract info     | `fin_derivatives(symbol="RB2501.SHF", query_type="futures_info")`                           |
-| `futures_holding`    | Futures position ranking  | `fin_derivatives(symbol="RB2501.SHF", query_type="futures_holding", trade_date="20250228")` |
-| `futures_settle`     | Futures daily settlement  | `fin_derivatives(symbol="RB2501.SHF", query_type="futures_settle")`                         |
-| `futures_warehouse`  | Warehouse receipts        | `fin_derivatives(symbol="RB.SHF", query_type="futures_warehouse")`                          |
-| `futures_mapping`    | Active contract mapping   | `fin_derivatives(symbol="RB.SHF", query_type="futures_mapping")`                            |
-| `option_basic`       | Option contract list      | `fin_derivatives(symbol="510050.SH", query_type="option_basic")`                            |
-| `option_daily`       | Option daily prices       | `fin_derivatives(symbol="10004537.SH", query_type="option_daily")`                          |
-| `option_chains`      | Option chains with Greeks | `fin_derivatives(symbol="AAPL", query_type="option_chains")`                                |
-| `cb_basic`           | Convertible bond info     | `fin_derivatives(symbol="113xxx.SH", query_type="cb_basic")`                                |
-| `cb_daily`           | Convertible bond daily    | `fin_derivatives(symbol="113xxx.SH", query_type="cb_daily")`                                |
+### Futures
 
-## Symbol Format
+| endpoint             | Description              | Example                                                                                     |
+| -------------------- | ------------------------ | ------------------------------------------------------------------------------------------- |
+| `futures/historical` | Futures historical OHLCV | `fin_derivatives(symbol="RB2501.SHF", endpoint="futures/historical")`                       |
+| `futures/info`       | Contract specification   | `fin_derivatives(symbol="RB2501.SHF", endpoint="futures/info")`                             |
+| `futures/holding`    | Position ranking         | `fin_derivatives(symbol="RB2501.SHF", endpoint="futures/holding", trade_date="2025-02-28")` |
+| `futures/settle`     | Daily settlement         | `fin_derivatives(symbol="RB2501.SHF", endpoint="futures/settle")`                           |
+| `futures/warehouse`  | Warehouse receipts       | `fin_derivatives(symbol="RB.SHF", endpoint="futures/warehouse")`                            |
+| `futures/mapping`    | Active contract mapping  | `fin_derivatives(symbol="RB.SHF", endpoint="futures/mapping")`                              |
 
-- Futures: `RB2501.SHF` (上期所), `IF2501.CFX` (中金所), `M2501.DCE` (大商所), `SR2501.ZCE` (郑商所)
-- Options: `510050.SH` (ETF option underlying), `AAPL` (US equity option)
-- Convertible bonds: `113xxx.SH`
+### Options
 
-## Multi-step Analysis Pattern
+| endpoint         | Description               | Example                                                           |
+| ---------------- | ------------------------- | ----------------------------------------------------------------- |
+| `options/basic`  | Option contract list      | `fin_derivatives(symbol="510050.SH", endpoint="options/basic")`   |
+| `options/daily`  | Option daily prices       | `fin_derivatives(symbol="10004537.SH", endpoint="options/daily")` |
+| `options/chains` | Option chains with Greeks | `fin_derivatives(symbol="AAPL", endpoint="options/chains")`       |
 
-For a comprehensive futures analysis:
+### Convertible Bonds
 
-1. `fin_derivatives(futures_info)` — contract specification
-2. `fin_derivatives(futures_historical)` — price trend
-3. `fin_derivatives(futures_holding)` — major institution positions
-4. `fin_derivatives(futures_settle)` — settlement price and open interest
-5. `fin_derivatives(futures_warehouse)` — warehouse receipts trend (supply signal)
+| endpoint            | Description     | Example                                                             |
+| ------------------- | --------------- | ------------------------------------------------------------------- |
+| `convertible/basic` | CB basic info   | `fin_derivatives(symbol="113xxx.SH", endpoint="convertible/basic")` |
+| `convertible/daily` | CB daily prices | `fin_derivatives(symbol="113xxx.SH", endpoint="convertible/daily")` |
 
-For option analysis:
+## Futures Analysis Pattern
 
-1. `fin_derivatives(option_basic)` — available strikes and expirations
-2. `fin_derivatives(option_chains)` — full chain with Greeks and IV
-3. `fin_derivatives(option_daily)` — specific contract price history
+1. `fin_derivatives(futures/info)` — contract specification
+2. `fin_derivatives(futures/historical)` — price trend
+3. `fin_derivatives(futures/holding)` — major institution positions
+4. `fin_derivatives(futures/settle)` — settlement and open interest
+5. `fin_derivatives(futures/warehouse)` — warehouse receipts (supply signal)
