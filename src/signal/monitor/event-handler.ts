@@ -430,10 +430,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     // Check if the message is from our own account to prevent loop/self-reply
     // This handles both phone number and UUID based identification
+    const normalizedAccount = deps.account ? normalizeE164(deps.account) : undefined;
     const isOwnMessage =
-      deps.account &&
-      ((sender.kind === "phone" && sender.e164 === normalizeE164(deps.account)) ||
-        (sender.kind === "uuid" && deps.accountUuid && sender.raw === deps.accountUuid));
+      (sender.kind === "phone" && normalizedAccount != null && sender.e164 === normalizedAccount) ||
+      (sender.kind === "uuid" && deps.accountUuid != null && sender.raw === deps.accountUuid);
     if (isOwnMessage) {
       return;
     }
