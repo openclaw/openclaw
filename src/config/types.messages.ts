@@ -82,6 +82,8 @@ export type StatusReactionsConfig = {
   timing?: StatusReactionsTimingConfig;
 };
 
+export type ModelEmojiMap = Record<string, string>;
+
 export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
@@ -97,14 +99,48 @@ export type MessagesConfig = {
    * - `{provider}` - provider name (e.g., `anthropic`, `openai`)
    * - `{thinkingLevel}` or `{think}` - current thinking level (`high`, `low`, `off`)
    * - `{identity.name}` or `{identityName}` - agent identity name
+   * - `{modelEmoji}` - emoji resolved from `modelEmojiMap` by matching model/provider/alias
+   * - `{thinkEmoji}` - emoji for thinking state: first entry when thinking is active, second when off
    *
-   * Example: `"[{model} | think:{thinkingLevel}]"` → `"[claude-opus-4-6 | think:high]"`
+   * Example: `"{modelEmoji}{thinkEmoji}"` → `"🧠💭"` (Opus with thinking on)
    *
    * Unresolved variables remain as literal text (e.g., `{model}` if context unavailable).
    *
    * Default: none
    */
   responsePrefix?: string;
+  /**
+   * Map model names, provider names, or aliases to emoji strings for `{modelEmoji}`.
+   *
+   * Keys are matched case-insensitively against (in order):
+   * 1. Short model name (e.g., `claude-opus-4-6`)
+   * 2. Provider name (e.g., `anthropic`)
+   * 3. Model alias (e.g., `opus`)
+   *
+   * First match wins. If no match, `{modelEmoji}` resolves to empty string.
+   *
+   * Example:
+   * ```json5
+   * {
+   *   "claude-opus-4-6": "🧠",
+   *   "claude-sonnet-4-5": "🎵",
+   *   "gpt-5.3-codex": "🤖",
+   *   "kimi-k2.5": "🌙",
+   * }
+   * ```
+   */
+  modelEmojiMap?: ModelEmojiMap;
+  /**
+   * Emoji pair for `{thinkEmoji}` — [active, inactive].
+   *
+   * When thinking level is "high" or "low", the first emoji is used.
+   * When thinking is "off" or unavailable, the second emoji is used (or empty string if not set).
+   *
+   * Example: `["💭", ""]` → shows 💭 when thinking, nothing when not.
+   *
+   * Default: none (variable resolves to empty string)
+   */
+  thinkEmoji?: [string, string];
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
   /** Debounce rapid inbound messages per sender (global + per-channel overrides). */
