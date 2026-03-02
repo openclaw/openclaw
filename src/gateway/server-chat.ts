@@ -472,7 +472,8 @@ export function createAgentEventHandler({
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text);
-      } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
+      } else if (!isAborted && lifecyclePhase === "end") {
+        const jobState: "done" | "error" = evt.data?.error ? "error" : "done";
         if (chatLink) {
           const finished = chatRunState.registry.shift(evt.runId);
           if (!finished) {
@@ -484,19 +485,20 @@ export function createAgentEventHandler({
             finished.clientRunId,
             evt.runId,
             evt.seq,
-            lifecyclePhase === "error" ? "error" : "done",
+            jobState,
             evt.data?.error,
           );
         } else {
-          emitChatFinal(
-            sessionKey,
-            eventRunId,
-            evt.runId,
-            evt.seq,
-            lifecyclePhase === "error" ? "error" : "done",
-            evt.data?.error,
-          );
+          emitChatFinal(sessionKey, eventRunId, evt.runId, evt.seq, jobState, evt.data?.error);
         }
+      } else if (!isAborted && lifecyclePhase === "error") {
+        // Embedded agent reported an error for this run. For interactive chat
+        // surfaces, do not treat this as a terminal chat failure – model
+        // fallback may retry the run with the same runId. We only reset the
+        // streaming buffer; the outer runner will emit a lifecycle "end" with
+        // an error payload if all fallbacks ultimately fail.
+        chatRunState.buffers.delete(clientRunId);
+        chatRunState.deltaSentAt.delete(clientRunId);
       } else if (isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         chatRunState.abortedRuns.delete(clientRunId);
         chatRunState.abortedRuns.delete(evt.runId);
