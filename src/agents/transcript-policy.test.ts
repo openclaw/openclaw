@@ -44,6 +44,16 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBeUndefined();
   });
 
+  it("enables sanitizeToolCallIds for openai-codex provider (Responses API rejects pipe chars in IDs)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai-codex",
+      modelId: "gpt-5.2",
+      modelApi: "openai-codex-responses",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+  });
+
   it("enables user-turn merge for strict OpenAI-compatible providers", () => {
     const policy = resolveTranscriptPolicy({
       provider: "moonshot",
