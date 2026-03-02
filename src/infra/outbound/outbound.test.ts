@@ -53,10 +53,6 @@ describe("delivery-queue", () => {
     fs.mkdirSync(tmpDir, { recursive: true });
   });
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
   afterAll(() => {
     if (!fixtureRoot) {
       return;
