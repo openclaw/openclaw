@@ -541,6 +541,7 @@ async function runExecResolver(params: {
     } catch (error) {
       handleStdinError(error);
     }
+    }
   });
 }
 
