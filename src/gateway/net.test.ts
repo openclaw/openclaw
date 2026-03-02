@@ -350,6 +350,18 @@ describe("isPrivateOrLoopbackAddress", () => {
 });
 
 describe("isSecureWebSocketUrl", () => {
+  it("accepts ws:// for local tailnet IPv4 and IPv6 IPs", () => {
+    vi.spyOn(os, "networkInterfaces").mockReturnValue({
+      tailscale0: [
+        { address: "100.88.77.66", family: "IPv4", internal: false },
+        { address: "fd7a:115c:a1e0::123", family: "IPv6", internal: false },
+      ],
+    } as unknown as ReturnType<typeof os.networkInterfaces>);
+
+    expect(isSecureWebSocketUrl("ws://100.88.77.66:18789")).toBe(true);
+    expect(isSecureWebSocketUrl("ws://[fd7a:115c:a1e0::123]:18789")).toBe(true);
+  });
+
   it("accepts secure websocket/loopback ws URLs and rejects unsafe inputs", () => {
     const cases = [
       { input: "wss://127.0.0.1:18789", expected: true },

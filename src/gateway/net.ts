@@ -199,8 +199,8 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
   if (tailnetIPv4 && normalized === tailnetIPv4.toLowerCase()) {
     return true;
   }
-  const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  if (tailnetIPv6 && ip.trim().toLowerCase() === tailnetIPv6.toLowerCase()) {
+  const tailnetIPv6 = normalizeIp(pickPrimaryTailnetIPv6());
+  if (tailnetIPv6 && normalized === tailnetIPv6) {
     return true;
   }
   return false;
@@ -352,7 +352,9 @@ export function isLocalishHost(hostHeader?: string): boolean {
  *
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
- * - ws:// is only secure for loopback addresses (localhost, 127.x.x.x, ::1)
+ * - ws:// is accepted only for local machine endpoints:
+ *   - loopback addresses (localhost, 127.x.x.x, ::1)
+ *   - this device's local tailnet addresses (for gateway.bind=tailnet)
  *
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
@@ -373,6 +375,6 @@ export function isSecureWebSocketUrl(url: string): boolean {
     return false;
   }
 
-  // ws:// is only secure for loopback addresses
-  return isLoopbackHost(parsed.hostname);
+  // ws:// is secure for local machine addresses (loopback or local tailnet IPs).
+  return isLoopbackHost(parsed.hostname) || isLocalGatewayAddress(parsed.hostname);
 }
