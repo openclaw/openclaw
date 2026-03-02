@@ -185,11 +185,27 @@ Bindings are **deterministic** and **most-specific wins**:
 If multiple bindings match in the same tier, the first one in config order wins.
 If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields are required (`AND` semantics).
 
+Important account-scope detail:
+
+- A binding that omits `accountId` matches the default account only.
+- Use `accountId: "*"` for a channel-wide fallback across all accounts.
+- If you later add the same binding for the same agent with an explicit account id, OpenClaw upgrades the existing channel-only binding to account-scoped instead of duplicating it.
+
 ## Multiple accounts / phone numbers
 
 Channels that support **multiple accounts** (e.g. WhatsApp) use `accountId` to identify
 each login. Each `accountId` can be routed to a different agent, so one server can host
 multiple phone numbers without mixing sessions.
+
+If you want a channel-wide default account when `accountId` is omitted, set
+`channels.<channel>.defaultAccount` (optional). When unset, OpenClaw falls back
+to `default` if present, otherwise the first configured account id (sorted).
+
+Common channels supporting this pattern include:
+
+- `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`
+- `irc`, `line`, `googlechat`, `mattermost`, `matrix`, `nextcloud-talk`
+- `bluebubbles`, `zalo`, `zalouser`, `nostr`, `feishu`
 
 ## Concepts
 

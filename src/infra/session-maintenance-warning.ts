@@ -1,8 +1,8 @@
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry, SessionMaintenanceWarning } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 import { enqueueSystemEvent } from "./system-events.js";
 
@@ -96,6 +96,10 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
 
   try {
     const { deliverOutboundPayloads } = await import("./outbound/deliver.js");
+    const outboundSession = buildOutboundSessionContext({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    });
     await deliverOutboundPayloads({
       cfg: params.cfg,
       channel,
@@ -103,7 +107,7 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
       accountId: target.accountId,
       threadId: target.threadId,
       payloads: [{ text }],
-      agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg }),
+      session: outboundSession,
     });
   } catch (err) {
     log.warn(`Failed to deliver session maintenance warning: ${String(err)}`);

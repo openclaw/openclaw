@@ -438,6 +438,54 @@ describe("security audit", () => {
     );
   });
 
+  it("warns for risky safeBinTrustedDirs entries", async () => {
+    const riskyGlobalTrustedDirs =
+      process.platform === "win32"
+        ? [String.raw`C:\Users\ci-user\bin`, String.raw`C:\Users\ci-user\.local\bin`]
+        : ["/usr/local/bin", "/tmp/openclaw-safe-bins"];
+    const cfg: OpenClawConfig = {
+      tools: {
+        exec: {
+          safeBinTrustedDirs: riskyGlobalTrustedDirs,
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "ops",
+            tools: {
+              exec: {
+                safeBinTrustedDirs: ["./relative-bin-dir"],
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "tools.exec.safe_bin_trusted_dirs_risky",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain(riskyGlobalTrustedDirs[0]);
+    expect(finding?.detail).toContain(riskyGlobalTrustedDirs[1]);
+    expect(finding?.detail).toContain("agents.list.ops.tools.exec");
+  });
+
+  it("does not warn for non-risky absolute safeBinTrustedDirs entries", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        exec: {
+          safeBinTrustedDirs: ["/usr/libexec"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectNoFinding(res, "tools.exec.safe_bin_trusted_dirs_risky");
+  });
+
   it("evaluates loopback control UI and logging exposure findings", async () => {
     const cases: Array<{
       name: string;
@@ -855,6 +903,31 @@ describe("security audit", () => {
     );
   });
 
+  it("flags container namespace join network mode in sandbox config", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            docker: {
+              network: "container:peer",
+            },
+          },
+        },
+      },
+    };
+    const res = await audit(cfg);
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "sandbox.dangerous_network_mode",
+          severity: "critical",
+          title: "Dangerous network mode in sandbox config",
+        }),
+      ]),
+    );
+  });
+
   it("checks sandbox browser bridge-network restrictions", async () => {
     const cases: Array<{
       name: string;
@@ -1150,6 +1223,29 @@ describe("security audit", () => {
     expectFinding(res, "gateway.control_ui.allowed_origins_required", "critical");
   });
 
+  it("flags wildcard Control UI origins by exposure level", async () => {
+    const loopbackCfg: OpenClawConfig = {
+      gateway: {
+        bind: "loopback",
+        controlUi: { allowedOrigins: ["*"] },
+      },
+    };
+    const exposedCfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+        controlUi: { allowedOrigins: ["*"] },
+      },
+    };
+
+    const loopback = await audit(loopbackCfg);
+    const exposed = await audit(exposedCfg);
+
+    expectFinding(loopback, "gateway.control_ui.allowed_origins_wildcard", "warn");
+    expectFinding(exposed, "gateway.control_ui.allowed_origins_wildcard", "critical");
+    expectNoFinding(exposed, "gateway.control_ui.allowed_origins_required");
+  });
+
   it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -1168,6 +1264,35 @@ describe("security audit", () => {
     expect(flags?.detail ?? "").toContain(
       "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true",
     );
+  });
+
+  it("warns when Feishu doc tool is enabled because create can grant requester access", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret_test",
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectFinding(res, "channels.feishu.doc_owner_open_id", "warn");
+  });
+
+  it("does not warn for Feishu doc grant risk when doc tools are disabled", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret_test",
+          tools: { doc: false },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectNoFinding(res, "channels.feishu.doc_owner_open_id");
   });
 
   it("scores X-Real-IP fallback risk by gateway exposure", async () => {

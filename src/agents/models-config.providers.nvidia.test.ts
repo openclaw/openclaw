@@ -1,4 +1,5 @@
 import { mkdtempSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -54,8 +55,37 @@ describe("MiniMax implicit provider (#15275)", () => {
       const providers = await resolveImplicitProviders({ agentDir });
       expect(providers?.minimax).toBeDefined();
       expect(providers?.minimax?.api).toBe("anthropic-messages");
+      expect(providers?.minimax?.authHeader).toBe(true);
       expect(providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
     });
+  });
+
+  it("should set authHeader for minimax portal provider", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    await writeFile(
+      join(agentDir, "auth-profiles.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "minimax-portal:default": {
+              type: "oauth",
+              provider: "minimax-portal",
+              oauth: {
+                access: "token",
+                expires: Date.now() + 60_000,
+              },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const providers = await resolveImplicitProviders({ agentDir });
+    expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
   });
 });
 

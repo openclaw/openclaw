@@ -155,4 +155,43 @@ describe("announce loop guard (#18264)", () => {
     const stored = runs.find((run) => run.runId === entry.runId);
     expect(stored?.cleanupCompletedAt).toBeDefined();
   });
+
+  test("announce rejection resets cleanupHandled so retries can resume", async () => {
+    announceFn.mockReset();
+    announceFn.mockRejectedValueOnce(new Error("announce failed"));
+    registry.resetSubagentRegistryForTests();
+
+    const now = Date.now();
+    const runId = "test-announce-rejection";
+    loadSubagentRegistryFromDisk.mockReturnValue(
+      new Map([
+        [
+          runId,
+          {
+            runId,
+            childSessionKey: "agent:main:subagent:child-1",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "agent:main:main",
+            task: "rejection test",
+            cleanup: "keep" as const,
+            createdAt: now - 30_000,
+            startedAt: now - 20_000,
+            endedAt: now - 10_000,
+            cleanupHandled: false,
+          },
+        ],
+      ]),
+    );
+
+    registry.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const runs = registry.listSubagentRunsForRequester("agent:main:main");
+    const stored = runs.find((run) => run.runId === runId);
+    expect(stored?.cleanupHandled).toBe(false);
+    expect(stored?.cleanupCompletedAt).toBeUndefined();
+    expect(stored?.announceRetryCount).toBe(1);
+    expect(stored?.lastAnnounceRetryAt).toBeTypeOf("number");
+  });
 });

@@ -20,6 +20,86 @@ require_cmd() {
   fi
 }
 
+read_config_gateway_token() {
+  local config_path="$OPENCLAW_CONFIG_DIR/openclaw.json"
+  if [[ ! -f "$config_path" ]]; then
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$config_path" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception:
+    raise SystemExit(0)
+
+gateway = cfg.get("gateway")
+if not isinstance(gateway, dict):
+    raise SystemExit(0)
+auth = gateway.get("auth")
+if not isinstance(auth, dict):
+    raise SystemExit(0)
+token = auth.get("token")
+if isinstance(token, str):
+    token = token.strip()
+    if token:
+        print(token)
+PY
+    return 0
+  fi
+  if command -v node >/dev/null 2>&1; then
+    node - "$config_path" <<'NODE'
+const fs = require("node:fs");
+const configPath = process.argv[2];
+try {
+  const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const token = cfg?.gateway?.auth?.token;
+  if (typeof token === "string" && token.trim().length > 0) {
+    process.stdout.write(token.trim());
+  }
+} catch {
+  // Keep docker-setup resilient when config parsing fails.
+}
+NODE
+  fi
+}
+
+ensure_control_ui_allowed_origins() {
+  if [[ "${OPENCLAW_GATEWAY_BIND}" == "loopback" ]]; then
+    return 0
+  fi
+
+  local allowed_origin_json
+  local current_allowed_origins
+  allowed_origin_json="$(printf '["http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT")"
+  current_allowed_origins="$(
+    docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+      config get gateway.controlUi.allowedOrigins 2>/dev/null || true
+  )"
+  current_allowed_origins="${current_allowed_origins//$'\r'/}"
+
+  if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
+    echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
+    return 0
+  fi
+
+  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json >/dev/null
+  echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
+}
+
+sync_gateway_mode_and_bind() {
+  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set gateway.mode local >/dev/null
+  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
+  echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
+}
+
 contains_disallowed_chars() {
   local value="$1"
   [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\t'* ]]
@@ -82,9 +162,11 @@ fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
-# Seed device-identity parent eagerly for Docker Desktop/Windows bind mounts
-# that reject creating new subdirectories from inside the container.
+# Seed directory tree eagerly so bind mounts work even on Docker Desktop/Windows
+# where the container (even as root) cannot create new host subdirectories.
 mkdir -p "$OPENCLAW_CONFIG_DIR/identity"
+mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/agent"
+mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/sessions"
 
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR
@@ -95,9 +177,14 @@ export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
+export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}"
 
 if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
-  if command -v openssl >/dev/null 2>&1; then
+  EXISTING_CONFIG_TOKEN="$(read_config_gateway_token || true)"
+  if [[ -n "$EXISTING_CONFIG_TOKEN" ]]; then
+    OPENCLAW_GATEWAY_TOKEN="$EXISTING_CONFIG_TOKEN"
+    echo "Reusing gateway token from $OPENCLAW_CONFIG_DIR/openclaw.json"
+  elif command -v openssl >/dev/null 2>&1; then
     OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
   else
     OPENCLAW_GATEWAY_TOKEN="$(python3 - <<'PY'
@@ -245,25 +332,58 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_IMAGE \
   OPENCLAW_EXTRA_MOUNTS \
   OPENCLAW_HOME_VOLUME \
-  OPENCLAW_DOCKER_APT_PACKAGES
+  OPENCLAW_DOCKER_APT_PACKAGES \
+  OPENCLAW_ALLOW_INSECURE_PRIVATE_WS
 
-echo "==> Building Docker image: $IMAGE_NAME"
-docker build \
-  --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
-  -t "$IMAGE_NAME" \
-  -f "$ROOT_DIR/Dockerfile" \
-  "$ROOT_DIR"
+if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
+  echo "==> Building Docker image: $IMAGE_NAME"
+  docker build \
+    --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
+    -t "$IMAGE_NAME" \
+    -f "$ROOT_DIR/Dockerfile" \
+    "$ROOT_DIR"
+else
+  echo "==> Pulling Docker image: $IMAGE_NAME"
+  if ! docker pull "$IMAGE_NAME"; then
+    echo "ERROR: Failed to pull image $IMAGE_NAME. Please check the image name and your access permissions." >&2
+    exit 1
+  fi
+fi
+
+# Ensure bind-mounted data directories are writable by the container's `node`
+# user (uid 1000). Host-created dirs inherit the host user's uid which may
+# differ, causing EACCES when the container tries to mkdir/write.
+# Running a brief root container to chown is the portable Docker idiom --
+# it works regardless of the host uid and doesn't require host-side root.
+echo ""
+echo "==> Fixing data-directory permissions"
+# Use -xdev to restrict chown to the config-dir mount only — without it,
+# the recursive chown would cross into the workspace bind mount and rewrite
+# ownership of all user project files on Linux hosts.
+# After fixing the config dir, only the OpenClaw metadata subdirectory
+# (.openclaw/) inside the workspace gets chowned, not the user's project files.
+docker compose "${COMPOSE_ARGS[@]}" run --rm --user root --entrypoint sh openclaw-cli -c \
+  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
+   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
 echo ""
 echo "==> Onboarding (interactive)"
-echo "When prompted:"
-echo "  - Gateway bind: lan"
-echo "  - Gateway auth: token"
-echo "  - Gateway token: $OPENCLAW_GATEWAY_TOKEN"
-echo "  - Tailscale exposure: Off"
-echo "  - Install Gateway daemon: No"
+echo "Docker setup pins Gateway mode to local."
+echo "Gateway runtime bind comes from OPENCLAW_GATEWAY_BIND (default: lan)."
+echo "Current runtime bind: $OPENCLAW_GATEWAY_BIND"
+echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
+echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
+echo "Install Gateway daemon: No (managed by Docker Compose)"
 echo ""
-docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --no-install-daemon
+docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --mode local --no-install-daemon
+
+echo ""
+echo "==> Docker gateway defaults"
+sync_gateway_mode_and_bind
+
+echo ""
+echo "==> Control UI origin allowlist"
+ensure_control_ui_allowed_origins
 
 echo ""
 echo "==> Provider setup (optional)"

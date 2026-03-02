@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime, SsrFPolicy } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMSTeamsAttachmentPlaceholder,
@@ -9,16 +9,6 @@ import {
 } from "./attachments.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
-vi.mock("openclaw/plugin-sdk", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk")>();
-  return {
-    ...actual,
-    isPrivateIpAddress: () => false,
-  };
-});
-
-/** Mock DNS resolver that always returns a public IP (for anti-SSRF validation in tests). */
-const publicResolveFn = async () => ({ address: "13.107.136.10" });
 const GRAPH_HOST = "graph.microsoft.com";
 const SHAREPOINT_HOST = "contoso.sharepoint.com";
 const AZUREEDGE_HOST = "azureedge.net";
@@ -50,6 +40,7 @@ type RemoteMediaFetchParams = {
   url: string;
   maxBytes?: number;
   filePathHint?: string;
+  ssrfPolicy?: SsrFPolicy;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
@@ -75,10 +66,44 @@ const readRemoteMediaResponse = async (
     fileName: params.filePathHint,
   };
 };
+
+function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean {
+  if (pattern.startsWith("*.")) {
+    const suffix = pattern.slice(2);
+    return suffix.length > 0 && hostname !== suffix && hostname.endsWith(`.${suffix}`);
+  }
+  return hostname === pattern;
+}
+
+function isUrlAllowedBySsrfPolicy(url: string, policy?: SsrFPolicy): boolean {
+  if (!policy?.hostnameAllowlist || policy.hostnameAllowlist.length === 0) {
+    return true;
+  }
+  const hostname = new URL(url).hostname.toLowerCase();
+  return policy.hostnameAllowlist.some((pattern) =>
+    isHostnameAllowedByPattern(hostname, pattern.toLowerCase()),
+  );
+}
+
 const fetchRemoteMediaMock = vi.fn(async (params: RemoteMediaFetchParams) => {
   const fetchFn = params.fetchImpl ?? fetch;
-  const res = await fetchFn(params.url);
-  return readRemoteMediaResponse(res, params);
+  let currentUrl = params.url;
+  for (let i = 0; i <= MAX_REDIRECT_HOPS; i += 1) {
+    if (!isUrlAllowedBySsrfPolicy(currentUrl, params.ssrfPolicy)) {
+      throw new Error(`Blocked hostname (not in allowlist): ${currentUrl}`);
+    }
+    const res = await fetchFn(currentUrl, { redirect: "manual" });
+    if (REDIRECT_STATUS_CODES.includes(res.status)) {
+      const location = res.headers.get("location");
+      if (!location) {
+        throw new Error("redirect missing location");
+      }
+      currentUrl = new URL(location, currentUrl).toString();
+      continue;
+    }
+    return readRemoteMediaResponse(res, params);
+  }
+  throw new Error("too many redirects");
 });
 
 const runtimeStub = {
@@ -100,16 +125,13 @@ type DownloadGraphMediaParams = Parameters<typeof downloadMSTeamsGraphMedia>[0];
 type DownloadedMedia = Awaited<ReturnType<typeof downloadMSTeamsAttachments>>;
 type MSTeamsMediaPayload = ReturnType<typeof buildMSTeamsMediaPayload>;
 type DownloadAttachmentsBuildOverrides = Partial<
-  Omit<DownloadAttachmentsParams, "attachments" | "maxBytes" | "allowHosts" | "resolveFn">
+  Omit<DownloadAttachmentsParams, "attachments" | "maxBytes" | "allowHosts">
 > &
-  Pick<DownloadAttachmentsParams, "allowHosts" | "resolveFn">;
+  Pick<DownloadAttachmentsParams, "allowHosts">;
 type DownloadAttachmentsNoFetchOverrides = Partial<
-  Omit<
-    DownloadAttachmentsParams,
-    "attachments" | "maxBytes" | "allowHosts" | "resolveFn" | "fetchFn"
-  >
+  Omit<DownloadAttachmentsParams, "attachments" | "maxBytes" | "allowHosts" | "fetchFn">
 > &
-  Pick<DownloadAttachmentsParams, "allowHosts" | "resolveFn">;
+  Pick<DownloadAttachmentsParams, "allowHosts">;
 type DownloadGraphMediaOverrides = Partial<
   Omit<DownloadGraphMediaParams, "messageUrl" | "tokenProvider" | "maxBytes">
 >;
@@ -210,7 +232,6 @@ const buildDownloadParams = (
     attachments,
     maxBytes: DEFAULT_MAX_BYTES,
     allowHosts: DEFAULT_ALLOW_HOSTS,
-    resolveFn: publicResolveFn,
     ...overrides,
   };
 };
@@ -680,12 +701,36 @@ describe("msteams attachments", () => {
         fetchMock,
         {
           allowHosts: [GRAPH_HOST],
-          resolveFn: undefined,
         },
         { expectFetchCalled: false },
       );
 
       expectAttachmentMediaLength(media, 0);
+    });
+
+    it("blocks redirects to non-https URLs", async () => {
+      const insecureUrl = "http://x/insecure.png";
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url === TEST_URL_IMAGE) {
+          return createRedirectResponse(insecureUrl);
+        }
+        if (url === insecureUrl) {
+          return createBufferResponse("insecure", CONTENT_TYPE_IMAGE_PNG);
+        }
+        return createNotFoundResponse();
+      });
+
+      const media = await downloadAttachmentsWithFetch(
+        createImageAttachments(TEST_URL_IMAGE),
+        fetchMock,
+        {
+          allowHosts: [TEST_HOST],
+        },
+      );
+
+      expectAttachmentMediaLength(media, 0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -701,24 +746,6 @@ describe("msteams attachments", () => {
 
     it("blocks SharePoint redirects to hosts outside allowHosts", async () => {
       const escapedUrl = "https://evil.example/internal.pdf";
-      fetchRemoteMediaMock.mockImplementationOnce(async (params) => {
-        const fetchFn = params.fetchImpl ?? fetch;
-        let currentUrl = params.url;
-        for (let i = 0; i < MAX_REDIRECT_HOPS; i += 1) {
-          const res = await fetchFn(currentUrl, { redirect: "manual" });
-          if (REDIRECT_STATUS_CODES.includes(res.status)) {
-            const location = res.headers.get("location");
-            if (!location) {
-              throw new Error("redirect missing location");
-            }
-            currentUrl = new URL(location, currentUrl).toString();
-            continue;
-          }
-          return readRemoteMediaResponse(res, params);
-        }
-        throw new Error("too many redirects");
-      });
-
       const { fetchMock, media } = await downloadGraphMediaWithMockOptions(
         {
           ...buildDefaultShareReferenceGraphFetchOptions({

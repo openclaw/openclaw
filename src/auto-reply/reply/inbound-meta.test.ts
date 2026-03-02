@@ -25,6 +25,7 @@ describe("buildInboundMetaSystemPrompt", () => {
       MessageSidFull: "123",
       ReplyToId: "99",
       OriginatingTo: "telegram:5494292670",
+      AccountId: " work ",
       OriginatingChannel: "telegram",
       Provider: "telegram",
       Surface: "telegram",
@@ -34,6 +35,7 @@ describe("buildInboundMetaSystemPrompt", () => {
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["schema"]).toBe("openclaw.inbound_meta.v1");
     expect(payload["chat_id"]).toBe("telegram:5494292670");
+    expect(payload["account_id"]).toBe("work");
     expect(payload["channel"]).toBe("telegram");
   });
 
@@ -143,6 +145,36 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["sender"]).toBe("+15551234567");
+  });
+
+  it("includes formatted timestamp in conversation info when provided", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      MessageSid: "msg-with-ts",
+      Timestamp: Date.UTC(2026, 1, 15, 13, 35),
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+  });
+
+  it("omits invalid timestamps instead of throwing", () => {
+    expect(() =>
+      buildInboundUserContextPrefix({
+        ChatType: "group",
+        MessageSid: "msg-with-bad-ts",
+        Timestamp: 1e20,
+      } as TemplateContext),
+    ).not.toThrow();
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      MessageSid: "msg-with-bad-ts",
+      Timestamp: 1e20,
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["timestamp"]).toBeUndefined();
   });
 
   it("includes message_id in conversation info", () => {

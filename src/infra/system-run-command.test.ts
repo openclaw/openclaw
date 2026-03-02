@@ -21,6 +21,10 @@ describe("system run command helpers", () => {
     expect(formatExecCommand(["echo", "hi there"])).toBe('echo "hi there"');
   });
 
+  test("formatExecCommand preserves trailing whitespace in argv tokens", () => {
+    expect(formatExecCommand(["runner "])).toBe('"runner "');
+  });
+
   test("extractShellCommandFromArgv extracts sh -lc command", () => {
     expect(extractShellCommandFromArgv(["/bin/sh", "-lc", "echo hi"])).toBe("echo hi");
   });

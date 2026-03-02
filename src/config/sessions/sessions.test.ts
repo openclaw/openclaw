@@ -6,12 +6,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  mergeSessionEntry,
   resolveAndPersistSessionFile,
   updateSessionStore,
 } from "../sessions.js";
 import type { SessionConfig } from "../types.base.js";
 import {
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
@@ -65,6 +67,13 @@ describe("session path safety", () => {
       { sessionsDir },
     );
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
+  });
+
+  it("ignores multi-store sentinel paths when deriving session file options", () => {
+    expect(resolveSessionFilePathOptions({ agentId: "worker", storePath: "(multiple)" })).toEqual({
+      agentId: "worker",
+    });
+    expect(resolveSessionFilePathOptions({ storePath: "(multiple)" })).toBeUndefined();
   });
 
   it("accepts symlink-alias session paths that resolve under the sessions dir", () => {
@@ -214,6 +223,42 @@ describe("session store lock (Promise chain mutex)", () => {
 
     const store = loadSessionStore(storePath);
     expect(store[key]?.modelOverride).toBe("recovered");
+  });
+
+  it("clears stale runtime provider when model is patched without provider", () => {
+    const merged = mergeSessionEntry(
+      {
+        sessionId: "sess-runtime",
+        updatedAt: 100,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      {
+        model: "gpt-5.2",
+      },
+    );
+    expect(merged.model).toBe("gpt-5.2");
+    expect(merged.modelProvider).toBeUndefined();
+  });
+
+  it("normalizes orphan modelProvider fields at store write boundary", async () => {
+    const key = "agent:main:orphan-provider";
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-orphan",
+        updatedAt: 100,
+        modelProvider: "anthropic",
+      },
+    });
+
+    await updateSessionStore(storePath, async (store) => {
+      const entry = store[key];
+      entry.updatedAt = Date.now();
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[key]?.modelProvider).toBeUndefined();
+    expect(store[key]?.model).toBeUndefined();
   });
 });
 

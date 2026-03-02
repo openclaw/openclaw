@@ -13,6 +13,28 @@ import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
 
 const mockedExecDockerRaw = vi.mocked(execDockerRaw);
+const DOCKER_SCRIPT_INDEX = 5;
+const DOCKER_FIRST_SCRIPT_ARG_INDEX = 7;
+
+function getDockerScript(args: string[]): string {
+  return String(args[DOCKER_SCRIPT_INDEX] ?? "");
+}
+
+function getDockerArg(args: string[], position: number): string {
+  return String(args[DOCKER_FIRST_SCRIPT_ARG_INDEX + position - 1] ?? "");
+}
+
+function getDockerPathArg(args: string[]): string {
+  return getDockerArg(args, 1);
+}
+
+function getScriptsFromCalls(): string[] {
+  return mockedExecDockerRaw.mock.calls.map(([args]) => getDockerScript(args));
+}
+
+function findCallByScriptFragment(fragment: string) {
+  return mockedExecDockerRaw.mock.calls.find(([args]) => getDockerScript(args).includes(fragment));
+}
 
 function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({
@@ -27,14 +49,23 @@ function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   });
 }
 
+async function withTempDir<T>(prefix: string, run: (stateDir: string) => Promise<T>): Promise<T> {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  try {
+    return await run(stateDir);
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
+
 describe("sandbox fs bridge shell compatibility", () => {
   beforeEach(() => {
     mockedExecDockerRaw.mockClear();
     mockedExecDockerRaw.mockImplementation(async (args) => {
-      const script = args[5] ?? "";
+      const script = getDockerScript(args);
       if (script.includes('readlink -f -- "$cursor"')) {
         return {
-          stdout: Buffer.from(`${String(args.at(-2) ?? "")}\n`),
+          stdout: Buffer.from(`${getDockerArg(args, 1)}\n`),
           stderr: Buffer.alloc(0),
           code: 0,
         };
@@ -73,12 +104,49 @@ describe("sandbox fs bridge shell compatibility", () => {
 
     expect(mockedExecDockerRaw).toHaveBeenCalled();
 
-    const scripts = mockedExecDockerRaw.mock.calls.map(([args]) => args[5] ?? "");
+    const scripts = getScriptsFromCalls();
     const executables = mockedExecDockerRaw.mock.calls.map(([args]) => args[3] ?? "");
 
     expect(executables.every((shell) => shell === "sh")).toBe(true);
-    expect(scripts.every((script) => script.includes("set -eu;"))).toBe(true);
+    expect(scripts.every((script) => /set -eu[;\n]/.test(script))).toBe(true);
     expect(scripts.some((script) => script.includes("pipefail"))).toBe(false);
+  });
+
+  it("resolveCanonicalContainerPath script is valid POSIX sh (no do; token)", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.readFile({ filePath: "a.txt" });
+
+    const scripts = getScriptsFromCalls();
+    const canonicalScript = scripts.find((script) => script.includes("allow_final"));
+    expect(canonicalScript).toBeDefined();
+    // "; " joining can create "do; cmd", which is invalid in POSIX sh.
+    expect(canonicalScript).not.toMatch(/\bdo;/);
+    // Keep command on the next line after "do" for POSIX-sh safety.
+    expect(canonicalScript).toMatch(/\bdo\n\s*parent=/);
+  });
+
+  it("reads inbound media-style filenames with triple-dash ids", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+    const inboundPath = "media/inbound/file_1095---f00a04a2-99a0-4d98-99b0-dfe61c5a4198.ogg";
+
+    await bridge.readFile({ filePath: inboundPath });
+
+    const readCall = findCallByScriptFragment('cat -- "$1"');
+    expect(readCall).toBeDefined();
+    const readPath = readCall ? getDockerPathArg(readCall[0]) : "";
+    expect(readPath).toContain("file_1095---");
+  });
+
+  it("resolves dash-leading basenames into absolute container paths", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.readFile({ filePath: "--leading.txt" });
+
+    const readCall = findCallByScriptFragment('cat -- "$1"');
+    expect(readCall).toBeDefined();
+    const readPath = readCall ? getDockerPathArg(readCall[0]) : "";
+    expect(readPath).toBe("/workspace/--leading.txt");
   });
 
   it("resolves bind-mounted absolute container paths for reads", async () => {
@@ -96,7 +164,7 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(args).toEqual(
       expect.arrayContaining(["moltbot-sbx-test", "sh", "-c", 'set -eu; cat -- "$1"']),
     );
-    expect(args.at(-1)).toBe("/workspace-two/README.md");
+    expect(getDockerPathArg(args)).toBe("/workspace-two/README.md");
   });
 
   it("blocks writes into read-only bind mounts", async () => {
@@ -114,31 +182,107 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(mockedExecDockerRaw).not.toHaveBeenCalled();
   });
 
-  it("rejects pre-existing host symlink escapes before docker exec", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-"));
-    const workspaceDir = path.join(stateDir, "workspace");
-    const outsideDir = path.join(stateDir, "outside");
-    const outsideFile = path.join(outsideDir, "secret.txt");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(outsideDir, { recursive: true });
-    await fs.writeFile(outsideFile, "classified");
-    await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
+  it("allows mkdirp for existing in-boundary subdirectories", async () => {
+    await withTempDir("openclaw-fs-bridge-mkdirp-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      const nestedDir = path.join(workspaceDir, "memory", "kemik");
+      await fs.mkdir(nestedDir, { recursive: true });
 
-    const bridge = createSandboxFsBridge({
-      sandbox: createSandbox({
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-      }),
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.mkdirp({ filePath: "memory/kemik" })).resolves.toBeUndefined();
+
+      const mkdirCall = findCallByScriptFragment('mkdir -p -- "$1"');
+      expect(mkdirCall).toBeDefined();
+      const mkdirPath = mkdirCall ? getDockerPathArg(mkdirCall[0]) : "";
+      expect(mkdirPath).toBe("/workspace/memory/kemik");
     });
+  });
 
-    await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/Symlink escapes/);
-    expect(mockedExecDockerRaw).not.toHaveBeenCalled();
-    await fs.rm(stateDir, { recursive: true, force: true });
+  it("rejects mkdirp when target exists as a file", async () => {
+    await withTempDir("openclaw-fs-bridge-mkdirp-file-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      const filePath = path.join(workspaceDir, "memory", "kemik");
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, "not a directory");
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.mkdirp({ filePath: "memory/kemik" })).rejects.toThrow(
+        /cannot create directories/i,
+      );
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects pre-existing host symlink escapes before docker exec", async () => {
+    await withTempDir("openclaw-fs-bridge-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      const outsideDir = path.join(stateDir, "outside");
+      const outsideFile = path.join(outsideDir, "secret.txt");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(outsideFile, "classified");
+      await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/Symlink escapes/);
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects pre-existing host hardlink escapes before docker exec", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir("openclaw-fs-bridge-hardlink-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      const outsideDir = path.join(stateDir, "outside");
+      const outsideFile = path.join(outsideDir, "secret.txt");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(outsideFile, "classified");
+      const hardlinkPath = path.join(workspaceDir, "link.txt");
+      try {
+        await fs.link(outsideFile, hardlinkPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/hardlink|sandbox/i);
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    });
   });
 
   it("rejects container-canonicalized paths outside allowed mounts", async () => {
     mockedExecDockerRaw.mockImplementation(async (args) => {
-      const script = args[5] ?? "";
+      const script = getDockerScript(args);
       if (script.includes('readlink -f -- "$cursor"')) {
         return {
           stdout: Buffer.from("/etc/passwd\n"),
@@ -162,7 +306,7 @@ describe("sandbox fs bridge shell compatibility", () => {
 
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
     await expect(bridge.readFile({ filePath: "a.txt" })).rejects.toThrow(/escapes allowed mounts/i);
-    const scripts = mockedExecDockerRaw.mock.calls.map(([args]) => args[5] ?? "");
+    const scripts = getScriptsFromCalls();
     expect(scripts.some((script) => script.includes('cat -- "$1"'))).toBe(false);
   });
 });

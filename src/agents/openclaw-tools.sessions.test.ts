@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSubagentRunForTests,
@@ -91,6 +92,9 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe("number");
     expect(schemaProp("sessions_spawn", "thread").type).toBe("boolean");
     expect(schemaProp("sessions_spawn", "mode").type).toBe("string");
+    expect(schemaProp("sessions_spawn", "sandbox").type).toBe("string");
+    expect(schemaProp("sessions_spawn", "runtime").type).toBe("string");
+    expect(schemaProp("sessions_spawn", "cwd").type).toBe("string");
     expect(schemaProp("subagents", "recentMinutes").type).toBe("number");
   });
 
@@ -167,6 +171,46 @@ describe("sessions tools", () => {
     };
     expect(cronDetails.sessions).toHaveLength(1);
     expect(cronDetails.sessions?.[0]?.kind).toBe("cron");
+  });
+
+  it("sessions_list resolves transcriptPath from agent state dir for multi-store listings", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "(multiple)",
+          sessions: [
+            {
+              key: "main",
+              kind: "direct",
+              sessionId: "sess-main",
+              updatedAt: 12,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_list tool");
+    }
+
+    const result = await tool.execute("call2b", {});
+    const details = result.details as {
+      sessions?: Array<{
+        key?: string;
+        transcriptPath?: string;
+      }>;
+    };
+    const main = details.sessions?.find((session) => session.key === "main");
+    expect(typeof main?.transcriptPath).toBe("string");
+    expect(main?.transcriptPath).not.toContain("(multiple)");
+    expect(main?.transcriptPath).toContain(
+      path.join("agents", "main", "sessions", "sess-main.jsonl"),
+    );
   });
 
   it("sessions_history filters tool messages by default", async () => {
