@@ -551,7 +551,7 @@ export const registerTelegramNativeCommands = ({
             dmThreadId != null
               ? resolveThreadSessionKeys({
                   baseSessionKey,
-                  threadId: String(dmThreadId),
+                  threadId: `${chatId}:${dmThreadId}`,
                 })
               : null;
           const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
