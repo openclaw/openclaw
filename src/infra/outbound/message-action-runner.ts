@@ -217,6 +217,30 @@ async function maybeApplyCrossContextMarker(params: {
   });
 }
 
+function maybeInjectWhatsAppReactionMessageId(params: {
+  action: ChannelMessageActionName;
+  channel: ChannelId;
+  args: Record<string, unknown>;
+  toolContext?: ChannelThreadingToolContext;
+}) {
+  if (params.action !== "react" || params.channel !== "whatsapp") {
+    return;
+  }
+  const explicitMessageId =
+    readStringParam(params.args, "messageId") ?? readStringParam(params.args, "message_id");
+  if (explicitMessageId) {
+    return;
+  }
+  const currentMessageId = params.toolContext?.currentMessageId;
+  if (typeof currentMessageId === "number") {
+    params.args.messageId = String(currentMessageId);
+    return;
+  }
+  if (typeof currentMessageId === "string" && currentMessageId.trim().length > 0) {
+    params.args.messageId = currentMessageId.trim();
+  }
+}
+
 async function resolveChannel(cfg: OpenClawConfig, params: Record<string, unknown>) {
   const channelHint = readStringParam(params, "channel");
   const selection = await resolveMessageChannelSelection({
@@ -755,6 +779,12 @@ export async function runMessageAction(
   }
 
   const channel = await resolveChannel(cfg, params);
+  maybeInjectWhatsAppReactionMessageId({
+    action,
+    channel,
+    args: params,
+    toolContext: input.toolContext,
+  });
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
     const byAgent = buildChannelAccountBindings(cfg).get(channel);

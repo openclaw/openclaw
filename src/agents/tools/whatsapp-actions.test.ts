@@ -98,6 +98,42 @@ describe("handleWhatsAppAction", () => {
     });
   });
 
+  it("falls back to MessageSid when messageId is omitted", async () => {
+    await handleWhatsAppAction(
+      {
+        action: "react",
+        chatJid: "123@s.whatsapp.net",
+        MessageSid: "fallback-msg-1",
+        emoji: "✅",
+      },
+      enabledConfig,
+    );
+    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith("+123", "fallback-msg-1", "✅", {
+      verbose: false,
+      fromMe: undefined,
+      participant: undefined,
+      accountId: DEFAULT_ACCOUNT_ID,
+    });
+  });
+
+  it("accepts message_id alias for reactions", async () => {
+    await handleWhatsAppAction(
+      {
+        action: "react",
+        chatJid: "123@s.whatsapp.net",
+        message_id: "msg-from-alias",
+        emoji: "✅",
+      },
+      enabledConfig,
+    );
+    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith("+123", "msg-from-alias", "✅", {
+      verbose: false,
+      fromMe: undefined,
+      participant: undefined,
+      accountId: DEFAULT_ACCOUNT_ID,
+    });
+  });
+
   it("respects reaction gating", async () => {
     const cfg = {
       channels: { whatsapp: { actions: { reactions: false } } },

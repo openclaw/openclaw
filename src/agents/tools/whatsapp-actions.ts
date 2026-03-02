@@ -4,6 +4,24 @@ import { sendReactionWhatsApp } from "../../web/outbound.js";
 import { createActionGate, jsonResult, readReactionParams, readStringParam } from "./common.js";
 import { resolveAuthorizedWhatsAppOutboundTarget } from "./whatsapp-target-auth.js";
 
+function resolveWhatsAppReactionMessageId(params: Record<string, unknown>): string {
+  const explicitMessageId =
+    readStringParam(params, "messageId") ?? readStringParam(params, "message_id");
+  if (explicitMessageId) {
+    return explicitMessageId;
+  }
+  const contextFallbackMessageId =
+    readStringParam(params, "CurrentMessageId") ??
+    readStringParam(params, "MessageSidFull") ??
+    readStringParam(params, "MessageSid") ??
+    readStringParam(params, "MessageSidFirst") ??
+    readStringParam(params, "MessageSidLast");
+  if (contextFallbackMessageId) {
+    return contextFallbackMessageId;
+  }
+  throw new Error("messageId required");
+}
+
 export async function handleWhatsAppAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
@@ -16,7 +34,7 @@ export async function handleWhatsAppAction(
       throw new Error("WhatsApp reactions are disabled.");
     }
     const chatJid = readStringParam(params, "chatJid", { required: true });
-    const messageId = readStringParam(params, "messageId", { required: true });
+    const messageId = resolveWhatsAppReactionMessageId(params);
     const { emoji, remove, isEmpty } = readReactionParams(params, {
       removeErrorMessage: "Emoji is required to remove a WhatsApp reaction.",
     });

@@ -1050,3 +1050,76 @@ describe("runMessageAction accountId defaults", () => {
     expect(ctx.params.accountId).toBe("account-b");
   });
 });
+
+describe("runMessageAction whatsapp react messageId fallback", () => {
+  const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+    jsonResult({
+      ok: true,
+      messageId: params.messageId ?? null,
+    }),
+  );
+
+  const whatsappActionPlugin: ChannelPlugin = {
+    id: "whatsapp",
+    meta: {
+      id: "whatsapp",
+      label: "WhatsApp",
+      selectionLabel: "WhatsApp",
+      docsPath: "/channels/whatsapp",
+      blurb: "WhatsApp test plugin.",
+    },
+    capabilities: { chatTypes: ["direct", "group"], reactions: true },
+    config: createAlwaysConfiguredPluginConfig(),
+    actions: {
+      listActions: () => ["react"],
+      supportsAction: ({ action }) => action === "react",
+      handleAction,
+    },
+  };
+
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: whatsappActionPlugin,
+        },
+      ]),
+    );
+    handleAction.mockClear();
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    vi.clearAllMocks();
+  });
+
+  it("injects messageId from toolContext.currentMessageId when omitted", async () => {
+    await runMessageAction({
+      cfg: whatsappConfig,
+      action: "react",
+      params: {
+        channel: "whatsapp",
+        chatId: "test-chat",
+        emoji: "👍",
+      },
+      toolContext: {
+        currentChannelId: "test-chat",
+        currentMessageId: "msg-ctx-1",
+      },
+      dryRun: false,
+    });
+
+    expect(handleAction).toHaveBeenCalled();
+    const ctx = (handleAction.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
+      | {
+          params: Record<string, unknown>;
+        }
+      | undefined;
+    if (!ctx) {
+      throw new Error("expected action context");
+    }
+    expect(ctx.params.messageId).toBe("msg-ctx-1");
+  });
+});
