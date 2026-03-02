@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-team-id.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
+const BASH_ARGS = process.platform === "win32" ? [SCRIPT] : ["--noprofile", "--norc", SCRIPT];
 const BASE_PATH = process.env.PATH ?? "/usr/bin:/bin";
 const BASE_LANG = process.env.LANG ?? "C";
 let fixtureRoot = "";
@@ -34,7 +35,7 @@ function runScript(
     ...extraEnv,
   };
   try {
-    const stdout = execFileSync(BASH_BIN, [SCRIPT], {
+    const stdout = execFileSync(BASH_BIN, BASH_ARGS, {
       env,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -113,19 +114,29 @@ exit 1`,
   }
 
   it("resolves fallback and preferred team IDs from provisioning profiles", async () => {
-    const { homeDir } = await createHomeDir();
+    const { homeDir, binDir } = await createHomeDir();
     const profilesDir = path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles");
     await mkdir(profilesDir, { recursive: true });
     await writeFile(path.join(profilesDir, "one.mobileprovision"), "stub1");
+    await writeExecutable(
+      path.join(binDir, "fake-python"),
+      `#!/usr/bin/env bash
+printf 'AAAAA11111\\t0\\tAlpha Team\\r\\n'
+printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
+    );
 
-    const fallbackResult = runScript(homeDir);
+    const fallbackResult = runScript(homeDir, {
+      IOS_PYTHON_BIN: path.join(binDir, "fake-python"),
+    });
     expect(fallbackResult.ok).toBe(true);
     expect(fallbackResult.stdout).toBe("AAAAA11111");
 
-    await writeFile(path.join(profilesDir, "two.mobileprovision"), "stub2");
-    const preferredResult = runScript(homeDir, { IOS_PREFERRED_TEAM_ID: "BBBBB22222" });
-    expect(preferredResult.ok).toBe(true);
-    expect(preferredResult.stdout).toBe("BBBBB22222");
+    const crlfResult = runScript(homeDir, {
+      IOS_PYTHON_BIN: path.join(binDir, "fake-python"),
+      IOS_PREFERRED_TEAM_ID: "BBBBB22222",
+    });
+    expect(crlfResult.ok).toBe(true);
+    expect(crlfResult.stdout).toBe("BBBBB22222");
   });
 
   it("prints actionable guidance when Xcode account exists but no Team ID is resolvable", async () => {
@@ -150,22 +161,5 @@ exit 1`,
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("An Apple account is signed in to Xcode");
     expect(result.stderr).toContain("IOS_DEVELOPMENT_TEAM");
-  });
-
-  it("matches preferred team IDs even when parser output uses CRLF line endings", async () => {
-    const { homeDir, binDir } = await createHomeDir();
-    await writeExecutable(
-      path.join(binDir, "fake-python"),
-      `#!/usr/bin/env bash
-printf 'AAAAA11111\\t0\\tAlpha Team\\r\\n'
-printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
-    );
-
-    const result = runScript(homeDir, {
-      IOS_PYTHON_BIN: path.join(binDir, "fake-python"),
-      IOS_PREFERRED_TEAM_ID: "BBBBB22222",
-    });
-    expect(result.ok).toBe(true);
-    expect(result.stdout).toBe("BBBBB22222");
   });
 });

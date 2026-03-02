@@ -326,31 +326,39 @@ export async function dispatchCronDelivery(
       if (didAnnounce) {
         delivered = true;
       } else {
+        // Announce delivery failed but the agent execution itself succeeded.
+        // Return ok so the job isn't penalized for a transient delivery issue
+        // (e.g. "pairing required" when no active client session exists).
+        // Delivery failure is tracked separately via delivered/deliveryAttempted.
         const message = "cron announce delivery failed";
+        logWarn(`[cron:${params.job.id}] ${message}`);
         if (!params.deliveryBestEffort) {
           return params.withRunSession({
-            status: "error",
+            status: "ok",
             summary,
             outputText,
             error: message,
+            delivered: false,
             deliveryAttempted,
             ...params.telemetry,
           });
         }
-        logWarn(`[cron:${params.job.id}] ${message}`);
       }
     } catch (err) {
+      // Same as above: announce delivery errors should not mark a successful
+      // agent execution as failed.
+      logWarn(`[cron:${params.job.id}] ${String(err)}`);
       if (!params.deliveryBestEffort) {
         return params.withRunSession({
-          status: "error",
+          status: "ok",
           summary,
           outputText,
           error: String(err),
+          delivered: false,
           deliveryAttempted,
           ...params.telemetry,
         });
       }
-      logWarn(`[cron:${params.job.id}] ${String(err)}`);
     }
     return null;
   };

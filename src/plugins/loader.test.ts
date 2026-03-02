@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,30 +8,35 @@ import { __testing, loadOpenClawPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
 
-const fixtureRoot = path.join(os.tmpdir(), `openclaw-plugin-${randomUUID()}`);
+const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-"));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
-const BUNDLED_TELEGRAM_PLUGIN_BODY = `export default { id: "telegram", register(api) {
-  api.registerChannel({
-    plugin: {
-      id: "telegram",
-      meta: {
+let cachedBundledTelegramDir = "";
+let cachedBundledMemoryDir = "";
+const BUNDLED_TELEGRAM_PLUGIN_BODY = `module.exports = {
+  id: "telegram",
+  register(api) {
+    api.registerChannel({
+      plugin: {
         id: "telegram",
-        label: "Telegram",
-        selectionLabel: "Telegram",
-        docsPath: "/channels/telegram",
-        blurb: "telegram channel"
+        meta: {
+          id: "telegram",
+          label: "Telegram",
+          selectionLabel: "Telegram",
+          docsPath: "/channels/telegram",
+          blurb: "telegram channel",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
       },
-      capabilities: { chatTypes: ["direct"] },
-      config: {
-        listAccountIds: () => [],
-        resolveAccount: () => ({ accountId: "default" })
-      },
-      outbound: { deliveryMode: "direct" }
-    }
-  });
-} };`;
+    });
+  },
+};`;
 
 function makeTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
@@ -70,13 +74,28 @@ function loadBundledMemoryPluginRegistry(options?: {
   pluginBody?: string;
   pluginFilename?: string;
 }) {
+  if (!options && cachedBundledMemoryDir) {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = cachedBundledMemoryDir;
+    return loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: cachedBundledMemoryDir,
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-core",
+          },
+        },
+      },
+    });
+  }
+
   const bundledDir = makeTempDir();
   let pluginDir = bundledDir;
-  let pluginFilename = options?.pluginFilename ?? "memory-core.js";
+  let pluginFilename = options?.pluginFilename ?? "memory-core.cjs";
 
   if (options?.packageMeta) {
     pluginDir = path.join(bundledDir, "memory-core");
-    pluginFilename = "index.js";
+    pluginFilename = options.pluginFilename ?? "index.js";
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
@@ -85,7 +104,7 @@ function loadBundledMemoryPluginRegistry(options?: {
           name: options.packageMeta.name,
           version: options.packageMeta.version,
           description: options.packageMeta.description,
-          openclaw: { extensions: ["./index.js"] },
+          openclaw: { extensions: [`./${pluginFilename}`] },
         },
         null,
         2,
@@ -97,14 +116,19 @@ function loadBundledMemoryPluginRegistry(options?: {
   writePlugin({
     id: "memory-core",
     body:
-      options?.pluginBody ?? `export default { id: "memory-core", kind: "memory", register() {} };`,
+      options?.pluginBody ??
+      `module.exports = { id: "memory-core", kind: "memory", register() {} };`,
     dir: pluginDir,
     filename: pluginFilename,
   });
+  if (!options) {
+    cachedBundledMemoryDir = bundledDir;
+  }
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
   return loadOpenClawPlugins({
     cache: false,
+    workspaceDir: bundledDir,
     config: {
       plugins: {
         slots: {
@@ -116,14 +140,16 @@ function loadBundledMemoryPluginRegistry(options?: {
 }
 
 function setupBundledTelegramPlugin() {
-  const bundledDir = makeTempDir();
-  writePlugin({
-    id: "telegram",
-    body: BUNDLED_TELEGRAM_PLUGIN_BODY,
-    dir: bundledDir,
-    filename: "telegram.js",
-  });
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+  if (!cachedBundledTelegramDir) {
+    cachedBundledTelegramDir = makeTempDir();
+    writePlugin({
+      id: "telegram",
+      body: BUNDLED_TELEGRAM_PLUGIN_BODY,
+      dir: cachedBundledTelegramDir,
+      filename: "telegram.cjs",
+    });
+  }
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = cachedBundledTelegramDir;
 }
 
 function expectTelegramLoaded(registry: ReturnType<typeof loadOpenClawPlugins>) {
@@ -209,6 +235,9 @@ afterAll(() => {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   } catch {
     // ignore cleanup failures
+  } finally {
+    cachedBundledTelegramDir = "";
+    cachedBundledMemoryDir = "";
   }
 });
 
@@ -241,6 +270,7 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      workspaceDir: cachedBundledTelegramDir,
       config: {
         plugins: {
           allow: ["telegram"],
@@ -259,6 +289,7 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      workspaceDir: cachedBundledTelegramDir,
       config: {
         channels: {
           telegram: {
@@ -279,6 +310,7 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      workspaceDir: cachedBundledTelegramDir,
       config: {
         channels: {
           telegram: {
@@ -313,7 +345,7 @@ describe("loadOpenClawPlugins", () => {
         description: "Memory plugin package",
       },
       pluginBody:
-        'export default { id: "memory-core", kind: "memory", name: "Memory (Core)", register() {} };',
+        'module.exports = { id: "memory-core", kind: "memory", name: "Memory (Core)", register() {} };',
     });
 
     const memory = registry.plugins.find((entry) => entry.id === "memory-core");
@@ -326,7 +358,13 @@ describe("loadOpenClawPlugins", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "allowed",
-      body: `export default { id: "allowed", register(api) { api.registerGatewayMethod("allowed.ping", ({ respond }) => respond(true, { ok: true })); } };`,
+      filename: "allowed.cjs",
+      body: `module.exports = {
+  id: "allowed",
+  register(api) {
+    api.registerGatewayMethod("allowed.ping", ({ respond }) => respond(true, { ok: true }));
+  },
+};`,
     });
 
     const registry = loadOpenClawPlugins({

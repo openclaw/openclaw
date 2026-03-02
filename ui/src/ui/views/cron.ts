@@ -61,6 +61,7 @@ export type CronProps = {
   thinkingSuggestions: string[];
   timezoneSuggestions: string[];
   deliveryToSuggestions: string[];
+  accountSuggestions: string[];
   onFormChange: (patch: Partial<CronFormState>) => void;
   onRefresh: () => void;
   onAdd: () => void;
@@ -68,7 +69,7 @@ export type CronProps = {
   onClone: (job: CronJob) => void;
   onCancelEdit: () => void;
   onToggle: (job: CronJob, enabled: boolean) => void;
-  onRun: (job: CronJob) => void;
+  onRun: (job: CronJob, mode?: "force" | "due") => void;
   onRemove: (job: CronJob) => void;
   onLoadRuns: (jobId: string) => void;
   onLoadMoreJobs: () => void;
@@ -1037,6 +1038,21 @@ export function renderCron(props: CronProps) {
                 <span class="field-checkbox__label">${t("cron.form.clearAgentOverride")}</span>
                 <div class="cron-help">${t("cron.form.clearAgentHelp")}</div>
               </label>
+              <label class="field cron-span-2">
+                ${renderFieldLabel("Session key")}
+                <input
+                  id="cron-session-key"
+                  .value=${props.form.sessionKey}
+                  @input=${(e: Event) =>
+                    props.onFormChange({
+                      sessionKey: (e.target as HTMLInputElement).value,
+                    })}
+                  placeholder="agent:main:main"
+                />
+                <div class="cron-help">
+                  Optional routing key for job delivery and wake routing.
+                </div>
+              </label>
               ${
                 isCronSchedule
                   ? html`
@@ -1098,6 +1114,37 @@ export function renderCron(props: CronProps) {
               ${
                 isAgentTurn
                   ? html`
+                      <label class="field cron-span-2">
+                        ${renderFieldLabel("Account ID")}
+                        <input
+                          id="cron-delivery-account-id"
+                          .value=${props.form.deliveryAccountId}
+                          list="cron-delivery-account-suggestions"
+                          ?disabled=${selectedDeliveryMode !== "announce"}
+                          @input=${(e: Event) =>
+                            props.onFormChange({
+                              deliveryAccountId: (e.target as HTMLInputElement).value,
+                            })}
+                          placeholder="default"
+                        />
+                        <div class="cron-help">
+                          Optional channel account ID for multi-account setups.
+                        </div>
+                      </label>
+                      <label class="field checkbox cron-checkbox cron-span-2">
+                        <input
+                          type="checkbox"
+                          .checked=${props.form.payloadLightContext}
+                          @change=${(e: Event) =>
+                            props.onFormChange({
+                              payloadLightContext: (e.target as HTMLInputElement).checked,
+                            })}
+                        />
+                        <span class="field-checkbox__label">Light context</span>
+                        <div class="cron-help">
+                          Use lightweight bootstrap context for this agent job.
+                        </div>
+                      </label>
                       <label class="field">
                         ${renderFieldLabel(t("cron.form.model"))}
                         <input
@@ -1311,6 +1358,7 @@ export function renderCron(props: CronProps) {
     ${renderSuggestionList("cron-thinking-suggestions", props.thinkingSuggestions)}
     ${renderSuggestionList("cron-tz-suggestions", props.timezoneSuggestions)}
     ${renderSuggestionList("cron-delivery-to-suggestions", props.deliveryToSuggestions)}
+    ${renderSuggestionList("cron-delivery-account-suggestions", props.accountSuggestions)}
   `;
 }
 
@@ -1476,10 +1524,20 @@ function renderJob(job: CronJob, props: CronProps) {
             ?disabled=${props.busy}
             @click=${(event: Event) => {
               event.stopPropagation();
-              selectAnd(() => props.onRun(job));
+              selectAnd(() => props.onRun(job, "force"));
             }}
           >
             ${t("cron.jobList.run")}
+          </button>
+          <button
+            class="btn"
+            ?disabled=${props.busy}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              selectAnd(() => props.onRun(job, "due"));
+            }}
+          >
+            Run if due
           </button>
           <button
             class="btn"
