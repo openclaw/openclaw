@@ -15,7 +15,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { RequestClient } from "@buape/carbon";
+import { RateLimitError, type RequestClient } from "@buape/carbon";
 import type { RetryRunner } from "../infra/retry-policy.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
@@ -235,26 +235,57 @@ export async function sendDiscordVoiceMessage(
   replyTo: string | undefined,
   request: RetryRunner,
   silent?: boolean,
+  token?: string,
 ): Promise<{ id: string; channel_id: string }> {
   const filename = "voice-message.ogg";
   const fileSize = audioBuffer.byteLength;
 
   // Step 1: Request upload URL from Discord
-  const uploadUrlResponse = await request(
-    () =>
-      rest.post(`/channels/${channelId}/attachments`, {
-        body: {
-          files: [
-            {
-              filename,
-              file_size: fileSize,
-              id: "0",
-            },
-          ],
-        },
-      }) as Promise<UploadUrlResponse>,
-    "voice-upload-url",
-  );
+  // Must use fetch() directly instead of rest.post() because @buape/carbon's
+  // RequestClient auto-converts requests to multipart/form-data when the body
+  // contains a "files" key. Discord's /attachments endpoint expects JSON, so
+  // the auto-conversion causes HTTP 400 "Expected Content-Type application/json".
+  const botToken = token;
+  if (!botToken) {
+    throw new Error("Discord bot token is required for voice message upload");
+  }
+  const uploadUrlResponse = await request(async () => {
+    const url = `${rest.options?.baseUrl ?? "https://discord.com/api"}/channels/${channelId}/attachments`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bot ${botToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        files: [{ filename, file_size: fileSize, id: "0" }],
+      }),
+    });
+    if (!res.ok) {
+      if (res.status === 429) {
+        const retryData = (await res.json().catch(() => ({}))) as {
+          message?: string;
+          retry_after?: number;
+          global?: boolean;
+        };
+        throw new RateLimitError(res, {
+          message: retryData.message ?? "You are being rate limited.",
+          retry_after: retryData.retry_after ?? 1,
+          global: retryData.global ?? false,
+        });
+      }
+      const errorBody = (await res.json().catch(() => null)) as {
+        code?: number;
+        message?: string;
+      } | null;
+      const err = new Error(`Upload URL request failed: ${res.status} ${errorBody?.message ?? ""}`);
+      if (errorBody?.code !== undefined) {
+        (err as Error & { code: number }).code = errorBody.code;
+      }
+      throw err;
+    }
+    return (await res.json()) as UploadUrlResponse;
+  }, "voice-upload-url");
 
   if (!uploadUrlResponse.attachments?.[0]) {
     throw new Error("Failed to get upload URL for voice message");
