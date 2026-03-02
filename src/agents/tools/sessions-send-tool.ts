@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
+import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -348,7 +349,8 @@ export function createSessionsSendTool(opts?: {
       });
       const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
       const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
-      const reply = last ? extractAssistantText(last) : undefined;
+      const rawReply = last ? extractAssistantText(last) : undefined;
+      const reply = rawReply && isSilentReplyText(rawReply) ? undefined : rawReply;
       startA2AFlow(reply ?? undefined);
 
       return jsonResult({
