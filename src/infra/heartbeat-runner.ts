@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ReplyPayload } from "../auto-reply/types.js";
+import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { OutboundSendDeps } from "./outbound/deliver.js";
 import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
@@ -18,11 +23,8 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
@@ -34,7 +36,6 @@ import {
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -58,7 +59,6 @@ import {
   requestHeartbeatNow,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
-import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import {
@@ -637,6 +637,25 @@ export async function runHeartbeatOnce(opts: {
   }
   const { entry, sessionKey, storePath } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
+
+  // Kai fork: Skip heartbeat if session was updated within last 5 minutes
+  // AND this is a regular interval heartbeat (not cron/exec/wake event).
+  // Prevents heartbeat from injecting into active conversations, burning
+  // context tokens, and derailing work.
+  // Original: Patch 28 (dist, Feb 27, 2026)
+  const isRegularHeartbeat = !opts.reason || opts.reason === "interval";
+  if (isRegularHeartbeat && previousUpdatedAt) {
+    const msSinceActivity = (opts.deps?.nowMs?.() ?? Date.now()) - previousUpdatedAt;
+    if (msSinceActivity < 5 * 60 * 1000) {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "active-conversation",
+        durationMs: (opts.deps?.nowMs?.() ?? Date.now()) - startedAt,
+      });
+      return { status: "skipped", reason: "active-conversation" };
+    }
+  }
+
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
