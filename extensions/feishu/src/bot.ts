@@ -44,6 +44,13 @@ type PermissionError = {
   grantUrl?: string;
 };
 
+const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
+
+function shouldSuppressPermissionErrorNotice(permissionError: PermissionError): boolean {
+  const message = permissionError.message.toLowerCase();
+  return IGNORED_PERMISSION_SCOPE_TOKENS.some((token) => message.includes(token));
+}
+
 function extractPermissionError(err: unknown): PermissionError | null {
   if (!err || typeof err !== "object") return null;
 
@@ -140,6 +147,10 @@ async function resolveFeishuSenderName(params: {
     // Check if this is a permission error
     const permErr = extractPermissionError(err);
     if (permErr) {
+      if (shouldSuppressPermissionErrorNotice(permErr)) {
+        log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
+        return {};
+      }
       log(`feishu: permission error resolving sender name: code=${permErr.code}`);
       return { permissionError: permErr };
     }
