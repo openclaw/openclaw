@@ -170,6 +170,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       Boolean,
     );
     const rmCommand = flags.length > 0 ? `rm ${flags.join(" ")}` : "rm";
+    await this.assertPathSafety(target, {
+      action: "remove files",
+      requireWritable: true,
+      aliasPolicy: PATH_ALIAS_POLICIES.unlinkTarget,
+    });
     await this.runCommand(`set -eu; ${rmCommand} -- "$1"`, {
       args: [target.containerPath],
       signal: params.signal,
@@ -186,6 +191,15 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const to = this.resolveResolvedPath({ filePath: params.to, cwd: params.cwd });
     this.ensureWriteAccess(from, "rename files");
     this.ensureWriteAccess(to, "rename files");
+    await this.assertPathSafety(from, {
+      action: "rename files",
+      requireWritable: true,
+      aliasPolicy: PATH_ALIAS_POLICIES.unlinkTarget,
+    });
+    await this.assertPathSafety(to, {
+      action: "rename files",
+      requireWritable: true,
+    });
     await this.assertPathSafety(from, {
       action: "rename files",
       requireWritable: true,

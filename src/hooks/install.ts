@@ -8,7 +8,11 @@ import {
   resolveTimedInstallModeOptions,
 } from "../infra/install-mode-options.js";
 import { installPackageDir } from "../infra/install-package-dir.js";
-import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
+import {
+  assertCanonicalPathWithinBase,
+  resolveSafeInstallDir,
+  unscopedPackageName,
+} from "../infra/install-safe-path.js";
 import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,
@@ -111,6 +115,15 @@ async function resolveInstallTargetDir(
   });
   if (!targetDirResult.ok) {
     return { ok: false, error: targetDirResult.error };
+  }
+  try {
+    await assertCanonicalPathWithinBase({
+      baseDir: baseHooksDir,
+      candidatePath: targetDirResult.path,
+      boundaryLabel: "hooks directory",
+    });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
   return { ok: true, targetDir: targetDirResult.path };
 }
@@ -289,25 +302,18 @@ async function installHookFromDir(params: {
     return { ok: true, hookPackId: hookName, hooks: [hookName], targetDir };
   }
 
-  logger.info?.(`Installing to ${targetDir}…`);
-  let backupDir: string | null = null;
-  if (mode === "update" && (await fileExists(targetDir))) {
-    backupDir = `${targetDir}.backup-${Date.now()}`;
-    await fs.rename(targetDir, backupDir);
-  }
-
-  try {
-    await fs.cp(params.hookDir, targetDir, { recursive: true });
-  } catch (err) {
-    if (backupDir) {
-      await fs.rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
-      await fs.rename(backupDir, targetDir).catch(() => undefined);
-    }
-    return { ok: false, error: `failed to copy hook: ${String(err)}` };
-  }
-
-  if (backupDir) {
-    await fs.rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
+  const installRes = await installPackageDir({
+    sourceDir: params.hookDir,
+    targetDir,
+    mode,
+    timeoutMs: 120_000,
+    logger,
+    copyErrorPrefix: "failed to copy hook",
+    hasDeps: false,
+    depsLogMessage: "Installing hook dependencies…",
+  });
+  if (!installRes.ok) {
+    return installRes;
   }
 
   return { ok: true, hookPackId: hookName, hooks: [hookName], targetDir };

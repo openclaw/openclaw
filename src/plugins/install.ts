@@ -9,6 +9,7 @@ import {
 } from "../infra/install-mode-options.js";
 import { installPackageDir } from "../infra/install-package-dir.js";
 import {
+  assertCanonicalPathWithinBase,
   resolveSafeInstallDir,
   safeDirName,
   unscopedPackageName,
@@ -234,6 +235,15 @@ async function installPluginFromPackageDir(params: {
     return { ok: false, error: targetDirResult.error };
   }
   const targetDir = targetDirResult.path;
+  try {
+    await assertCanonicalPathWithinBase({
+      baseDir: extensionsDir,
+      candidatePath: targetDir,
+      boundaryLabel: "extensions directory",
+    });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 
   if (mode === "install" && (await fileExists(targetDir))) {
     return {
