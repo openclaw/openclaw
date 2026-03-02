@@ -658,7 +658,7 @@ export async function registerSlackMonitorSlashCommands(params: {
   if (nativeEnabled) {
     reg = await getCommandsRegistry();
     const skillCommands = nativeSkillsEnabled
-      ? (await import("../../auto-reply/skill-commands.js")).listSkillCommandsForAgents({ cfg })
+      ? (await import("../../auto-reply/skill-commands.js")).listSkillCommandsForAllAgents({ cfg })
       : [];
     nativeCommands = reg.listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "slack" });
   }
