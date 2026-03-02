@@ -293,7 +293,7 @@ export async function initSessionState(params: {
   const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
     skipCache: true,
   });
-  const sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
+  let sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
   let sessionEntry: SessionEntry;
 
   let sessionId: string | undefined;
