@@ -2,11 +2,13 @@
  * Token rotation for the gateway auth token.
  *
  * T-ACCESS-003 recommends "token encryption at rest, add token rotation."
- * This module handles rotation: generate a new token, replace the old
- * one in config, and log the rotation event.
+ * Generates a new token and atomically replaces the old one.
  *
- * Uses atomic write (write-to-temp, then rename) to prevent config
- * corruption if the process crashes mid-write.
+ * Uses write-to-temp-then-rename to prevent config corruption.
+ *
+ * Note: Uses JSON.parse/stringify. If OpenClaw configs adopt JSON5
+ * (comments, trailing commas), this should be updated to use a
+ * JSON5-aware parser to preserve formatting and comments.
  */
 
 import { randomBytes } from "crypto";
@@ -28,35 +30,24 @@ function generateToken(bytes: number = 24): string {
  * Atomically write content to a file.
  *
  * Writes to a temporary file in the same directory, then renames
- * it over the target. rename() is atomic on POSIX filesystems,
- * so a crash at any point leaves either the old or new file
- * intact — never a truncated file.
+ * over the target. rename() is atomic on POSIX filesystems, so a
+ * crash at any point leaves either the old or new file intact.
  */
 function atomicWriteFileSync(filePath: string, content: string): void {
   const dir = dirname(filePath);
   const tmpPath = join(dir, `.openclaw-tmp-${process.pid}-${Date.now()}`);
 
   try {
-    writeFileSync(tmpPath, content, { mode: 0o600 });
+    writeFileSync(tmpPath, content, { encoding: "utf-8", mode: 0o600 });
     renameSync(tmpPath, filePath);
   } catch (err) {
-    // Clean up temp file if rename failed
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      // temp file may not exist, ignore
-    }
+    try { unlinkSync(tmpPath); } catch { /* temp may not exist */ }
     throw err;
   }
 }
 
 /**
  * Rotate the gateway auth token in the config file.
- *
- * - Reads the current config
- * - Generates a new token
- * - Atomically writes the updated config
- * - Returns metadata about the rotation (no full tokens exposed)
  */
 export function rotateToken(configPath: string): RotationResult {
   const raw = readFileSync(configPath, "utf-8");
@@ -69,8 +60,7 @@ export function rotateToken(configPath: string): RotationResult {
   if (!config.gateway.auth) config.gateway.auth = {};
   config.gateway.auth.token = newToken;
 
-  const updatedContent = JSON.stringify(config, null, 2);
-  atomicWriteFileSync(configPath, updatedContent);
+  atomicWriteFileSync(configPath, JSON.stringify(config, null, 2));
 
   return {
     previousTokenPrefix: oldToken.slice(0, 4) + "****",
