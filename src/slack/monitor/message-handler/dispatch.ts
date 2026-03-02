@@ -461,13 +461,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
-  const hasFinalReply = queuedFinal || (counts.final ?? 0) > 0;
 
-  // If a stream was started but the final reply was suppressed (e.g. NO_REPLY),
-  // delete the stream message. This covers the case where a sentinel prefix
-  // leaked through as a streamed block (incrementing counts.block) but no real
-  // final reply was produced — the stray streamed text should be cleaned up.
-  if (finalStream && !hasFinalReply) {
+  // If a stream was started but no replies of any kind were delivered, delete
+  // the stream message. This is a last-resort safety net for cases where
+  // sentinel text leaked past prefix detection. We intentionally gate on
+  // !anyReplyDelivered (not just !hasFinalReply) to avoid deleting streams
+  // that carry legitimate block-only replies (e.g. ACP flows).
+  if (finalStream && !anyReplyDelivered) {
     try {
       await abandonSlackStream(finalStream);
     } catch (err) {
