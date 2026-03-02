@@ -37,6 +37,21 @@ describe("emitExecSystemEvent", () => {
     });
   });
 
+  it("keeps wake unscoped for non-agent session keys", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "global",
+      contextKey: "exec:run-global",
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "global",
+      contextKey: "exec:run-global",
+    });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+    });
+  });
+
   it("ignores events without a session key", () => {
     emitExecSystemEvent("Exec finished", {
       sessionKey: "  ",

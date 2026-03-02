@@ -550,6 +550,25 @@ describe("exec notifyOnExit", () => {
     }
   });
 
+  it("keeps notifyOnExit heartbeat wake unscoped for non-agent session keys", async () => {
+    const tool = createNotifyOnExitExecTool({ sessionKey: "global" });
+    const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+    const dispose = setHeartbeatWakeHandler(
+      wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
+    );
+    try {
+      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+
+      await expect
+        .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
+        .toEqual({
+          reason: `exec:${sessionId}:exit`,
+        });
+    } finally {
+      dispose();
+    }
+  });
+
   it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);
 });
 
