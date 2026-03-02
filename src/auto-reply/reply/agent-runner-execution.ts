@@ -361,6 +361,13 @@ export async function runAgentTurnWithFallback(params: {
                   await params.typingSignals.signalToolStart();
                   await params.opts?.onToolStart?.({ name, phase });
                 }
+                // Keep typing alive when a tool finishes — the agent is still working
+                // (processing the result and likely invoking the next tool).
+                // Without this, long tool executions (>2min TTL) cause the typing
+                // indicator to silently stop, making the agent appear unresponsive.
+                if (phase === "result") {
+                  await params.typingSignals.signalToolStart();
+                }
               }
               // Track auto-compaction completion
               if (evt.stream === "compaction") {
