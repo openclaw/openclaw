@@ -199,8 +199,8 @@ Notes:
 ## Browserbase (hosted remote CDP)
 
 [Browserbase](https://www.browserbase.com) is a cloud platform for running
-headless browsers with remote CDP endpoints. Paid plans (Developer and above)
-add CAPTCHA solving, stealth mode, and residential proxies. You can point an
+headless browsers. It provides remote CDP endpoints with built-in CAPTCHA
+solving, stealth mode, and residential proxies. You can point an
 OpenClaw browser profile at Browserbase's connect endpoint and authenticate
 with your API key.
 
@@ -228,11 +228,8 @@ Notes:
 - [Sign up](https://www.browserbase.com/sign-up) and copy your **API Key**
   from the [Overview dashboard](https://www.browserbase.com/overview).
 - Replace `<BROWSERBASE_API_KEY>` with your real Browserbase API key.
-- The free tier allows one concurrent session, 15-minute session duration, and
-  one browser hour per month. See [pricing](https://www.browserbase.com/pricing)
-  for paid plan limits.
-- CAPTCHA solving, stealth mode, and proxies require the Developer plan
-  ($20/month) or above.
+- The free tier allows one concurrent session and one browser hour per month.
+  See [pricing](https://www.browserbase.com/pricing) for paid plan limits.
 - See the [Browserbase docs](https://docs.browserbase.com) for full API
   reference, SDK guides, and integration examples.
 
