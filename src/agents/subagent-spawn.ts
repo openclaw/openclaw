@@ -30,6 +30,7 @@ export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
 export const SUBAGENT_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[number];
+const STRICT_AGENT_ID_INPUT_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
 export function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
   const maxEncodedBytes = Math.ceil(maxDecodedBytes / 3) * 4;
@@ -248,7 +249,13 @@ export async function spawnSubagentDirect(
 ): Promise<SpawnSubagentResult> {
   const task = params.task;
   const label = params.label?.trim() || "";
-  const requestedAgentId = params.agentId;
+  const requestedAgentId = params.agentId?.trim();
+  if (requestedAgentId && !STRICT_AGENT_ID_INPUT_RE.test(requestedAgentId)) {
+    return {
+      status: "error",
+      error: "Invalid agentId. Use agents_list and pass an id matching [a-z0-9][a-z0-9_-]{0,63}.",
+    };
+  }
   const modelOverride = params.model;
   const thinkingOverrideRaw = params.thinking;
   const requestThreadBinding = params.thread === true;

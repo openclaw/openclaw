@@ -155,6 +155,20 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     });
   });
 
+  it("rejects malformed agentId input before any spawn side effects", async () => {
+    setAllowAgents(["*"]);
+
+    const result = await executeSpawn(
+      "call10b",
+      "agentId is not allowed for sessions_spawn (allowed: none)",
+    );
+    const details = result.details as { status?: string; error?: string };
+
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("Invalid agentId");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("forbids sandboxed cross-agent spawns that would unsandbox the child", async () => {
     setSessionsSpawnConfigOverride({
       session: {
