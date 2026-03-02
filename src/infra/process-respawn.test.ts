@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
@@ -47,6 +47,9 @@ function clearSupervisorHints() {
 }
 
 describe("restartGatewayProcessWithFreshPid", () => {
+  beforeEach(() => {
+    delete process.env.OPENCLAW_LAUNCHD_LABEL;
+  });
   it("returns disabled when OPENCLAW_NO_RESPAWN is set", () => {
     process.env.OPENCLAW_NO_RESPAWN = "1";
     const result = restartGatewayProcessWithFreshPid();

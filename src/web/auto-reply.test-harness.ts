@@ -27,7 +27,7 @@ type MockWebListener = {
   sendComposingTo: () => Promise<void>;
 };
 
-export const TEST_NET_IP = "203.0.113.10";
+export const TEST_NET_IP = "192.0.2.1";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
