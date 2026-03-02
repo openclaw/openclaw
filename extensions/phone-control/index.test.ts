@@ -32,7 +32,7 @@ function createApi(params: {
     } as OpenClawPluginApi["runtime"],
     logger: { info() {}, warn() {}, error() {} },
     registerTool() {},
-    registerHook() {}, 
+    registerHook() {},
     registerHttpRoute() {},
     registerChannel() {},
     registerGatewayMethod() {},
