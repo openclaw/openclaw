@@ -178,6 +178,71 @@ OpenClaw 在调用 `/json/*` 端点和连接 CDP WebSocket 时会保留认证信
 - 将 `<BROWSERLESS_API_KEY>` 替换为你真实的 Browserless 令牌。
 - 选择与你的 Browserless 账户匹配的区域端点（请参阅其文档）。
 
+## Browserbase（托管远程 CDP）
+
+[Browserbase](https://www.browserbase.com) 是一个云平台，用于运行无头浏览器。它提供远程 CDP 端点，内置验证码自动解决、反机器人隐身模式和住宅代理。你可以将 OpenClaw 浏览器配置文件指向 Browserbase 会话，并使用你的 API 密钥进行认证。
+
+### 快速开始
+
+1. 在 [browserbase.com/sign-up](https://www.browserbase.com/sign-up) **注册**。免费版包含一个并发浏览器会话和每月 60 分钟的使用时间。
+2. 在[概览面板](https://www.browserbase.com/overview)中**查找你的凭据** — 从右侧面板复制你的 **API Key** 和 **Project ID**。
+3. 使用 Browserbase API（或其 SDK）**创建会话**，并获取 CDP 连接 URL。
+
+### 配置
+
+Browserbase 会话暴露 WebSocket CDP 端点。将配置文件指向它：
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "browserbase",
+    remoteCdpTimeoutMs: 3000,
+    remoteCdpHandshakeTimeoutMs: 5000,
+    profiles: {
+      browserbase: {
+        cdpUrl: "wss://connect.browserbase.com?apiKey=<BROWSERBASE_API_KEY>",
+        color: "#F97316",
+      },
+    },
+  },
+}
+```
+
+如果你通过 Browserbase Sessions API 创建会话，每个会话会返回自己的 `connectUrl`。你可以直接使用：
+
+```json5
+{
+  browser: {
+    profiles: {
+      browserbase: {
+        cdpUrl: "<SESSION_CONNECT_URL>",
+        color: "#F97316",
+      },
+    },
+  },
+}
+```
+
+### 环境变量
+
+将凭据存储在环境变量中，而不是提交到配置文件：
+
+```bash
+export BROWSERBASE_API_KEY="bb_live_..."
+export BROWSERBASE_PROJECT_ID="your-project-id"
+```
+
+然后在配置文件中引用它们，或以编程方式创建会话。
+
+### 注意事项
+
+- 将 `<BROWSERBASE_API_KEY>` 替换为你真实的 Browserbase API 密钥（以 `bb_live_` 开头）。
+- 免费版允许一个并发会话和每月 60 分钟。付费计划提供更高的并发数和使用限额。
+- Browserbase 会话默认包含自动验证码解决和反机器人隐身功能 — 无需额外配置。
+- 可以在 `https://www.browserbase.com/sessions/<SESSION_ID>` 实时监控会话。
+- 请参阅 [Browserbase 文档](https://docs.browserbase.com) 获取完整的 API 参考、SDK 指南和集成示例。
+
 ## 安全性
 
 核心理念：
