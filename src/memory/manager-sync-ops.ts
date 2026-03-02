@@ -41,6 +41,7 @@ import {
 } from "./session-files.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
 import { requireNodeSqlite } from "./sqlite.js";
+import { getMemoryChunkTime } from "./time-utils.js";
 import type { MemorySource, MemorySyncProgressUpdate } from "./types.js";
 
 type MemoryIndexMeta = {
@@ -133,7 +134,6 @@ export abstract class MemoryManagerSyncOps {
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
-  private lastMetaSerialized: string | null = null;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract db: DatabaseSync;
@@ -152,7 +152,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract pruneEmbeddingCacheIfNeeded(): void;
   protected abstract indexFile(
     entry: MemoryFileEntry | SessionFileEntry,
-    options: { source: MemorySource; content?: string },
+    options: { source: MemorySource; content?: string; chunkTime?: number | null },
   ): Promise<void>;
 
   protected async ensureVectorReady(dimensions?: number): Promise<boolean> {
@@ -672,7 +672,8 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
-      await this.indexFile(entry, { source: "memory" });
+      const chunkTime = await getMemoryChunkTime(entry);
+      await this.indexFile(entry, { source: "memory", chunkTime });
       if (params.progress) {
         params.progress.completed += 1;
         params.progress.report({
@@ -774,7 +775,9 @@ export abstract class MemoryManagerSyncOps {
         this.resetSessionDelta(absPath, entry.size);
         return;
       }
-      await this.indexFile(entry, { source: "sessions", content: entry.content });
+      const chunkTime = entry.mtimeMs ? Math.floor(entry.mtimeMs) : null;
+      await this.indexFile(entry, { source: "sessions", content: entry.content, chunkTime });
+
       this.resetSessionDelta(absPath, entry.size);
       if (params.progress) {
         params.progress.completed += 1;
@@ -1167,30 +1170,22 @@ export abstract class MemoryManagerSyncOps {
       | { value: string }
       | undefined;
     if (!row?.value) {
-      this.lastMetaSerialized = null;
       return null;
     }
     try {
-      const parsed = JSON.parse(row.value) as MemoryIndexMeta;
-      this.lastMetaSerialized = row.value;
-      return parsed;
+      return JSON.parse(row.value) as MemoryIndexMeta;
     } catch {
-      this.lastMetaSerialized = null;
       return null;
     }
   }
 
   protected writeMeta(meta: MemoryIndexMeta) {
     const value = JSON.stringify(meta);
-    if (this.lastMetaSerialized === value) {
-      return;
-    }
     this.db
       .prepare(
         `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
       )
       .run(META_KEY, value);
-    this.lastMetaSerialized = value;
   }
 
   private resolveConfiguredSourcesForMeta(): MemorySource[] {

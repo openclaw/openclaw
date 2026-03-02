@@ -19,6 +19,7 @@ import {
 } from "./internal.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 import type { SessionFileEntry } from "./session-files.js";
+import { buildSessionChunkTimeFn } from "./time-utils.js";
 import type { MemorySource } from "./types.js";
 
 const VECTOR_TABLE = "chunks_vec";
@@ -692,7 +693,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   protected async indexFile(
     entry: MemoryFileEntry | SessionFileEntry,
-    options: { source: MemorySource; content?: string },
+    options: {
+      source: MemorySource;
+      content?: string;
+      chunkTime?: number | null;
+    },
   ) {
     // FTS-only mode: skip indexing if no provider
     if (!this.provider) {
@@ -720,6 +725,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
     const now = Date.now();
+    // For session files, build a per-chunk timestamp extractor from JSONL lines
+    const sessionChunkTimeFn =
+      options.source === "sessions" && content
+        ? buildSessionChunkTimeFn(content.split("\n"), options.chunkTime ?? null)
+        : null;
     if (vectorReady) {
       try {
         this.db
@@ -747,14 +757,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       );
       this.db
         .prepare(
-          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, chunk_time)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              hash=excluded.hash,
              model=excluded.model,
              text=excluded.text,
              embedding=excluded.embedding,
-             updated_at=excluded.updated_at`,
+             updated_at=excluded.updated_at,
+             chunk_time=excluded.chunk_time`,
         )
         .run(
           id,
@@ -767,6 +778,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           chunk.text,
           JSON.stringify(embedding),
           now,
+          (sessionChunkTimeFn
+            ? sessionChunkTimeFn(chunk.startLine, chunk.endLine)
+            : options.chunkTime) ?? null,
         );
       if (vectorReady && embedding.length > 0) {
         try {

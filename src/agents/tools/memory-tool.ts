@@ -14,6 +14,8 @@ const MemorySearchSchema = Type.Object({
   query: Type.String(),
   maxResults: Type.Optional(Type.Number()),
   minScore: Type.Optional(Type.Number()),
+  after: Type.Optional(Type.String()),
+  before: Type.Optional(Type.String()),
 });
 
 const MemoryGetSchema = Type.Object({
@@ -56,6 +58,8 @@ export function createMemorySearchTool(options: {
       const query = readStringParam(params, "query", { required: true });
       const maxResults = readNumberParam(params, "maxResults");
       const minScore = readNumberParam(params, "minScore");
+      const after = readStringParam(params, "after");
+      const before = readStringParam(params, "before");
       const { manager, error } = await getMemorySearchManager({
         cfg,
         agentId,
@@ -73,6 +77,8 @@ export function createMemorySearchTool(options: {
           maxResults,
           minScore,
           sessionKey: options.agentSessionKey,
+          after,
+          before,
         });
         const status = manager.status();
         const decorated = decorateCitations(rawResults, includeCitations);
