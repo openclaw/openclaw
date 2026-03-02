@@ -177,6 +177,7 @@ export async function dispatchReplyFromConfig(params: {
           : "";
   const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
   const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+  const hookSessionKey = ctx.SessionKey?.trim() || ctx.CommandTargetSessionKey?.trim() || undefined;
 
   // Trigger plugin hooks (fire-and-forget)
   if (hookRunner?.hasHooks("message_received")) {
@@ -214,9 +215,9 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
-  if (sessionKey) {
+  if (hookSessionKey) {
     void triggerInternalHook(
-      createInternalHookEvent("message", "received", sessionKey, {
+      createInternalHookEvent("message", "received", hookSessionKey, {
         from: ctx.From ?? "",
         content,
         timestamp,
