@@ -489,6 +489,27 @@ export function createGatewayHttpServer(opts: {
           return;
         }
       }
+      // Plugin HTTP handlers must run before Control UI SPA catch-all to allow
+      // POST requests to webhook endpoints (e.g., BlueBubbles). Otherwise, the
+      // SPA handler returns 405 Method Not Allowed for non-GET methods.
+      if (handlePluginRequest) {
+        if ((shouldEnforcePluginGatewayAuth ?? isProtectedPluginRoutePath)(requestPath)) {
+          const pluginAuthOk = await enforcePluginRouteGatewayAuth({
+            req,
+            res,
+            auth: resolvedAuth,
+            trustedProxies,
+            allowRealIpFallback,
+            rateLimiter,
+          });
+          if (!pluginAuthOk) {
+            return;
+          }
+        }
+        if (await handlePluginRequest(req, res)) {
+          return;
+        }
+      }
       if (controlUiEnabled) {
         if (
           handleControlUiAvatarRequest(req, res, {
@@ -505,26 +526,6 @@ export function createGatewayHttpServer(opts: {
             root: controlUiRoot,
           })
         ) {
-          return;
-        }
-      }
-      // Plugins run after built-in gateway routes so core surfaces keep
-      // precedence on overlapping paths.
-      if (handlePluginRequest) {
-        if ((shouldEnforcePluginGatewayAuth ?? isProtectedPluginRoutePath)(requestPath)) {
-          const pluginAuthOk = await enforcePluginRouteGatewayAuth({
-            req,
-            res,
-            auth: resolvedAuth,
-            trustedProxies,
-            allowRealIpFallback,
-            rateLimiter,
-          });
-          if (!pluginAuthOk) {
-            return;
-          }
-        }
-        if (await handlePluginRequest(req, res)) {
           return;
         }
       }
