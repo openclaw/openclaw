@@ -7,7 +7,6 @@ import {
   readJsonBodyWithLimit,
   registerPluginHttpRoute,
   registerWebhookTarget,
-  registerPluginHttpRoute,
   rejectNonPostWebhookRequest,
   isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,

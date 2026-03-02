@@ -45,12 +45,12 @@ export function isBotMentionedFromTargets(
 
   const hasMentions = (msg.mentionedJids?.length ?? 0) > 0;
   if (hasMentions && !isSelfChat) {
-    if (targets.selfE164 && targets.normalizedMentions.includes(targets.selfE164)) {
+    if (targets.selfE164 && targets.normalizedMentions?.includes(targets.selfE164)) {
       return true;
     }
     if (targets.selfJid) {
       // Some mentions use the bare JID; match on E.164 to be safe.
-      if (targets.normalizedMentions.includes(targets.selfJid)) {
+      if (targets.normalizedMentions?.includes(targets.selfJid)) {
         return true;
       }
     }
@@ -68,11 +68,11 @@ export function isBotMentionedFromTargets(
   if (targets.selfE164) {
     const selfDigits = targets.selfE164.replace(/\D/g, "");
     if (selfDigits) {
-      const bodyDigits = bodyClean.replace(/[^\d]/g, "");
+      const bodyDigits = (bodyClean ?? "").replace(/[^\d]/g, "");
       if (bodyDigits.includes(selfDigits)) {
         return true;
       }
-      const bodyNoSpace = msg.body.replace(/[\s-]/g, "");
+      const bodyNoSpace = (msg.body ?? "").replace(/[\s-]/g, "");
       const pattern = new RegExp(`\\+?${selfDigits}`, "i");
       if (pattern.test(bodyNoSpace)) {
         return true;
