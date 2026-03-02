@@ -145,8 +145,9 @@ describe("subagent announce formatting", () => {
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
 
   beforeAll(async () => {
-    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
+    process.env.OPENCLAW_TEST_FAST = "1";
+    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
   });
 
   afterAll(() => {
@@ -158,7 +159,6 @@ describe("subagent announce formatting", () => {
   });
 
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     agentSpy
       .mockClear()
       .mockImplementation(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
