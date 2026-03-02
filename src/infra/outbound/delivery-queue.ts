@@ -460,7 +460,10 @@ export async function importLegacyFileQueue(stateDir?: string): Promise<void> {
           entry.enqueuedAt ?? Date.now(),
           "queued",
           entry.retryCount ?? 0,
-          entry.lastAttemptAt ?? entry.enqueuedAt ?? Date.now(),
+          // Respect backoff for imported entries: base from last attempt (or enqueue time)
+          // plus computed backoff for the current retry count.
+          (entry.lastAttemptAt ?? entry.enqueuedAt ?? Date.now()) +
+            computeBackoffMs(entry.retryCount ?? 0),
           entry.lastError ?? null,
           entry.lastAttemptAt ?? null,
         );
