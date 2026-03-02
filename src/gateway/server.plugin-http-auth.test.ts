@@ -145,8 +145,9 @@ describe("gateway plugin HTTP auth boundary", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: (requestPath) =>
-          isProtectedPluginRoutePath(requestPath) || requestPath === "/plugin/public",
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          isProtectedPluginRoutePath(pathContext.pathname) ||
+          pathContext.pathname === "/plugin/public",
       },
       run: async (server) => {
         const unauthenticated = await sendRequest(server, {
@@ -197,8 +198,9 @@ describe("gateway plugin HTTP auth boundary", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: (requestPath) =>
-          requestPath.startsWith("/api/channels") || requestPath === "/plugin/routed",
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          pathContext.pathname.startsWith("/api/channels") ||
+          pathContext.pathname === "/plugin/routed",
       },
       run: async (server) => {
         const unauthenticatedRouted = await sendRequest(server, { path: "/plugin/routed" });
@@ -385,7 +387,8 @@ describe("gateway plugin HTTP auth boundary", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: isProtectedPluginRoutePath,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          isProtectedPluginRoutePath(pathContext.pathname),
       },
       run: async (server) => {
         await expectUnauthorizedVariants({ server, variants: CANONICAL_UNAUTH_VARIANTS });
@@ -409,7 +412,8 @@ describe("gateway plugin HTTP auth boundary", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: isProtectedPluginRoutePath,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          isProtectedPluginRoutePath(pathContext.pathname),
       },
       run: async (server) => {
         for (const variant of buildChannelPathFuzzCorpus()) {

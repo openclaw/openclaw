@@ -176,7 +176,7 @@ function createPluginRecord(params: {
     cliCommands: [],
     services: [],
     commands: [],
-    httpHandlers: 0,
+    httpRoutes: 0,
     hookCount: 0,
     configSchema: params.configSchema,
     configUiHints: undefined,
