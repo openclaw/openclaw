@@ -21,15 +21,7 @@ enum GatewayWebSocketTestSupport {
     }
 
     static func connectRequestID(from message: URLSessionWebSocketTask.Message) -> String? {
-        let data: Data? = switch message {
-        case let .data(d): d
-        case let .string(s): s.data(using: .utf8)
-        @unknown default: nil
-        }
-        guard let data else { return nil }
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
+        guard let obj = self.requestFrameObject(from: message) else { return nil }
         guard (obj["type"] as? String) == "req", (obj["method"] as? String) == "connect" else {
             return nil
         }
@@ -61,19 +53,21 @@ enum GatewayWebSocketTestSupport {
     }
 
     static func requestID(from message: URLSessionWebSocketTask.Message) -> String? {
+        guard let obj = self.requestFrameObject(from: message) else { return nil }
+        guard (obj["type"] as? String) == "req" else {
+            return nil
+        }
+        return obj["id"] as? String
+    }
+
+    private static func requestFrameObject(from message: URLSessionWebSocketTask.Message) -> [String: Any]? {
         let data: Data? = switch message {
         case let .data(d): d
         case let .string(s): s.data(using: .utf8)
         @unknown default: nil
         }
         guard let data else { return nil }
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        guard (obj["type"] as? String) == "req" else {
-            return nil
-        }
-        return obj["id"] as? String
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
     static func okResponseData(id: String) -> Data {
