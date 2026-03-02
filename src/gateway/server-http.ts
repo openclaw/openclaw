@@ -8,12 +8,7 @@ import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
-import {
-  A2UI_PATH,
-  CANVAS_HOST_PATH,
-  CANVAS_WS_PATH,
-  handleA2uiHttpRequest,
-} from "../canvas-host/a2ui.js";
+import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -25,13 +20,8 @@ import {
   normalizeRateLimitClientIp,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
-import {
-  authorizeHttpGatewayConnect,
-  isLocalDirectRequest,
-  type GatewayAuthResult,
-  type ResolvedGatewayAuth,
-} from "./auth.js";
-import { CANVAS_CAPABILITY_TTL_MS, normalizeCanvasScopedUrl } from "./canvas-capability.js";
+import { type GatewayAuthResult, type ResolvedGatewayAuth } from "./auth.js";
+import { normalizeCanvasScopedUrl } from "./canvas-capability.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -56,11 +46,14 @@ import {
   resolveHookDeliver,
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
-import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
-import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
 import { isProtectedPluginRoutePath } from "./security-path.js";
+import {
+  authorizeCanvasRequest,
+  enforcePluginRouteGatewayAuth,
+  isCanvasPath,
+} from "./server/http-auth.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
@@ -78,121 +71,6 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
-}
-
-function isCanvasPath(pathname: string): boolean {
-  return (
-    pathname === A2UI_PATH ||
-    pathname.startsWith(`${A2UI_PATH}/`) ||
-    pathname === CANVAS_HOST_PATH ||
-    pathname.startsWith(`${CANVAS_HOST_PATH}/`) ||
-    pathname === CANVAS_WS_PATH
-  );
-}
-
-function isNodeWsClient(client: GatewayWsClient): boolean {
-  if (client.connect.role === "node") {
-    return true;
-  }
-  return normalizeGatewayClientMode(client.connect.client.mode) === GATEWAY_CLIENT_MODES.NODE;
-}
-
-function hasAuthorizedNodeWsClientForCanvasCapability(
-  clients: Set<GatewayWsClient>,
-  capability: string,
-): boolean {
-  const nowMs = Date.now();
-  for (const client of clients) {
-    if (!isNodeWsClient(client)) {
-      continue;
-    }
-    if (!client.canvasCapability || !client.canvasCapabilityExpiresAtMs) {
-      continue;
-    }
-    if (client.canvasCapabilityExpiresAtMs <= nowMs) {
-      continue;
-    }
-    if (safeEqualSecret(client.canvasCapability, capability)) {
-      // Sliding expiration while the connected node keeps using canvas.
-      client.canvasCapabilityExpiresAtMs = nowMs + CANVAS_CAPABILITY_TTL_MS;
-      return true;
-    }
-  }
-  return false;
-}
-
-async function authorizeCanvasRequest(params: {
-  req: IncomingMessage;
-  auth: ResolvedGatewayAuth;
-  trustedProxies: string[];
-  allowRealIpFallback: boolean;
-  clients: Set<GatewayWsClient>;
-  canvasCapability?: string;
-  malformedScopedPath?: boolean;
-  rateLimiter?: AuthRateLimiter;
-}): Promise<GatewayAuthResult> {
-  const {
-    req,
-    auth,
-    trustedProxies,
-    allowRealIpFallback,
-    clients,
-    canvasCapability,
-    malformedScopedPath,
-    rateLimiter,
-  } = params;
-  if (malformedScopedPath) {
-    return { ok: false, reason: "unauthorized" };
-  }
-  if (isLocalDirectRequest(req, trustedProxies, allowRealIpFallback)) {
-    return { ok: true };
-  }
-
-  let lastAuthFailure: GatewayAuthResult | null = null;
-  const token = getBearerToken(req);
-  if (token) {
-    const authResult = await authorizeHttpGatewayConnect({
-      auth: { ...auth, allowTailscale: false },
-      connectAuth: { token, password: token },
-      req,
-      trustedProxies,
-      allowRealIpFallback,
-      rateLimiter,
-    });
-    if (authResult.ok) {
-      return authResult;
-    }
-    lastAuthFailure = authResult;
-  }
-
-  if (canvasCapability && hasAuthorizedNodeWsClientForCanvasCapability(clients, canvasCapability)) {
-    return { ok: true };
-  }
-  return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
-}
-
-async function enforcePluginRouteGatewayAuth(params: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  auth: ResolvedGatewayAuth;
-  trustedProxies: string[];
-  allowRealIpFallback: boolean;
-  rateLimiter?: AuthRateLimiter;
-}): Promise<boolean> {
-  const token = getBearerToken(params.req);
-  const authResult = await authorizeHttpGatewayConnect({
-    auth: params.auth,
-    connectAuth: token ? { token, password: token } : null,
-    req: params.req,
-    trustedProxies: params.trustedProxies,
-    allowRealIpFallback: params.allowRealIpFallback,
-    rateLimiter: params.rateLimiter,
-  });
-  if (!authResult.ok) {
-    sendGatewayAuthFailure(params.res, authResult);
-    return false;
-  }
-  return true;
 }
 
 function writeUpgradeAuthFailure(
