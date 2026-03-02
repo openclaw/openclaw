@@ -1,11 +1,20 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
+
+type ReplyMessageSentHookContext = {
+  sessionKey?: string;
+  channelId?: string;
+  accountId?: string;
+  conversationId?: string;
+  to?: string;
+};
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
@@ -55,6 +64,8 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Emits internal message:sent hook for dispatcher-driven agent replies. */
+  messageSentHook?: ReplyMessageSentHookContext;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -100,6 +111,30 @@ function normalizeReplyPayloadInternal(
     onHeartbeatStrip: opts.onHeartbeatStrip,
     onSkip: opts.onSkip,
   });
+}
+
+function emitInternalMessageSentHook(params: {
+  hook?: ReplyMessageSentHookContext;
+  payload: ReplyPayload;
+  success: boolean;
+  error?: string;
+}): void {
+  const sessionKey = params.hook?.sessionKey;
+  if (!sessionKey) {
+    return;
+  }
+  const content = params.payload.text ?? "";
+  void triggerInternalHook(
+    createInternalHookEvent("message", "sent", sessionKey, {
+      to: params.hook?.to ?? params.hook?.conversationId,
+      content,
+      success: params.success,
+      ...(params.error ? { error: params.error } : {}),
+      channelId: params.hook?.channelId,
+      accountId: params.hook?.accountId,
+      conversationId: params.hook?.conversationId,
+    }),
+  ).catch(() => {});
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
@@ -156,8 +191,19 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
+        emitInternalMessageSentHook({
+          hook: options.messageSentHook,
+          payload: normalized,
+          success: true,
+        });
       })
       .catch((err) => {
+        emitInternalMessageSentHook({
+          hook: options.messageSentHook,
+          payload: normalized,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
         options.onError?.(err, { kind });
       })
       .finally(() => {

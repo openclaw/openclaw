@@ -60,12 +60,20 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping(
-    params.dispatcherOptions,
-  );
+  const finalized = finalizeInboundContext(params.ctx);
+  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+    ...params.dispatcherOptions,
+    messageSentHook: {
+      sessionKey: finalized.SessionKey,
+      channelId: finalized.OriginatingChannel ?? finalized.Surface ?? finalized.Provider,
+      accountId: finalized.AccountId,
+      conversationId: finalized.OriginatingTo ?? finalized.From ?? finalized.To,
+      to: finalized.To ?? finalized.OriginatingTo ?? finalized.From,
+    },
+  });
   try {
     return await dispatchInboundMessage({
-      ctx: params.ctx,
+      ctx: finalized,
       cfg: params.cfg,
       dispatcher,
       replyResolver: params.replyResolver,
@@ -86,9 +94,19 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const dispatcher = createReplyDispatcher(params.dispatcherOptions);
+  const finalized = finalizeInboundContext(params.ctx);
+  const dispatcher = createReplyDispatcher({
+    ...params.dispatcherOptions,
+    messageSentHook: {
+      sessionKey: finalized.SessionKey,
+      channelId: finalized.OriginatingChannel ?? finalized.Surface ?? finalized.Provider,
+      accountId: finalized.AccountId,
+      conversationId: finalized.OriginatingTo ?? finalized.From ?? finalized.To,
+      to: finalized.To ?? finalized.OriginatingTo ?? finalized.From,
+    },
+  });
   return await dispatchInboundMessage({
-    ctx: params.ctx,
+    ctx: finalized,
     cfg: params.cfg,
     dispatcher,
     replyResolver: params.replyResolver,
