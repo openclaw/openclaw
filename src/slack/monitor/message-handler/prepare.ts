@@ -594,7 +594,8 @@ export async function prepareSlackMessage(params: {
       storePath,
       sessionKey, // Thread-specific session key
     });
-    if (threadInitialHistoryLimit > 0) {
+    // Only fetch thread history for NEW sessions (existing sessions already have this context in their transcript)
+    if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
       const threadHistory = await resolveSlackThreadHistory({
         channelId: message.channel,
         threadTs,
@@ -684,7 +685,8 @@ export async function prepareSlackMessage(params: {
     // Preserve thread context for routed tool notifications.
     MessageThreadId: threadContext.messageThreadId,
     ParentSessionKey: threadKeys.parentSessionKey,
-    ThreadStarterBody: threadStarterBody,
+    // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
+    ThreadStarterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
     ThreadHistoryBody: threadHistoryBody,
     IsFirstThreadTurn:
       isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
