@@ -7,9 +7,10 @@ import {
   createWebhookHandler,
 } from "./webhook-handler.js";
 
-// Mock sendMessage to prevent real HTTP calls
+// Mock sendMessage and resolveChatUserId to prevent real HTTP calls
 vi.mock("./client.js", () => ({
   sendMessage: vi.fn().mockResolvedValue(true),
+  resolveChatUserId: vi.fn().mockResolvedValue(undefined),
 }));
 
 function makeAccount(
