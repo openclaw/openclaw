@@ -127,7 +127,7 @@ describe("exec wakeOnExit", () => {
 
     expect(requestSessionEventRunMock).toHaveBeenCalledWith({
       source: "exec-event",
-      sessionKey: "agent:main:main",
+      sessionKey: "main",
       agentId: undefined,
     });
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
@@ -190,5 +190,27 @@ describe("exec wakeOnExit", () => {
     expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("immediate wake is only supported for agent-scoped session keys"),
     );
+  });
+
+  it("preserves alias key when emitExecSystemEvent wakes on exit", () => {
+    resolveSessionStoreKeyMock.mockImplementation(({ sessionKey }: { sessionKey: string }) =>
+      sessionKey === "main" ? "agent:main:main" : sessionKey.trim().toLowerCase(),
+    );
+
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "main",
+      wakeOnExit: true,
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "main",
+      contextKey: undefined,
+    });
+    expect(requestSessionEventRunMock).toHaveBeenCalledWith({
+      source: "exec-event",
+      sessionKey: "main",
+      agentId: undefined,
+    });
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 });

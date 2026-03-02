@@ -227,7 +227,7 @@ function requestExecEventWake(opts: { sessionKey: string; agentId?: string }) {
   }
   requestSessionEventRun({
     source: "exec-event",
-    sessionKey: canonicalSessionKey,
+    sessionKey: rawSessionKey,
     agentId: opts.agentId,
   });
 }
