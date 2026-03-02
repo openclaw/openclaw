@@ -41,7 +41,7 @@ From repo root:
 
 This script:
 
-- builds the gateway image
+- builds the gateway image locally (or pulls a remote image if `OPENCLAW_IMAGE` is set)
 - runs the onboarding wizard
 - prints optional provider setup hints
 - starts the gateway via Docker Compose
@@ -49,6 +49,7 @@ This script:
 
 Optional env vars:
 
+- `OPENCLAW_IMAGE` — use a remote image instead of building locally (e.g. `ghcr.io/openclaw/openclaw:latest`)
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
@@ -90,6 +91,37 @@ It writes config/workspace on the host:
 - `~/.openclaw/workspace`
 
 Running on a VPS? See [Hetzner (Docker VPS)](/install/hetzner).
+
+### Use a remote image (skip local build)
+
+Official pre-built images are published at:
+
+- [GitHub Container Registry package](https://github.com/openclaw/openclaw/pkgs/container/openclaw)
+
+Use image name `ghcr.io/openclaw/openclaw` (not similarly named Docker Hub
+images).
+
+Common tags:
+
+- `main` — latest build from `main`
+- `<version>` — release tag builds (for example `2026.2.26`)
+- `latest` — latest stable release tag
+
+By default the setup script builds the image from source. To pull a pre-built
+image instead, set `OPENCLAW_IMAGE` before running the script:
+
+```bash
+export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
+./docker-setup.sh
+```
+
+The script detects that `OPENCLAW_IMAGE` is not the default `openclaw:local` and
+runs `docker pull` instead of `docker build`. Everything else (onboarding,
+gateway start, token generation) works the same way.
+
+`docker-setup.sh` still runs from the repository root because it uses the local
+`docker-compose.yml` and helper files. `OPENCLAW_IMAGE` skips local image build
+time; it does not replace the compose/setup workflow.
 
 ### Shell Helpers (optional)
 
