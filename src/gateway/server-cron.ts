@@ -230,6 +230,15 @@ export function buildGatewayCronService(params: {
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
 
+      // Webhook mode requires a URL - fail closed if missing
+      if (mode === "webhook" && !to) {
+        cronLogger.warn(
+          { jobId: job.id },
+          "cron: failure alert webhook mode requires URL, skipping",
+        );
+        return;
+      }
+
       if (mode === "webhook" && to) {
         const webhookUrl = normalizeHttpWebhookUrl(to);
         if (webhookUrl) {

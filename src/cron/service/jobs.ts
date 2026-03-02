@@ -692,12 +692,31 @@ function mergeCronDelivery(
     } else {
       const existingFd = next.failureDestination;
       const patchFd = patch.failureDestination;
-      next.failureDestination = {
-        channel: patchFd?.channel ?? existingFd?.channel,
-        to: patchFd?.to ?? existingFd?.to,
-        accountId: patchFd?.accountId ?? existingFd?.accountId,
-        mode: patchFd?.mode ?? existingFd?.mode,
+      const nextFd: typeof next.failureDestination = {
+        channel: existingFd?.channel,
+        to: existingFd?.to,
+        accountId: existingFd?.accountId,
+        mode: existingFd?.mode,
       };
+      if (patchFd) {
+        if ("channel" in patchFd) {
+          const channel = typeof patchFd.channel === "string" ? patchFd.channel.trim() : "";
+          nextFd.channel = channel ? channel : undefined;
+        }
+        if ("to" in patchFd) {
+          const to = typeof patchFd.to === "string" ? patchFd.to.trim() : "";
+          nextFd.to = to ? to : undefined;
+        }
+        if ("accountId" in patchFd) {
+          const accountId = typeof patchFd.accountId === "string" ? patchFd.accountId.trim() : "";
+          nextFd.accountId = accountId ? accountId : undefined;
+        }
+        if ("mode" in patchFd) {
+          const mode = typeof patchFd.mode === "string" ? patchFd.mode.trim() : "";
+          nextFd.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
+        }
+      }
+      next.failureDestination = nextFd;
     }
   }
 
