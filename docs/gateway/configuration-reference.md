@@ -1587,6 +1587,8 @@ Defaults for Talk mode (macOS/iOS/Android).
 
 `tools.profile` sets a base allowlist before `tools.allow`/`tools.deny`:
 
+Local onboarding defaults new local configs to `tools.profile: "messaging"` when unset (existing explicit profiles are preserved).
+
 | Profile     | Includes                                                                                  |
 | ----------- | ----------------------------------------------------------------------------------------- |
 | `minimal`   | `session_status` only                                                                     |
