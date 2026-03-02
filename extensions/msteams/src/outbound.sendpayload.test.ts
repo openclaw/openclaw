@@ -87,6 +87,18 @@ describe("sendPayload", () => {
     expect(result).toEqual({ channel: "msteams", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    const chunkerSpy = vi.spyOn(msteamsOutbound, "chunker").mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(msteamsOutbound, "sendText");
+    const result = await msteamsOutbound.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "msteams", messageId: "" });
+    chunkerSpy.mockRestore();
+  });
+
   it("chunks long text before calling sendText", async () => {
     const longText = "x".repeat(8000);
     await msteamsOutbound.sendPayload!({

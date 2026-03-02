@@ -71,6 +71,18 @@ describe("sendPayload", () => {
     expect(result).toEqual({ channel: "slack", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    slackPlugin.outbound!.chunker = vi.fn().mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(slackPlugin.outbound!, "sendText");
+    const result = await slackPlugin.outbound!.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "slack", messageId: "" });
+    delete (slackPlugin.outbound as any).chunker;
+  });
+
   it("chunks long text before calling sendText", async () => {
     // Slack has chunker: null, so text goes through as a single chunk
     const longText = "x".repeat(8000);

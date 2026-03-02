@@ -92,6 +92,18 @@ describe("sendPayload", () => {
     expect(result).toEqual({ channel: "synology-chat", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    (plugin.outbound as any).chunker = vi.fn().mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(plugin.outbound, "sendText");
+    const result = await plugin.outbound.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "synology-chat", messageId: "" });
+    delete (plugin.outbound as any).chunker;
+  });
+
   it("chunks long text before calling sendText", async () => {
     // Synology Chat has no chunker, so text goes through as single chunk
     const longText = "x".repeat(5000);

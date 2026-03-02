@@ -36,6 +36,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     }
     const limit = msteamsOutbound.textChunkLimit;
     const chunks = limit && msteamsOutbound.chunker ? msteamsOutbound.chunker(text, limit) : [text];
+    if (!chunks.length) return { channel: "msteams", messageId: "" };
     let lastResult: Awaited<ReturnType<NonNullable<typeof msteamsOutbound.sendText>>>;
     for (const chunk of chunks) {
       lastResult = await msteamsOutbound.sendText!({ ...ctx, text: chunk });

@@ -116,6 +116,18 @@ describe("sendPayload", () => {
     expect(result).toEqual({ channel: "googlechat", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    const chunkerSpy = vi.spyOn(googlechatPlugin.outbound!, "chunker").mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(googlechatPlugin.outbound!, "sendText");
+    const result = await googlechatPlugin.outbound!.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "googlechat", messageId: "" });
+    chunkerSpy.mockRestore();
+  });
+
   it("chunks long text before calling sendText", async () => {
     const longText = "x".repeat(8000);
     await googlechatPlugin.outbound!.sendPayload!({

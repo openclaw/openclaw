@@ -224,6 +224,7 @@ export function createSynologyChatPlugin() {
         const limit = outbound.textChunkLimit;
         const chunks =
           limit && (outbound as any).chunker ? (outbound as any).chunker(text, limit) : [text];
+        if (!chunks.length) return { channel: CHANNEL_ID, messageId: "" };
         let lastResult: any;
         for (const chunk of chunks) {
           lastResult = await outbound.sendText!({ ...ctx, text: chunk });
