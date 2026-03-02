@@ -1170,6 +1170,40 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].outputTokens).toBe(10_000);
   });
 
+  it("uses lastCallUsage cache counters when available", async () => {
+    const storePath = await createStorePath("openclaw-usage-cache-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "s1", updatedAt: Date.now() },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: {
+        input: 100_000,
+        output: 8_000,
+        cacheRead: 260_000,
+        cacheWrite: 90_000,
+      },
+      lastCallUsage: {
+        input: 12_000,
+        output: 1_000,
+        cacheRead: 18_000,
+        cacheWrite: 4_000,
+      },
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].inputTokens).toBe(100_000);
+    expect(stored[sessionKey].outputTokens).toBe(8_000);
+    expect(stored[sessionKey].cacheRead).toBe(18_000);
+    expect(stored[sessionKey].cacheWrite).toBe(4_000);
+  });
+
   it("marks totalTokens as unknown when no fresh context snapshot is available", async () => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";
