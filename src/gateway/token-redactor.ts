@@ -6,12 +6,12 @@
  * and error stack traces.
  */
 
-// Matches "token": "any-string-value" in JSON
-const TOKEN_FIELD_PATTERN = /("token"\s*:\s*")([^"]{8,})(")/gi;
+// Matches "token": "any-string-value" in JSON (min 4 chars)
+const TOKEN_FIELD_PATTERN = /("token"\s*:\s*")([^"]{4,})(")/gi;
 
 // Matches "Bearer <token>" — case-insensitive per RFC 6750
-// Full token68 charset per RFC 7235
-const BEARER_PATTERN = /(bearer\s+)([\w\-\.+/=~]{16,})/gi;
+// Full token68 charset per RFC 7235 — min 4 chars to catch short tokens
+const BEARER_PATTERN = /(bearer\s+)([\w\-\.+/=~]{4,})/gi;
 
 // Matches standalone long hex strings (API keys, session IDs)
 const HEX_TOKEN_PATTERN = /\b([a-f0-9]{32,})\b/gi;
@@ -34,17 +34,10 @@ export function redactTokens(input: string): string {
     });
 }
 
-/**
- * Convert any argument to a redacted copy for logging.
- * Never mutates the original argument.
- */
 function stringify(arg: any): any {
   if (typeof arg === "string") return redactTokens(arg);
 
   if (arg instanceof Error) {
-    // Use Object.create to preserve prototype chain and all custom
-    // fields (code, statusCode, etc.) without calling the subclass
-    // constructor, which may require extra arguments.
     const clone: Error = Object.create(Object.getPrototypeOf(arg));
     Object.assign(clone, arg);
     clone.message = redactTokens(arg.message);
@@ -56,19 +49,19 @@ function stringify(arg: any): any {
     try {
       return JSON.parse(redactTokens(JSON.stringify(arg)));
     } catch {
-      return arg;
+      return "[object: redaction failed]";
     }
   }
 
   return arg;
 }
 
-/**
- * Wraps all console output methods to automatically redact tokens.
- * Covers log, info, debug, warn, error, trace, dir, and table.
- * Call once at gateway startup.
- */
+let redactionInstalled = false;
+
 export function installLogRedaction(): void {
+  if (redactionInstalled) return;
+  redactionInstalled = true;
+
   const methods = [
     "log", "info", "debug", "warn", "error", "trace", "dir", "table",
   ] as const;
