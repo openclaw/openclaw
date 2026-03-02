@@ -85,35 +85,70 @@ export type FeishuMessageInfo = {
   createTime?: number;
 };
 
+function extractCardTextElements(elements: unknown[]): string[] {
+  const texts: string[] = [];
+  for (const element of elements) {
+    if (!element || typeof element !== "object") continue;
+    const el = element as Record<string, unknown>;
+    const tag = el.tag;
+
+    if (tag === "div" && el.text && typeof el.text === "object") {
+      const c = (el.text as Record<string, unknown>).content;
+      if (typeof c === "string" && c) texts.push(c);
+    } else if (
+      (tag === "markdown" || tag === "plain_text" || tag === "lark_md") &&
+      typeof el.content === "string" &&
+      el.content
+    ) {
+      texts.push(el.content);
+    } else if (tag === "header" && el.title && typeof el.title === "object") {
+      const c = (el.title as Record<string, unknown>).content;
+      if (typeof c === "string" && c) texts.push(c);
+    } else if (tag === "note" && Array.isArray(el.elements)) {
+      texts.push(...extractCardTextElements(el.elements as unknown[]));
+    } else if (tag === "column_set" && Array.isArray(el.columns)) {
+      for (const col of el.columns as unknown[]) {
+        if (
+          col &&
+          typeof col === "object" &&
+          Array.isArray((col as Record<string, unknown>).elements)
+        ) {
+          texts.push(
+            ...extractCardTextElements((col as Record<string, unknown>).elements as unknown[]),
+          );
+        }
+      }
+    }
+  }
+  return texts;
+}
+
 function parseInteractiveCardContent(parsed: unknown): string {
   if (!parsed || typeof parsed !== "object") {
     return "[Interactive Card]";
   }
 
-  const candidate = parsed as { elements?: unknown };
-  if (!Array.isArray(candidate.elements)) {
-    return "[Interactive Card]";
+  const card = parsed as Record<string, unknown>;
+  const texts: string[] = [];
+
+  // Extract header title if present
+  if (card.header && typeof card.header === "object") {
+    texts.push(
+      ...extractCardTextElements([
+        { tag: "header", title: (card.header as Record<string, unknown>).title },
+      ]),
+    );
   }
 
-  const texts: string[] = [];
-  for (const element of candidate.elements) {
-    if (!element || typeof element !== "object") {
-      continue;
-    }
-    const item = element as {
-      tag?: string;
-      content?: string;
-      text?: { content?: string };
-    };
-    if (item.tag === "div" && typeof item.text?.content === "string") {
-      texts.push(item.text.content);
-      continue;
-    }
-    if (item.tag === "markdown" && typeof item.content === "string") {
-      texts.push(item.content);
-    }
+  // Extract body elements
+  if (Array.isArray(card.elements)) {
+    texts.push(...extractCardTextElements(card.elements as unknown[]));
   }
-  return texts.join("\n").trim() || "[Interactive Card]";
+
+  const joined = texts.join("\n").trim();
+  // Fall back to raw JSON so the agent can work with the full card structure
+  // instead of a useless "[Interactive Card]" placeholder.
+  return joined || JSON.stringify(parsed);
 }
 
 function parseQuotedMessageContent(rawContent: string, msgType: string): string {
