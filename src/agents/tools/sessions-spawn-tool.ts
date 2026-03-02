@@ -7,6 +7,7 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
+const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
@@ -22,6 +23,7 @@ const SessionsSpawnToolSchema = Type.Object({
   thread: Type.Optional(Type.Boolean()),
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
+  sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
 });
 
 export function createSessionsSpawnTool(opts?: {
@@ -55,6 +57,7 @@ export function createSessionsSpawnTool(opts?: {
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
+      const sandbox = params.sandbox === "require" ? "require" : "inherit";
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -98,6 +101,7 @@ export function createSessionsSpawnTool(opts?: {
                 thread,
                 mode,
                 cleanup,
+                sandbox,
                 expectsCompletionMessage: true,
               },
               {
