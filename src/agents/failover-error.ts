@@ -5,7 +5,7 @@ import {
 } from "./pi-embedded-helpers.js";
 
 const TIMEOUT_HINT_RE =
-  /timeout|timed out|deadline exceeded|context deadline exceeded|stop reason:\s*abort|reason:\s*abort|unhandled stop reason:\s*abort/i;
+  /timeout|timed out|deadline exceeded|context deadline exceeded|connection error|network error|network request failed|fetch failed|socket hang up|econnrefused|econnreset|econnaborted|enotfound|eai_again|stop reason:\s*abort|reason:\s*abort|unhandled stop reason:\s*abort/i;
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
 export class FailoverError extends Error {
