@@ -263,7 +263,6 @@ openclaw sessions cleanup --dry-run
 openclaw sessions cleanup --enforce
 ```
 
-
 ## Session pruning
 
 OpenClaw trims **old tool results** from the in-memory context right before LLM calls by default.
