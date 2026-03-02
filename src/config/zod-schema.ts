@@ -502,6 +502,7 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         root: z.string().optional(),
         port: z.number().int().positive().optional(),
+        displayName: z.string().optional(),
         liveReload: z.boolean().optional(),
       })
       .strict()
@@ -535,6 +536,7 @@ export const OpenClawSchema = z
     gateway: z
       .object({
         port: z.number().int().positive().optional(),
+        displayName: z.string().optional(),
         mode: z.union([z.literal("local"), z.literal("remote")]).optional(),
         bind: z
           .union([
