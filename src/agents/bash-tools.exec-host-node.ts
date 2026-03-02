@@ -17,9 +17,9 @@ import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-cont
 import { logInfo } from "../logger.js";
 import {
   buildExecApprovalRequesterContext,
+  resolveRegisteredExecApprovalDecision,
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
-  waitForExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
 import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -243,13 +243,12 @@ export async function executeNodeHostCommand(
     preResolvedDecision = registration.finalDecision;
 
     void (async () => {
-      let decision: string | null = preResolvedDecision ?? null;
+      let decision: string | null = null;
       try {
-        // Some gateways may return a final decision inline during registration.
-        // Only call waitDecision when registration did not already carry one.
-        if (preResolvedDecision === undefined) {
-          decision = await waitForExecApprovalDecision(approvalId);
-        }
+        decision = await resolveRegisteredExecApprovalDecision({
+          approvalId,
+          preResolvedDecision,
+        });
       } catch {
         emitExecSystemEvent(
           `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
