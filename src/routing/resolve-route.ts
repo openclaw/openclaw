@@ -125,7 +125,10 @@ function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): string 
   if (match?.id?.trim()) {
     return sanitizeAgentId(match.id.trim());
   }
-  return sanitizeAgentId(resolveDefaultAgentId(cfg));
+  // Trust the binding's explicit agentId even when it is not in agents.list.
+  // Falling back to the default agent causes silent misdirection in multi-agent
+  // setups where the binding references an external or cross-registered agent.
+  return sanitizeAgentId(trimmed);
 }
 
 function matchesChannel(
