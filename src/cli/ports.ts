@@ -158,6 +158,32 @@ export function parseLsofOutput(output: string): PortProcess[] {
 }
 
 export function listPortListeners(port: number): PortProcess[] {
+  if (process.platform === "win32") {
+    try {
+      const out = execFileSync("netstat", ["-ano", "-p", "TCP"], { encoding: "utf-8" });
+      const lines = out.split(/\r?\n/).filter(Boolean);
+      const results: PortProcess[] = [];
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 5 && parts[3] === "LISTENING") {
+          const localAddress = parts[1];
+          const addressPort = localAddress.split(":").pop();
+          if (addressPort === String(port)) {
+            const pid = Number.parseInt(parts[4], 10);
+            if (!Number.isNaN(pid) && pid > 0) {
+              if (!results.some((p) => p.pid === pid)) {
+                results.push({ pid });
+              }
+            }
+          }
+        }
+      }
+      return results;
+    } catch (err: unknown) {
+      throw new Error(`netstat failed: ${String(err)}`, { cause: err });
+    }
+  }
+
   try {
     const lsof = resolveLsofCommandSync();
     const out = execFileSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFc"], {
