@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { handleChatEvent, type ChatEventPayload, type ChatState } from "./chat.ts";
+import { describe, expect, it, vi } from "vitest";
+import { handleChatEvent, loadChatHistory, type ChatEventPayload, type ChatState } from "./chat.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -77,6 +77,30 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages[0]).toEqual(payload.message);
   });
 
+  it("drops NO_REPLY final payload from another run", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamStartedAt).toBe(123);
+  });
+
   it("returns final for another run when payload has no message", () => {
     const state = createState({
       sessionKey: "main",
@@ -131,6 +155,30 @@ describe("handleChatEvent", () => {
     };
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toEqual([payload.message]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
+  });
+
+  it("drops NO_REPLY final payload from own run", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "NO_REPLY",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
@@ -200,6 +248,25 @@ describe("handleChatEvent", () => {
     });
   });
 
+  it("does not append NO_REPLY fallback text when aborted payload is invalid", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "NO_REPLY",
+      chatStreamStartedAt: 100,
+      chatMessages: [],
+    });
+    const payload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "aborted",
+      message: "not-an-assistant-message",
+    } as unknown as ChatEventPayload;
+
+    expect(handleChatEvent(state, payload)).toBe("aborted");
+    expect(state.chatMessages).toEqual([]);
+  });
+
   it("falls back to streamed partial when aborted payload has non-assistant role", () => {
     const existingMessage = {
       role: "user",
@@ -255,5 +322,53 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
     expect(state.chatMessages).toEqual([existingMessage]);
+  });
+
+  it("ignores NO_REPLY delta updates", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Hello",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Hello");
+  });
+});
+
+describe("loadChatHistory", () => {
+  it("filters NO_REPLY assistant messages from loaded history", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+        { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+        { role: "user", content: [{ type: "text", text: "question" }] },
+      ],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "main",
+      limit: 200,
+    });
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+      { role: "user", content: [{ type: "text", text: "question" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+    expect(state.lastError).toBeNull();
   });
 });

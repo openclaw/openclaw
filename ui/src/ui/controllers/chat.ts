@@ -3,6 +3,13 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 
+const SILENT_REPLY_TOKEN = "NO_REPLY";
+const SILENT_REPLY_REGEX = new RegExp(`^\\s*${SILENT_REPLY_TOKEN}\\s*$`);
+
+function isSilentReplyTokenText(text: string | undefined): boolean {
+  return Boolean(text && SILENT_REPLY_REGEX.test(text));
+}
+
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -41,7 +48,9 @@ export async function loadChatHistory(state: ChatState) {
         limit: 200,
       },
     );
-    state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
+    state.chatMessages = Array.isArray(res.messages)
+      ? res.messages.filter((message) => !isSilentAssistantMessage(message))
+      : [];
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
     state.lastError = String(err);
@@ -105,6 +114,19 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
     roleRequirement: "optional",
     allowTextField: true,
   });
+}
+
+function isSilentAssistantMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const candidate = message as Record<string, unknown>;
+  const roleValue = candidate.role;
+  if (typeof roleValue === "string" && roleValue.toLowerCase() !== "assistant") {
+    return false;
+  }
+  const text = extractText(message);
+  return isSilentReplyTokenText(text ?? undefined);
 }
 
 export async function sendChatMessage(
@@ -230,7 +252,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
-      if (finalMessage) {
+      if (finalMessage && !isSilentAssistantMessage(finalMessage)) {
         state.chatMessages = [...state.chatMessages, finalMessage];
         return null;
       }
@@ -241,7 +263,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
 
   if (payload.state === "delta") {
     const next = extractText(payload.message);
-    if (typeof next === "string") {
+    if (typeof next === "string" && !isSilentReplyTokenText(next)) {
       const current = state.chatStream ?? "";
       if (!current || next.length >= current.length) {
         state.chatStream = next;
@@ -249,7 +271,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
-    if (finalMessage) {
+    if (finalMessage && !isSilentAssistantMessage(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
     }
     state.chatStream = null;
@@ -257,11 +279,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
-    if (normalizedMessage) {
+    if (normalizedMessage && !isSilentAssistantMessage(normalizedMessage)) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
     } else {
       const streamedText = state.chatStream ?? "";
-      if (streamedText.trim()) {
+      if (streamedText.trim() && !isSilentReplyTokenText(streamedText)) {
         state.chatMessages = [
           ...state.chatMessages,
           {
