@@ -116,6 +116,27 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("suppresses announce delivery for multi-payload narration ending in HEARTBEAT_OK", async () => {
+    await withTempHome(async (home) => {
+      const { storePath, deps } = await createTelegramDeliveryFixture(home);
+      mockEmbeddedAgentPayloads([
+        { text: "Checked inbox and calendar. Nothing actionable yet." },
+        { text: "HEARTBEAT_OK" },
+      ]);
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(false);
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    });
+  });
+
   it("handles media heartbeat delivery and announce cleanup modes", async () => {
     await withTempHome(async (home) => {
       const { storePath, deps } = await createTelegramDeliveryFixture(home);
