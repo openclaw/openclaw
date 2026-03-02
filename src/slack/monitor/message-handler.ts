@@ -16,6 +16,31 @@ export type SlackMessageHandler = (
   opts: { source: "message" | "app_mention"; wasMentioned?: boolean },
 ) => Promise<void>;
 
+/**
+ * Build a debounce key that isolates messages by thread (or by message timestamp
+ * for top-level channel messages). Without per-message scoping, concurrent
+ * top-level messages from the same sender would share a key and get merged
+ * into a single reply on the wrong thread.
+ */
+export function buildSlackDebounceKey(
+  message: SlackMessageEvent,
+  accountId: string,
+): string | null {
+  const senderId = message.user ?? message.bot_id;
+  if (!senderId) {
+    return null;
+  }
+  const messageTs = message.ts ?? message.event_ts;
+  const threadKey = message.thread_ts
+    ? `${message.channel}:${message.thread_ts}`
+    : message.parent_user_id && messageTs
+      ? `${message.channel}:maybe-thread:${messageTs}`
+      : messageTs
+        ? `${message.channel}:${messageTs}`
+        : message.channel;
+  return `slack:${accountId}:${threadKey}:${senderId}`;
+}
+
 export function createSlackMessageHandler(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -31,20 +56,7 @@ export function createSlackMessageHandler(params: {
     opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
   }>({
     debounceMs,
-    buildKey: (entry) => {
-      const senderId = entry.message.user ?? entry.message.bot_id;
-      if (!senderId) {
-        return null;
-      }
-      const messageTs = entry.message.ts ?? entry.message.event_ts;
-      // If Slack flags a thread reply but omits thread_ts, isolate it from root debouncing.
-      const threadKey = entry.message.thread_ts
-        ? `${entry.message.channel}:${entry.message.thread_ts}`
-        : entry.message.parent_user_id && messageTs
-          ? `${entry.message.channel}:maybe-thread:${messageTs}`
-          : entry.message.channel;
-      return `slack:${ctx.accountId}:${threadKey}:${senderId}`;
-    },
+    buildKey: (entry) => buildSlackDebounceKey(entry.message, ctx.accountId),
     shouldDebounce: (entry) => {
       const text = entry.message.text ?? "";
       if (!text.trim()) {
