@@ -304,7 +304,7 @@ describe("config form renderer", () => {
     expect(noMatchContainer.textContent).toContain('No settings match "mode tag:security"');
   });
 
-  it("flags unsupported unions", () => {
+  it("supports object-and-primitive unions", () => {
     const schema = {
       type: "object",
       properties: {
@@ -314,7 +314,7 @@ describe("config form renderer", () => {
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).toContain("mixed");
+    expect(analysis.unsupportedPaths).not.toContain("mixed");
   });
 
   it("supports nullable types", () => {

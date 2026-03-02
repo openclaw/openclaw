@@ -290,15 +290,16 @@ function matchesSearch(params: {
   }
   const criteria = parseConfigSearchQuery(params.query);
   const q = criteria.text;
+  const hasTagFilter = criteria.tags.length > 0;
   const meta = SECTION_META[params.key];
 
-  // Check key name
-  if (q && params.key.toLowerCase().includes(q)) {
+  // Text-only queries can use fast metadata checks.
+  // Tag-filtered queries must defer to structural matching so both filters apply.
+  if (!hasTagFilter && q && params.key.toLowerCase().includes(q)) {
     return true;
   }
 
-  // Check label and description
-  if (q && meta) {
+  if (!hasTagFilter && q && meta) {
     if (meta.label.toLowerCase().includes(q)) {
       return true;
     }

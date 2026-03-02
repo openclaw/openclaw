@@ -190,6 +190,23 @@ function normalizeUnion(
   }
 
   const primitiveTypes = new Set(["string", "number", "integer", "boolean"]);
+  if (remaining.length > 0 && literals.length === 0) {
+    const variantTypes = remaining.map((entry) => schemaType(entry)).filter(Boolean);
+    const hasObject = variantTypes.includes("object");
+    const hasOnlyObjectAndPrimitives = variantTypes.every(
+      (entryType) => entryType === "object" || primitiveTypes.has(entryType),
+    );
+    if (hasObject && hasOnlyObjectAndPrimitives) {
+      return {
+        schema: {
+          ...schema,
+          nullable,
+        },
+        unsupportedPaths: [],
+      };
+    }
+  }
+
   if (
     remaining.length > 0 &&
     literals.length === 0 &&

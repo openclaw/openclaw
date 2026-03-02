@@ -76,6 +76,66 @@ describe("config view", () => {
     expect(saveButton?.disabled).toBe(false);
   });
 
+  it("keeps models.providers editable for string-or-object SecretInput unions", () => {
+    const container = document.createElement("div");
+    render(
+      renderConfig({
+        ...baseProps(),
+        schema: {
+          type: "object",
+          properties: {
+            models: {
+              type: "object",
+              properties: {
+                providers: {
+                  type: "object",
+                  additionalProperties: {
+                    type: "object",
+                    properties: {
+                      baseUrl: { type: "string" },
+                      apiKey: {
+                        anyOf: [
+                          { type: "string" },
+                          {
+                            type: "object",
+                            properties: {
+                              source: { type: "string" },
+                              provider: { type: "string" },
+                              id: { type: "string" },
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        formMode: "form",
+        formValue: {
+          models: {
+            providers: {
+              "my-provider": {
+                baseUrl: "https://example.com/v1",
+                apiKey: "sk-test",
+              },
+            },
+          },
+        },
+      }),
+      container,
+    );
+
+    const renderedText = container.textContent ?? "";
+    expect(renderedText).not.toContain("Form view can't safely edit some fields");
+    expect(renderedText).not.toContain("Unsupported schema node. Use Raw mode.");
+    expect(renderedText).toContain("my-provider");
+    const inputs = Array.from(container.querySelectorAll<HTMLInputElement>("input"));
+    expect(inputs.some((input) => input.value === "https://example.com/v1")).toBe(true);
+  });
+
   it("disables save when schema is missing", () => {
     const container = document.createElement("div");
     render(
