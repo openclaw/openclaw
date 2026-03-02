@@ -26,8 +26,9 @@ import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/
 import { loadConfig } from "../../config/config.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
-import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
+import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
+import { imageResultFromFile } from "./image-result.js";
 import { listNodes, resolveNodeIdFromList, type NodeListNode } from "./nodes-utils.js";
 
 function wrapBrowserExternalJson(params: {

@@ -7,8 +7,9 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
-import { type AnyAgentTool, imageResult, jsonResult, readStringParam } from "./common.js";
+import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
+import { imageResult } from "./image-result.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
 const CANVAS_ACTIONS = [

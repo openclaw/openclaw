@@ -85,8 +85,8 @@ vi.mock("../../config/config.js", () => configMocks);
 const toolCommonMocks = vi.hoisted(() => ({
   imageResultFromFile: vi.fn(),
 }));
-vi.mock("./common.js", async () => {
-  const actual = await vi.importActual<typeof import("./common.js")>("./common.js");
+vi.mock("./image-result.js", async () => {
+  const actual = await vi.importActual<typeof import("./image-result.js")>("./image-result.js");
   return {
     ...actual,
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
