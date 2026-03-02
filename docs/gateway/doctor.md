@@ -168,6 +168,9 @@ Doctor checks:
   (`~/Library/Mobile Documents/com~apple~CloudDocs/...`) or
   `~/Library/CloudStorage/...` because sync-backed paths can cause slower I/O
   and lock/sync races.
+- **Linux SD or eMMC state dir**: warns when state resolves to an `mmcblk*`
+  mount source, because SD or eMMC-backed random I/O can be slower and wear
+  faster under session and credential writes.
 - **Session dirs missing**: `sessions/` and the session store directory are
   required to persist history and avoid `ENOENT` crashes.
 - **Transcript mismatch**: warns when recent session entries have missing
