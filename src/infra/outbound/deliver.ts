@@ -221,6 +221,8 @@ type DeliverOutboundPayloadsCoreParams = {
     mediaUrls?: string[];
   };
   silent?: boolean;
+  /** Skip message_sending hook (used when hook was already run upstream). */
+  skipMessageSendingHook?: boolean;
 };
 
 type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
@@ -518,7 +520,7 @@ async function deliverOutboundPayloadsCore(
 
       // Run message_sending plugin hook (may modify content or cancel)
       let effectivePayload = payload;
-      if (hookRunner?.hasHooks("message_sending")) {
+      if (!params.skipMessageSendingHook && hookRunner?.hasHooks("message_sending")) {
         try {
           const sendingResult = await hookRunner.runMessageSending(
             {

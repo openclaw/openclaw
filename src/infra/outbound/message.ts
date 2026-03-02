@@ -58,6 +58,8 @@ type MessageSendParams = {
   };
   abortSignal?: AbortSignal;
   silent?: boolean;
+  /** Skip message_sending hook (used when hook was already run upstream). */
+  skipMessageSendingHook?: boolean;
 };
 
 export type MessageSendResult = {
@@ -232,6 +234,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
       silent: params.silent,
+      skipMessageSendingHook: params.skipMessageSendingHook,
       mirror: params.mirror
         ? {
             ...params.mirror,

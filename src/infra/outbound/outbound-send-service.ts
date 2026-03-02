@@ -113,19 +113,25 @@ async function runMessageSendingHook(params: {
   }
 }
 
+type TryHandleResult =
+  | { handled: PluginHandledResult; hookRan: boolean }
+  | { handled: null; hookRan: boolean };
+
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
   send?: PluginSendAttempt;
   onHandled?: () => Promise<void> | void;
-}): Promise<PluginHandledResult | null> {
+}): Promise<TryHandleResult> {
   if (params.ctx.dryRun) {
-    return null;
+    return { handled: null, hookRan: false };
   }
   if (!canDispatchChannelMessageAction({ channel: params.ctx.channel, action: params.action })) {
-    return null;
+    return { handled: null, hookRan: false };
   }
+  let hookRan = false;
   if (params.action === "send" && params.send) {
+    hookRan = true;
     const hookResult = await runMessageSendingHook({
       ctx: params.ctx,
       send: params.send,
@@ -133,9 +139,12 @@ async function tryHandleWithPluginAction(params: {
     if (hookResult.cancelled) {
       const toolResult = buildCancelledToolResult();
       return {
-        handledBy: "plugin",
-        payload: extractToolPayload(toolResult),
-        toolResult,
+        handled: {
+          handledBy: "plugin",
+          payload: extractToolPayload(toolResult),
+          toolResult,
+        },
+        hookRan,
       };
     }
     params.send.content = hookResult.content;
@@ -157,13 +166,16 @@ async function tryHandleWithPluginAction(params: {
     dryRun: params.ctx.dryRun,
   });
   if (!handled) {
-    return null;
+    return { handled: null, hookRan };
   }
   await params.onHandled?.();
   return {
-    handledBy: "plugin",
-    payload: extractToolPayload(handled),
-    toolResult: handled,
+    handled: {
+      handledBy: "plugin",
+      payload: extractToolPayload(handled),
+      toolResult: handled,
+    },
+    hookRan,
   };
 }
 
@@ -190,7 +202,7 @@ export async function executeSendAction(params: {
     mediaUrl: params.mediaUrl,
     mediaUrls: params.mediaUrls,
   };
-  const pluginHandled = await tryHandleWithPluginAction({
+  const { handled: pluginHandled, hookRan } = await tryHandleWithPluginAction({
     ctx: params.ctx,
     action: "send",
     send: pluginSendAttempt,
@@ -235,6 +247,7 @@ export async function executeSendAction(params: {
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
+    skipMessageSendingHook: hookRan,
   });
 
   return {
@@ -260,7 +273,7 @@ export async function executePollAction(params: {
   toolResult?: AgentToolResult<unknown>;
   pollResult?: MessagePollResult;
 }> {
-  const pluginHandled = await tryHandleWithPluginAction({
+  const { handled: pluginHandled } = await tryHandleWithPluginAction({
     ctx: params.ctx,
     action: "poll",
   });
