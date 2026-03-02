@@ -13,6 +13,13 @@ final class PairingAlertHostWindow: NSWindow {
 }
 
 @MainActor
+final class PairingAlertState {
+    var activeAlert: NSAlert?
+    var activeRequestId: String?
+    var alertHostWindow: NSWindow?
+}
+
+@MainActor
 enum PairingAlertSupport {
     enum PairingResolution: String {
         case approved
@@ -32,6 +39,10 @@ enum PairingAlertSupport {
         }
         activeAlert = nil
         activeRequestId = nil
+    }
+
+    static func endActiveAlert(state: PairingAlertState) {
+        self.endActiveAlert(activeAlert: &state.activeAlert, activeRequestId: &state.activeRequestId)
     }
 
     static func requireAlertHostWindow(alertHostWindow: inout NSWindow?) -> NSWindow {
@@ -179,6 +190,30 @@ enum PairingAlertSupport {
         }
     }
 
+    static func presentPairingAlert<Request>(
+        request: Request,
+        requestId: String,
+        messageText: String,
+        informativeText: String,
+        state: PairingAlertState,
+        onResponse: @escaping @MainActor (NSApplication.ModalResponse, Request) async -> Void)
+    {
+        self.presentPairingAlert(
+            request: request,
+            requestId: requestId,
+            messageText: messageText,
+            informativeText: informativeText,
+            activeAlert: &state.activeAlert,
+            activeRequestId: &state.activeRequestId,
+            alertHostWindow: &state.alertHostWindow)
+        { response, hostWindow in
+            Task { @MainActor in
+                self.clearActivePairingAlert(state: state, hostWindow: hostWindow)
+                await onResponse(response, request)
+            }
+        }
+    }
+
     static func clearActivePairingAlert(
         activeAlert: inout NSAlert?,
         activeRequestId: inout String?,
@@ -187,6 +222,13 @@ enum PairingAlertSupport {
         activeRequestId = nil
         activeAlert = nil
         hostWindow.orderOut(nil)
+    }
+
+    static func clearActivePairingAlert(state: PairingAlertState, hostWindow: NSWindow) {
+        self.clearActivePairingAlert(
+            activeAlert: &state.activeAlert,
+            activeRequestId: &state.activeRequestId,
+            hostWindow: hostWindow)
     }
 
     static func stopPairingPrompter<Request>(
@@ -208,6 +250,23 @@ enum PairingAlertSupport {
         alertHostWindow?.orderOut(nil)
         alertHostWindow?.close()
         alertHostWindow = nil
+    }
+
+    static func stopPairingPrompter<Request>(
+        isStopping: inout Bool,
+        task: inout Task<Void, Never>?,
+        queue: inout [Request],
+        isPresenting: inout Bool,
+        state: PairingAlertState)
+    {
+        self.stopPairingPrompter(
+            isStopping: &isStopping,
+            activeAlert: &state.activeAlert,
+            activeRequestId: &state.activeRequestId,
+            task: &task,
+            queue: &queue,
+            isPresenting: &isPresenting,
+            alertHostWindow: &state.alertHostWindow)
     }
 
     static func approveRequest(
