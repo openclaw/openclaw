@@ -198,4 +198,46 @@ describe("listSkillCommandsForAllAgents/listSkillCommandsForAgentIds", () => {
     expect(commands.map((entry) => entry.skillName)).toEqual(["demo-skill", "extra-skill"]);
     expect(commands.map((entry) => entry.name)).toEqual(["demo_skill", "extra_skill"]);
   });
+
+  it("keeps workspace unrestricted when one co-tenant agent has no skills filter", async () => {
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-unfiltered-"));
+    const sharedWorkspace = path.join(baseDir, "research");
+    await fs.mkdir(sharedWorkspace, { recursive: true });
+
+    const commands = listSkillCommandsForAgentIds({
+      cfg: {
+        agents: {
+          list: [
+            { id: "restricted", workspace: sharedWorkspace, skills: ["extra-skill"] },
+            { id: "unrestricted", workspace: sharedWorkspace },
+          ],
+        },
+      },
+      agentIds: ["restricted", "unrestricted"],
+    });
+
+    const skillNames = commands.map((entry) => entry.skillName);
+    expect(skillNames).toContain("demo-skill");
+    expect(skillNames).toContain("extra-skill");
+  });
+
+  it("merges empty allowlist with non-empty allowlist for shared workspace", async () => {
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-empty-"));
+    const sharedWorkspace = path.join(baseDir, "research");
+    await fs.mkdir(sharedWorkspace, { recursive: true });
+
+    const commands = listSkillCommandsForAgentIds({
+      cfg: {
+        agents: {
+          list: [
+            { id: "locked", workspace: sharedWorkspace, skills: [] },
+            { id: "partial", workspace: sharedWorkspace, skills: ["extra-skill"] },
+          ],
+        },
+      },
+      agentIds: ["locked", "partial"],
+    });
+
+    expect(commands.map((entry) => entry.skillName)).toEqual(["extra-skill"]);
+  });
 });
