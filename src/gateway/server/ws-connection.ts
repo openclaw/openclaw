@@ -81,6 +81,7 @@ export function attachGatewayWsConnectionHandler(params: {
       stateVersion?: { presence?: number; health?: number };
     },
   ) => void;
+  getTailscaleOrigin?: () => string | null;
   buildRequestContext: () => GatewayRequestContext;
 }) {
   const {
@@ -100,6 +101,7 @@ export function attachGatewayWsConnectionHandler(params: {
     logWsControl,
     extraHandlers,
     broadcast,
+    getTailscaleOrigin,
     buildRequestContext,
   } = params;
 
@@ -285,6 +287,7 @@ export function attachGatewayWsConnectionHandler(params: {
       gatewayMethods,
       events,
       extraHandlers,
+      getTailscaleOrigin,
       buildRequestContext,
       send,
       close,

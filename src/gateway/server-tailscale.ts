@@ -12,18 +12,19 @@ export async function startGatewayTailscaleExposure(params: {
   port: number;
   controlUiBasePath?: string;
   logTailscale: { info: (msg: string) => void; warn: (msg: string) => void };
-}): Promise<(() => Promise<void>) | null> {
+}): Promise<{ cleanup: (() => Promise<void>) | null; hostname: string | null }> {
   if (params.tailscaleMode === "off") {
-    return null;
+    return { cleanup: null, hostname: null };
   }
 
+  let host: string | null = null;
   try {
     if (params.tailscaleMode === "serve") {
       await enableTailscaleServe(params.port);
     } else {
       await enableTailscaleFunnel(params.port);
     }
-    const host = await getTailnetHostname().catch(() => null);
+    host = await getTailnetHostname().catch(() => null);
     if (host) {
       const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
       params.logTailscale.info(
@@ -36,13 +37,14 @@ export async function startGatewayTailscaleExposure(params: {
     params.logTailscale.warn(
       `${params.tailscaleMode} failed: ${err instanceof Error ? err.message : String(err)}`,
     );
+    return { cleanup: null, hostname: null };
   }
 
   if (!params.resetOnExit) {
-    return null;
+    return { cleanup: null, hostname: host };
   }
 
-  return async () => {
+  const cleanup = async () => {
     try {
       if (params.tailscaleMode === "serve") {
         await disableTailscaleServe();
@@ -55,4 +57,5 @@ export async function startGatewayTailscaleExposure(params: {
       );
     }
   };
+  return { cleanup, hostname: host };
 }
