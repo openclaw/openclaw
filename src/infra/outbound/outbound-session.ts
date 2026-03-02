@@ -882,6 +882,29 @@ function resolveFallbackSession(
   };
 }
 
+type OutboundSessionResolver = (
+  params: ResolveOutboundSessionRouteParams,
+) => OutboundSessionRoute | null | Promise<OutboundSessionRoute | null>;
+
+const OUTBOUND_SESSION_RESOLVERS: Partial<Record<ChannelId, OutboundSessionResolver>> = {
+  slack: resolveSlackSession,
+  discord: resolveDiscordSession,
+  telegram: resolveTelegramSession,
+  whatsapp: resolveWhatsAppSession,
+  signal: resolveSignalSession,
+  imessage: resolveIMessageSession,
+  matrix: resolveMatrixSession,
+  msteams: resolveMSTeamsSession,
+  mattermost: resolveMattermostSession,
+  bluebubbles: resolveBlueBubblesSession,
+  "nextcloud-talk": resolveNextcloudTalkSession,
+  zalo: resolveZaloSession,
+  zalouser: resolveZalouserSession,
+  nostr: resolveNostrSession,
+  tlon: resolveTlonSession,
+  feishu: resolveFeishuSession,
+};
+
 export async function resolveOutboundSessionRoute(
   params: ResolveOutboundSessionRouteParams,
 ): Promise<OutboundSessionRoute | null> {
@@ -889,42 +912,12 @@ export async function resolveOutboundSessionRoute(
   if (!target) {
     return null;
   }
-  switch (params.channel) {
-    case "slack":
-      return await resolveSlackSession({ ...params, target });
-    case "discord":
-      return resolveDiscordSession({ ...params, target });
-    case "telegram":
-      return resolveTelegramSession({ ...params, target });
-    case "whatsapp":
-      return resolveWhatsAppSession({ ...params, target });
-    case "signal":
-      return resolveSignalSession({ ...params, target });
-    case "imessage":
-      return resolveIMessageSession({ ...params, target });
-    case "matrix":
-      return resolveMatrixSession({ ...params, target });
-    case "msteams":
-      return resolveMSTeamsSession({ ...params, target });
-    case "mattermost":
-      return resolveMattermostSession({ ...params, target });
-    case "bluebubbles":
-      return resolveBlueBubblesSession({ ...params, target });
-    case "nextcloud-talk":
-      return resolveNextcloudTalkSession({ ...params, target });
-    case "zalo":
-      return resolveZaloSession({ ...params, target });
-    case "zalouser":
-      return resolveZalouserSession({ ...params, target });
-    case "nostr":
-      return resolveNostrSession({ ...params, target });
-    case "tlon":
-      return resolveTlonSession({ ...params, target });
-    case "feishu":
-      return resolveFeishuSession({ ...params, target });
-    default:
-      return resolveFallbackSession({ ...params, target });
+  const nextParams = { ...params, target };
+  const resolver = OUTBOUND_SESSION_RESOLVERS[params.channel];
+  if (!resolver) {
+    return resolveFallbackSession(nextParams);
   }
+  return await resolver(nextParams);
 }
 
 export async function ensureOutboundSessionEntry(params: {
