@@ -76,6 +76,36 @@ describe("probeFeishu", () => {
     );
   });
 
+  it("returns timeout error when request exceeds timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const requestFn = vi.fn().mockImplementation(() => new Promise(() => {}));
+      createFeishuClientMock.mockReturnValue({ request: requestFn });
+
+      const promise = probeFeishu({ appId: "cli_123", appSecret: "secret" }, { timeoutMs: 1_000 });
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await promise;
+
+      expect(result).toMatchObject({ ok: false, error: "probe timed out after 1000ms" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns aborted when abort signal is already aborted", async () => {
+    createFeishuClientMock.mockClear();
+    const abortController = new AbortController();
+    abortController.abort();
+
+    const result = await probeFeishu(
+      { appId: "cli_123", appSecret: "secret" },
+      { abortSignal: abortController.signal },
+    );
+
+    expect(result).toMatchObject({ ok: false, error: "probe aborted" });
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+  });
+
   it("returns cached result on subsequent calls within TTL", async () => {
     const requestFn = setupClient({
       code: 0,
