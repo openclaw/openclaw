@@ -385,7 +385,8 @@ export async function prepareSlackMessage(params: {
     ctx.botUserId &&
     message.thread_ts &&
     (message.parent_user_id === ctx.botUserId ||
-      hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts)),
+      (ctx.threadAutoReplyOnParticipation &&
+        hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts))),
   );
 
   let resolvedSenderName = message.username?.trim() || undefined;

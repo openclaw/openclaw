@@ -673,6 +673,7 @@ describe("prepareSlackMessage sender prefix", () => {
       replyToMode: "off",
       threadHistoryScope: "channel",
       threadInheritParent: false,
+      threadAutoReplyOnParticipation: true,
       slashCommand: params.slashCommand,
       textLimit: 2000,
       ackReactionScope: "off",

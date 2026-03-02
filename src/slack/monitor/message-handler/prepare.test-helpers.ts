@@ -10,6 +10,7 @@ export function createInboundSlackTestContext(params: {
   defaultRequireMention?: boolean;
   replyToMode?: "off" | "all" | "first";
   channelsConfig?: Record<string, { systemPrompt: string }>;
+  threadAutoReplyOnParticipation?: boolean;
 }) {
   return createSlackMonitorContext({
     cfg: params.cfg,
@@ -38,6 +39,7 @@ export function createInboundSlackTestContext(params: {
     replyToMode: params.replyToMode ?? "off",
     threadHistoryScope: "thread",
     threadInheritParent: false,
+    threadAutoReplyOnParticipation: params.threadAutoReplyOnParticipation ?? true,
     slashCommand: {
       enabled: false,
       name: "openclaw",

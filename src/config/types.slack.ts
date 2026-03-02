@@ -77,6 +77,8 @@ export type SlackThreadConfig = {
   inheritParent?: boolean;
   /** Maximum number of thread messages to fetch as context when starting a new thread session (default: 20). Set to 0 to disable thread history fetching. */
   initialHistoryLimit?: number;
+  /** If true, the bot auto-replies in threads it has previously participated in, even without @mention. Default: true. */
+  autoReplyOnParticipation?: boolean;
 };
 
 export type SlackAccountConfig = {
