@@ -60,6 +60,26 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("Log cursor reset");
   });
 
+  it("keeps unparsed lines visible in --human mode", async () => {
+    const partialLine = '{"time":"2026-03-02T19:35:00.000Z","message":"partial';
+    callGatewayFromCli.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 2,
+      size: 456,
+      lines: [partialLine],
+    });
+
+    const stdoutWrites: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdoutWrites.push(String(chunk));
+      return true;
+    });
+
+    await runLogsCli(["logs", "--human", "--plain"]);
+
+    expect(stdoutWrites.join("")).toContain(partialLine);
+  });
+
   it("wires --local-time through CLI parsing and emits local timestamps", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",

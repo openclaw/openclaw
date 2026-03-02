@@ -131,9 +131,7 @@ function formatLogLine(
       if (activity) {
         return renderActivityLine(activity, { mode: opts.humanFull ? "full" : "normal" });
       }
-      if (!opts.humanFull) {
-        return "";
-      }
+      return raw;
     }
   }
 
