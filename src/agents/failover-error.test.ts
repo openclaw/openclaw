@@ -87,6 +87,16 @@ describe("failover-error", () => {
     );
   });
 
+  it("403 OAuth permission_error message returns auth_permanent", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 403,
+        message:
+          "HTTP 403 permission_error: OAuth authentication is currently not allowed for this organization.",
+      }),
+    ).toBe("auth_permanent");
+  });
+
   it("resolveFailoverStatus maps auth_permanent to 403", () => {
     expect(resolveFailoverStatus("auth_permanent")).toBe(403);
   });

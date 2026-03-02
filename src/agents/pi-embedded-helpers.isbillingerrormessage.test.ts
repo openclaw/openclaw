@@ -26,6 +26,7 @@ describe("isAuthPermanentErrorMessage", () => {
       "key has been disabled",
       "key has been revoked",
       "account has been deactivated",
+      "HTTP 403 permission_error: OAuth authentication is currently not allowed for this organization.",
       "could not authenticate api key",
       "could not validate credentials",
       "API_KEY_REVOKED",
@@ -524,6 +525,11 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");
     expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
     expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
+    expect(
+      classifyFailoverReason(
+        "HTTP 403 permission_error: OAuth authentication is currently not allowed for this organization.",
+      ),
+    ).toBe("auth_permanent");
   });
   it("classifies JSON api_error internal server failures as timeout", () => {
     expect(

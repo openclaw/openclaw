@@ -659,6 +659,7 @@ const ERROR_PATTERNS = {
     "key has been disabled",
     "key has been revoked",
     "account has been deactivated",
+    "oauth authentication is currently not allowed for this organization",
     /could not (?:authenticate|validate).*(?:api[_ ]?key|credentials)/i,
   ],
   auth: [
