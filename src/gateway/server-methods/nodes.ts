@@ -1,9 +1,10 @@
 import { loadConfig } from "../../config/config.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { clearDevicePairing, listDevicePairing } from "../../infra/device-pairing.js";
 import {
   approveNodePairing,
   listNodePairing,
   rejectNodePairing,
+  removePairedNode,
   renamePairedNode,
   requestNodePairing,
   verifyNodeToken,
@@ -31,6 +32,7 @@ import {
   validateNodePairApproveParams,
   validateNodePairListParams,
   validateNodePairRejectParams,
+  validateNodePairRemoveParams,
   validateNodePairRequestParams,
   validateNodePairVerifyParams,
   validateNodeRenameParams,
@@ -381,6 +383,36 @@ export const nodeHandlers: GatewayRequestHandlers = {
         { dropIfSlow: true },
       );
       respond(true, rejected, undefined);
+    });
+  },
+  "node.pair.remove": async ({ params, respond, context }) => {
+    if (!validateNodePairRemoveParams(params)) {
+      respondInvalidParams({
+        respond,
+        method: "node.pair.remove",
+        validator: validateNodePairRemoveParams,
+      });
+      return;
+    }
+    const { nodeId } = params as { nodeId: string };
+    await respondUnavailableOnThrow(respond, async () => {
+      const removedNode = await removePairedNode(nodeId);
+      // Also clean up any matching device pairing entry since node.list
+      // merges both the node and device pairing systems.
+      let removedDevice = false;
+      try {
+        removedDevice = await clearDevicePairing(nodeId);
+      } catch (err) {
+        context.logGateway.warn(
+          `node.pair.remove: device pairing cleanup failed for ${nodeId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      if (!removedNode && !removedDevice) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+        return;
+      }
+      context.logGateway.info(`node pairing removed node=${nodeId}`);
+      respond(true, { nodeId }, undefined);
     });
   },
   "node.pair.verify": async ({ params, respond }) => {
