@@ -83,4 +83,12 @@ describe("extractSystemdExecStartCommandToken", () => {
       ),
     ).toBe("/snap/bin/chromium");
   });
+
+  it("extracts executable token from env --split-string payload", () => {
+    expect(
+      extractSystemdExecStartCommandToken(
+        '/usr/bin/env --split-string "/snap/bin/chromium --headless --remote-debugging-port=18800"',
+      ),
+    ).toBe("/snap/bin/chromium");
+  });
 });

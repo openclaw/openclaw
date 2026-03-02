@@ -152,19 +152,23 @@ export function extractSystemdExecStartCommandToken(execStartValue: string): str
     }
 
     if (token.toLowerCase().endsWith("/env") || token.toLowerCase() === "env") {
-      index += 1;
-      while (index < tokens.length) {
-        const envToken = tokens[index] ?? "";
+      const pending = tokens.slice(index + 1);
+      while (pending.length > 0) {
+        const envToken = pending.shift() ?? "";
         if (!envToken) {
-          index += 1;
           continue;
         }
         if (envOptionConsumesNextValue(envToken)) {
-          index += 2;
+          const optionValue = pending.shift();
+          if ((envToken === "-S" || envToken === "--split-string") && optionValue) {
+            const expanded = parseSystemdExecStart(optionValue);
+            if (expanded.length > 0) {
+              pending.unshift(...expanded);
+            }
+          }
           continue;
         }
         if (envToken.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(envToken)) {
-          index += 1;
           continue;
         }
         return stripSystemdExecPrefix(envToken);
