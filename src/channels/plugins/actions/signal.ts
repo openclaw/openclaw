@@ -90,7 +90,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
   },
   supportsAction: ({ action }) => action !== "send",
 
-  handleAction: async ({ action, params, cfg, accountId }) => {
+  handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     if (action === "send") {
       throw new Error("Send should be handled by outbound, not actions handler.");
     }
@@ -126,10 +126,14 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         throw new Error("recipient or group required");
       }
 
-      const messageId = readStringParam(params, "messageId", {
-        required: true,
-        label: "messageId (timestamp)",
-      });
+      const messageId =
+        readStringParam(params, "messageId") ??
+        (toolContext?.currentMessageId != null ? String(toolContext.currentMessageId) : undefined);
+      if (!messageId) {
+        throw new Error(
+          "messageId (timestamp) required. Provide messageId explicitly or react to the current inbound message.",
+        );
+      }
       const targetAuthor = readStringParam(params, "targetAuthor");
       const targetAuthorUuid = readStringParam(params, "targetAuthorUuid");
       if (target.groupId && !targetAuthor && !targetAuthorUuid) {
