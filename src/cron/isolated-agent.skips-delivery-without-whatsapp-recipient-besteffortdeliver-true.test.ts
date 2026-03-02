@@ -1,6 +1,8 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
 import {
@@ -9,13 +11,60 @@ import {
   runTelegramAnnounceTurn,
 } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import {
-  makeCfg,
-  makeJob,
-  withTempCronHome,
-  writeSessionStore,
-} from "./isolated-agent.test-harness.js";
+import { makeCfg, makeJob, writeSessionStore } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
+
+let tempRoot = "";
+let tempHomeId = 0;
+
+async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+  if (!tempRoot) {
+    throw new Error("temp root not initialized");
+  }
+  const home = path.join(tempRoot, `case-${tempHomeId++}`);
+  await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), {
+    recursive: true,
+  });
+  const snapshot = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    HOMEDRIVE: process.env.HOMEDRIVE,
+    HOMEPATH: process.env.HOMEPATH,
+    OPENCLAW_HOME: process.env.OPENCLAW_HOME,
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+  };
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  delete process.env.OPENCLAW_HOME;
+  process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+
+  if (process.platform === "win32") {
+    const driveMatch = home.match(/^([A-Za-z]:)(.*)$/);
+    if (driveMatch) {
+      process.env.HOMEDRIVE = driveMatch[1];
+      process.env.HOMEPATH = driveMatch[2] || "\\";
+    }
+  }
+
+  try {
+    return await fn(home);
+  } finally {
+    const restoreKey = (key: keyof typeof snapshot) => {
+      const value = snapshot[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    };
+    restoreKey("HOME");
+    restoreKey("USERPROFILE");
+    restoreKey("HOMEDRIVE");
+    restoreKey("HOMEPATH");
+    restoreKey("OPENCLAW_HOME");
+    restoreKey("OPENCLAW_STATE_DIR");
+  }
+}
 
 async function runExplicitTelegramAnnounceTurn(params: {
   home: string;
@@ -35,7 +84,7 @@ async function withTelegramAnnounceFixture(
     sessionStore?: { lastProvider?: string; lastTo?: string };
   },
 ): Promise<void> {
-  await withTempCronHome(async (home) => {
+  await withTempHome(async (home) => {
     const storePath = await writeSessionStore(home, {
       lastProvider: params?.sessionStore?.lastProvider ?? "webchat",
       lastTo: params?.sessionStore?.lastTo ?? "",
@@ -167,6 +216,17 @@ async function assertExplicitTelegramTargetAnnounce(params: {
 }
 
 describe("runCronIsolatedAgentTurn", () => {
+  beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-delivery-suite-"));
+  });
+
+  afterAll(async () => {
+    if (!tempRoot) {
+      return;
+    }
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
   beforeEach(() => {
     setupIsolatedAgentTurnMocks();
   });
@@ -231,7 +291,7 @@ describe("runCronIsolatedAgentTurn", () => {
   });
 
   it("routes threaded announce targets through direct delivery", async () => {
-    await withTempCronHome(async (home) => {
+    await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       await fs.writeFile(
         storePath,
@@ -325,7 +385,7 @@ describe("runCronIsolatedAgentTurn", () => {
   });
 
   it("returns ok when announce delivery reports false and best-effort is disabled", async () => {
-    await withTempCronHome(async (home) => {
+    await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
       mockAgentPayloads([{ text: "hello from cron" }]);
@@ -363,7 +423,7 @@ describe("runCronIsolatedAgentTurn", () => {
   });
 
   it("returns ok when announce flow throws and best-effort is disabled", async () => {
-    await withTempCronHome(async (home) => {
+    await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
       mockAgentPayloads([{ text: "hello from cron" }]);
