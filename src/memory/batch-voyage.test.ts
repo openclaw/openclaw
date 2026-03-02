@@ -51,8 +51,8 @@ describe("runVoyageEmbeddingBatches", () => {
 
     // 3. Poll status (pending) - Optional depending on wait loop, let's say it finishes immediately for this test
     // Actually the code does: initial check (if completed) -> wait loop.
-    // If create returns "pending", it enters waitForVoyageBatch.
-    // waitForVoyageBatch fetches status.
+    // If create returns "pending", it enters waitForBatch.
+    // waitForBatch fetches status.
 
     // 3. Poll status (completed)
     fetchMock.mockResolvedValueOnce({

@@ -14,6 +14,7 @@ import {
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "./batch-embedding-common.js";
+import { waitForBatch } from "./batch-lifecycle.js";
 import type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 
 export type OpenAiBatchRequest = {
@@ -32,6 +33,8 @@ export type OpenAiBatchOutputLine = ProviderBatchOutputLine;
 export const OPENAI_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
 const OPENAI_BATCH_COMPLETION_WINDOW = "24h";
 const OPENAI_BATCH_MAX_REQUESTS = 50000;
+// OpenAI Batch API terminal failure states (both "cancelled" and "canceled" spellings are observed)
+const OPENAI_FAILED_STATES = new Set(["failed", "expired", "cancelled", "canceled"]);
 
 async function submitOpenAiBatch(params: {
   openAi: OpenAiEmbeddingClient;
@@ -136,53 +139,6 @@ async function readOpenAiBatchError(params: {
   }
 }
 
-async function waitForOpenAiBatch(params: {
-  openAi: OpenAiEmbeddingClient;
-  batchId: string;
-  wait: boolean;
-  pollIntervalMs: number;
-  timeoutMs: number;
-  debug?: (message: string, data?: Record<string, unknown>) => void;
-  initial?: OpenAiBatchStatus;
-}): Promise<{ outputFileId: string; errorFileId?: string }> {
-  const start = Date.now();
-  let current: OpenAiBatchStatus | undefined = params.initial;
-  while (true) {
-    const status =
-      current ??
-      (await fetchOpenAiBatchStatus({
-        openAi: params.openAi,
-        batchId: params.batchId,
-      }));
-    const state = status.status ?? "unknown";
-    if (state === "completed") {
-      if (!status.output_file_id) {
-        throw new Error(`openai batch ${params.batchId} completed without output file`);
-      }
-      return {
-        outputFileId: status.output_file_id,
-        errorFileId: status.error_file_id ?? undefined,
-      };
-    }
-    if (["failed", "expired", "cancelled", "canceled"].includes(state)) {
-      const detail = status.error_file_id
-        ? await readOpenAiBatchError({ openAi: params.openAi, errorFileId: status.error_file_id })
-        : undefined;
-      const suffix = detail ? `: ${detail}` : "";
-      throw new Error(`openai batch ${params.batchId} ${state}${suffix}`);
-    }
-    if (!params.wait) {
-      throw new Error(`openai batch ${params.batchId} still ${state}; wait disabled`);
-    }
-    if (Date.now() - start > params.timeoutMs) {
-      throw new Error(`openai batch ${params.batchId} timed out after ${params.timeoutMs}ms`);
-    }
-    params.debug?.(`openai batch ${params.batchId} ${state}; waiting ${params.pollIntervalMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
-    current = undefined;
-  }
-}
-
 export async function runOpenAiEmbeddingBatches(
   params: {
     openAi: OpenAiEmbeddingClient;
@@ -204,9 +160,11 @@ export async function runOpenAiEmbeddingBatches(
       if (!batchInfo.id) {
         throw new Error("openai batch create failed: missing batch id");
       }
+      // Capture batchId as string after the guard; TypeScript can't narrow across async closures.
+      const batchId: string = batchInfo.id;
 
       params.debug?.("memory embeddings: openai batch created", {
-        batchId: batchInfo.id,
+        batchId,
         status: batchInfo.status,
         group: groupIndex + 1,
         groups,
@@ -215,28 +173,34 @@ export async function runOpenAiEmbeddingBatches(
 
       if (!params.wait && batchInfo.status !== "completed") {
         throw new Error(
-          `openai batch ${batchInfo.id} submitted; enable remote.batch.wait to await completion`,
+          `openai batch ${batchId} submitted; enable remote.batch.wait to await completion`,
         );
       }
 
-      const completed =
-        batchInfo.status === "completed"
-          ? {
-              outputFileId: batchInfo.output_file_id ?? "",
-              errorFileId: batchInfo.error_file_id ?? undefined,
-            }
-          : await waitForOpenAiBatch({
-              openAi: params.openAi,
-              batchId: batchInfo.id,
-              wait: params.wait,
-              pollIntervalMs: params.pollIntervalMs,
-              timeoutMs: params.timeoutMs,
-              debug: params.debug,
-              initial: batchInfo,
-            });
-      if (!completed.outputFileId) {
-        throw new Error(`openai batch ${batchInfo.id} completed without output file`);
-      }
+      // waitForBatch handles the already-completed case on the first iteration via `initial`.
+      const completed = await waitForBatch<OpenAiBatchStatus>({
+        adapter: {
+          label: "openai",
+          fetchStatus: () => fetchOpenAiBatchStatus({ openAi: params.openAi, batchId }),
+          resolveState: (s) => s.status ?? "unknown",
+          isCompleted: (state) => state === "completed",
+          isFailed: (state) => OPENAI_FAILED_STATES.has(state),
+          resolveOutputFileId: (s) => s.output_file_id ?? undefined,
+          resolveErrorDetail: async (s) =>
+            s.error_file_id
+              ? await readOpenAiBatchError({
+                  openAi: params.openAi,
+                  errorFileId: s.error_file_id,
+                })
+              : undefined,
+        },
+        batchId,
+        wait: params.wait,
+        pollIntervalMs: params.pollIntervalMs,
+        timeoutMs: params.timeoutMs,
+        debug: params.debug,
+        initial: batchInfo,
+      });
 
       const content = await fetchOpenAiFileContent({
         openAi: params.openAi,
@@ -251,12 +215,10 @@ export async function runOpenAiEmbeddingBatches(
       }
 
       if (errors.length > 0) {
-        throw new Error(`openai batch ${batchInfo.id} failed: ${errors.join("; ")}`);
+        throw new Error(`openai batch ${batchId} failed: ${errors.join("; ")}`);
       }
       if (remaining.size > 0) {
-        throw new Error(
-          `openai batch ${batchInfo.id} missing ${remaining.size} embedding responses`,
-        );
+        throw new Error(`openai batch ${batchId} missing ${remaining.size} embedding responses`);
       }
     },
   });
