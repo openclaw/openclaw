@@ -7,7 +7,6 @@ import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
-const runCliAgentMock = vi.fn();
 
 type EmbeddedRunParams = {
   prompt?: string;
@@ -29,10 +28,6 @@ vi.mock("../../agents/model-fallback.js", () => ({
     provider,
     model,
   }),
-}));
-
-vi.mock("../../agents/cli-runner.js", () => ({
-  runCliAgent: (params: unknown) => runCliAgentMock(params),
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
@@ -123,7 +118,6 @@ function createBaseRun(params: {
 describe("runReplyAgent memory flush", () => {
   it("skips memory flush for CLI providers", async () => {
     runEmbeddedPiAgentMock.mockReset();
-    runCliAgentMock.mockReset();
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-flush-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
@@ -144,10 +138,8 @@ describe("runReplyAgent memory flush", () => {
         meta: { agentMeta: { usage: { input: 1, output: 1 } } },
       };
     });
-    runCliAgentMock.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-    });
+    // CLI providers now route through the embedded Pi runner
+    // (the CLI-backed StreamFn handles the subprocess internally).
 
     const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
       storePath,
@@ -180,9 +172,13 @@ describe("runReplyAgent memory flush", () => {
       typingMode: "instant",
     });
 
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    const call = runCliAgentMock.mock.calls[0]?.[0] as { prompt?: string } | undefined;
+    // CLI providers route through runEmbeddedPiAgent; the main
+    // run should be called exactly once (no memory flush turn).
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+      | { prompt?: string; provider?: string }
+      | undefined;
     expect(call?.prompt).toBe("hello");
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(call?.provider).toBe("codex-cli");
   });
 });

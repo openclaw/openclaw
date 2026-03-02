@@ -8,7 +8,6 @@ import { DEFAULT_MEMORY_FLUSH_PROMPT } from "./memory-flush.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
-const runCliAgentMock = vi.fn();
 
 type EmbeddedRunParams = {
   prompt?: string;
@@ -30,10 +29,6 @@ vi.mock("../../agents/model-fallback.js", () => ({
     provider,
     model,
   }),
-}));
-
-vi.mock("../../agents/cli-runner.js", () => ({
-  runCliAgent: (params: unknown) => runCliAgentMock(params),
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({

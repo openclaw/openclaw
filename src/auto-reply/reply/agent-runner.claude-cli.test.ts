@@ -6,7 +6,6 @@ import { onAgentEvent } from "../../infra/agent-events.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
-const runCliAgentMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: async ({
@@ -27,10 +26,6 @@ vi.mock("../../agents/model-fallback.js", () => ({
 vi.mock("../../agents/pi-embedded.js", () => ({
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
-}));
-
-vi.mock("../../agents/cli-runner.js", () => ({
-  runCliAgent: (params: unknown) => runCliAgentMock(params),
 }));
 
 vi.mock("./queue.js", async () => {
@@ -102,7 +97,7 @@ function createRun() {
 }
 
 describe("runReplyAgent claude-cli routing", () => {
-  it("uses claude-cli runner for claude-cli provider", async () => {
+  it("routes claude-cli provider through embedded Pi runner", async () => {
     const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue("run-1");
     const lifecyclePhases: string[] = [];
     const unsubscribe = onAgentEvent((evt) => {
@@ -117,7 +112,9 @@ describe("runReplyAgent claude-cli routing", () => {
         lifecyclePhases.push(phase);
       }
     });
-    runCliAgentMock.mockResolvedValueOnce({
+    // CLI providers now route through runEmbeddedPiAgent which
+    // uses the CLI-backed StreamFn internally.
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
         agentMeta: {
@@ -131,9 +128,10 @@ describe("runReplyAgent claude-cli routing", () => {
     unsubscribe();
     randomSpy.mockRestore();
 
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    expect(lifecyclePhases).toEqual(["start", "end"]);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    // Verify the provider flows through to the embedded runner
+    const callArgs = runEmbeddedPiAgentMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(callArgs.provider).toBe("claude-cli");
     expect(result).toMatchObject({ text: "ok" });
   });
 });
