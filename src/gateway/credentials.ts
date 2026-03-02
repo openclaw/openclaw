@@ -94,6 +94,7 @@ export function resolveGatewayCredentialsFromConfig(params: {
   env?: NodeJS.ProcessEnv;
   explicitAuth?: ExplicitGatewayAuth;
   urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
   modeOverride?: GatewayCredentialMode;
   includeLegacyEnv?: boolean;
   localTokenPrecedence?: GatewayCredentialPrecedence;
@@ -110,8 +111,18 @@ export function resolveGatewayCredentialsFromConfig(params: {
   if (explicitToken || explicitPassword) {
     return { token: explicitToken, password: explicitPassword };
   }
-  if (trimToUndefined(params.urlOverride)) {
+  if (trimToUndefined(params.urlOverride) && params.urlOverrideSource !== "env") {
     return {};
+  }
+  if (trimToUndefined(params.urlOverride) && params.urlOverrideSource === "env") {
+    return resolveGatewayCredentialsFromValues({
+      configToken: undefined,
+      configPassword: undefined,
+      env,
+      includeLegacyEnv,
+      tokenPrecedence: "env-first",
+      passwordPrecedence: "env-first",
+    });
   }
 
   const mode: GatewayCredentialMode =

@@ -369,7 +369,7 @@ export async function compactEmbeddedPiSessionDirect(
       sandbox,
       messageProvider: params.messageChannel ?? params.messageProvider,
       agentAccountId: params.agentAccountId,
-      sessionKey: params.sessionKey ?? params.sessionId,
+      sessionKey: sandboxSessionKey,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
