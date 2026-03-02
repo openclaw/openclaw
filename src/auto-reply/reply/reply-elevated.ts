@@ -1,49 +1,19 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
-import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
 import type { AgentElevatedAllowFromConfig, OpenClawConfig } from "../../config/config.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
+import {
+  type AllowFromFormatter,
+  type ExplicitElevatedAllowField,
+  addFormattedTokens,
+  buildMutableTokens,
+  matchesFormattedTokens,
+  matchesMutableTokens,
+  parseExplicitElevatedAllowEntry,
+  stripSenderPrefix,
+} from "./elevated-allowlist-matcher.js";
 export { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
-
-function normalizeAllowToken(value?: string) {
-  if (!value) {
-    return "";
-  }
-  return value.trim().toLowerCase();
-}
-
-function slugAllowToken(value?: string) {
-  if (!value) {
-    return "";
-  }
-  let text = value.trim().toLowerCase();
-  if (!text) {
-    return "";
-  }
-  text = text.replace(/^[@#]+/, "");
-  text = text.replace(/[\s_]+/g, "-");
-  text = text.replace(/[^a-z0-9-]+/g, "-");
-  return text.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
-}
-
-const SENDER_PREFIXES = [
-  ...CHAT_CHANNEL_ORDER,
-  INTERNAL_MESSAGE_CHANNEL,
-  "user",
-  "group",
-  "channel",
-];
-const SENDER_PREFIX_RE = new RegExp(`^(${SENDER_PREFIXES.join("|")}):`, "i");
-
-function stripSenderPrefix(value?: string) {
-  if (!value) {
-    return "";
-  }
-  const trimmed = value.trim();
-  return trimmed.replace(SENDER_PREFIX_RE, "");
-}
 
 function resolveElevatedAllowList(
   allowFrom: AgentElevatedAllowFromConfig | undefined,
@@ -57,9 +27,31 @@ function resolveElevatedAllowList(
   return Array.isArray(value) ? value : fallbackAllowFrom;
 }
 
+function resolveAllowFromFormatter(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  accountId?: string;
+}): AllowFromFormatter {
+  const normalizedProvider = normalizeChannelId(params.provider);
+  const dock = normalizedProvider ? getChannelDock(normalizedProvider) : undefined;
+  const formatAllowFrom = dock?.config?.formatAllowFrom;
+  if (!formatAllowFrom) {
+    return (values) => values.map((entry) => String(entry).trim()).filter(Boolean);
+  }
+  return (values) =>
+    formatAllowFrom({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      allowFrom: values,
+    })
+      .map((entry) => String(entry).trim())
+      .filter(Boolean);
+}
+
 function isApprovedElevatedSender(params: {
   provider: string;
   ctx: MsgContext;
+  formatAllowFrom: AllowFromFormatter;
   allowFrom?: AgentElevatedAllowFromConfig;
   fallbackAllowFrom?: Array<string | number>;
 }): boolean {
@@ -80,50 +72,84 @@ function isApprovedElevatedSender(params: {
     return true;
   }
 
-  const tokens = new Set<string>();
-  const addToken = (value?: string) => {
-    if (!value) {
-      return;
-    }
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return;
-    }
-    tokens.add(trimmed);
-    const normalized = normalizeAllowToken(trimmed);
-    if (normalized) {
-      tokens.add(normalized);
-    }
-    const slugged = slugAllowToken(trimmed);
-    if (slugged) {
-      tokens.add(slugged);
-    }
+  const senderIdTokens = new Set<string>();
+  const senderFromTokens = new Set<string>();
+  const senderE164Tokens = new Set<string>();
+
+  if (params.ctx.SenderId?.trim()) {
+    addFormattedTokens({
+      formatAllowFrom: params.formatAllowFrom,
+      values: [params.ctx.SenderId, stripSenderPrefix(params.ctx.SenderId)].filter(Boolean),
+      tokens: senderIdTokens,
+    });
+  }
+  if (params.ctx.From?.trim()) {
+    addFormattedTokens({
+      formatAllowFrom: params.formatAllowFrom,
+      values: [params.ctx.From, stripSenderPrefix(params.ctx.From)].filter(Boolean),
+      tokens: senderFromTokens,
+    });
+  }
+  if (params.ctx.SenderE164?.trim()) {
+    addFormattedTokens({
+      formatAllowFrom: params.formatAllowFrom,
+      values: [params.ctx.SenderE164],
+      tokens: senderE164Tokens,
+    });
+  }
+  const senderIdentityTokens = new Set<string>([
+    ...senderIdTokens,
+    ...senderFromTokens,
+    ...senderE164Tokens,
+  ]);
+
+  const senderNameTokens = buildMutableTokens(params.ctx.SenderName);
+  const senderUsernameTokens = buildMutableTokens(params.ctx.SenderUsername);
+  const senderTagTokens = buildMutableTokens(params.ctx.SenderTag);
+
+  const explicitFieldMatchers: Record<ExplicitElevatedAllowField, (value: string) => boolean> = {
+    id: (value) =>
+      matchesFormattedTokens({
+        formatAllowFrom: params.formatAllowFrom,
+        value,
+        includeStripped: true,
+        tokens: senderIdTokens,
+      }),
+    from: (value) =>
+      matchesFormattedTokens({
+        formatAllowFrom: params.formatAllowFrom,
+        value,
+        includeStripped: true,
+        tokens: senderFromTokens,
+      }),
+    e164: (value) =>
+      matchesFormattedTokens({
+        formatAllowFrom: params.formatAllowFrom,
+        value,
+        tokens: senderE164Tokens,
+      }),
+    name: (value) => matchesMutableTokens(value, senderNameTokens),
+    username: (value) => matchesMutableTokens(value, senderUsernameTokens),
+    tag: (value) => matchesMutableTokens(value, senderTagTokens),
   };
 
-  addToken(params.ctx.SenderName);
-  addToken(params.ctx.SenderUsername);
-  addToken(params.ctx.SenderTag);
-  addToken(params.ctx.SenderE164);
-  addToken(params.ctx.From);
-  addToken(stripSenderPrefix(params.ctx.From));
-  addToken(params.ctx.To);
-  addToken(stripSenderPrefix(params.ctx.To));
-
-  for (const rawEntry of allowTokens) {
-    const entry = rawEntry.trim();
-    if (!entry) {
+  for (const entry of allowTokens) {
+    const explicitEntry = parseExplicitElevatedAllowEntry(entry);
+    if (!explicitEntry) {
+      if (
+        matchesFormattedTokens({
+          formatAllowFrom: params.formatAllowFrom,
+          value: entry,
+          includeStripped: true,
+          tokens: senderIdentityTokens,
+        })
+      ) {
+        return true;
+      }
       continue;
     }
-    const stripped = stripSenderPrefix(entry);
-    if (tokens.has(entry) || tokens.has(stripped)) {
-      return true;
-    }
-    const normalized = normalizeAllowToken(stripped);
-    if (normalized && tokens.has(normalized)) {
-      return true;
-    }
-    const slugged = slugAllowToken(stripped);
-    if (slugged && tokens.has(slugged)) {
+    const matchesExplicitField = explicitFieldMatchers[explicitEntry.field];
+    if (matchesExplicitField(explicitEntry.value)) {
       return true;
     }
   }
@@ -165,16 +191,20 @@ export function resolveElevatedPermissions(params: {
   }
 
   const normalizedProvider = normalizeChannelId(params.provider);
-  const dockFallbackAllowFrom = normalizedProvider
-    ? getChannelDock(normalizedProvider)?.elevated?.allowFromFallback?.({
-        cfg: params.cfg,
-        accountId: params.ctx.AccountId,
-      })
-    : undefined;
-  const fallbackAllowFrom = dockFallbackAllowFrom;
+  const dock = normalizedProvider ? getChannelDock(normalizedProvider) : undefined;
+  const fallbackAllowFrom = dock?.elevated?.allowFromFallback?.({
+    cfg: params.cfg,
+    accountId: params.ctx.AccountId,
+  });
+  const formatAllowFrom = resolveAllowFromFormatter({
+    cfg: params.cfg,
+    provider: params.provider,
+    accountId: params.ctx.AccountId,
+  });
   const globalAllowed = isApprovedElevatedSender({
     provider: params.provider,
     ctx: params.ctx,
+    formatAllowFrom,
     allowFrom: globalConfig?.allowFrom,
     fallbackAllowFrom,
   });
@@ -190,6 +220,7 @@ export function resolveElevatedPermissions(params: {
     ? isApprovedElevatedSender({
         provider: params.provider,
         ctx: params.ctx,
+        formatAllowFrom,
         allowFrom: agentConfig.allowFrom,
         fallbackAllowFrom,
       })

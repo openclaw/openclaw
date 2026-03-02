@@ -88,6 +88,7 @@ struct RootCanvas: View {
             }
         }
         .gatewayTrustPromptAlert()
+        .deepLinkAgentPromptAlert()
         .sheet(item: self.$presentedSheet) { sheet in
             switch sheet {
             case .settings:
@@ -97,10 +98,9 @@ struct RootCanvas: View {
                     .environment(self.gatewayController)
             case .chat:
                 ChatSheet(
-                    // Mobile chat UI should use the node role RPC surface (chat.* / sessions.*)
-                    // to avoid requiring operator scopes like operator.read.
-                    gateway: self.appModel.gatewaySession,
-                    sessionKey: self.appModel.mainSessionKey,
+                    // Chat RPCs run on the operator session (read/write scopes).
+                    gateway: self.appModel.operatorSession,
+                    sessionKey: self.appModel.chatSessionKey,
                     agentName: self.appModel.activeAgentName,
                     userAccent: self.appModel.seamColor)
             case .quickSetup:
@@ -146,6 +146,9 @@ struct RootCanvas: View {
                 OnboardingStateStore.markCompleted(mode: nil)
             }
             self.maybeAutoOpenSettings()
+        }
+        .onChange(of: self.appModel.openChatRequestID) { _, _ in
+            self.presentedSheet = .chat
         }
         .onChange(of: self.voiceWake.lastTriggeredCommand) { _, newValue in
             guard let newValue else { return }

@@ -14,6 +14,14 @@ type ReadChannelAllowFromStore =
   typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
 type UpsertChannelPairingRequest =
   typeof import("../../pairing/pairing-store.js").upsertChannelPairingRequest;
+type ReadChannelAllowFromStoreForAccount = (params: {
+  channel: Parameters<ReadChannelAllowFromStore>[0];
+  accountId: string;
+  env?: Parameters<ReadChannelAllowFromStore>[1];
+}) => ReturnType<ReadChannelAllowFromStore>;
+type UpsertChannelPairingRequestForAccount = (
+  params: Omit<Parameters<UpsertChannelPairingRequest>[0], "accountId"> & { accountId: string },
+) => ReturnType<UpsertChannelPairingRequest>;
 type FetchRemoteMedia = typeof import("../../media/fetch.js").fetchRemoteMedia;
 type SaveMediaBuffer = typeof import("../../media/store.js").saveMediaBuffer;
 type TextToSpeechTelephony = typeof import("../../tts/tts.js").textToSpeechTelephony;
@@ -55,6 +63,7 @@ type ShouldHandleTextCommands =
   typeof import("../../auto-reply/commands-registry.js").shouldHandleTextCommands;
 type DispatchReplyFromConfig =
   typeof import("../../auto-reply/reply/dispatch-from-config.js").dispatchReplyFromConfig;
+type WithReplyDispatcher = typeof import("../../auto-reply/dispatch.js").withReplyDispatcher;
 type FinalizeInboundContext =
   typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
 type FormatAgentEnvelope = typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
@@ -222,6 +231,7 @@ export type PluginRuntime = {
       resolveEffectiveMessagesConfig: ResolveEffectiveMessagesConfig;
       resolveHumanDelayConfig: ResolveHumanDelayConfig;
       dispatchReplyFromConfig: DispatchReplyFromConfig;
+      withReplyDispatcher: WithReplyDispatcher;
       finalizeInboundContext: FinalizeInboundContext;
       formatAgentEnvelope: FormatAgentEnvelope;
       /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
@@ -233,8 +243,8 @@ export type PluginRuntime = {
     };
     pairing: {
       buildPairingReply: BuildPairingReply;
-      readAllowFromStore: ReadChannelAllowFromStore;
-      upsertPairingRequest: UpsertChannelPairingRequest;
+      readAllowFromStore: ReadChannelAllowFromStoreForAccount;
+      upsertPairingRequest: UpsertChannelPairingRequestForAccount;
     };
     media: {
       fetchRemoteMedia: FetchRemoteMedia;

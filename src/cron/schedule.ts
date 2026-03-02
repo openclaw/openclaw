@@ -41,7 +41,12 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return anchor + steps * everyMs;
   }
 
-  const expr = schedule.expr.trim();
+  const cronSchedule = schedule as { expr?: unknown; cron?: unknown };
+  const exprSource = typeof cronSchedule.expr === "string" ? cronSchedule.expr : cronSchedule.cron;
+  if (typeof exprSource !== "string") {
+    throw new Error("invalid cron schedule: expr is required");
+  }
+  const expr = exprSource.trim();
   if (!expr) {
     return undefined;
   }

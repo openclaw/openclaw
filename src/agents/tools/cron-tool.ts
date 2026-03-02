@@ -9,7 +9,7 @@ import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
-import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
+import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 // NOTE: We use Type.Object({}, { additionalProperties: true }) for job/patch
@@ -28,26 +28,35 @@ const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
 // Flattened schema: runtime validates per-action requirements.
-const CronToolSchema = Type.Object({
-  action: stringEnum(CRON_ACTIONS),
-  gatewayUrl: Type.Optional(Type.String()),
-  gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
-  includeDisabled: Type.Optional(Type.Boolean()),
-  job: Type.Optional(Type.Object({}, { additionalProperties: true })),
-  jobId: Type.Optional(Type.String()),
-  id: Type.Optional(Type.String()),
-  patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
-  text: Type.Optional(Type.String()),
-  mode: optionalStringEnum(CRON_WAKE_MODES),
-  runMode: optionalStringEnum(CRON_RUN_MODES),
-  contextMessages: Type.Optional(
-    Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
-  ),
-});
+const CronToolSchema = Type.Object(
+  {
+    action: stringEnum(CRON_ACTIONS),
+    gatewayUrl: Type.Optional(Type.String()),
+    gatewayToken: Type.Optional(Type.String()),
+    timeoutMs: Type.Optional(Type.Number()),
+    includeDisabled: Type.Optional(Type.Boolean()),
+    job: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    jobId: Type.Optional(Type.String()),
+    id: Type.Optional(Type.String()),
+    patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    text: Type.Optional(Type.String()),
+    mode: optionalStringEnum(CRON_WAKE_MODES),
+    runMode: optionalStringEnum(CRON_RUN_MODES),
+    contextMessages: Type.Optional(
+      Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
+    ),
+  },
+  { additionalProperties: true },
+);
 
 type CronToolOptions = {
   agentSessionKey?: string;
+};
+
+type GatewayToolCaller = typeof callGatewayTool;
+
+type CronToolDeps = {
+  callGatewayTool?: GatewayToolCaller;
 };
 
 type ChatMessage = {
@@ -84,6 +93,7 @@ async function buildReminderContextLines(params: {
   agentSessionKey?: string;
   gatewayOpts: GatewayCallOptions;
   contextMessages: number;
+  callGatewayTool: GatewayToolCaller;
 }) {
   const maxMessages = Math.min(
     REMINDER_CONTEXT_MESSAGES_MAX,
@@ -100,7 +110,7 @@ async function buildReminderContextLines(params: {
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
   try {
-    const res = await callGatewayTool<{ messages: Array<unknown> }>(
+    const res = await params.callGatewayTool<{ messages: Array<unknown> }>(
       "chat.history",
       params.gatewayOpts,
       {
@@ -197,10 +207,12 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   return delivery;
 }
 
-export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
+export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
+  const callGateway = deps?.callGatewayTool ?? callGatewayTool;
   return {
     label: "Cron",
     name: "cron",
+    ownerOnly: true,
     description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.
 
 ACTIONS:
@@ -237,7 +249,7 @@ PAYLOAD TYPES (payload.kind):
 - "systemEvent": Injects text as system event into session
   { "kind": "systemEvent", "text": "<message>" }
 - "agentTurn": Runs agent with message (isolated sessions only)
-  { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional> }
+  { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
 
 DELIVERY (top-level):
   { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
@@ -262,17 +274,19 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const gatewayOpts: GatewayCallOptions = {
-        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
-        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : 60_000,
+        ...readGatewayCallOptions(params),
+        timeoutMs:
+          typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+            ? params.timeoutMs
+            : 60_000,
       };
 
       switch (action) {
         case "status":
-          return jsonResult(await callGatewayTool("cron.status", gatewayOpts, {}));
+          return jsonResult(await callGateway("cron.status", gatewayOpts, {}));
         case "list":
           return jsonResult(
-            await callGatewayTool("cron.list", gatewayOpts, {
+            await callGateway("cron.list", gatewayOpts, {
               includeDisabled: Boolean(params.includeDisabled),
             }),
           );
@@ -409,6 +423,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                 agentSessionKey: opts?.agentSessionKey,
                 gatewayOpts,
                 contextMessages,
+                callGatewayTool: callGateway,
               });
               if (contextLines.length > 0) {
                 const baseText = stripExistingContext(payload.text);
@@ -416,19 +431,55 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               }
             }
           }
-          return jsonResult(await callGatewayTool("cron.add", gatewayOpts, job));
+          return jsonResult(await callGateway("cron.add", gatewayOpts, job));
         }
         case "update": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
+
+          // Flat-params recovery for patch
+          if (
+            !params.patch ||
+            (typeof params.patch === "object" &&
+              params.patch !== null &&
+              Object.keys(params.patch as Record<string, unknown>).length === 0)
+          ) {
+            const PATCH_KEYS: ReadonlySet<string> = new Set([
+              "name",
+              "schedule",
+              "payload",
+              "delivery",
+              "enabled",
+              "description",
+              "deleteAfterRun",
+              "agentId",
+              "sessionKey",
+              "sessionTarget",
+              "wakeMode",
+              "failureAlert",
+              "allowUnsafeExternalContent",
+            ]);
+            const synthetic: Record<string, unknown> = {};
+            let found = false;
+            for (const key of Object.keys(params)) {
+              if (PATCH_KEYS.has(key) && params[key] !== undefined) {
+                synthetic[key] = params[key];
+                found = true;
+              }
+            }
+            if (found) {
+              params.patch = synthetic;
+            }
+          }
+
           if (!params.patch || typeof params.patch !== "object") {
             throw new Error("patch required");
           }
           const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
           return jsonResult(
-            await callGatewayTool("cron.update", gatewayOpts, {
+            await callGateway("cron.update", gatewayOpts, {
               id,
               patch,
             }),
@@ -439,7 +490,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGatewayTool("cron.remove", gatewayOpts, { id }));
+          return jsonResult(await callGateway("cron.remove", gatewayOpts, { id }));
         }
         case "run": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
@@ -448,14 +499,14 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
           const runMode =
             params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
-          return jsonResult(await callGatewayTool("cron.run", gatewayOpts, { id, mode: runMode }));
+          return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
         }
         case "runs": {
           const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(await callGatewayTool("cron.runs", gatewayOpts, { id }));
+          return jsonResult(await callGateway("cron.runs", gatewayOpts, { id }));
         }
         case "wake": {
           const text = readStringParam(params, "text", { required: true });
@@ -464,7 +515,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               ? params.mode
               : "next-heartbeat";
           return jsonResult(
-            await callGatewayTool("wake", gatewayOpts, { mode, text }, { expectFinal: false }),
+            await callGateway("wake", gatewayOpts, { mode, text }, { expectFinal: false }),
           );
         }
         default:

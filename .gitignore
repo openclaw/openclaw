@@ -17,6 +17,11 @@ __pycache__/
 ui/src/ui/__screenshots__/
 ui/playwright-report/
 ui/test-results/
+packages/dashboard-next/.next/
+packages/dashboard-next/out/
+
+# Mise configuration files
+mise.toml
 
 # Android build artifacts
 apps/android/.gradle/
@@ -36,10 +41,13 @@ bin/docs-list
 apps/macos/.build-local/
 apps/macos/.swiftpm/
 apps/shared/MoltbotKit/.swiftpm/
+apps/shared/OpenClawKit/.swiftpm/
 Core/
 apps/ios/*.xcodeproj/
 apps/ios/*.xcworkspace/
 apps/ios/.swiftpm/
+apps/ios/.derivedData/
+apps/ios/.local-signing.xcconfig
 vendor/
 apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
@@ -86,3 +94,29 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+.claude/settings.local.json
+.agents/
+.agents
+.agent/
+skills-lock.json
+
+# Local iOS signing overrides
+apps/ios/LocalSigning.xcconfig
+
+# Xcode build directories (xcodebuild output)
+apps/ios/build/
+apps/shared/OpenClawKit/build/
+Swabble/build/
+
+# Generated protocol schema (produced via pnpm protocol:gen)
+dist/protocol.schema.json
+.ant-colony/
+
+# Eclipse
+**/.project
+**/.classpath
+**/.settings/
+**/.gradle/
+
+# Synthing
+**/.stfolder/

@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { fetchDiscord } from "./api.js";
-
-function jsonResponse(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status });
-}
+import { jsonResponse } from "./test-http-helpers.js";
 
 describe("fetchDiscord", () => {
   it("formats rate limit payloads without raw JSON", async () => {
-    const fetcher = async () =>
+    const fetcher = withFetchPreconnect(async () =>
       jsonResponse(
         {
           message: "You are being rate limited.",
@@ -15,11 +13,12 @@ describe("fetchDiscord", () => {
           global: false,
         },
         429,
-      );
+      ),
+    );
 
     let error: unknown;
     try {
-      await fetchDiscord("/users/@me/guilds", "test", fetcher as typeof fetch, {
+      await fetchDiscord("/users/@me/guilds", "test", fetcher, {
         retry: { attempts: 1 },
       });
     } catch (err) {
@@ -35,9 +34,9 @@ describe("fetchDiscord", () => {
   });
 
   it("preserves non-JSON error text", async () => {
-    const fetcher = async () => new Response("Not Found", { status: 404 });
+    const fetcher = withFetchPreconnect(async () => new Response("Not Found", { status: 404 }));
     await expect(
-      fetchDiscord("/users/@me/guilds", "test", fetcher as typeof fetch, {
+      fetchDiscord("/users/@me/guilds", "test", fetcher, {
         retry: { attempts: 1 },
       }),
     ).rejects.toThrow("Discord API /users/@me/guilds failed (404): Not Found");
@@ -45,7 +44,7 @@ describe("fetchDiscord", () => {
 
   it("retries rate limits before succeeding", async () => {
     let calls = 0;
-    const fetcher = async () => {
+    const fetcher = withFetchPreconnect(async () => {
       calls += 1;
       if (calls === 1) {
         return jsonResponse(
@@ -58,12 +57,12 @@ describe("fetchDiscord", () => {
         );
       }
       return jsonResponse([{ id: "1", name: "Guild" }], 200);
-    };
+    });
 
     const result = await fetchDiscord<Array<{ id: string; name: string }>>(
       "/users/@me/guilds",
       "test",
-      fetcher as typeof fetch,
+      fetcher,
       { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0 } },
     );
 

@@ -14,6 +14,8 @@ export function buildEmbeddedSystemPrompt(params: {
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  ownerDisplay?: "raw" | "hash";
+  ownerDisplaySecret?: string;
   reasoningTagHint: boolean;
   heartbeatPrompt?: string;
   skillsPrompt?: string;
@@ -26,6 +28,8 @@ export function buildEmbeddedSystemPrompt(params: {
   workspaceNotes?: string[];
   /** Controls which hardcoded sections to include. Defaults to "full". */
   promptMode?: PromptMode;
+  /** Whether ACP-specific routing guidance should be included. Defaults to true. */
+  acpEnabled?: boolean;
   runtimeInfo: {
     agentId?: string;
     host: string;
@@ -55,6 +59,8 @@ export function buildEmbeddedSystemPrompt(params: {
     reasoningLevel: params.reasoningLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
+    ownerDisplay: params.ownerDisplay,
+    ownerDisplaySecret: params.ownerDisplaySecret,
     reasoningTagHint: params.reasoningTagHint,
     heartbeatPrompt: params.heartbeatPrompt,
     skillsPrompt: params.skillsPrompt,
@@ -63,6 +69,7 @@ export function buildEmbeddedSystemPrompt(params: {
     workspaceNotes: params.workspaceNotes,
     reactionGuidance: params.reactionGuidance,
     promptMode: params.promptMode,
+    acpEnabled: params.acpEnabled,
     runtimeInfo: params.runtimeInfo,
     messageToolHints: params.messageToolHints,
     sandboxInfo: params.sandboxInfo,

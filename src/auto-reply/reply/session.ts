@@ -11,6 +11,7 @@ import {
   evaluateSessionFreshness,
   type GroupKeyResolution,
   loadSessionStore,
+  resolveAndPersistSessionFile,
   resolveChannelResetConfig,
   resolveThreadFlag,
   resolveSessionResetPolicy,
@@ -27,13 +28,68 @@ import {
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import { buildAgentMainSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  deliveryContextFromSession,
+  deliveryContextKey,
+  normalizeDeliveryContext,
+  normalizeSessionDeliveryFields,
+} from "../../utils/delivery-context.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+
+const log = createSubsystemLogger("session-init");
+
+function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed?.rest) {
+    return undefined;
+  }
+  const head = parsed.rest.split(":")[0]?.trim().toLowerCase();
+  if (!head || head === "main" || head === "cron" || head === "subagent" || head === "acp") {
+    return undefined;
+  }
+  return normalizeMessageChannel(head);
+}
+
+function resolveLastChannelRaw(params: {
+  originatingChannelRaw?: string;
+  persistedLastChannel?: string;
+  sessionKey?: string;
+}): string | undefined {
+  const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+  const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
+  const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
+  let resolved = params.originatingChannelRaw || params.persistedLastChannel;
+  // Internal webchat/system turns should not overwrite previously known external
+  // delivery routes (or explicit channel hints encoded in the session key).
+  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL) {
+    if (
+      persistedChannel &&
+      persistedChannel !== INTERNAL_MESSAGE_CHANNEL &&
+      isDeliverableMessageChannel(persistedChannel)
+    ) {
+      resolved = persistedChannel;
+    } else if (
+      sessionKeyChannelHint &&
+      sessionKeyChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
+      isDeliverableMessageChannel(sessionKeyChannelHint)
+    ) {
+      resolved = sessionKeyChannelHint;
+    }
+  }
+  return resolved;
+}
 
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
@@ -53,6 +109,87 @@ export type SessionInitResult = {
   bodyStripped?: string;
   triggerBodyNormalized: string;
 };
+
+/**
+ * Default max parent token count beyond which thread/session parent forking is skipped.
+ * This prevents new thread sessions from inheriting near-full parent context.
+ * See #26905.
+ */
+const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
+
+type LegacyMainDeliveryRetirement = {
+  key: string;
+  entry: SessionEntry;
+};
+
+function resolveParentForkMaxTokens(cfg: OpenClawConfig): number {
+  const configured = cfg.session?.parentForkMaxTokens;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured >= 0) {
+    return Math.floor(configured);
+  }
+  return DEFAULT_PARENT_FORK_MAX_TOKENS;
+}
+
+function maybeRetireLegacyMainDeliveryRoute(params: {
+  sessionCfg: OpenClawConfig["session"] | undefined;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  agentId: string;
+  mainKey: string;
+  isGroup: boolean;
+  ctx: MsgContext;
+}): LegacyMainDeliveryRetirement | undefined {
+  const dmScope = params.sessionCfg?.dmScope ?? "main";
+  if (dmScope === "main" || params.isGroup) {
+    return undefined;
+  }
+  const canonicalMainSessionKey = buildAgentMainSessionKey({
+    agentId: params.agentId,
+    mainKey: params.mainKey,
+  }).toLowerCase();
+  if (params.sessionKey === canonicalMainSessionKey) {
+    return undefined;
+  }
+  const legacyMain = params.sessionStore[canonicalMainSessionKey];
+  if (!legacyMain) {
+    return undefined;
+  }
+  const legacyRouteKey = deliveryContextKey(deliveryContextFromSession(legacyMain));
+  if (!legacyRouteKey) {
+    return undefined;
+  }
+  const activeDirectRouteKey = deliveryContextKey(
+    normalizeDeliveryContext({
+      channel: params.ctx.OriginatingChannel as string | undefined,
+      to: params.ctx.OriginatingTo || params.ctx.To,
+      accountId: params.ctx.AccountId,
+      threadId: params.ctx.MessageThreadId,
+    }),
+  );
+  if (!activeDirectRouteKey || activeDirectRouteKey !== legacyRouteKey) {
+    return undefined;
+  }
+  if (
+    legacyMain.deliveryContext === undefined &&
+    legacyMain.lastChannel === undefined &&
+    legacyMain.lastTo === undefined &&
+    legacyMain.lastAccountId === undefined &&
+    legacyMain.lastThreadId === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    key: canonicalMainSessionKey,
+    entry: {
+      ...legacyMain,
+      deliveryContext: undefined,
+      lastChannel: undefined,
+      lastTo: undefined,
+      lastAccountId: undefined,
+      lastThreadId: undefined,
+    },
+  };
+}
 
 function forkSessionFromParent(params: {
   parentEntry: SessionEntry;
@@ -89,10 +226,7 @@ function forkSessionFromParent(params: {
       cwd: manager.getCwd(),
       parentSession: parentSessionFile,
     };
-    fs.writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
+    fs.writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
     return { sessionId, sessionFile };
   } catch {
     return null;
@@ -123,6 +257,7 @@ export async function initSessionState(params: {
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
+  const parentForkMaxTokens = resolveParentForkMaxTokens(cfg);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
 
@@ -149,6 +284,7 @@ export async function initSessionState(params: {
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
+  let persistedLabel: string | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
@@ -208,6 +344,18 @@ export async function initSessionState(params: {
   }
 
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
+  const retiredLegacyMainDelivery = maybeRetireLegacyMainDeliveryRoute({
+    sessionCfg,
+    sessionKey,
+    sessionStore,
+    agentId,
+    mainKey,
+    isGroup,
+    ctx,
+  });
+  if (retiredLegacyMainDelivery) {
+    sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
+  }
   const entry = sessionStore[sessionKey];
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
@@ -246,6 +394,7 @@ export async function initSessionState(params: {
     persistedTtsAuto = entry.ttsAuto;
     persistedModelOverride = entry.modelOverride;
     persistedProviderOverride = entry.providerOverride;
+    persistedLabel = entry.label;
   } else {
     sessionId = crypto.randomUUID();
     isNewSession = true;
@@ -259,12 +408,20 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
+      persistedModelOverride = entry.modelOverride;
+      persistedProviderOverride = entry.providerOverride;
+      persistedLabel = entry.label;
     }
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
-  const lastChannelRaw = (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
+  const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
+  const lastChannelRaw = resolveLastChannelRaw({
+    originatingChannelRaw,
+    persistedLastChannel: baseEntry?.lastChannel,
+    sessionKey,
+  });
   const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
   const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
   // Only fall back to persisted threadId for thread sessions.  Non-thread
@@ -297,6 +454,7 @@ export async function initSessionState(params: {
     responseUsage: baseEntry?.responseUsage,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
+    label: persistedLabel ?? baseEntry?.label,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,
@@ -333,35 +491,57 @@ export async function initSessionState(params: {
     sessionEntry.displayName = threadLabel;
   }
   const parentSessionKey = ctx.ParentSessionKey?.trim();
+  const alreadyForked = sessionEntry.forkedFromParent === true;
   if (
-    isNewSession &&
     parentSessionKey &&
     parentSessionKey !== sessionKey &&
-    sessionStore[parentSessionKey]
+    sessionStore[parentSessionKey] &&
+    !alreadyForked
   ) {
-    console.warn(
-      `[session-init] forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-        `parentTokens=${sessionStore[parentSessionKey].totalTokens ?? "?"}`,
-    );
-    const forked = forkSessionFromParent({
-      parentEntry: sessionStore[parentSessionKey],
-      agentId,
-      sessionsDir: path.dirname(storePath),
-    });
-    if (forked) {
-      sessionId = forked.sessionId;
-      sessionEntry.sessionId = forked.sessionId;
-      sessionEntry.sessionFile = forked.sessionFile;
-      console.warn(`[session-init] forked session created: file=${forked.sessionFile}`);
+    const parentTokens = sessionStore[parentSessionKey].totalTokens ?? 0;
+    if (parentForkMaxTokens > 0 && parentTokens > parentForkMaxTokens) {
+      // Parent context is too large — forking would create a thread session
+      // that immediately overflows the model's context window. Start fresh
+      // instead and mark as forked to prevent re-attempts. See #26905.
+      log.warn(
+        `skipping parent fork (parent too large): parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
+          `parentTokens=${parentTokens} maxTokens=${parentForkMaxTokens}`,
+      );
+      sessionEntry.forkedFromParent = true;
+    } else {
+      log.warn(
+        `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
+          `parentTokens=${parentTokens}`,
+      );
+      const forked = forkSessionFromParent({
+        parentEntry: sessionStore[parentSessionKey],
+        agentId,
+        sessionsDir: path.dirname(storePath),
+      });
+      if (forked) {
+        sessionId = forked.sessionId;
+        sessionEntry.sessionId = forked.sessionId;
+        sessionEntry.sessionFile = forked.sessionFile;
+        sessionEntry.forkedFromParent = true;
+        log.warn(`forked session created: file=${forked.sessionFile}`);
+      }
     }
   }
-  if (!sessionEntry.sessionFile) {
-    sessionEntry.sessionFile = resolveSessionTranscriptPath(
-      sessionEntry.sessionId,
-      agentId,
-      ctx.MessageThreadId,
-    );
-  }
+  const fallbackSessionFile = !sessionEntry.sessionFile
+    ? resolveSessionTranscriptPath(sessionEntry.sessionId, agentId, ctx.MessageThreadId)
+    : undefined;
+  const resolvedSessionFile = await resolveAndPersistSessionFile({
+    sessionId: sessionEntry.sessionId,
+    sessionKey,
+    sessionStore,
+    storePath,
+    sessionEntry,
+    agentId,
+    sessionsDir: path.dirname(storePath),
+    fallbackSessionFile,
+    activeSessionKey: sessionKey,
+  });
+  sessionEntry = resolvedSessionFile.sessionEntry;
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
@@ -380,6 +560,9 @@ export async function initSessionState(params: {
     (store) => {
       // Preserve per-session overrides while resetting compaction state on /new.
       store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+      if (retiredLegacyMainDelivery) {
+        store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
+      }
     },
     {
       activeSessionKey: sessionKey,

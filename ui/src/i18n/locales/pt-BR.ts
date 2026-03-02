@@ -2,6 +2,7 @@ import type { TranslationMap } from "../lib/types.ts";
 
 export const pt_BR: TranslationMap = {
   common: {
+    version: "Versão",
     health: "Saúde",
     ok: "OK",
     offline: "Offline",
@@ -97,6 +98,11 @@ export const pt_BR: TranslationMap = {
       failed:
         "Falha na autenticação. Recopie uma URL com token usando {command}, ou atualize o token e clique em Conectar.",
     },
+    pairing: {
+      hint: "Este dispositivo precisa de aprovação de pareamento do host do gateway.",
+      mobileHint:
+        "No celular? Copie a URL completa (incluindo #token=...) executando openclaw dashboard --no-open no desktop.",
+    },
     insecure: {
       hint: "Esta página é HTTP, então o navegador bloqueia a identidade do dispositivo. Use HTTPS (Tailscale Serve) ou abra {url} no host do gateway.",
       stayHttp: "Se você precisar permanecer em HTTP, defina {config} (apenas token).",
@@ -107,6 +113,9 @@ export const pt_BR: TranslationMap = {
     refreshTitle: "Atualizar dados do chat",
     thinkingToggle: "Alternar saída de pensamento/trabalho do assistente",
     focusToggle: "Alternar modo de foco (ocultar barra lateral + cabeçalho da página)",
+    hideCronSessions: "Ocultar sessões de cron",
+    showCronSessions: "Mostrar sessões de cron",
+    showCronSessionsHidden: "Mostrar sessões de cron ({count} ocultas)",
     onboardingDisabled: "Desativado durante a integração",
   },
   languages: {
@@ -114,5 +123,6 @@ export const pt_BR: TranslationMap = {
     zhCN: "简体中文 (Chinês Simplificado)",
     zhTW: "繁體中文 (Chinês Tradicional)",
     ptBR: "Português (Português Brasileiro)",
+    de: "Deutsch (Alemão)",
   },
 };

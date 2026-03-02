@@ -3,6 +3,15 @@ import { resolveFetch } from "../infra/fetch.js";
 import { resetTelegramFetchStateForTests, resolveTelegramFetch } from "./fetch.js";
 
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
+const setDefaultResultOrder = vi.hoisted(() => vi.fn());
+const setGlobalDispatcher = vi.hoisted(() => vi.fn());
+const getGlobalDispatcherState = vi.hoisted(() => ({ value: undefined as unknown }));
+const getGlobalDispatcher = vi.hoisted(() => vi.fn(() => getGlobalDispatcherState.value));
+const EnvHttpProxyAgentCtor = vi.hoisted(() =>
+  vi.fn(function MockEnvHttpProxyAgent(this: { options: unknown }, options: unknown) {
+    this.options = options;
+  }),
+);
 
 vi.mock("node:net", async () => {
   const actual = await vi.importActual<typeof import("node:net")>("node:net");
@@ -12,11 +21,30 @@ vi.mock("node:net", async () => {
   };
 });
 
+vi.mock("node:dns", async () => {
+  const actual = await vi.importActual<typeof import("node:dns")>("node:dns");
+  return {
+    ...actual,
+    setDefaultResultOrder,
+  };
+});
+
+vi.mock("undici", () => ({
+  EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
+  getGlobalDispatcher,
+  setGlobalDispatcher,
+}));
+
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   resetTelegramFetchStateForTests();
   setDefaultAutoSelectFamily.mockReset();
+  setDefaultResultOrder.mockReset();
+  setGlobalDispatcher.mockReset();
+  getGlobalDispatcher.mockClear();
+  getGlobalDispatcherState.value = undefined;
+  EnvHttpProxyAgentCtor.mockClear();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
   if (originalFetch) {
@@ -104,5 +132,89 @@ describe("resolveTelegramFetch", () => {
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
     expect(setDefaultAutoSelectFamily).toHaveBeenCalledWith(false);
+  });
+
+  it("applies dns result order from config", async () => {
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { dnsResultOrder: "verbatim" } });
+    expect(setDefaultResultOrder).toHaveBeenCalledWith("verbatim");
+  });
+
+  it("retries dns setter on next call when previous attempt threw", async () => {
+    setDefaultResultOrder.mockImplementationOnce(() => {
+      throw new Error("dns setter failed once");
+    });
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { dnsResultOrder: "ipv4first" } });
+    resolveTelegramFetch(undefined, { network: { dnsResultOrder: "ipv4first" } });
+
+    expect(setDefaultResultOrder).toHaveBeenCalledTimes(2);
+  });
+
+  it("replaces global undici dispatcher with proxy-aware EnvHttpProxyAgent", async () => {
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledWith({
+      connect: {
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+      },
+    });
+  });
+
+  it("keeps an existing proxy-like global dispatcher", async () => {
+    getGlobalDispatcherState.value = {
+      constructor: { name: "ProxyAgent" },
+    };
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
+  });
+
+  it("updates proxy-like dispatcher when proxy env is configured", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    getGlobalDispatcherState.value = {
+      constructor: { name: "ProxyAgent" },
+    };
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets global dispatcher only once across repeated equal decisions", async () => {
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates global dispatcher when autoSelectFamily decision changes", async () => {
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: false } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(1, {
+      connect: {
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+      },
+    });
+    expect(EnvHttpProxyAgentCtor).toHaveBeenNthCalledWith(2, {
+      connect: {
+        autoSelectFamily: false,
+        autoSelectFamilyAttemptTimeout: 300,
+      },
+    });
   });
 });

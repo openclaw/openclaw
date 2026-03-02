@@ -115,10 +115,21 @@ Cron supports three schedule kinds:
 
 - `at`: one-shot timestamp via `schedule.at` (ISO 8601).
 - `every`: fixed interval (ms).
-- `cron`: 5-field cron expression with optional IANA timezone.
+- `cron`: 5-field cron expression (or 6-field with seconds) with optional IANA timezone.
 
 Cron expressions use `croner`. If a timezone is omitted, the Gateway host’s
 local timezone is used.
+
+To reduce top-of-hour load spikes across many gateways, OpenClaw applies a
+deterministic per-job stagger window of up to 5 minutes for recurring
+top-of-hour expressions (for example `0 * * * *`, `0 */2 * * *`). Fixed-hour
+expressions such as `0 7 * * *` remain exact.
+
+For any cron schedule, you can set an explicit stagger window with `schedule.staggerMs`
+(`0` keeps exact timing). CLI shortcuts:
+
+- `--stagger 30s` (or `1m`, `5m`) to set an explicit stagger window.
+- `--exact` to force `staggerMs = 0`.
 
 ### Main vs isolated execution
 
@@ -338,8 +349,41 @@ Notes:
 ## Storage & history
 
 - Job store: `~/.openclaw/cron/jobs.json` (Gateway-managed JSON).
-- Run history: `~/.openclaw/cron/runs/<jobId>.jsonl` (JSONL, auto-pruned).
+- Run history: `~/.openclaw/cron/runs/<jobId>.jsonl` (JSONL, auto-pruned by size and line count).
+- Isolated cron run sessions in `sessions.json` are pruned by `cron.sessionRetention` (default `24h`; set `false` to disable).
 - Override store path: `cron.store` in config.
+
+## Retry policy
+
+When a job fails, OpenClaw classifies errors as **transient** (retryable) or **permanent** (disable immediately).
+
+### Transient errors (retried)
+
+- Rate limit (429, too many requests, resource exhausted)
+- Network errors (timeout, ECONNRESET, fetch failed, socket)
+- Server errors (5xx)
+- Cloudflare-related errors
+
+### Permanent errors (no retry)
+
+- Auth failures (invalid API key, unauthorized)
+- Config or validation errors
+- Other non-transient errors
+
+### Default behavior (no config)
+
+**One-shot jobs (`schedule.kind: "at"`):**
+
+- On transient error: retry up to 3 times with exponential backoff (30s → 1m → 5m).
+- On permanent error: disable immediately.
+- On success or skip: disable (or delete if `deleteAfterRun: true`).
+
+**Recurring jobs (`cron` / `every`):**
+
+- On any error: apply exponential backoff (30s → 1m → 5m → 15m → 60m) before the next scheduled run.
+- Job stays enabled; backoff resets after the next successful run.
+
+Configure `cron.retry` to override these defaults (see [Configuration](/automation/cron-jobs#configuration)).
 
 ## Configuration
 
@@ -349,11 +393,28 @@ Notes:
     enabled: true, // default true
     store: "~/.openclaw/cron/jobs.json",
     maxConcurrentRuns: 1, // default 1
+    // Optional: override retry policy for one-shot jobs
+    retry: {
+      maxAttempts: 3,
+      backoffMs: [60000, 120000, 300000],
+      retryOn: ["rate_limit", "network", "server_error"],
+    },
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-webhook-token", // optional bearer token for webhook mode
+    sessionRetention: "24h", // duration string or false
+    runLog: {
+      maxBytes: "2mb", // default 2_000_000 bytes
+      keepLines: 2000, // default 2000
+    },
   },
 }
 ```
+
+Run-log pruning behavior:
+
+- `cron.runLog.maxBytes`: max run-log file size before pruning.
+- `cron.runLog.keepLines`: when pruning, keep only the newest N lines.
+- Both apply to `cron/runs/<jobId>.jsonl` files.
 
 Webhook behavior:
 
@@ -368,6 +429,85 @@ Disable cron entirely:
 
 - `cron.enabled: false` (config)
 - `OPENCLAW_SKIP_CRON=1` (env)
+
+## Maintenance
+
+Cron has two built-in maintenance paths: isolated run-session retention and run-log pruning.
+
+### Defaults
+
+- `cron.sessionRetention`: `24h` (set `false` to disable run-session pruning)
+- `cron.runLog.maxBytes`: `2_000_000` bytes
+- `cron.runLog.keepLines`: `2000`
+
+### How it works
+
+- Isolated runs create session entries (`...:cron:<jobId>:run:<uuid>`) and transcript files.
+- The reaper removes expired run-session entries older than `cron.sessionRetention`.
+- For removed run sessions no longer referenced by the session store, OpenClaw archives transcript files and purges old deleted archives on the same retention window.
+- After each run append, `cron/runs/<jobId>.jsonl` is size-checked:
+  - if file size exceeds `runLog.maxBytes`, it is trimmed to the newest `runLog.keepLines` lines.
+
+### Performance caveat for high volume schedulers
+
+High-frequency cron setups can generate large run-session and run-log footprints. Maintenance is built in, but loose limits can still create avoidable IO and cleanup work.
+
+What to watch:
+
+- long `cron.sessionRetention` windows with many isolated runs
+- high `cron.runLog.keepLines` combined with large `runLog.maxBytes`
+- many noisy recurring jobs writing to the same `cron/runs/<jobId>.jsonl`
+
+What to do:
+
+- keep `cron.sessionRetention` as short as your debugging/audit needs allow
+- keep run logs bounded with moderate `runLog.maxBytes` and `runLog.keepLines`
+- move noisy background jobs to isolated mode with delivery rules that avoid unnecessary chatter
+- review growth periodically with `openclaw cron runs` and adjust retention before logs become large
+
+### Customize examples
+
+Keep run sessions for a week and allow bigger run logs:
+
+```json5
+{
+  cron: {
+    sessionRetention: "7d",
+    runLog: {
+      maxBytes: "10mb",
+      keepLines: 5000,
+    },
+  },
+}
+```
+
+Disable isolated run-session pruning but keep run-log pruning:
+
+```json5
+{
+  cron: {
+    sessionRetention: false,
+    runLog: {
+      maxBytes: "5mb",
+      keepLines: 3000,
+    },
+  },
+}
+```
+
+Tune for high-volume cron usage (example):
+
+```json5
+{
+  cron: {
+    sessionRetention: "12h",
+    runLog: {
+      maxBytes: "3mb",
+      keepLines: 1500,
+    },
+  },
+}
+```
 
 ## CLI quickstart
 
@@ -406,6 +546,19 @@ openclaw cron add \
   --announce \
   --channel whatsapp \
   --to "+15551234567"
+```
+
+Recurring cron job with explicit 30-second stagger:
+
+```bash
+openclaw cron add \
+  --name "Minute watcher" \
+  --cron "0 * * * * *" \
+  --tz "UTC" \
+  --stagger 30s \
+  --session isolated \
+  --message "Run minute watcher checks." \
+  --announce
 ```
 
 Recurring isolated job (deliver to a Telegram topic):
@@ -465,6 +618,12 @@ openclaw cron edit <jobId> \
   --thinking low
 ```
 
+Force an existing cron job to run exactly on schedule (no stagger):
+
+```bash
+openclaw cron edit <jobId> --exact
+```
+
 Run history:
 
 ```bash
@@ -496,7 +655,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - OpenClaw applies exponential retry backoff for recurring jobs after consecutive errors:
   30s, 1m, 5m, 15m, then 60m between retries.
 - Backoff resets automatically after the next successful run.
-- One-shot (`at`) jobs disable after a terminal run (`ok`, `error`, or `skipped`) and do not retry.
+- One-shot (`at`) jobs retry transient errors (rate limit, network, server_error) up to 3 times with backoff; permanent errors disable immediately. See [Retry policy](/automation/cron-jobs#retry-policy).
 
 ### Telegram delivers to the wrong place
 

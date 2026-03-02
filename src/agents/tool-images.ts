@@ -1,7 +1,18 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getImageMetadata, resizeToJpeg } from "../media/image-ops.js";
+import { canonicalizeBase64 } from "../media/base64.js";
+import {
+  buildImageResizeSideGrid,
+  getImageMetadata,
+  IMAGE_REDUCE_QUALITY_STEPS,
+  resizeToJpeg,
+} from "../media/image-ops.js";
+import {
+  DEFAULT_IMAGE_MAX_BYTES,
+  DEFAULT_IMAGE_MAX_DIMENSION_PX,
+  type ImageSanitizationLimits,
+} from "./image-sanitization.js";
 
 type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
@@ -13,58 +24,9 @@ type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 //
 // To keep sessions resilient (and avoid "silent" WhatsApp non-replies), we auto-downscale
 // and recompress base64 image blocks when they exceed these limits.
-const MAX_IMAGE_DIMENSION_PX = 2000;
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION_PX = DEFAULT_IMAGE_MAX_DIMENSION_PX;
+const MAX_IMAGE_BYTES = DEFAULT_IMAGE_MAX_BYTES;
 const log = createSubsystemLogger("agents/tool-images");
-
-// Valid base64: alphanumeric, +, /, with 0-2 trailing = padding only
-// This regex ensures = only appears at the end as valid padding
-const BASE64_REGEX = /^[A-Za-z0-9+/]*={0,2}$/;
-
-/**
- * Validates and normalizes base64 image data before processing.
- * - Strips data URL prefixes (e.g., "data:image/png;base64,")
- * - Converts URL-safe base64 to standard base64 (- → +, _ → /)
- * - Validates base64 character set and structure
- * - Ensures the string is not empty after trimming
- *
- * Returns the cleaned base64 string or throws an error if invalid.
- */
-function validateAndNormalizeBase64(base64: string): string {
-  let data = base64.trim();
-
-  // Strip data URL prefix if present (e.g., "data:image/png;base64,...")
-  const dataUrlMatch = data.match(/^data:[^;]+;base64,(.*)$/i);
-  if (dataUrlMatch) {
-    data = dataUrlMatch[1].trim();
-  }
-
-  if (!data) {
-    throw new Error("Base64 data is empty");
-  }
-
-  // Normalize URL-safe base64 to standard base64
-  // URL-safe uses - instead of + and _ instead of /
-  data = data.replace(/-/g, "+").replace(/_/g, "/");
-
-  // Check for valid base64 characters and structure
-  // The regex ensures = only appears as 0-2 trailing padding chars
-  // Node's Buffer.from silently ignores invalid chars, but Anthropic API rejects them
-  if (!BASE64_REGEX.test(data)) {
-    throw new Error("Base64 data contains invalid characters or malformed padding");
-  }
-
-  // Check that length is valid for base64 (must be multiple of 4 when padded)
-  // Remove padding for length check, then verify
-  const withoutPadding = data.replace(/=+$/, "");
-  const remainder = withoutPadding.length % 4;
-  if (remainder === 1) {
-    // A single char remainder is always invalid in base64
-    throw new Error("Base64 data has invalid length");
-  }
-
-  return data;
-}
 
 function isImageBlock(block: unknown): block is ImageContentBlock {
   if (!block || typeof block !== "object") {
@@ -99,12 +61,97 @@ function inferMimeTypeFromBase64(base64: string): string | undefined {
   return undefined;
 }
 
+function formatBytesShort(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 1024) {
+    return `${Math.max(0, Math.round(bytes))}B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)}KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
+}
+
+function parseMediaPathFromText(text: string): string | undefined {
+  for (const line of text.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("MEDIA:")) {
+      continue;
+    }
+    const raw = trimmed.slice("MEDIA:".length).trim();
+    if (!raw) {
+      continue;
+    }
+    const backtickWrapped = raw.match(/^`([^`]+)`$/u);
+    return (backtickWrapped?.[1] ?? raw).trim();
+  }
+  return undefined;
+}
+
+function fileNameFromPathLike(pathLike: string): string | undefined {
+  const value = pathLike.trim();
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(value);
+    const candidate = url.pathname.split("/").filter(Boolean).at(-1);
+    return candidate && candidate.length > 0 ? candidate : undefined;
+  } catch {
+    // Not a URL; continue with path-like parsing.
+  }
+
+  const normalized = value.replaceAll("\\", "/");
+  const candidate = normalized.split("/").filter(Boolean).at(-1);
+  return candidate && candidate.length > 0 ? candidate : undefined;
+}
+
+function inferImageFileName(params: {
+  block: ImageContentBlock;
+  label?: string;
+  mediaPathHint?: string;
+}): string | undefined {
+  const rec = params.block as unknown as Record<string, unknown>;
+  const explicitKeys = ["fileName", "filename", "path", "url"] as const;
+  for (const key of explicitKeys) {
+    const raw = rec[key];
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+      continue;
+    }
+    const candidate = fileNameFromPathLike(raw);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  if (typeof rec.name === "string" && rec.name.trim().length > 0) {
+    return rec.name.trim();
+  }
+
+  if (params.mediaPathHint) {
+    const candidate = fileNameFromPathLike(params.mediaPathHint);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  if (typeof params.label === "string" && params.label.startsWith("read:")) {
+    const candidate = fileNameFromPathLike(params.label.slice("read:".length));
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
 async function resizeImageBase64IfNeeded(params: {
   base64: string;
   mimeType: string;
   maxDimensionPx: number;
   maxBytes: number;
   label?: string;
+  fileName?: string;
 }): Promise<{
   base64: string;
   mimeType: string;
@@ -118,6 +165,8 @@ async function resizeImageBase64IfNeeded(params: {
   const height = meta?.height;
   const overBytes = buf.byteLength > params.maxBytes;
   const hasDimensions = typeof width === "number" && typeof height === "number";
+  const overDimensions =
+    hasDimensions && (width > params.maxDimensionPx || height > params.maxDimensionPx);
   if (
     hasDimensions &&
     !overBytes &&
@@ -132,30 +181,14 @@ async function resizeImageBase64IfNeeded(params: {
       height,
     };
   }
-  if (
-    hasDimensions &&
-    (width > params.maxDimensionPx || height > params.maxDimensionPx || overBytes)
-  ) {
-    log.warn("Image exceeds limits; resizing", {
-      label: params.label,
-      width,
-      height,
-      maxDimensionPx: params.maxDimensionPx,
-      maxBytes: params.maxBytes,
-    });
-  }
 
-  const qualities = [85, 75, 65, 55, 45, 35];
   const maxDim = hasDimensions ? Math.max(width ?? 0, height ?? 0) : params.maxDimensionPx;
   const sideStart = maxDim > 0 ? Math.min(params.maxDimensionPx, maxDim) : params.maxDimensionPx;
-  const sideGrid = [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
-    .map((v) => Math.min(params.maxDimensionPx, v))
-    .filter((v, i, arr) => v > 0 && arr.indexOf(v) === i)
-    .toSorted((a, b) => b - a);
+  const sideGrid = buildImageResizeSideGrid(params.maxDimensionPx, sideStart);
 
   let smallest: { buffer: Buffer; size: number } | null = null;
   for (const side of sideGrid) {
-    for (const quality of qualities) {
+    for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
       const out = await resizeToJpeg({
         buffer: buf,
         maxSide: side,
@@ -166,17 +199,37 @@ async function resizeImageBase64IfNeeded(params: {
         smallest = { buffer: out, size: out.byteLength };
       }
       if (out.byteLength <= params.maxBytes) {
-        log.info("Image resized", {
-          label: params.label,
-          width,
-          height,
-          maxDimensionPx: params.maxDimensionPx,
-          maxBytes: params.maxBytes,
-          originalBytes: buf.byteLength,
-          resizedBytes: out.byteLength,
-          quality,
-          side,
-        });
+        const sourcePixels =
+          typeof width === "number" && typeof height === "number"
+            ? `${width}x${height}px`
+            : "unknown";
+        const sourceWithFile = params.fileName
+          ? `${params.fileName} ${sourcePixels}`
+          : sourcePixels;
+        const byteReductionPct =
+          buf.byteLength > 0
+            ? Number((((buf.byteLength - out.byteLength) / buf.byteLength) * 100).toFixed(1))
+            : 0;
+        log.info(
+          `Image resized to fit limits: ${sourceWithFile} ${formatBytesShort(buf.byteLength)} -> ${formatBytesShort(out.byteLength)} (-${byteReductionPct}%)`,
+          {
+            label: params.label,
+            fileName: params.fileName,
+            sourceMimeType: params.mimeType,
+            sourceWidth: width,
+            sourceHeight: height,
+            sourceBytes: buf.byteLength,
+            maxBytes: params.maxBytes,
+            maxDimensionPx: params.maxDimensionPx,
+            triggerOverBytes: overBytes,
+            triggerOverDimensions: overDimensions,
+            outputMimeType: "image/jpeg",
+            outputBytes: out.byteLength,
+            outputQuality: quality,
+            outputMaxSide: side,
+            byteReductionPct,
+          },
+        );
         return {
           base64: out.toString("base64"),
           mimeType: "image/jpeg",
@@ -191,47 +244,79 @@ async function resizeImageBase64IfNeeded(params: {
   const best = smallest?.buffer ?? buf;
   const maxMb = (params.maxBytes / (1024 * 1024)).toFixed(0);
   const gotMb = (best.byteLength / (1024 * 1024)).toFixed(2);
+  const sourcePixels =
+    typeof width === "number" && typeof height === "number" ? `${width}x${height}px` : "unknown";
+  const sourceWithFile = params.fileName ? `${params.fileName} ${sourcePixels}` : sourcePixels;
+  log.warn(
+    `Image resize failed to fit limits: ${sourceWithFile} best=${formatBytesShort(best.byteLength)} limit=${formatBytesShort(params.maxBytes)}`,
+    {
+      label: params.label,
+      fileName: params.fileName,
+      sourceMimeType: params.mimeType,
+      sourceWidth: width,
+      sourceHeight: height,
+      sourceBytes: buf.byteLength,
+      maxDimensionPx: params.maxDimensionPx,
+      maxBytes: params.maxBytes,
+      smallestCandidateBytes: best.byteLength,
+      triggerOverBytes: overBytes,
+      triggerOverDimensions: overDimensions,
+    },
+  );
   throw new Error(`Image could not be reduced below ${maxMb}MB (got ${gotMb}MB)`);
 }
 
 export async function sanitizeContentBlocksImages(
   blocks: ToolContentBlock[],
   label: string,
-  opts: { maxDimensionPx?: number; maxBytes?: number } = {},
+  opts: ImageSanitizationLimits = {},
 ): Promise<ToolContentBlock[]> {
   const maxDimensionPx = Math.max(opts.maxDimensionPx ?? MAX_IMAGE_DIMENSION_PX, 1);
   const maxBytes = Math.max(opts.maxBytes ?? MAX_IMAGE_BYTES, 1);
   const out: ToolContentBlock[] = [];
+  let mediaPathHint: string | undefined;
 
   for (const block of blocks) {
+    if (isTextBlock(block)) {
+      const mediaPath = parseMediaPathFromText(block.text);
+      if (mediaPath) {
+        mediaPathHint = mediaPath;
+      }
+    }
+
     if (!isImageBlock(block)) {
       out.push(block);
       continue;
     }
 
-    const rawData = block.data.trim();
-    if (!rawData) {
+    const data = block.data.trim();
+    if (!data) {
       out.push({
         type: "text",
         text: `[${label}] omitted empty image payload`,
       } satisfies TextContentBlock);
       continue;
     }
+    const canonicalData = canonicalizeBase64(data);
+    if (!canonicalData) {
+      out.push({
+        type: "text",
+        text: `[${label}] omitted image payload: invalid base64`,
+      } satisfies TextContentBlock);
+      continue;
+    }
 
     try {
-      // Validate and normalize base64 before processing
-      // This catches invalid base64 that Buffer.from() would silently accept
-      // but Anthropic's API would reject, preventing permanent session corruption
-      const data = validateAndNormalizeBase64(rawData);
-
-      const inferredMimeType = inferMimeTypeFromBase64(data);
+      const inferredMimeType = inferMimeTypeFromBase64(canonicalData);
       const mimeType = inferredMimeType ?? block.mimeType;
+      const fileName = inferImageFileName({ block, label, mediaPathHint });
       const resized = await resizeImageBase64IfNeeded({
-        base64: data,
+        base64: canonicalData,
         mimeType,
         maxDimensionPx,
         maxBytes,
         label,
+        fileName,
       });
       out.push({
         ...block,
@@ -252,7 +337,7 @@ export async function sanitizeContentBlocksImages(
 export async function sanitizeImageBlocks(
   images: ImageContent[],
   label: string,
-  opts: { maxDimensionPx?: number; maxBytes?: number } = {},
+  opts: ImageSanitizationLimits = {},
 ): Promise<{ images: ImageContent[]; dropped: number }> {
   if (images.length === 0) {
     return { images, dropped: 0 };
@@ -265,7 +350,7 @@ export async function sanitizeImageBlocks(
 export async function sanitizeToolResultImages(
   result: AgentToolResult<unknown>,
   label: string,
-  opts: { maxDimensionPx?: number; maxBytes?: number } = {},
+  opts: ImageSanitizationLimits = {},
 ): Promise<AgentToolResult<unknown>> {
   const content = Array.isArray(result.content) ? result.content : [];
   if (!content.some((b) => isImageBlock(b) || isTextBlock(b))) {

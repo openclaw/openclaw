@@ -1,12 +1,10 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
+import { resolveTelegramPreviewStreamMode } from "../../config/discord-preview-streaming.js";
 import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/types.js";
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
-import {
-  firstDefined,
-  normalizeAllowFromWithStore,
-  type NormalizedAllowFrom,
-} from "../bot-access.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
+import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import type { TelegramStreamMode } from "./types.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
@@ -35,24 +33,22 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   effectiveGroupAllow: NormalizedAllowFrom;
   hasGroupAllowOverride: boolean;
 }> {
+  const accountId = normalizeAccountId(params.accountId);
   const resolvedThreadId = resolveTelegramForumThreadId({
     isForum: params.isForum,
     messageThreadId: params.messageThreadId,
   });
-  const storeAllowFrom = await readChannelAllowFromStore(
-    "telegram",
-    process.env,
-    params.accountId,
-  ).catch(() => []);
+  const storeAllowFrom = await readChannelAllowFromStore("telegram", process.env, accountId).catch(
+    () => [],
+  );
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
     resolvedThreadId,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-  const effectiveGroupAllow = normalizeAllowFromWithStore({
-    allowFrom: groupAllowOverride ?? params.groupAllowFrom,
-    storeAllowFrom,
-  });
+  // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
+  // DM pairing store entries are not a group authorization source.
+  const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? params.groupAllowFrom);
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
   return {
     resolvedThreadId,
@@ -154,13 +150,10 @@ export function buildTypingThreadParams(messageThreadId?: number) {
 }
 
 export function resolveTelegramStreamMode(telegramCfg?: {
-  streamMode?: TelegramStreamMode;
+  streaming?: unknown;
+  streamMode?: unknown;
 }): TelegramStreamMode {
-  const raw = telegramCfg?.streamMode?.trim().toLowerCase();
-  if (raw === "off" || raw === "partial" || raw === "block") {
-    return raw;
-  }
-  return "partial";
+  return resolveTelegramPreviewStreamMode(telegramCfg);
 }
 
 export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {
@@ -321,6 +314,8 @@ export type TelegramReplyTarget = {
   sender: string;
   body: string;
   kind: "reply" | "quote";
+  /** Forward context if the reply target was itself a forwarded message (issue #9619). */
+  forwardedFrom?: TelegramForwardedContext;
 };
 
 export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
@@ -359,11 +354,17 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const sender = replyLike ? buildSenderName(replyLike) : undefined;
   const senderLabel = sender ?? "unknown sender";
 
+  // Extract forward context from the resolved reply target (reply_to_message or external_reply).
+  const forwardedFrom = replyLike?.forward_origin
+    ? (resolveForwardOrigin(replyLike.forward_origin) ?? undefined)
+    : undefined;
+
   return {
     id: replyLike?.message_id ? String(replyLike.message_id) : undefined,
     sender: senderLabel,
     body,
     kind,
+    forwardedFrom,
   };
 }
 

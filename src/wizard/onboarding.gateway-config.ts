@@ -5,7 +5,9 @@ import {
 } from "../commands/onboard-helpers.js";
 import type { GatewayAuthChoice } from "../commands/onboard-types.js";
 import type { GatewayBindMode, GatewayTailscaleMode, OpenClawConfig } from "../config/config.js";
+import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
 import {
+  maybeAddTailnetOriginToControlUiAllowedOrigins,
   TAILSCALE_DOCS_LINES,
   TAILSCALE_EXPOSURE_OPTIONS,
   TAILSCALE_MISSING_BIN_NOTE_LINES,
@@ -122,8 +124,10 @@ export async function configureGatewayForOnboarding(
         });
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
+  // Persist the path so getTailnetHostname can reuse it for origin injection.
+  let tailscaleBin: string | null = null;
   if (tailscaleMode !== "off") {
-    const tailscaleBin = await findTailscaleBinary();
+    tailscaleBin = await findTailscaleBinary();
     if (!tailscaleBin) {
       await prompter.note(TAILSCALE_MISSING_BIN_NOTE_LINES.join("\n"), "Tailscale Warning");
     }
@@ -215,6 +219,15 @@ export async function configureGatewayForOnboarding(
       },
     },
   };
+
+  nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
+    requireControlUiEnabled: true,
+  }).config;
+  nextConfig = await maybeAddTailnetOriginToControlUiAllowedOrigins({
+    config: nextConfig,
+    tailscaleMode,
+    tailscaleBin,
+  });
 
   // If this is a new gateway setup (no existing gateway settings), start with a
   // denylist for high-risk node commands. Users can arm these temporarily via

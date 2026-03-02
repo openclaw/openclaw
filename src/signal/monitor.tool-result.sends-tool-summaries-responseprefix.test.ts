@@ -3,7 +3,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { normalizeE164 } from "../utils.js";
+import type { SignalDaemonExitEvent } from "./daemon.js";
 import {
+  createMockSignalDaemonHandle,
   config,
   flush,
   getSignalToolResultTestMocks,
@@ -14,7 +16,7 @@ import {
 installSignalToolResultTestHooks();
 
 // Import after the harness registers `vi.mock(...)` for Signal internals.
-await import("./monitor.js");
+const { monitorSignalProvider } = await import("./monitor.js");
 
 const {
   replyMock,
@@ -23,9 +25,11 @@ const {
   updateLastRouteMock,
   upsertPairingRequestMock,
   waitForTransportReadyMock,
+  spawnSignalDaemonMock,
 } = getSignalToolResultTestMocks();
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
+type MonitorSignalProviderOptions = Parameters<typeof monitorSignalProvider>[0];
 
 function createMonitorRuntime() {
   return {
@@ -69,16 +73,13 @@ function createAutoAbortController() {
   return abortController;
 }
 
-async function runMonitorWithMocks(
-  opts: Parameters<(typeof import("./monitor.js"))["monitorSignalProvider"]>[0],
-) {
-  const { monitorSignalProvider } = await import("./monitor.js");
+async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider(opts);
 }
 
 async function receiveSignalPayloads(params: {
   payloads: unknown[];
-  opts?: Partial<Parameters<(typeof import("./monitor.js"))["monitorSignalProvider"]>[0]>;
+  opts?: Partial<MonitorSignalProviderOptions>;
 }) {
   const abortController = new AbortController();
   streamMock.mockImplementation(async ({ onEvent }) => {
@@ -111,6 +112,52 @@ function getDirectSignalEventsFor(sender: string) {
   return peekSystemEvents(route.sessionKey);
 }
 
+function makeBaseEnvelope(overrides: Record<string, unknown> = {}) {
+  return {
+    sourceNumber: "+15550001111",
+    sourceName: "Ada",
+    timestamp: 1,
+    ...overrides,
+  };
+}
+
+async function receiveSingleEnvelope(
+  envelope: Record<string, unknown>,
+  opts?: Partial<MonitorSignalProviderOptions>,
+) {
+  await receiveSignalPayloads({
+    payloads: [{ envelope }],
+    opts,
+  });
+}
+
+function expectNoReplyDeliveryOrRouteUpdate() {
+  expect(replyMock).not.toHaveBeenCalled();
+  expect(sendMock).not.toHaveBeenCalled();
+  expect(updateLastRouteMock).not.toHaveBeenCalled();
+}
+
+function setReactionNotificationConfig(mode: "all" | "own", extra: Record<string, unknown> = {}) {
+  setSignalToolResultTestConfig(
+    createSignalConfig({
+      autoStart: false,
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      reactionNotifications: mode,
+      ...extra,
+    }),
+  );
+}
+
+function expectWaitForTransportReadyTimeout(timeoutMs: number) {
+  expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
+  expect(waitForTransportReadyMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      timeoutMs,
+    }),
+  );
+}
+
 describe("monitorSignalProvider tool results", () => {
   it("uses bounded readiness checks when auto-starting the daemon", async () => {
     const runtime = createMonitorRuntime();
@@ -132,7 +179,7 @@ describe("monitorSignalProvider tool results", () => {
         logIntervalMs: 10_000,
         pollIntervalMs: 150,
         runtime,
-        abortSignal: abortController.signal,
+        abortSignal: expect.any(AbortSignal),
       }),
     );
   });
@@ -150,12 +197,7 @@ describe("monitorSignalProvider tool results", () => {
       startupTimeoutMs: 90_000,
     });
 
-    expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
-    expect(waitForTransportReadyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 90_000,
-      }),
-    );
+    expectWaitForTransportReadyTimeout(90_000);
   });
 
   it("caps startupTimeoutMs at 2 minutes", async () => {
@@ -170,12 +212,78 @@ describe("monitorSignalProvider tool results", () => {
       runtime,
     });
 
-    expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
-    expect(waitForTransportReadyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 120_000,
+    expectWaitForTransportReadyTimeout(120_000);
+  });
+
+  it("fails fast when auto-started signal daemon exits during startup", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig();
+    spawnSignalDaemonMock.mockReturnValueOnce(
+      createMockSignalDaemonHandle({
+        exited: Promise.resolve({ source: "process", code: 1, signal: null }),
+        isExited: () => true,
       }),
     );
+    waitForTransportReadyMock.mockImplementationOnce(
+      async (params: { abortSignal?: AbortSignal | null }) => {
+        await new Promise<void>((_resolve, reject) => {
+          if (params.abortSignal?.aborted) {
+            reject(params.abortSignal.reason);
+            return;
+          }
+          params.abortSignal?.addEventListener(
+            "abort",
+            () => reject(params.abortSignal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        });
+      },
+    );
+
+    await expect(
+      runMonitorWithMocks({
+        autoStart: true,
+        baseUrl: SIGNAL_BASE_URL,
+        runtime,
+      }),
+    ).rejects.toThrow(/signal daemon exited/i);
+  });
+
+  it("treats daemon exit after user abort as clean shutdown", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig();
+    const abortController = new AbortController();
+    let exited = false;
+    let resolveExit!: (value: SignalDaemonExitEvent) => void;
+    const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
+      resolveExit = resolve;
+    });
+    const stop = vi.fn(() => {
+      if (exited) {
+        return;
+      }
+      exited = true;
+      resolveExit({ source: "process", code: null, signal: "SIGTERM" });
+    });
+    spawnSignalDaemonMock.mockReturnValueOnce(
+      createMockSignalDaemonHandle({
+        stop,
+        exited: exitedPromise,
+        isExited: () => exited,
+      }),
+    );
+    streamMock.mockImplementationOnce(async () => {
+      abortController.abort(new Error("stop"));
+    });
+
+    await expect(
+      runMonitorWithMocks({
+        autoStart: true,
+        baseUrl: SIGNAL_BASE_URL,
+        runtime,
+        abortSignal: abortController.signal,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("skips tool summaries with responsePrefix", async () => {
@@ -227,110 +335,102 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("ignores reaction-only messages", async () => {
-    await receiveSignalPayloads({
-      payloads: [
-        {
-          envelope: {
-            sourceNumber: "+15550001111",
-            sourceName: "Ada",
-            timestamp: 1,
-            reactionMessage: {
-              emoji: "👍",
-              targetAuthor: "+15550002222",
-              targetSentTimestamp: 2,
-            },
-          },
-        },
-      ],
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      reactionMessage: {
+        emoji: "👍",
+        targetAuthor: "+15550002222",
+        targetSentTimestamp: 2,
+      },
     });
 
-    expect(replyMock).not.toHaveBeenCalled();
-    expect(sendMock).not.toHaveBeenCalled();
-    expect(updateLastRouteMock).not.toHaveBeenCalled();
+    expectNoReplyDeliveryOrRouteUpdate();
   });
 
   it("ignores reaction-only dataMessage.reaction events (don’t treat as broken attachments)", async () => {
-    await receiveSignalPayloads({
-      payloads: [
-        {
-          envelope: {
-            sourceNumber: "+15550001111",
-            sourceName: "Ada",
-            timestamp: 1,
-            dataMessage: {
-              reaction: {
-                emoji: "👍",
-                targetAuthor: "+15550002222",
-                targetSentTimestamp: 2,
-              },
-              attachments: [{}],
-            },
-          },
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      dataMessage: {
+        reaction: {
+          emoji: "👍",
+          targetAuthor: "+15550002222",
+          targetSentTimestamp: 2,
         },
-      ],
+        attachments: [{}],
+      },
     });
 
-    expect(replyMock).not.toHaveBeenCalled();
-    expect(sendMock).not.toHaveBeenCalled();
-    expect(updateLastRouteMock).not.toHaveBeenCalled();
+    expectNoReplyDeliveryOrRouteUpdate();
   });
 
   it("enqueues system events for reaction notifications", async () => {
-    setSignalToolResultTestConfig(
-      createSignalConfig({
-        autoStart: false,
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        reactionNotifications: "all",
-      }),
-    );
-    await receiveSignalPayloads({
-      payloads: [
-        {
-          envelope: {
-            sourceNumber: "+15550001111",
-            sourceName: "Ada",
-            timestamp: 1,
-            reactionMessage: {
-              emoji: "✅",
-              targetAuthor: "+15550002222",
-              targetSentTimestamp: 2,
-            },
-          },
-        },
-      ],
+    setReactionNotificationConfig("all");
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      reactionMessage: {
+        emoji: "✅",
+        targetAuthor: "+15550002222",
+        targetSentTimestamp: 2,
+      },
     });
 
     const events = getDirectSignalEventsFor("+15550001111");
     expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
   });
 
+  it.each([
+    {
+      name: "blocks reaction notifications from unauthorized senders when dmPolicy is allowlist",
+      mode: "all" as const,
+      extra: { dmPolicy: "allowlist", allowFrom: ["+15550007777"] } as Record<string, unknown>,
+      targetAuthor: "+15550002222",
+      shouldEnqueue: false,
+    },
+    {
+      name: "blocks reaction notifications from unauthorized senders when dmPolicy is pairing",
+      mode: "own" as const,
+      extra: {
+        dmPolicy: "pairing",
+        allowFrom: [],
+        account: "+15550009999",
+      } as Record<string, unknown>,
+      targetAuthor: "+15550009999",
+      shouldEnqueue: false,
+    },
+    {
+      name: "allows reaction notifications for allowlisted senders when dmPolicy is allowlist",
+      mode: "all" as const,
+      extra: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] } as Record<string, unknown>,
+      targetAuthor: "+15550002222",
+      shouldEnqueue: true,
+    },
+  ])("$name", async ({ mode, extra, targetAuthor, shouldEnqueue }) => {
+    setReactionNotificationConfig(mode, extra);
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      reactionMessage: {
+        emoji: "✅",
+        targetAuthor,
+        targetSentTimestamp: 2,
+      },
+    });
+
+    const events = getDirectSignalEventsFor("+15550001111");
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(shouldEnqueue);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+  });
+
   it("notifies on own reactions when target includes uuid + phone", async () => {
-    setSignalToolResultTestConfig(
-      createSignalConfig({
-        autoStart: false,
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        account: "+15550002222",
-        reactionNotifications: "own",
-      }),
-    );
-    await receiveSignalPayloads({
-      payloads: [
-        {
-          envelope: {
-            sourceNumber: "+15550001111",
-            sourceName: "Ada",
-            timestamp: 1,
-            reactionMessage: {
-              emoji: "✅",
-              targetAuthor: "+15550002222",
-              targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000",
-              targetSentTimestamp: 2,
-            },
-          },
-        },
-      ],
+    setReactionNotificationConfig("own", { account: "+15550002222" });
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      reactionMessage: {
+        emoji: "✅",
+        targetAuthor: "+15550002222",
+        targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000",
+        targetSentTimestamp: 2,
+      },
     });
 
     const events = getDirectSignalEventsFor("+15550001111");

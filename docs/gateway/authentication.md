@@ -14,6 +14,7 @@ use the long‑lived token created by `claude setup-token`.
 
 See [/concepts/oauth](/concepts/oauth) for the full OAuth flow and storage
 layout.
+For SecretRef-based auth (`env`/`file`/`exec` providers), see [Secrets Management](/gateway/secrets).
 
 ## Recommended Anthropic setup (API key)
 
@@ -85,6 +86,11 @@ openclaw models auth paste-token --provider anthropic
 openclaw models auth paste-token --provider openrouter
 ```
 
+Auth profile refs are also supported for static credentials:
+
+- `api_key` credentials can use `keyRef: { source, provider, id }`
+- `token` credentials can use `tokenRef: { source, provider, id }`
+
 Automation-friendly check (exit `1` when expired/missing, `2` when expiring):
 
 ```bash
@@ -102,6 +108,23 @@ Optional ops scripts (systemd/Termux) are documented here:
 openclaw models status
 openclaw doctor
 ```
+
+## API key rotation behavior (gateway)
+
+Some providers support retrying a request with alternative keys when an API call
+hits a provider rate limit.
+
+- Priority order:
+  - `OPENCLAW_LIVE_<PROVIDER>_KEY` (single override)
+  - `<PROVIDER>_API_KEYS`
+  - `<PROVIDER>_API_KEY`
+  - `<PROVIDER>_API_KEY_*`
+- Google providers also include `GOOGLE_API_KEY` as an additional fallback.
+- The same key list is deduplicated before use.
+- OpenClaw retries with the next key only for rate-limit errors (for example
+  `429`, `rate_limit`, `quota`, `resource exhausted`).
+- Non-rate-limit errors are not retried with alternate keys.
+- If all keys fail, the final error from the last attempt is returned.
 
 ## Controlling which credential is used
 

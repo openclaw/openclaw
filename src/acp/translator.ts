@@ -23,6 +23,11 @@ import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
+import {
+  createFixedWindowRateLimiter,
+  type FixedWindowRateLimiter,
+} from "../infra/fixed-window-rate-limit.js";
+import { shortenHomePath } from "../utils.js";
 import { getAvailableCommands } from "./commands.js";
 import {
   extractAttachmentsFromPrompt,
@@ -34,6 +39,9 @@ import { readBool, readNumber, readString } from "./meta.js";
 import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./session-mapper.js";
 import { defaultAcpSessionStore, type AcpSessionStore } from "./session.js";
 import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
+
+// Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
+const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 
 type PendingPrompt = {
   sessionId: string;
@@ -50,12 +58,16 @@ type AcpGatewayAgentOptions = AcpServerOptions & {
   sessionStore?: AcpSessionStore;
 };
 
+const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
+const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
+
 export class AcpGatewayAgent implements Agent {
   private connection: AgentSideConnection;
   private gateway: GatewayClient;
   private opts: AcpGatewayAgentOptions;
   private log: (msg: string) => void;
   private sessionStore: AcpSessionStore;
+  private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
 
   constructor(
@@ -68,6 +80,16 @@ export class AcpGatewayAgent implements Agent {
     this.opts = opts;
     this.log = opts.verbose ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`) : () => {};
     this.sessionStore = opts.sessionStore ?? defaultAcpSessionStore;
+    this.sessionCreateRateLimiter = createFixedWindowRateLimiter({
+      maxRequests: Math.max(
+        1,
+        opts.sessionCreateRateLimit?.maxRequests ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
+      ),
+      windowMs: Math.max(
+        1_000,
+        opts.sessionCreateRateLimit?.windowMs ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
+      ),
+    });
   }
 
   start(): void {
@@ -124,6 +146,7 @@ export class AcpGatewayAgent implements Agent {
     if (params.mcpServers.length > 0) {
       this.log(`ignoring ${params.mcpServers.length} MCP servers`);
     }
+    this.enforceSessionCreateRateLimit("newSession");
 
     const sessionId = randomUUID();
     const meta = parseSessionMeta(params._meta);
@@ -153,6 +176,9 @@ export class AcpGatewayAgent implements Agent {
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
     if (params.mcpServers.length > 0) {
       this.log(`ignoring ${params.mcpServers.length} MCP servers`);
+    }
+    if (!this.sessionStore.hasSession(params.sessionId)) {
+      this.enforceSessionCreateRateLimit("loadSession");
     }
 
     const meta = parseSessionMeta(params._meta);
@@ -233,15 +259,23 @@ export class AcpGatewayAgent implements Agent {
       this.sessionStore.cancelActiveRun(params.sessionId);
     }
 
+    const meta = parseSessionMeta(params._meta);
+    // Pass MAX_PROMPT_BYTES so extractTextFromPrompt rejects oversized content
+    // block-by-block, before the full string is ever assembled in memory (CWE-400)
+    const userText = extractTextFromPrompt(params.prompt, MAX_PROMPT_BYTES);
+    const attachments = extractAttachmentsFromPrompt(params.prompt);
+    const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
+    const displayCwd = shortenHomePath(session.cwd);
+    const message = prefixCwd ? `[Working directory: ${displayCwd}]\n\n${userText}` : userText;
+
+    // Defense-in-depth: also check the final assembled message (includes cwd prefix)
+    if (Buffer.byteLength(message, "utf-8") > MAX_PROMPT_BYTES) {
+      throw new Error(`Prompt exceeds maximum allowed size of ${MAX_PROMPT_BYTES} bytes`);
+    }
+
     const abortController = new AbortController();
     const runId = randomUUID();
     this.sessionStore.setActiveRun(params.sessionId, runId, abortController);
-
-    const meta = parseSessionMeta(params._meta);
-    const userText = extractTextFromPrompt(params.prompt);
-    const attachments = extractAttachmentsFromPrompt(params.prompt);
-    const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
-    const message = prefixCwd ? `[Working directory: ${session.cwd}]\n\n${userText}` : userText;
 
     return new Promise<PromptResponse>((resolve, reject) => {
       this.pendingPrompts.set(params.sessionId, {
@@ -450,5 +484,15 @@ export class AcpGatewayAgent implements Agent {
         availableCommands: getAvailableCommands(),
       },
     });
+  }
+
+  private enforceSessionCreateRateLimit(method: "newSession" | "loadSession"): void {
+    const budget = this.sessionCreateRateLimiter.consume();
+    if (budget.allowed) {
+      return;
+    }
+    throw new Error(
+      `ACP session creation rate limit exceeded for ${method}; retry after ${Math.ceil(budget.retryAfterMs / 1_000)}s.`,
+    );
   }
 }

@@ -6,6 +6,7 @@ import {
 } from "../legacy-delivery.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { migrateLegacyCronPayload } from "../payload-migration.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../stagger.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
@@ -127,7 +128,7 @@ function copyTopLevelAgentTurnFields(
     typeof raw.timeoutSeconds === "number" &&
     Number.isFinite(raw.timeoutSeconds)
   ) {
-    payload.timeoutSeconds = Math.max(1, Math.floor(raw.timeoutSeconds));
+    payload.timeoutSeconds = Math.max(0, Math.floor(raw.timeoutSeconds));
     mutated = true;
   }
 
@@ -247,6 +248,20 @@ export async function ensureLoaded(
       mutated = true;
     }
 
+    const rawId = typeof raw.id === "string" ? raw.id.trim() : "";
+    const legacyJobId = typeof raw.jobId === "string" ? raw.jobId.trim() : "";
+    if (!rawId && legacyJobId) {
+      raw.id = legacyJobId;
+      mutated = true;
+    } else if (rawId && raw.id !== rawId) {
+      raw.id = rawId;
+      mutated = true;
+    }
+    if ("jobId" in raw) {
+      delete raw.jobId;
+      mutated = true;
+    }
+
     const nameRaw = raw.name;
     if (typeof nameRaw !== "string" || nameRaw.trim().length === 0) {
       raw.name = inferLegacyName({
@@ -275,6 +290,22 @@ export async function ensureLoaded(
 
     if (typeof raw.enabled !== "boolean") {
       raw.enabled = true;
+      mutated = true;
+    }
+
+    const wakeModeRaw = typeof raw.wakeMode === "string" ? raw.wakeMode.trim().toLowerCase() : "";
+    if (wakeModeRaw === "next-heartbeat") {
+      if (raw.wakeMode !== "next-heartbeat") {
+        raw.wakeMode = "next-heartbeat";
+        mutated = true;
+      }
+    } else if (wakeModeRaw === "now") {
+      if (raw.wakeMode !== "now") {
+        raw.wakeMode = "now";
+        mutated = true;
+      }
+    } else {
+      raw.wakeMode = "now";
       mutated = true;
     }
 
@@ -377,6 +408,37 @@ export async function ensureLoaded(
                 : null;
         if (normalizedAnchor !== null && anchorRaw !== normalizedAnchor) {
           sched.anchorMs = normalizedAnchor;
+          mutated = true;
+        }
+      }
+
+      const exprRaw = typeof sched.expr === "string" ? sched.expr.trim() : "";
+      const legacyCronRaw = typeof sched.cron === "string" ? sched.cron.trim() : "";
+      let normalizedExpr = exprRaw;
+      if (!normalizedExpr && legacyCronRaw) {
+        normalizedExpr = legacyCronRaw;
+        sched.expr = normalizedExpr;
+        mutated = true;
+      }
+      if (typeof sched.expr === "string" && sched.expr !== normalizedExpr) {
+        sched.expr = normalizedExpr;
+        mutated = true;
+      }
+      if ("cron" in sched) {
+        delete sched.cron;
+        mutated = true;
+      }
+      if ((kind === "cron" || sched.kind === "cron") && normalizedExpr) {
+        const explicitStaggerMs = normalizeCronStaggerMs(sched.staggerMs);
+        const defaultStaggerMs = resolveDefaultCronStaggerMs(normalizedExpr);
+        const targetStaggerMs = explicitStaggerMs ?? defaultStaggerMs;
+        if (targetStaggerMs === undefined) {
+          if ("staggerMs" in sched) {
+            delete sched.staggerMs;
+            mutated = true;
+          }
+        } else if (sched.staggerMs !== targetStaggerMs) {
+          sched.staggerMs = targetStaggerMs;
           mutated = true;
         }
       }

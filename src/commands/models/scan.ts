@@ -4,12 +4,14 @@ import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-s
 import { withProgressTotals } from "../../cli/progress.js";
 import { loadConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { toAgentModelListLike } from "../../config/model-input.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   stylePromptHint,
   stylePromptMessage,
   stylePromptTitle,
 } from "../../terminal/prompt-style.js";
+import { pad, truncate } from "./list.format.js";
 import { formatMs, formatTokenK, updateConfig } from "./shared.js";
 
 const MODEL_PAD = 42;
@@ -32,18 +34,6 @@ function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   }
   return value;
 }
-
-const pad = (value: string, size: number) => value.padEnd(size);
-
-const truncate = (value: string, max: number) => {
-  if (value.length <= max) {
-    return value;
-  }
-  if (max <= 3) {
-    return value.slice(0, max);
-  }
-  return `${value.slice(0, max - 3)}...`;
-};
 
 function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
   return results.slice().toSorted((a, b) => {
@@ -308,9 +298,7 @@ export async function modelsScanCommand(
         nextModels[entry] = {};
       }
     }
-    const existingImageModel = cfg.agents?.defaults?.imageModel as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
+    const existingImageModel = toAgentModelListLike(cfg.agents?.defaults?.imageModel);
     const nextImageModel =
       selectedImages.length > 0
         ? {
@@ -319,9 +307,7 @@ export async function modelsScanCommand(
             ...(opts.setImage ? { primary: selectedImages[0] } : {}),
           }
         : cfg.agents?.defaults?.imageModel;
-    const existingModel = cfg.agents?.defaults?.model as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
+    const existingModel = toAgentModelListLike(cfg.agents?.defaults?.model);
     const defaults = {
       ...cfg.agents?.defaults,
       model: {

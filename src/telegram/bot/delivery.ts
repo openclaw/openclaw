@@ -33,8 +33,16 @@ import {
 import type { StickerMetadata, TelegramContext } from "./types.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
+const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
+const CAPTION_TOO_LONG_RE = /caption is too long/i;
 const FILE_TOO_BIG_RE = /file is too big/i;
+const TELEGRAM_MEDIA_SSRF_POLICY = {
+  // Telegram file downloads should trust api.telegram.org even when DNS/proxy
+  // resolution maps to private/internal ranges in restricted networks.
+  allowedHostnames: ["api.telegram.org"],
+  allowRfc2544BenchmarkRange: true,
+};
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -104,6 +112,8 @@ export async function deliverReplies(params: {
       continue;
     }
     const replyToId = replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+    const replyToMessageIdForPayload =
+      replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
     const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
       : reply.mediaUrl
@@ -115,6 +125,7 @@ export async function deliverReplies(params: {
     const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
     if (mediaList.length === 0) {
       const chunks = chunkText(reply.text || "");
+      let sentTextChunk = false;
       for (let i = 0; i < chunks.length; i += 1) {
         const chunk = chunks[i];
         if (!chunk) {
@@ -123,8 +134,7 @@ export async function deliverReplies(params: {
         // Only attach buttons to the first chunk.
         const shouldAttachButtons = i === 0 && replyMarkup;
         await sendTelegramText(bot, chatId, chunk.html, runtime, {
-          replyToMessageId:
-            replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined,
+          replyToMessageId: replyToMessageIdForPayload,
           replyQuoteText,
           thread,
           textMode: "html",
@@ -132,10 +142,11 @@ export async function deliverReplies(params: {
           linkPreview,
           replyMarkup: shouldAttachButtons ? replyMarkup : undefined,
         });
+        sentTextChunk = true;
         markDelivered();
-        if (replyToId && !hasReplied) {
-          hasReplied = true;
-        }
+      }
+      if (replyToMessageIdForPayload && !hasReplied && sentTextChunk) {
+        hasReplied = true;
       }
       continue;
     }
@@ -167,8 +178,7 @@ export async function deliverReplies(params: {
         pendingFollowUpText = followUpText;
       }
       first = false;
-      const replyToMessageId =
-        replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
+      const replyToMessageId = replyToMessageIdForPayload;
       const shouldAttachButtonsToMedia = isFirstMedia && replyMarkup && !followUpText;
       const mediaParams: Record<string, unknown> = {
         caption: htmlCaption,
@@ -221,8 +231,6 @@ export async function deliverReplies(params: {
             markDelivered();
           } catch (voiceErr) {
             // Fall back to text if voice messages are forbidden in this chat.
-            // This happens when the recipient has Telegram Premium privacy settings
-            // that block voice messages (Settings > Privacy > Voice Messages).
             if (isVoiceMessagesForbidden(voiceErr)) {
               const fallbackText = reply.text;
               if (!fallbackText || !fallbackText.trim()) {
@@ -231,22 +239,54 @@ export async function deliverReplies(params: {
               logVerbose(
                 "telegram sendVoice forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
               );
-              hasReplied = await sendTelegramVoiceFallbackText({
+              await sendTelegramVoiceFallbackText({
                 bot,
                 chatId,
                 runtime,
                 text: fallbackText,
                 chunkText,
-                replyToId,
-                replyToMode,
-                hasReplied,
+                replyToId: replyToMessageIdForPayload,
                 thread,
                 linkPreview,
                 replyMarkup,
                 replyQuoteText,
               });
+              if (replyToMessageIdForPayload && !hasReplied) {
+                hasReplied = true;
+              }
               markDelivered();
-              // Skip this media item; continue with next.
+              continue;
+            }
+            if (isCaptionTooLong(voiceErr)) {
+              logVerbose(
+                "telegram sendVoice caption too long; resending voice without caption + text separately",
+              );
+              const noCaptionParams = { ...mediaParams };
+              delete noCaptionParams.caption;
+              delete noCaptionParams.parse_mode;
+              await withTelegramApiErrorLogging({
+                operation: "sendVoice",
+                runtime,
+                fn: () => bot.api.sendVoice(chatId, file, { ...noCaptionParams }),
+              });
+              markDelivered();
+              const fallbackText = reply.text;
+              if (fallbackText?.trim()) {
+                await sendTelegramVoiceFallbackText({
+                  bot,
+                  chatId,
+                  runtime,
+                  text: fallbackText,
+                  chunkText,
+                  replyToId: undefined,
+                  thread,
+                  linkPreview,
+                  replyMarkup,
+                });
+              }
+              if (replyToMessageIdForPayload && !hasReplied) {
+                hasReplied = true;
+              }
               continue;
             }
             throw voiceErr;
@@ -277,10 +317,8 @@ export async function deliverReplies(params: {
         const chunks = chunkText(pendingFollowUpText);
         for (let i = 0; i < chunks.length; i += 1) {
           const chunk = chunks[i];
-          const replyToMessageIdFollowup =
-            replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
           await sendTelegramText(bot, chatId, chunk.html, runtime, {
-            replyToMessageId: replyToMessageIdFollowup,
+            replyToMessageId: replyToMessageIdForPayload,
             thread,
             textMode: "html",
             plainText: chunk.text,
@@ -288,11 +326,11 @@ export async function deliverReplies(params: {
             replyMarkup: i === 0 ? replyMarkup : undefined,
           });
           markDelivered();
-          if (replyToId && !hasReplied) {
-            hasReplied = true;
-          }
         }
         pendingFollowUpText = undefined;
+      }
+      if (replyToMessageIdForPayload && !hasReplied) {
+        hasReplied = true;
       }
     }
   }
@@ -318,6 +356,8 @@ export async function resolveMedia(
       url,
       fetchImpl,
       filePathHint: filePath,
+      maxBytes,
+      ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
     });
     const originalName = fetched.fileName ?? filePath;
     return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);
@@ -453,6 +493,13 @@ function isVoiceMessagesForbidden(err: unknown): boolean {
   return VOICE_FORBIDDEN_RE.test(formatErrorMessage(err));
 }
 
+function isCaptionTooLong(err: unknown): boolean {
+  if (err instanceof GrammyError) {
+    return CAPTION_TOO_LONG_RE.test(err.description);
+  }
+  return CAPTION_TOO_LONG_RE.test(formatErrorMessage(err));
+}
+
 /**
  * Returns true if the error is Telegram's "file is too big" error.
  * This happens when trying to download files >20MB via the Bot API.
@@ -485,20 +532,16 @@ async function sendTelegramVoiceFallbackText(opts: {
   text: string;
   chunkText: (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
   replyToId?: number;
-  replyToMode: ReplyToMode;
-  hasReplied: boolean;
   thread?: TelegramThreadSpec | null;
   linkPreview?: boolean;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   replyQuoteText?: string;
-}): Promise<boolean> {
+}): Promise<void> {
   const chunks = opts.chunkText(opts.text);
-  let hasReplied = opts.hasReplied;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
     await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
-      replyToMessageId:
-        opts.replyToId && (opts.replyToMode === "all" || !hasReplied) ? opts.replyToId : undefined,
+      replyToMessageId: opts.replyToId,
       replyQuoteText: opts.replyQuoteText,
       thread: opts.thread,
       textMode: "html",
@@ -506,11 +549,7 @@ async function sendTelegramVoiceFallbackText(opts: {
       linkPreview: opts.linkPreview,
       replyMarkup: i === 0 ? opts.replyMarkup : undefined,
     });
-    if (opts.replyToId && !hasReplied) {
-      hasReplied = true;
-    }
   }
-  return hasReplied;
 }
 
 function buildTelegramSendParams(opts?: {
@@ -542,7 +581,7 @@ async function sendTelegramText(
     linkPreview?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
-): Promise<number | undefined> {
+): Promise<number> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     thread: opts?.thread,
@@ -552,11 +591,38 @@ async function sendTelegramText(
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
   const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
+  const fallbackText = opts?.plainText ?? text;
+  const hasFallbackText = fallbackText.trim().length > 0;
+  const sendPlainFallback = async () => {
+    const res = await withTelegramApiErrorLogging({
+      operation: "sendMessage",
+      runtime,
+      fn: () =>
+        bot.api.sendMessage(chatId, fallbackText, {
+          ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+          ...baseParams,
+        }),
+    });
+    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
+    return res.message_id;
+  };
+
+  // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
+  if (!htmlText.trim()) {
+    if (!hasFallbackText) {
+      throw new Error("telegram sendMessage failed: empty formatted text and empty plain fallback");
+    }
+    return await sendPlainFallback();
+  }
   try {
     const res = await withTelegramApiErrorLogging({
       operation: "sendMessage",
       runtime,
-      shouldLog: (err) => !PARSE_ERR_RE.test(formatErrorMessage(err)),
+      shouldLog: (err) => {
+        const errText = formatErrorMessage(err);
+        return !PARSE_ERR_RE.test(errText) && !EMPTY_TEXT_ERR_RE.test(errText);
+      },
       fn: () =>
         bot.api.sendMessage(chatId, htmlText, {
           parse_mode: "HTML",
@@ -565,23 +631,16 @@ async function sendTelegramText(
           ...baseParams,
         }),
     });
+    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
     return res.message_id;
   } catch (err) {
     const errText = formatErrorMessage(err);
-    if (PARSE_ERR_RE.test(errText)) {
-      runtime.log?.(`telegram HTML parse failed; retrying without formatting: ${errText}`);
-      const fallbackText = opts?.plainText ?? text;
-      const res = await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        runtime,
-        fn: () =>
-          bot.api.sendMessage(chatId, fallbackText, {
-            ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-            ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-            ...baseParams,
-          }),
-      });
-      return res.message_id;
+    if (PARSE_ERR_RE.test(errText) || EMPTY_TEXT_ERR_RE.test(errText)) {
+      if (!hasFallbackText) {
+        throw err;
+      }
+      runtime.log?.(`telegram formatted send failed; retrying without formatting: ${errText}`);
+      return await sendPlainFallback();
     }
     throw err;
   }

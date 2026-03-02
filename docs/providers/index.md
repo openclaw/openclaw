@@ -44,6 +44,7 @@ See [Venice AI](/providers/venice).
 - [Together AI](/providers/together)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
+- [Mistral](/providers/mistral)
 - [OpenCode Zen](/providers/opencode)
 - [Amazon Bedrock](/providers/bedrock)
 - [Z.AI](/providers/zai)
