@@ -443,6 +443,13 @@ Mattermost ships as a plugin: `openclaw plugins install @openclaw/mattermost`.
       dmPolicy: "pairing",
       chatmode: "oncall", // oncall | onmessage | onchar
       oncharPrefixes: [">", "!"],
+      commands: {
+        native: true, // opt-in
+        nativeSkills: true,
+        callbackPath: "/api/channels/mattermost/command",
+        // Optional explicit URL for reverse-proxy/public deployments
+        callbackUrl: "https://gateway.example.com/api/channels/mattermost/command",
+      },
       textChunkLimit: 4000,
       chunkMode: "length",
     },

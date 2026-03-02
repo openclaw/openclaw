@@ -55,6 +55,35 @@ Minimal config:
 }
 ```
 
+## Native slash commands
+
+Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash commands via
+the Mattermost API and receives callback POSTs on the gateway HTTP server.
+
+```json5
+{
+  channels: {
+    mattermost: {
+      commands: {
+        native: true,
+        nativeSkills: true,
+        callbackPath: "/api/channels/mattermost/command",
+        // Use when Mattermost cannot reach the gateway directly (reverse proxy/public URL).
+        callbackUrl: "https://gateway.example.com/api/channels/mattermost/command",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- `native: "auto"` defaults to disabled for Mattermost. Set `native: true` to enable.
+- If `callbackUrl` is omitted, OpenClaw derives one from gateway host/port + `callbackPath`.
+- For multi-account setups, `commands` can be set at the top level or under
+  `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
+- Command callbacks are validated with per-command tokens and fail closed when token checks fail.
+
 ## Environment variables (default account)
 
 Set these on the gateway host if you prefer env vars:
