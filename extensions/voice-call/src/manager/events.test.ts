@@ -235,7 +235,7 @@ describe("processEvent (functional)", () => {
     expect(ctx.activeCalls.size).toBe(0);
   });
 
-  it("auto-registers externally-initiated outbound-api calls", () => {
+  it("auto-registers externally-initiated outbound-api calls with correct direction", () => {
     const ctx = createContext();
     const event: NormalizedEvent = {
       id: "evt-external-1",
@@ -255,6 +255,7 @@ describe("processEvent (functional)", () => {
     expect(ctx.providerCallIdMap.get("CA-external-123")).toBeDefined();
     const call = [...ctx.activeCalls.values()][0];
     expect(call?.providerCallId).toBe("CA-external-123");
+    expect(call?.direction).toBe("outbound");
     expect(call?.from).toBe("+15550000000");
     expect(call?.to).toBe("+15559876543");
   });
@@ -277,6 +278,35 @@ describe("processEvent (functional)", () => {
     // External outbound calls bypass inbound policy — they should be accepted
     expect(ctx.activeCalls.size).toBe(1);
     expect(hangupCalls).toHaveLength(0);
+    const call = [...ctx.activeCalls.values()][0];
+    expect(call?.direction).toBe("outbound");
+  });
+
+  it("preserves inbound direction for auto-registered inbound calls", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+      }),
+    });
+    const event: NormalizedEvent = {
+      id: "evt-inbound-dir",
+      type: "call.initiated",
+      callId: "CA-inbound-789",
+      providerCallId: "CA-inbound-789",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15554444444",
+      to: "+15550000000",
+    };
+
+    processEvent(ctx, event);
+
+    expect(ctx.activeCalls.size).toBe(1);
+    const call = [...ctx.activeCalls.values()][0];
+    expect(call?.direction).toBe("inbound");
   });
 
   it("deduplicates by dedupeKey even when event IDs differ", () => {
