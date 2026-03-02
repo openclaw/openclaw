@@ -16,6 +16,8 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(1);
     expect(registry.httpRoutes[0]?.path).toBe("/plugins/demo");
     expect(registry.httpRoutes[0]?.handler).toBe(handler);
+    expect(registry.httpRoutes[0]?.auth).toBe("gateway");
+    expect(registry.httpRoutes[0]?.match).toBe("exact");
 
     unregister();
     expect(registry.httpRoutes).toHaveLength(0);
@@ -64,7 +66,7 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(1);
     expect(registry.httpRoutes[0]?.handler).toBe(secondHandler);
     expect(logs).toContain(
-      'plugin: replacing stale webhook path /plugins/synology for account "default" (synology-chat)',
+      'plugin: replacing stale webhook path /plugins/synology (exact) for account "default" (synology-chat)',
     );
 
     // Old unregister must not remove the replacement route.
