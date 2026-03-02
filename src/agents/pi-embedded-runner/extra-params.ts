@@ -15,6 +15,12 @@ const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as cons
 // Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
+const OPENAI_COMPAT_APIS = new Set([
+  "openai-completions",
+  "openai-responses",
+  "openai-codex-responses",
+]);
+const STAINLESS_HEADER_PREFIX = "x-stainless-";
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -742,6 +748,40 @@ function createZaiToolStreamWrapper(
   };
 }
 
+function createOpenAICompatHeaderSanitizerWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const api = typeof model.api === "string" ? model.api : undefined;
+    if (!api || !OPENAI_COMPAT_APIS.has(api)) {
+      return underlying(model, context, options);
+    }
+
+    const headers = options?.headers;
+    if (!headers || Object.keys(headers).length === 0) {
+      return underlying(model, context, options);
+    }
+
+    let changed = false;
+    const sanitized: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      if (key.toLowerCase().startsWith(STAINLESS_HEADER_PREFIX)) {
+        changed = true;
+        continue;
+      }
+      sanitized[key] = value;
+    }
+
+    if (!changed) {
+      return underlying(model, context, options);
+    }
+
+    return underlying(model, context, {
+      ...options,
+      headers: sanitized,
+    });
+  };
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -811,6 +851,12 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
   }
+
+  // Some OpenAI-compatible transit/aggregator endpoints behind Cloudflare block
+  // requests when SDK fingerprint headers (x-stainless-*) are present.
+  // Strip those headers right before request dispatch while preserving all other
+  // headers (including user-provided provider/model headers).
+  agent.streamFn = createOpenAICompatHeaderSanitizerWrapper(agent.streamFn);
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
     log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
