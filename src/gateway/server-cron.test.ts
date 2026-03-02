@@ -40,7 +40,7 @@ describe("buildGatewayCronService", () => {
     fetchWithSsrFGuardMock.mockClear();
   });
 
-  it("canonicalizes non-agent sessionKey to agent store key for enqueue + wake", async () => {
+  it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-${Date.now()}`);
     const cfg = {
       session: {

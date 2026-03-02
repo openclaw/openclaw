@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig, validateConfigObject } from "./config.js";
-import { withTempHome } from "./test-helpers.js";
+import { withTempHomeConfig } from "./test-helpers.js";
 
 describe("multi-agent agentDir validation", () => {
   it("rejects shared agents.list agentDir", async () => {
@@ -24,31 +23,22 @@ describe("multi-agent agentDir validation", () => {
   });
 
   it("throws on shared agentDir during loadConfig()", async () => {
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(
-        path.join(configDir, "openclaw.json"),
-        JSON.stringify(
-          {
-            agents: {
-              list: [
-                { id: "a", agentDir: "~/.openclaw/agents/shared/agent" },
-                { id: "b", agentDir: "~/.openclaw/agents/shared/agent" },
-              ],
-            },
-            bindings: [{ agentId: "a", match: { channel: "telegram" } }],
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-      expect(() => loadConfig()).toThrow(/duplicate agentDir/i);
-      expect(spy.mock.calls.flat().join(" ")).toMatch(/Duplicate agentDir/i);
-      spy.mockRestore();
-    });
+    await withTempHomeConfig(
+      {
+        agents: {
+          list: [
+            { id: "a", agentDir: "~/.openclaw/agents/shared/agent" },
+            { id: "b", agentDir: "~/.openclaw/agents/shared/agent" },
+          ],
+        },
+        bindings: [{ agentId: "a", match: { channel: "telegram" } }],
+      },
+      async () => {
+        const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+        expect(() => loadConfig()).toThrow(/duplicate agentDir/i);
+        expect(spy.mock.calls.flat().join(" ")).toMatch(/Duplicate agentDir/i);
+        spy.mockRestore();
+      },
+    );
   });
 });

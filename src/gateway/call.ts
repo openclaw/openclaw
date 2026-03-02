@@ -15,6 +15,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   resolveLeastPrivilegeOperatorScopesForMethod,
@@ -139,10 +140,11 @@ export function buildGatewayConnectionDetails(
     : undefined;
   const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
 
+  const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
   // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
   // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
   // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
-  if (!isSecureWebSocketUrl(url)) {
+  if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
     throw new Error(
       [
         `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
@@ -153,6 +155,9 @@ export function buildGatewayConnectionDetails(
         "Safe remote access defaults:",
         "- keep gateway.bind=loopback and use an SSH tunnel (ssh -N -L 18789:127.0.0.1:18789 user@gateway-host)",
         "- or use Tailscale Serve/Funnel for HTTPS remote access",
+        allowPrivateWs
+          ? undefined
+          : "Break-glass (trusted private networks only): set OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1",
         "Doctor: openclaw doctor --fix",
         "Docs: https://docs.openclaw.ai/gateway/remote",
       ].join("\n"),
@@ -244,27 +249,13 @@ function resolveGatewayCredentials(context: ResolvedGatewayCallContext): {
   token?: string;
   password?: string;
 } {
-  const authToken = context.config.gateway?.auth?.token;
-  const authPassword = context.config.gateway?.auth?.password;
-  const token =
-    context.explicitAuth.token ||
-    (!context.urlOverride
-      ? context.isRemoteMode
-        ? trimToUndefined(context.remote?.token)
-        : trimToUndefined(process.env.OPENCLAW_GATEWAY_TOKEN) ||
-          trimToUndefined(process.env.CLAWDBOT_GATEWAY_TOKEN) ||
-          trimToUndefined(authToken)
-      : undefined);
-  const password =
-    context.explicitAuth.password ||
-    (!context.urlOverride
-      ? trimToUndefined(process.env.OPENCLAW_GATEWAY_PASSWORD) ||
-        trimToUndefined(process.env.CLAWDBOT_GATEWAY_PASSWORD) ||
-        (context.isRemoteMode
-          ? trimToUndefined(context.remote?.password)
-          : trimToUndefined(authPassword))
-      : undefined);
-  return { token, password };
+  return resolveGatewayCredentialsFromConfig({
+    cfg: context.config,
+    env: process.env,
+    explicitAuth: context.explicitAuth,
+    urlOverride: context.urlOverride,
+    remotePasswordPrecedence: "env-first",
+  });
 }
 
 async function resolveGatewayTlsFingerprint(params: {

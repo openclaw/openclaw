@@ -20,6 +20,8 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - If `~/.openclaw/openclaw.json` exists, choose **Keep / Modify / Reset**.
     - Re-running the wizard does **not** wipe anything unless you explicitly choose **Reset**
       (or pass `--reset`).
+    - CLI `--reset` defaults to `config+creds+sessions`; use `--reset-scope full`
+      to also remove workspace.
     - If the config is invalid or contains legacy keys, the wizard stops and asks
       you to run `openclaw doctor` before continuing.
     - Reset uses `trash` (never `rm`) and offers scopes:
@@ -34,7 +36,7 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - **OpenAI Code (Codex) subscription (Codex CLI)**: if `~/.codex/auth.json` exists, the wizard can reuse it.
     - **OpenAI Code (Codex) subscription (OAuth)**: browser flow; paste the `code#state`.
       - Sets `agents.defaults.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
-    - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then saves it to `~/.openclaw/.env` so launchd can read it.
+    - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
     - **xAI (Grok) API key**: prompts for `XAI_API_KEY` and configures xAI as a model provider.
     - **OpenCode Zen (multi-model proxy)**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth).
     - **API key**: stores the key for you.
@@ -52,6 +54,7 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - **Skip**: no auth configured yet.
     - Pick a default model from detected options (or enter provider/model manually).
     - Wizard runs a model check and warns if the configured model is unknown or missing auth.
+    - API key storage mode defaults to plaintext auth-profile values. Use `--secret-input-mode ref` to store env-backed refs instead (for example `keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" }`).
     - OAuth credentials live in `~/.openclaw/credentials/oauth.json`; auth profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (API keys + OAuth).
     - More detail: [/concepts/oauth](/concepts/oauth)
     <Note>

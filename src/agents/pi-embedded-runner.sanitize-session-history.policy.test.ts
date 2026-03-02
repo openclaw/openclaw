@@ -5,21 +5,18 @@ import {
   loadSanitizeSessionHistoryWithCleanMocks,
   makeMockSessionManager,
   makeSimpleUserMessages,
-  makeSnapshotChangedOpenAIReasoningScenario,
+  sanitizeSnapshotChangedOpenAIReasoning,
   sanitizeWithOpenAIResponses,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
 
+vi.mock("./pi-embedded-helpers.js", async () => ({
+  ...(await vi.importActual("./pi-embedded-helpers.js")),
+  isGoogleModelApi: vi.fn(),
+  sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
+}));
+
 type SanitizeSessionHistory = Awaited<ReturnType<typeof loadSanitizeSessionHistoryWithCleanMocks>>;
 let sanitizeSessionHistory: SanitizeSessionHistory;
-
-vi.mock("./pi-embedded-helpers.js", async () => {
-  const actual = await vi.importActual("./pi-embedded-helpers.js");
-  return {
-    ...actual,
-    isGoogleModelApi: vi.fn(),
-    sanitizeSessionMessagesImages: vi.fn().mockImplementation(async (msgs) => msgs),
-  };
-});
 
 describe("sanitizeSessionHistory e2e smoke", () => {
   const mockSessionManager = makeMockSessionManager();
@@ -57,13 +54,8 @@ describe("sanitizeSessionHistory e2e smoke", () => {
   });
 
   it("downgrades openai reasoning blocks when the model snapshot changed", async () => {
-    const { sessionManager, messages, modelId } = makeSnapshotChangedOpenAIReasoningScenario();
-
-    const result = await sanitizeWithOpenAIResponses({
+    const result = await sanitizeSnapshotChangedOpenAIReasoning({
       sanitizeSessionHistory,
-      messages,
-      modelId,
-      sessionManager,
     });
 
     expect(result).toEqual([]);

@@ -65,6 +65,21 @@ export function execDockerRaw(
       if (signal) {
         signal.removeEventListener("abort", handleAbort);
       }
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        const friendly = Object.assign(
+          new Error(
+            'Sandbox mode requires Docker, but the "docker" command was not found in PATH. Install Docker (and ensure "docker" is available), or set `agents.defaults.sandbox.mode=off` to disable sandboxing.',
+          ),
+          { code: "INVALID_CONFIG", cause: error },
+        );
+        reject(friendly);
+        return;
+      }
       reject(error);
     });
 
@@ -263,9 +278,26 @@ export function buildSandboxCreateArgs(params: {
   createdAtMs?: number;
   labels?: Record<string, string>;
   configHash?: string;
+  includeBinds?: boolean;
+  bindSourceRoots?: string[];
+  allowSourcesOutsideAllowedRoots?: boolean;
+  allowReservedContainerTargets?: boolean;
+  allowContainerNamespaceJoin?: boolean;
 }) {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
-  validateSandboxSecurity(params.cfg);
+  validateSandboxSecurity({
+    ...params.cfg,
+    allowedSourceRoots: params.bindSourceRoots,
+    allowSourcesOutsideAllowedRoots:
+      params.allowSourcesOutsideAllowedRoots ??
+      params.cfg.dangerouslyAllowExternalBindSources === true,
+    allowReservedContainerTargets:
+      params.allowReservedContainerTargets ??
+      params.cfg.dangerouslyAllowReservedContainerTargets === true,
+    dangerouslyAllowContainerNamespaceJoin:
+      params.allowContainerNamespaceJoin ??
+      params.cfg.dangerouslyAllowContainerNamespaceJoin === true,
+  });
 
   const createdAtMs = params.createdAtMs ?? Date.now();
   const args = ["create", "--name", params.name];
@@ -342,12 +374,21 @@ export function buildSandboxCreateArgs(params: {
       args.push("--ulimit", formatted);
     }
   }
-  if (params.cfg.binds?.length) {
+  if (params.includeBinds !== false && params.cfg.binds?.length) {
     for (const bind of params.cfg.binds) {
       args.push("-v", bind);
     }
   }
   return args;
+}
+
+function appendCustomBinds(args: string[], cfg: SandboxDockerConfig): void {
+  if (!cfg.binds?.length) {
+    return;
+  }
+  for (const bind of cfg.binds) {
+    args.push("-v", bind);
+  }
 }
 
 async function createSandboxContainer(params: {
@@ -367,6 +408,8 @@ async function createSandboxContainer(params: {
     cfg,
     scopeKey,
     configHash: params.configHash,
+    includeBinds: false,
+    bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
   });
   args.push("--workdir", cfg.workdir);
   const mainMountSuffix =
@@ -379,6 +422,7 @@ async function createSandboxContainer(params: {
       `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
     );
   }
+  appendCustomBinds(args, cfg);
   args.push(cfg.image, "sleep", "infinity");
 
   await execDocker(args);

@@ -9,10 +9,15 @@ import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import type { OpenClawApp } from "./app.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { loadAgents } from "./controllers/agents.ts";
+import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadConfig, loadConfigSchema } from "./controllers/config.ts";
-import { loadCronJobs, loadCronStatus } from "./controllers/cron.ts";
+import {
+  loadCronJobs,
+  loadCronModelSuggestions,
+  loadCronRuns,
+  loadCronStatus,
+} from "./controllers/cron.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
@@ -21,7 +26,6 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { loadSkills } from "./controllers/skills.ts";
-import { loadUsage } from "./controllers/usage.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
@@ -33,7 +37,7 @@ import {
 import { saveSettings, type UiSettings } from "./storage.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
 import { resolveTheme, type ResolvedTheme, type ThemeMode } from "./theme.ts";
-import type { AgentsListResult, AttentionItem } from "./types.ts";
+import type { AgentsListResult } from "./types.ts";
 
 type SettingsHost = {
   settings: UiSettings;
@@ -52,6 +56,8 @@ type SettingsHost = {
   agentsList?: AgentsListResult | null;
   agentsSelectedId?: string | null;
   agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
+  themeMedia: MediaQueryList | null;
+  themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
   pendingGatewayUrl?: string | null;
 };
 
@@ -143,24 +149,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
 }
 
 export function setTab(host: SettingsHost, next: Tab) {
-  if (host.tab !== next) {
-    host.tab = next;
-  }
-  if (next === "chat") {
-    host.chatHasAutoScrolled = false;
-  }
-  if (next === "logs") {
-    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
-  } else {
-    stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
-  }
-  if (next === "debug") {
-    startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
-  } else {
-    stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
-  }
-  void refreshActiveTab(host);
-  syncUrlWithTab(host, next, false);
+  applyTabSelection(host, next, { refreshPolicy: "always", syncUrl: true });
 }
 
 export function setTheme(host: SettingsHost, next: ThemeMode, context?: ThemeTransitionContext) {
@@ -198,6 +187,7 @@ export async function refreshActiveTab(host: SettingsHost) {
   }
   if (host.tab === "agents") {
     await loadAgents(host as unknown as OpenClawApp);
+    await loadToolsCatalog(host as unknown as OpenClawApp);
     await loadConfig(host as unknown as OpenClawApp);
     const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
     if (agentIds.length > 0) {
@@ -258,7 +248,7 @@ export function inferBasePath() {
 }
 
 export function syncThemeWithSettings(host: SettingsHost) {
-  host.theme = host.settings.theme ?? "dark";
+  host.theme = host.settings.theme ?? "system";
   applyResolvedTheme(host, resolveTheme(host.theme));
 }
 
@@ -269,7 +259,44 @@ export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) 
   }
   const root = document.documentElement;
   root.dataset.theme = resolved;
-  root.style.colorScheme = resolved === "light" ? "light" : "dark";
+  root.style.colorScheme = resolved;
+}
+
+export function attachThemeListener(host: SettingsHost) {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return;
+  }
+  host.themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
+  host.themeMediaHandler = (event) => {
+    if (host.theme !== "system") {
+      return;
+    }
+    applyResolvedTheme(host, event.matches ? "dark" : "light");
+  };
+  if (typeof host.themeMedia.addEventListener === "function") {
+    host.themeMedia.addEventListener("change", host.themeMediaHandler);
+    return;
+  }
+  const legacy = host.themeMedia as MediaQueryList & {
+    addListener: (cb: (event: MediaQueryListEvent) => void) => void;
+  };
+  legacy.addListener(host.themeMediaHandler);
+}
+
+export function detachThemeListener(host: SettingsHost) {
+  if (!host.themeMedia || !host.themeMediaHandler) {
+    return;
+  }
+  if (typeof host.themeMedia.removeEventListener === "function") {
+    host.themeMedia.removeEventListener("change", host.themeMediaHandler);
+    return;
+  }
+  const legacy = host.themeMedia as MediaQueryList & {
+    removeListener: (cb: (event: MediaQueryListEvent) => void) => void;
+  };
+  legacy.removeListener(host.themeMediaHandler);
+  host.themeMedia = null;
+  host.themeMediaHandler = null;
 }
 
 export function syncTabWithLocation(host: SettingsHost, replace: boolean) {
@@ -305,6 +332,14 @@ export function onPopState(host: SettingsHost) {
 }
 
 export function setTabFromRoute(host: SettingsHost, next: Tab) {
+  applyTabSelection(host, next, { refreshPolicy: "connected" });
+}
+
+function applyTabSelection(
+  host: SettingsHost,
+  next: Tab,
+  options: { refreshPolicy: "always" | "connected"; syncUrl?: boolean },
+) {
   if (host.tab !== next) {
     host.tab = next;
   }
@@ -321,8 +356,13 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
   } else {
     stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   }
-  if (host.connected) {
+
+  if (options.refreshPolicy === "always" || host.connected) {
     void refreshActiveTab(host);
+  }
+
+  if (options.syncUrl) {
+    syncUrlWithTab(host, next, false);
   }
 }
 
@@ -365,121 +405,13 @@ export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, re
 }
 
 export async function loadOverview(host: SettingsHost) {
-  const app = host as unknown as OpenClawApp;
-  await Promise.allSettled([
-    loadChannels(app, false),
-    loadPresence(app),
-    loadSessions(app),
-    loadCronStatus(app),
-    loadCronJobs(app),
-    loadDebug(app),
-    loadSkills(app),
-    loadUsage(app),
-    loadOverviewLogs(app),
+  await Promise.all([
+    loadChannels(host as unknown as OpenClawApp, false),
+    loadPresence(host as unknown as OpenClawApp),
+    loadSessions(host as unknown as OpenClawApp),
+    loadCronStatus(host as unknown as OpenClawApp),
+    loadDebug(host as unknown as OpenClawApp),
   ]);
-  buildAttentionItems(app);
-}
-
-async function loadOverviewLogs(host: OpenClawApp) {
-  if (!host.client || !host.connected) {
-    return;
-  }
-  try {
-    const res = await host.client.request("logs.tail", {
-      cursor: host.overviewLogCursor || undefined,
-      limit: 100,
-      maxBytes: 50_000,
-    });
-    const payload = res as {
-      cursor?: number;
-      lines?: unknown;
-    };
-    const lines = Array.isArray(payload.lines)
-      ? payload.lines.filter((line): line is string => typeof line === "string")
-      : [];
-    host.overviewLogLines = [...host.overviewLogLines, ...lines].slice(-500);
-    if (typeof payload.cursor === "number") {
-      host.overviewLogCursor = payload.cursor;
-    }
-  } catch {
-    /* non-critical */
-  }
-}
-
-function buildAttentionItems(host: OpenClawApp) {
-  const items: AttentionItem[] = [];
-
-  if (host.lastError) {
-    items.push({
-      severity: "error",
-      icon: "x",
-      title: "Gateway Error",
-      description: host.lastError,
-    });
-  }
-
-  const hello = host.hello;
-  const auth = (hello as { auth?: { scopes?: string[] } } | null)?.auth;
-  if (auth?.scopes && !auth.scopes.includes("operator.read")) {
-    items.push({
-      severity: "warning",
-      icon: "key",
-      title: "Missing operator.read scope",
-      description:
-        "This connection does not have the operator.read scope. Some features may be unavailable.",
-      href: "https://docs.openclaw.ai/web/dashboard",
-      external: true,
-    });
-  }
-
-  const skills = host.skillsReport?.skills ?? [];
-  const missingDeps = skills.filter((s) => !s.disabled && Object.keys(s.missing).length > 0);
-  if (missingDeps.length > 0) {
-    const names = missingDeps.slice(0, 3).map((s) => s.name);
-    const more = missingDeps.length > 3 ? ` +${missingDeps.length - 3} more` : "";
-    items.push({
-      severity: "warning",
-      icon: "zap",
-      title: "Skills with missing dependencies",
-      description: `${names.join(", ")}${more}`,
-    });
-  }
-
-  const blocked = skills.filter((s) => s.blockedByAllowlist);
-  if (blocked.length > 0) {
-    items.push({
-      severity: "warning",
-      icon: "shield",
-      title: `${blocked.length} skill${blocked.length > 1 ? "s" : ""} blocked`,
-      description: blocked.map((s) => s.name).join(", "),
-    });
-  }
-
-  const cronJobs = host.cronJobs ?? [];
-  const failedCron = cronJobs.filter((j) => j.state?.lastStatus === "error");
-  if (failedCron.length > 0) {
-    items.push({
-      severity: "error",
-      icon: "clock",
-      title: `${failedCron.length} cron job${failedCron.length > 1 ? "s" : ""} failed`,
-      description: failedCron.map((j) => j.name).join(", "),
-    });
-  }
-
-  const now = Date.now();
-  const overdue = cronJobs.filter(
-    (j) => j.enabled && j.state?.nextRunAtMs != null && now - j.state.nextRunAtMs > 300_000,
-  );
-  if (overdue.length > 0) {
-    items.push({
-      severity: "warning",
-      icon: "clock",
-      title: `${overdue.length} overdue job${overdue.length > 1 ? "s" : ""}`,
-      description: overdue.map((j) => j.name).join(", "),
-    });
-  }
-
-  host.attentionItems = items;
 }
 
 export async function loadChannelsTab(host: SettingsHost) {
@@ -491,9 +423,18 @@ export async function loadChannelsTab(host: SettingsHost) {
 }
 
 export async function loadCron(host: SettingsHost) {
+  const cronHost = host as unknown as OpenClawApp;
   await Promise.all([
     loadChannels(host as unknown as OpenClawApp, false),
-    loadCronStatus(host as unknown as OpenClawApp),
-    loadCronJobs(host as unknown as OpenClawApp),
+    loadCronStatus(cronHost),
+    loadCronJobs(cronHost),
+    loadCronModelSuggestions(cronHost),
   ]);
+  if (cronHost.cronRunsScope === "all") {
+    await loadCronRuns(cronHost, null);
+    return;
+  }
+  if (cronHost.cronRunsJobId) {
+    await loadCronRuns(cronHost, cronHost.cronRunsJobId);
+  }
 }

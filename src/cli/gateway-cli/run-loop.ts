@@ -9,6 +9,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getActiveTaskCount,
+  markGatewayDraining,
   resetAllLanes,
   waitForActiveTasks,
 } from "../../process/command-queue.js";
@@ -22,8 +23,9 @@ type GatewayRunSignalAction = "stop" | "restart";
 export async function runGatewayLoop(params: {
   start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: typeof defaultRuntime;
+  lockPort?: number;
 }) {
-  let lock = await acquireGatewayLock();
+  let lock = await acquireGatewayLock({ port: params.lockPort });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
@@ -47,7 +49,7 @@ export async function runGatewayLoop(params: {
   };
   const reacquireLockForInProcessRestart = async (): Promise<boolean> => {
     try {
-      lock = await acquireGatewayLock();
+      lock = await acquireGatewayLock({ port: params.lockPort });
       return true;
     } catch (err) {
       gatewayLog.error(`failed to reacquire gateway lock for in-process restart: ${String(err)}`);
@@ -110,6 +112,9 @@ export async function runGatewayLoop(params: {
         // On restart, wait for in-flight agent turns to finish before
         // tearing down the server so buffered messages are delivered.
         if (isRestart) {
+          // Reject new enqueues immediately during the drain window so
+          // sessions get an explicit restart error instead of silent task loss.
+          markGatewayDraining();
           const activeTasks = getActiveTaskCount();
           if (activeTasks > 0) {
             gatewayLog.info(

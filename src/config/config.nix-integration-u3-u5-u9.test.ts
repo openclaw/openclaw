@@ -9,7 +9,7 @@ import {
   resolveIsNixMode,
   resolveStateDir,
 } from "./config.js";
-import { withTempHome } from "./test-helpers.js";
+import { withTempHome, withTempHomeConfig } from "./test-helpers.js";
 
 function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
   // Hermetic env: don't inherit process.env because other tests may mutate it.
@@ -21,6 +21,16 @@ function loadConfigForHome(home: string) {
     env: envWith({ OPENCLAW_HOME: home }),
     homedir: () => home,
   }).loadConfig();
+}
+
+async function withLoadedConfigForHome(
+  config: unknown,
+  run: (cfg: ReturnType<typeof loadConfigForHome>) => Promise<void> | void,
+) {
+  await withTempHomeConfig(config, async ({ home }) => {
+    const cfg = loadConfigForHome(home);
+    await run(cfg);
+  });
 }
 
 describe("Nix integration (U3, U5, U9)", () => {
@@ -211,62 +221,44 @@ describe("Nix integration (U3, U5, U9)", () => {
 
   describe("U9: telegram.tokenFile schema validation", () => {
     it("accepts config with only botToken", async () => {
-      await withTempHome(async (home) => {
-        const configDir = path.join(home, ".openclaw");
-        await fs.mkdir(configDir, { recursive: true });
-        await fs.writeFile(
-          path.join(configDir, "openclaw.json"),
-          JSON.stringify({
-            channels: { telegram: { botToken: "123:ABC" } },
-          }),
-          "utf-8",
-        );
-
-        const cfg = loadConfigForHome(home);
-        expect(cfg.channels?.telegram?.botToken).toBe("123:ABC");
-        expect(cfg.channels?.telegram?.tokenFile).toBeUndefined();
-      });
+      await withLoadedConfigForHome(
+        {
+          channels: { telegram: { botToken: "123:ABC" } },
+        },
+        async (cfg) => {
+          expect(cfg.channels?.telegram?.botToken).toBe("123:ABC");
+          expect(cfg.channels?.telegram?.tokenFile).toBeUndefined();
+        },
+      );
     });
 
     it("accepts config with only tokenFile", async () => {
-      await withTempHome(async (home) => {
-        const configDir = path.join(home, ".openclaw");
-        await fs.mkdir(configDir, { recursive: true });
-        await fs.writeFile(
-          path.join(configDir, "openclaw.json"),
-          JSON.stringify({
-            channels: { telegram: { tokenFile: "/run/agenix/telegram-token" } },
-          }),
-          "utf-8",
-        );
-
-        const cfg = loadConfigForHome(home);
-        expect(cfg.channels?.telegram?.tokenFile).toBe("/run/agenix/telegram-token");
-        expect(cfg.channels?.telegram?.botToken).toBeUndefined();
-      });
+      await withLoadedConfigForHome(
+        {
+          channels: { telegram: { tokenFile: "/run/agenix/telegram-token" } },
+        },
+        async (cfg) => {
+          expect(cfg.channels?.telegram?.tokenFile).toBe("/run/agenix/telegram-token");
+          expect(cfg.channels?.telegram?.botToken).toBeUndefined();
+        },
+      );
     });
 
     it("accepts config with both botToken and tokenFile", async () => {
-      await withTempHome(async (home) => {
-        const configDir = path.join(home, ".openclaw");
-        await fs.mkdir(configDir, { recursive: true });
-        await fs.writeFile(
-          path.join(configDir, "openclaw.json"),
-          JSON.stringify({
-            channels: {
-              telegram: {
-                botToken: "fallback:token",
-                tokenFile: "/run/agenix/telegram-token",
-              },
+      await withLoadedConfigForHome(
+        {
+          channels: {
+            telegram: {
+              botToken: "fallback:token",
+              tokenFile: "/run/agenix/telegram-token",
             },
-          }),
-          "utf-8",
-        );
-
-        const cfg = loadConfigForHome(home);
-        expect(cfg.channels?.telegram?.botToken).toBe("fallback:token");
-        expect(cfg.channels?.telegram?.tokenFile).toBe("/run/agenix/telegram-token");
-      });
+          },
+        },
+        async (cfg) => {
+          expect(cfg.channels?.telegram?.botToken).toBe("fallback:token");
+          expect(cfg.channels?.telegram?.tokenFile).toBe("/run/agenix/telegram-token");
+        },
+      );
     });
   });
 });

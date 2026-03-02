@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   SAFE_BIN_PROFILE_FIXTURES,
   SAFE_BIN_PROFILES,
+  buildLongFlagPrefixMap,
+  collectKnownLongFlags,
   renderSafeBinDeniedFlagsDocBullets,
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
@@ -48,11 +50,63 @@ describe("exec safe bin policy sort", () => {
   it("allows stdin-only sort flags", () => {
     expect(validateSafeBinArgv(["-S", "1M"], sortProfile)).toBe(true);
     expect(validateSafeBinArgv(["--key=1,1"], sortProfile)).toBe(true);
+    expect(validateSafeBinArgv(["--ke=1,1"], sortProfile)).toBe(true);
   });
 
   it("blocks sort --compress-program in safe-bin mode", () => {
     expect(validateSafeBinArgv(["--compress-program=sh"], sortProfile)).toBe(false);
     expect(validateSafeBinArgv(["--compress-program", "sh"], sortProfile)).toBe(false);
+  });
+
+  it("blocks denied long-option abbreviations in safe-bin mode", () => {
+    expect(validateSafeBinArgv(["--compress-prog=sh"], sortProfile)).toBe(false);
+    expect(validateSafeBinArgv(["--files0-fro=list.txt"], sortProfile)).toBe(false);
+  });
+
+  it("rejects unknown or ambiguous long options in safe-bin mode", () => {
+    expect(validateSafeBinArgv(["--totally-unknown=1"], sortProfile)).toBe(false);
+    expect(validateSafeBinArgv(["--f=1"], sortProfile)).toBe(false);
+  });
+});
+
+describe("exec safe bin policy wc", () => {
+  const wcProfile = SAFE_BIN_PROFILES.wc;
+
+  it("blocks wc --files0-from abbreviations in safe-bin mode", () => {
+    expect(validateSafeBinArgv(["--files0-fro=list.txt"], wcProfile)).toBe(false);
+    expect(validateSafeBinArgv(["--files0-fro", "list.txt"], wcProfile)).toBe(false);
+  });
+});
+
+describe("exec safe bin policy long-option metadata", () => {
+  it("precomputes long-option prefix mappings for compiled profiles", () => {
+    const sortProfile = SAFE_BIN_PROFILES.sort;
+    expect(sortProfile.knownLongFlagsSet?.has("--compress-program")).toBe(true);
+    expect(sortProfile.longFlagPrefixMap?.get("--compress-prog")).toBe("--compress-program");
+    expect(sortProfile.longFlagPrefixMap?.get("--f")).toBe(null);
+  });
+
+  it("preserves behavior when profile metadata is missing and rebuilt at runtime", () => {
+    const sortProfile = SAFE_BIN_PROFILES.sort;
+    const withoutMetadata = {
+      ...sortProfile,
+      knownLongFlags: undefined,
+      knownLongFlagsSet: undefined,
+      longFlagPrefixMap: undefined,
+    };
+    expect(validateSafeBinArgv(["--compress-prog=sh"], withoutMetadata)).toBe(false);
+    expect(validateSafeBinArgv(["--totally-unknown=1"], withoutMetadata)).toBe(false);
+  });
+
+  it("builds prefix maps from collected long flags", () => {
+    const sortProfile = SAFE_BIN_PROFILES.sort;
+    const flags = collectKnownLongFlags(
+      sortProfile.allowedValueFlags ?? new Set(),
+      sortProfile.deniedFlags ?? new Set(),
+    );
+    const prefixMap = buildLongFlagPrefixMap(flags);
+    expect(prefixMap.get("--compress-pr")).toBe("--compress-program");
+    expect(prefixMap.get("--f")).toBe(null);
   });
 });
 

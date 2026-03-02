@@ -2,7 +2,9 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
   truncateToolResultText,
+  truncateToolResultMessage,
   calculateMaxToolResultChars,
+  getToolResultTextLength,
   truncateOversizedToolResultsInMessages,
   isOversizedToolResult,
   sessionLikelyHasOversizedToolResults,
@@ -81,6 +83,55 @@ describe("truncateToolResultText", () => {
       // The last newline should be near the end (within the last line)
       expect(lastNewline).toBeGreaterThan(keptContent.length - 100);
     }
+  });
+
+  it("supports custom suffix and min keep chars", () => {
+    const text = "x".repeat(5_000);
+    const result = truncateToolResultText(text, 300, {
+      suffix: "\n\n[custom-truncated]",
+      minKeepChars: 250,
+    });
+    expect(result).toContain("[custom-truncated]");
+    expect(result.length).toBeGreaterThan(250);
+  });
+});
+
+describe("getToolResultTextLength", () => {
+  it("sums all text blocks in tool results", () => {
+    const msg = {
+      role: "toolResult",
+      content: [
+        { type: "text", text: "abc" },
+        { type: "image", source: { type: "base64", mediaType: "image/png", data: "x" } },
+        { type: "text", text: "12345" },
+      ],
+    } as unknown as AgentMessage;
+
+    expect(getToolResultTextLength(msg)).toBe(8);
+  });
+
+  it("returns zero for non-toolResult messages", () => {
+    expect(getToolResultTextLength(makeAssistantMessage("hello"))).toBe(0);
+  });
+});
+
+describe("truncateToolResultMessage", () => {
+  it("truncates with a custom suffix", () => {
+    const msg = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "text", text: "x".repeat(50_000) }],
+      isError: false,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const result = truncateToolResultMessage(msg, 10_000, {
+      suffix: "\n\n[persist-truncated]",
+      minKeepChars: 2_000,
+    }) as { content: Array<{ type: string; text: string }> };
+
+    expect(result.content[0]?.text).toContain("[persist-truncated]");
   });
 });
 

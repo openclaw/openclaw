@@ -17,6 +17,7 @@ import {
 } from "./extension-relay.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
@@ -176,6 +177,7 @@ function createProfileContext(
         const tabs = await listTabs().catch(() => [] as BrowserTab[]);
         const found = tabs.find((t) => t.targetId === createdViaCdp);
         if (found) {
+          await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
           return found;
         }
         await new Promise((r) => setTimeout(r, 100));
@@ -214,10 +216,12 @@ function createProfileContext(
     }
     const profileState = getProfileState();
     profileState.lastTargetId = created.id;
+    const resolvedUrl = created.url ?? url;
+    await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
     return {
       targetId: created.id,
       title: created.title ?? "",
-      url: created.url ?? url,
+      url: resolvedUrl,
       wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl),
       type: created.type,
     };
@@ -274,6 +278,7 @@ function createProfileContext(
   const ensureBrowserAvailable = async (): Promise<void> => {
     const current = state();
     const remoteCdp = !profile.cdpIsLoopback;
+    const attachOnly = profile.attachOnly;
     const isExtension = profile.driver === "extension";
     const profileState = getProfileState();
     const httpReachable = await isHttpReachable();
@@ -287,32 +292,25 @@ function createProfileContext(
     if (isExtension) {
       if (!httpReachable) {
         await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl });
-        if (await isHttpReachable(1200)) {
-          // continue: we still need the extension to connect for CDP websocket.
-        } else {
+        if (!(await isHttpReachable(1200))) {
           throw new Error(
             `Chrome extension relay for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`,
           );
         }
       }
-
-      if (await isReachable(600)) {
-        return;
-      }
-      // Relay server is up, but no attached tab yet. Prompt user to attach.
-      throw new Error(
-        `Chrome extension relay is running, but no tab is connected. Click the OpenClaw Chrome extension icon on a tab to attach it (profile "${profile.name}").`,
-      );
+      // Browser startup should only ensure relay availability.
+      // Tab attachment is checked when a tab is actually required.
+      return;
     }
 
     if (!httpReachable) {
-      if ((current.resolved.attachOnly || remoteCdp) && opts.onEnsureAttachTarget) {
+      if ((attachOnly || remoteCdp) && opts.onEnsureAttachTarget) {
         await opts.onEnsureAttachTarget(profile);
         if (await isHttpReachable(1200)) {
           return;
         }
       }
-      if (current.resolved.attachOnly || remoteCdp) {
+      if (attachOnly || remoteCdp) {
         throw new Error(
           remoteCdp
             ? `Remote CDP for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`
@@ -329,16 +327,9 @@ function createProfileContext(
       return;
     }
 
-    // HTTP responds but WebSocket fails - port in use by something else
-    if (!profileState.running) {
-      throw new Error(
-        `Port ${profile.cdpPort} is in use for profile "${profile.name}" but not by openclaw. ` +
-          `Run action=reset-profile profile=${profile.name} to kill the process.`,
-      );
-    }
-
-    // We own it but WebSocket failed - restart
-    if (current.resolved.attachOnly || remoteCdp) {
+    // HTTP responds but WebSocket fails. For attachOnly/remote profiles, never perform
+    // local ownership/restart handling; just run attach retries and surface attach errors.
+    if (attachOnly || remoteCdp) {
       if (opts.onEnsureAttachTarget) {
         await opts.onEnsureAttachTarget(profile);
         if (await isReachable(1200)) {
@@ -352,6 +343,23 @@ function createProfileContext(
       );
     }
 
+    // HTTP responds but WebSocket fails - port in use by something else.
+    if (!profileState.running) {
+      throw new Error(
+        `Port ${profile.cdpPort} is in use for profile "${profile.name}" but not by openclaw. ` +
+          `Run action=reset-profile profile=${profile.name} to kill the process.`,
+      );
+    }
+
+    // We own it but WebSocket failed - restart
+    // At this point profileState.running is always non-null: the !remoteCdp guard
+    // above throws when running is null, and attachOnly/remoteCdp paths always
+    // exit via the block above. Add an explicit guard for TypeScript.
+    if (!profileState.running) {
+      throw new Error(
+        `Unexpected state for profile "${profile.name}": no running process to restart.`,
+      );
+    }
     await stopOpenClawChrome(profileState.running);
     setProfileRunning(null);
 
@@ -410,8 +418,12 @@ function createProfileContext(
     };
 
     let chosen = targetId ? resolveById(targetId) : pickDefault();
-    if (!chosen && profile.driver === "extension" && candidates.length === 1) {
-      // If an agent passes a stale/foreign targetId but we only have a single attached tab,
+    if (
+      !chosen &&
+      (profile.driver === "extension" || !profile.cdpIsLoopback) &&
+      candidates.length === 1
+    ) {
+      // If an agent passes a stale/foreign targetId but only one candidate remains,
       // recover by using that tab instead of failing hard.
       chosen = candidates[0] ?? null;
     }
@@ -426,7 +438,7 @@ function createProfileContext(
     return chosen;
   };
 
-  const focusTab = async (targetId: string): Promise<void> => {
+  const resolveTargetIdOrThrow = async (targetId: string): Promise<string> => {
     const tabs = await listTabs();
     const resolved = resolveTargetIdFromTabs(targetId, tabs);
     if (!resolved.ok) {
@@ -435,6 +447,11 @@ function createProfileContext(
       }
       throw new Error("tab not found");
     }
+    return resolved.targetId;
+  };
+
+  const focusTab = async (targetId: string): Promise<void> => {
+    const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
 
     if (!profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
@@ -443,28 +460,21 @@ function createProfileContext(
       if (typeof focusPageByTargetIdViaPlaywright === "function") {
         await focusPageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
-          targetId: resolved.targetId,
+          targetId: resolvedTargetId,
         });
         const profileState = getProfileState();
-        profileState.lastTargetId = resolved.targetId;
+        profileState.lastTargetId = resolvedTargetId;
         return;
       }
     }
 
-    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/activate/${resolved.targetId}`));
+    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/activate/${resolvedTargetId}`));
     const profileState = getProfileState();
-    profileState.lastTargetId = resolved.targetId;
+    profileState.lastTargetId = resolvedTargetId;
   };
 
   const closeTab = async (targetId: string): Promise<void> => {
-    const tabs = await listTabs();
-    const resolved = resolveTargetIdFromTabs(targetId, tabs);
-    if (!resolved.ok) {
-      if (resolved.reason === "ambiguous") {
-        throw new Error("ambiguous target id prefix");
-      }
-      throw new Error("tab not found");
-    }
+    const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
 
     // For remote profiles, use Playwright's persistent connection to close tabs
     if (!profile.cdpIsLoopback) {
@@ -474,13 +484,13 @@ function createProfileContext(
       if (typeof closePageByTargetIdViaPlaywright === "function") {
         await closePageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
-          targetId: resolved.targetId,
+          targetId: resolvedTargetId,
         });
         return;
       }
     }
 
-    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${resolved.targetId}`));
+    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${resolvedTargetId}`));
   };
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {

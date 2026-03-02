@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 const getMessageContentMock = vi.hoisted(() => vi.fn());
 
@@ -54,7 +54,7 @@ describe("downloadLineMedia", () => {
     expect(writtenPath).not.toContain(messageId);
     expect(writtenPath).not.toContain("..");
 
-    const tmpRoot = path.resolve(os.tmpdir());
+    const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
     const rel = path.relative(tmpRoot, path.resolve(writtenPath));
     expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
   });
@@ -65,5 +65,55 @@ describe("downloadLineMedia", () => {
 
     await expect(downloadLineMedia("mid", "token", 7)).rejects.toThrow(/Media exceeds/i);
     expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("detects M4A audio from ftyp major brand (#29751)", async () => {
+    // Real M4A magic bytes: size(4) + "ftyp" + "M4A "
+    const m4a = Buffer.from([
+      0x00,
+      0x00,
+      0x00,
+      0x1c, // box size
+      0x66,
+      0x74,
+      0x79,
+      0x70, // "ftyp"
+      0x4d,
+      0x34,
+      0x41,
+      0x20, // "M4A " major brand
+    ]);
+    getMessageContentMock.mockResolvedValueOnce(chunks([m4a]));
+    vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+
+    const result = await downloadLineMedia("mid-m4a", "token");
+
+    expect(result.contentType).toBe("audio/mp4");
+    expect(result.path).toMatch(/\.m4a$/);
+  });
+
+  it("detects MP4 video from ftyp major brand (isom)", async () => {
+    // MP4 video magic bytes: size(4) + "ftyp" + "isom"
+    const mp4 = Buffer.from([
+      0x00,
+      0x00,
+      0x00,
+      0x1c,
+      0x66,
+      0x74,
+      0x79,
+      0x70,
+      0x69,
+      0x73,
+      0x6f,
+      0x6d, // "isom" major brand
+    ]);
+    getMessageContentMock.mockResolvedValueOnce(chunks([mp4]));
+    vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+
+    const result = await downloadLineMedia("mid-mp4", "token");
+
+    expect(result.contentType).toBe("video/mp4");
+    expect(result.path).toMatch(/\.mp4$/);
   });
 });

@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import {
   applySkillEnvOverrides,
@@ -13,6 +14,12 @@ import {
 } from "./skills.js";
 
 const tempDirs: string[] = [];
+let tempHome: TempHomeEnv | null = null;
+
+const resolveTestSkillDirs = (workspaceDir: string) => ({
+  managedSkillsDir: path.join(workspaceDir, ".managed"),
+  bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+});
 
 const makeWorkspace = async () => {
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
@@ -44,7 +51,19 @@ const withClearedEnv = <T>(
   }
 };
 
-afterEach(async () => {
+beforeAll(async () => {
+  tempHome = await createTempHomeEnv("openclaw-skills-home-");
+  await fs.mkdir(path.join(tempHome.home, ".openclaw", "agents", "main", "sessions"), {
+    recursive: true,
+  });
+});
+
+afterAll(async () => {
+  if (tempHome) {
+    await tempHome.restore();
+    tempHome = null;
+  }
+
   await Promise.all(
     tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
@@ -76,8 +95,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     });
 
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      ...resolveTestSkillDirs(workspaceDir),
       reservedNames: new Set(["help"]),
     });
 
@@ -101,10 +119,10 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       description: "Short description",
     });
 
-    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-    });
+    const commands = buildWorkspaceSkillCommandSpecs(
+      workspaceDir,
+      resolveTestSkillDirs(workspaceDir),
+    );
 
     const longCmd = commands.find((entry) => entry.skillName === "long-desc");
     const shortCmd = commands.find((entry) => entry.skillName === "short-desc");
@@ -123,7 +141,10 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       frontmatterExtra: "command-dispatch: tool\ncommand-tool: sessions_send",
     });
 
-    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir);
+    const commands = buildWorkspaceSkillCommandSpecs(
+      workspaceDir,
+      resolveTestSkillDirs(workspaceDir),
+    );
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
   });
@@ -133,10 +154,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
   it("returns empty prompt when skills dirs are missing", async () => {
     const workspaceDir = await makeWorkspace();
 
-    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-    });
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
     expect(prompt).toBe("");
   });
@@ -216,9 +234,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       body: "# Demo Skill\n",
     });
 
-    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-    });
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
     expect(prompt).toContain("demo-skill");
     expect(prompt).toContain("Does demo things");
     expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
@@ -236,9 +252,7 @@ describe("applySkillEnvOverrides", () => {
       metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
     });
 
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-    });
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
     withClearedEnv(["ENV_KEY"], () => {
       const restore = applySkillEnvOverrides({
@@ -266,7 +280,7 @@ describe("applySkillEnvOverrides", () => {
     });
 
     const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      ...resolveTestSkillDirs(workspaceDir),
       config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } },
     });
 
@@ -296,9 +310,7 @@ describe("applySkillEnvOverrides", () => {
         '{"openclaw":{"requires":{"env":["OPENAI_API_KEY","NODE_OPTIONS"]},"primaryEnv":"OPENAI_API_KEY"}}',
     });
 
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-    });
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
     withClearedEnv(["OPENAI_API_KEY", "NODE_OPTIONS"], () => {
       const restore = applySkillEnvOverrides({
@@ -338,9 +350,7 @@ describe("applySkillEnvOverrides", () => {
       metadata: '{"openclaw":{"requires":{"env":["BASH_ENV","SHELL"]}}}',
     });
 
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-    });
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
     withClearedEnv(["BASH_ENV", "SHELL"], () => {
       const restore = applySkillEnvOverrides({
@@ -392,7 +402,7 @@ describe("applySkillEnvOverrides", () => {
       },
     };
     const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      ...resolveTestSkillDirs(workspaceDir),
       config,
     });
 

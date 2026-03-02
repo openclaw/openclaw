@@ -104,4 +104,14 @@ describe("fetchBrowserJson loopback auth", () => {
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
+
+  it("injects auth for IPv4-mapped IPv6 loopback URLs", async () => {
+    const fetchMock = stubJsonFetchOk();
+
+    await fetchBrowserJson<{ ok: boolean }>("http://[::ffff:127.0.0.1]:18888/");
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    const headers = new Headers(init?.headers);
+    expect(headers.get("authorization")).toBe("Bearer loopback-token");
+  });
 });

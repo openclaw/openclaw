@@ -174,155 +174,138 @@ async function withCanvasGatewayHarness(params: {
 }
 
 describe("gateway canvas host auth", () => {
-  test("authorizes canvas HTTP/WS via node-scoped capability and rejects misuse", async () => {
-    const resolvedAuth: ResolvedGatewayAuth = {
-      mode: "token",
-      token: "test-token",
-      password: undefined,
-      allowTailscale: false,
-    };
+  const tokenResolvedAuth: ResolvedGatewayAuth = {
+    mode: "token",
+    token: "test-token",
+    password: undefined,
+    allowTailscale: false,
+  };
 
+  const withLoopbackTrustedProxy = async (run: () => Promise<void>, prefix?: string) => {
     await withTempConfig({
       cfg: {
         gateway: {
           trustedProxies: ["127.0.0.1"],
         },
       },
-      prefix: "openclaw-canvas-auth-test-",
-      run: async () => {
-        await withCanvasGatewayHarness({
-          resolvedAuth,
-          handleHttpRequest: allowCanvasHostHttp,
-          run: async ({ listener, clients }) => {
-            const host = "127.0.0.1";
-            const operatorOnlyCapability = "operator-only";
-            const expiredNodeCapability = "expired-node";
-            const activeNodeCapability = "active-node";
-            const activeCanvasPath = scopedCanvasPath(activeNodeCapability, `${CANVAS_HOST_PATH}/`);
-            const activeWsPath = scopedCanvasPath(activeNodeCapability, CANVAS_WS_PATH);
+      ...(prefix ? { prefix } : {}),
+      run,
+    });
+  };
 
-            const unauthCanvas = await fetch(`http://${host}:${listener.port}${CANVAS_HOST_PATH}/`);
-            expect(unauthCanvas.status).toBe(401);
+  test("authorizes canvas HTTP/WS via node-scoped capability and rejects misuse", async () => {
+    await withLoopbackTrustedProxy(async () => {
+      await withCanvasGatewayHarness({
+        resolvedAuth: tokenResolvedAuth,
+        handleHttpRequest: allowCanvasHostHttp,
+        run: async ({ listener, clients }) => {
+          const host = "127.0.0.1";
+          const operatorOnlyCapability = "operator-only";
+          const expiredNodeCapability = "expired-node";
+          const activeNodeCapability = "active-node";
+          const activeCanvasPath = scopedCanvasPath(activeNodeCapability, `${CANVAS_HOST_PATH}/`);
+          const activeWsPath = scopedCanvasPath(activeNodeCapability, CANVAS_WS_PATH);
 
-            const malformedScoped = await fetch(
-              `http://${host}:${listener.port}${CANVAS_CAPABILITY_PATH_PREFIX}/broken`,
-            );
-            expect(malformedScoped.status).toBe(401);
+          const unauthCanvas = await fetch(`http://${host}:${listener.port}${CANVAS_HOST_PATH}/`);
+          expect(unauthCanvas.status).toBe(401);
 
-            clients.add(
-              makeWsClient({
-                connId: "c-operator",
-                clientIp: "192.168.1.10",
-                role: "operator",
-                mode: "backend",
-                canvasCapability: operatorOnlyCapability,
-                canvasCapabilityExpiresAtMs: Date.now() + 60_000,
-              }),
-            );
+          const malformedScoped = await fetch(
+            `http://${host}:${listener.port}${CANVAS_CAPABILITY_PATH_PREFIX}/broken`,
+          );
+          expect(malformedScoped.status).toBe(401);
 
-            const operatorCapabilityBlocked = await fetch(
-              `http://${host}:${listener.port}${scopedCanvasPath(operatorOnlyCapability, `${CANVAS_HOST_PATH}/`)}`,
-            );
-            expect(operatorCapabilityBlocked.status).toBe(401);
+          clients.add(
+            makeWsClient({
+              connId: "c-operator",
+              clientIp: "192.168.1.10",
+              role: "operator",
+              mode: "backend",
+              canvasCapability: operatorOnlyCapability,
+              canvasCapabilityExpiresAtMs: Date.now() + 60_000,
+            }),
+          );
 
-            clients.add(
-              makeWsClient({
-                connId: "c-expired-node",
-                clientIp: "192.168.1.20",
-                role: "node",
-                mode: "node",
-                canvasCapability: expiredNodeCapability,
-                canvasCapabilityExpiresAtMs: Date.now() - 1,
-              }),
-            );
+          const operatorCapabilityBlocked = await fetch(
+            `http://${host}:${listener.port}${scopedCanvasPath(operatorOnlyCapability, `${CANVAS_HOST_PATH}/`)}`,
+          );
+          expect(operatorCapabilityBlocked.status).toBe(401);
 
-            const expiredCapabilityBlocked = await fetch(
-              `http://${host}:${listener.port}${scopedCanvasPath(expiredNodeCapability, `${CANVAS_HOST_PATH}/`)}`,
-            );
-            expect(expiredCapabilityBlocked.status).toBe(401);
-
-            const activeNodeClient = makeWsClient({
-              connId: "c-active-node",
-              clientIp: "192.168.1.30",
+          clients.add(
+            makeWsClient({
+              connId: "c-expired-node",
+              clientIp: "192.168.1.20",
               role: "node",
               mode: "node",
-              canvasCapability: activeNodeCapability,
-              canvasCapabilityExpiresAtMs: Date.now() + 60_000,
-            });
-            clients.add(activeNodeClient);
+              canvasCapability: expiredNodeCapability,
+              canvasCapabilityExpiresAtMs: Date.now() - 1,
+            }),
+          );
 
-            const scopedCanvas = await fetch(`http://${host}:${listener.port}${activeCanvasPath}`);
-            expect(scopedCanvas.status).toBe(200);
-            expect(await scopedCanvas.text()).toBe("ok");
+          const expiredCapabilityBlocked = await fetch(
+            `http://${host}:${listener.port}${scopedCanvasPath(expiredNodeCapability, `${CANVAS_HOST_PATH}/`)}`,
+          );
+          expect(expiredCapabilityBlocked.status).toBe(401);
 
-            const scopedA2ui = await fetch(
-              `http://${host}:${listener.port}${scopedCanvasPath(activeNodeCapability, `${A2UI_PATH}/`)}`,
-            );
-            expect(scopedA2ui.status).toBe(200);
+          const activeNodeClient = makeWsClient({
+            connId: "c-active-node",
+            clientIp: "192.168.1.30",
+            role: "node",
+            mode: "node",
+            canvasCapability: activeNodeCapability,
+            canvasCapabilityExpiresAtMs: Date.now() + 60_000,
+          });
+          clients.add(activeNodeClient);
 
-            await expectWsConnected(`ws://${host}:${listener.port}${activeWsPath}`);
+          const scopedCanvas = await fetch(`http://${host}:${listener.port}${activeCanvasPath}`);
+          expect(scopedCanvas.status).toBe(200);
+          expect(await scopedCanvas.text()).toBe("ok");
 
-            clients.delete(activeNodeClient);
+          const scopedA2ui = await fetch(
+            `http://${host}:${listener.port}${scopedCanvasPath(activeNodeCapability, `${A2UI_PATH}/`)}`,
+          );
+          expect(scopedA2ui.status).toBe(200);
 
-            const disconnectedNodeBlocked = await fetch(
-              `http://${host}:${listener.port}${activeCanvasPath}`,
-            );
-            expect(disconnectedNodeBlocked.status).toBe(401);
-            await expectWsRejected(`ws://${host}:${listener.port}${activeWsPath}`, {});
-          },
-        });
-      },
-    });
+          await expectWsConnected(`ws://${host}:${listener.port}${activeWsPath}`);
+
+          clients.delete(activeNodeClient);
+
+          const disconnectedNodeBlocked = await fetch(
+            `http://${host}:${listener.port}${activeCanvasPath}`,
+          );
+          expect(disconnectedNodeBlocked.status).toBe(401);
+          await expectWsRejected(`ws://${host}:${listener.port}${activeWsPath}`, {});
+        },
+      });
+    }, "openclaw-canvas-auth-test-");
   }, 60_000);
 
   test("denies canvas auth when trusted proxy omits forwarded client headers", async () => {
-    const resolvedAuth: ResolvedGatewayAuth = {
-      mode: "token",
-      token: "test-token",
-      password: undefined,
-      allowTailscale: false,
-    };
+    await withLoopbackTrustedProxy(async () => {
+      await withCanvasGatewayHarness({
+        resolvedAuth: tokenResolvedAuth,
+        handleHttpRequest: allowCanvasHostHttp,
+        run: async ({ listener, clients }) => {
+          clients.add(
+            makeWsClient({
+              connId: "c-loopback-node",
+              clientIp: "127.0.0.1",
+              role: "node",
+              mode: "node",
+              canvasCapability: "unused",
+              canvasCapabilityExpiresAtMs: Date.now() + 60_000,
+            }),
+          );
 
-    await withTempConfig({
-      cfg: {
-        gateway: {
-          trustedProxies: ["127.0.0.1"],
+          const res = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`);
+          expect(res.status).toBe(401);
+
+          await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {});
         },
-      },
-      run: async () => {
-        await withCanvasGatewayHarness({
-          resolvedAuth,
-          handleHttpRequest: allowCanvasHostHttp,
-          run: async ({ listener, clients }) => {
-            clients.add(
-              makeWsClient({
-                connId: "c-loopback-node",
-                clientIp: "127.0.0.1",
-                role: "node",
-                mode: "node",
-                canvasCapability: "unused",
-                canvasCapabilityExpiresAtMs: Date.now() + 60_000,
-              }),
-            );
-
-            const res = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`);
-            expect(res.status).toBe(401);
-
-            await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {});
-          },
-        });
-      },
+      });
     });
   }, 60_000);
 
   test("accepts capability-scoped paths over IPv6 loopback", async () => {
-    const resolvedAuth: ResolvedGatewayAuth = {
-      mode: "token",
-      token: "test-token",
-      password: undefined,
-      allowTailscale: false,
-    };
-
     await withTempConfig({
       cfg: {
         gateway: {
@@ -332,21 +315,9 @@ describe("gateway canvas host auth", () => {
       run: async () => {
         try {
           await withCanvasGatewayHarness({
-            resolvedAuth,
+            resolvedAuth: tokenResolvedAuth,
             listenHost: "::1",
-            handleHttpRequest: async (req, res) => {
-              const url = new URL(req.url ?? "/", "http://localhost");
-              if (
-                url.pathname !== CANVAS_HOST_PATH &&
-                !url.pathname.startsWith(`${CANVAS_HOST_PATH}/`)
-              ) {
-                return false;
-              }
-              res.statusCode = 200;
-              res.setHeader("Content-Type", "text/plain; charset=utf-8");
-              res.end("ok");
-              return true;
-            },
+            handleHttpRequest: allowCanvasHostHttp,
             run: async ({ listener, clients }) => {
               const capability = "ipv6-node";
               clients.add(
@@ -380,54 +351,36 @@ describe("gateway canvas host auth", () => {
   }, 60_000);
 
   test("returns 429 for repeated failed canvas auth attempts (HTTP + WS upgrade)", async () => {
-    const resolvedAuth: ResolvedGatewayAuth = {
-      mode: "token",
-      token: "test-token",
-      password: undefined,
-      allowTailscale: false,
-    };
+    await withLoopbackTrustedProxy(async () => {
+      const rateLimiter = createAuthRateLimiter({
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        exemptLoopback: false,
+      });
+      await withCanvasGatewayHarness({
+        resolvedAuth: tokenResolvedAuth,
+        rateLimiter,
+        handleHttpRequest: async () => false,
+        run: async ({ listener }) => {
+          const headers = {
+            authorization: "Bearer wrong",
+            "x-forwarded-for": "203.0.113.99",
+          };
+          const first = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
+            headers,
+          });
+          expect(first.status).toBe(401);
 
-    await withTempConfig({
-      cfg: {
-        gateway: {
-          trustedProxies: ["127.0.0.1"],
+          const second = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
+            headers,
+          });
+          expect(second.status).toBe(429);
+          expect(second.headers.get("retry-after")).toBeTruthy();
+
+          await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, headers, 429);
         },
-      },
-      run: async () => {
-        const rateLimiter = createAuthRateLimiter({
-          maxAttempts: 1,
-          windowMs: 60_000,
-          lockoutMs: 60_000,
-          exemptLoopback: false,
-        });
-        await withCanvasGatewayHarness({
-          resolvedAuth,
-          rateLimiter,
-          handleHttpRequest: async () => false,
-          run: async ({ listener }) => {
-            const headers = {
-              authorization: "Bearer wrong",
-              "x-forwarded-for": "203.0.113.99",
-            };
-            const first = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
-              headers,
-            });
-            expect(first.status).toBe(401);
-
-            const second = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
-              headers,
-            });
-            expect(second.status).toBe(429);
-            expect(second.headers.get("retry-after")).toBeTruthy();
-
-            await expectWsRejected(
-              `ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`,
-              headers,
-              429,
-            );
-          },
-        });
-      },
+      });
     });
   }, 60_000);
 });

@@ -1,6 +1,7 @@
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
+  buildTokenChannelStatusSummary,
   collectTelegramStatusIssues,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
@@ -332,13 +333,24 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       });
       return { channel: "telegram", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, threadId, silent }) => {
+    sendMedia: async ({
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      silent,
+    }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
       const messageThreadId = parseTelegramThreadId(threadId);
       const result = await send(to, text, {
         verbose: false,
         mediaUrl,
+        mediaLocalRoots,
         messageThreadId,
         replyToMessageId,
         accountId: accountId ?? undefined,
@@ -363,17 +375,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       lastError: null,
     },
     collectStatusIssues: collectTelegramStatusIssues,
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      tokenSource: snapshot.tokenSource ?? "none",
-      running: snapshot.running ?? false,
-      mode: snapshot.mode ?? null,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
       getTelegramRuntime().channel.telegram.probeTelegram(
         account.token,
@@ -492,6 +494,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         webhookSecret: account.config.webhookSecret,
         webhookPath: account.config.webhookPath,
         webhookHost: account.config.webhookHost,
+        webhookPort: account.config.webhookPort,
       });
     },
     logoutAccount: async ({ accountId, cfg }) => {
