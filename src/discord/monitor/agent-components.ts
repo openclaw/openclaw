@@ -479,16 +479,23 @@ async function ensureDmComponentAuthorized(params: {
   replyOpts: { ephemeral?: boolean };
 }): Promise<boolean> {
   const { ctx, interaction, user, componentLabel, replyOpts } = params;
+  const suppressed = isOutboundSuppressed({
+    cfg: ctx.cfg,
+    channel: "discord",
+    accountId: ctx.accountId,
+  });
   const dmPolicy = ctx.dmPolicy ?? "pairing";
   if (dmPolicy === "disabled") {
     logVerbose(`agent ${componentLabel}: blocked (DM policy disabled)`);
-    try {
-      await interaction.reply({
-        content: "DM interactions are disabled.",
-        ...replyOpts,
-      });
-    } catch {
-      // Interaction may have expired
+    if (!suppressed) {
+      try {
+        await interaction.reply({
+          content: "DM interactions are disabled.",
+          ...replyOpts,
+        });
+      } catch {
+        // Interaction may have expired
+      }
     }
     return false;
   }
@@ -528,31 +535,35 @@ async function ensureDmComponentAuthorized(params: {
         name: user.username,
       },
     });
-    try {
-      await interaction.reply({
-        content: created
-          ? buildPairingReply({
-              channel: "discord",
-              idLine: `Your Discord user id: ${user.id}`,
-              code,
-            })
-          : "Pairing already requested. Ask the bot owner to approve your code.",
-        ...replyOpts,
-      });
-    } catch {
-      // Interaction may have expired
+    if (!suppressed) {
+      try {
+        await interaction.reply({
+          content: created
+            ? buildPairingReply({
+                channel: "discord",
+                idLine: `Your Discord user id: ${user.id}`,
+                code,
+              })
+            : "Pairing already requested. Ask the bot owner to approve your code.",
+          ...replyOpts,
+        });
+      } catch {
+        // Interaction may have expired
+      }
     }
     return false;
   }
 
   logVerbose(`agent ${componentLabel}: blocked DM user ${user.id} (not in allowFrom)`);
-  try {
-    await interaction.reply({
-      content: `You are not authorized to use this ${componentLabel}.`,
-      ...replyOpts,
-    });
-  } catch {
-    // Interaction may have expired
+  if (!suppressed) {
+    try {
+      await interaction.reply({
+        content: `You are not authorized to use this ${componentLabel}.`,
+        ...replyOpts,
+      });
+    } catch {
+      // Interaction may have expired
+    }
   }
   return false;
 }

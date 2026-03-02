@@ -1431,6 +1431,10 @@ async function dispatchDiscordCommandInteraction(params: {
     cfg,
   });
   if (menu) {
+    if (discordCommandSuppressed) {
+      logVerbose("[suppressOutbound] Blocked Discord command-arg menu");
+      return;
+    }
     const menuPayload = buildDiscordCommandArgMenu({
       command,
       menu,
@@ -1466,6 +1470,10 @@ async function dispatchDiscordCommandInteraction(params: {
     commandArgs,
   });
   if (pickerCommandContext) {
+    if (discordCommandSuppressed) {
+      logVerbose("[suppressOutbound] Blocked Discord model picker");
+      return;
+    }
     await replyWithDiscordModelPickerProviders({
       interaction,
       cfg,
