@@ -8,6 +8,7 @@ import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { resolveOutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
+import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { logWarn } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -117,6 +118,7 @@ type DispatchCronDeliveryParams = {
 export type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
+  deliveryAttempted: boolean;
   summary?: string;
   outputText?: string;
   synthesizedText?: string;
@@ -134,6 +136,7 @@ export async function dispatchCronDelivery(
   // `true` means we confirmed at least one outbound send reached the target.
   // Keep this strict so timer fallback can safely decide whether to wake main.
   let delivered = params.skipMessagingToolDelivery;
+  let deliveryAttempted = params.skipMessagingToolDelivery;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
       status: "error",
@@ -141,6 +144,7 @@ export async function dispatchCronDelivery(
       errorKind: "delivery-target",
       summary,
       outputText,
+      deliveryAttempted,
       ...params.telemetry,
     });
 
@@ -162,9 +166,16 @@ export async function dispatchCronDelivery(
         return params.withRunSession({
           status: "error",
           error: params.abortReason(),
+          deliveryAttempted,
           ...params.telemetry,
         });
       }
+      deliveryAttempted = true;
+      const deliverySession = buildOutboundSessionContext({
+        cfg: params.cfgWithAgentDefaults,
+        agentId: params.agentId,
+        sessionKey: params.agentSessionKey,
+      });
       const deliveryResults = await deliverOutboundPayloads({
         cfg: params.cfgWithAgentDefaults,
         channel: delivery.channel,
@@ -172,7 +183,7 @@ export async function dispatchCronDelivery(
         accountId: delivery.accountId,
         threadId: delivery.threadId,
         payloads: payloadsForDelivery,
-        agentId: params.agentId,
+        session: deliverySession,
         identity,
         bestEffort: params.deliveryBestEffort,
         deps: createOutboundSendDeps(params.deps),
@@ -187,6 +198,7 @@ export async function dispatchCronDelivery(
           summary,
           outputText,
           error: String(err),
+          deliveryAttempted,
           ...params.telemetry,
         });
       }
@@ -277,9 +289,11 @@ export async function dispatchCronDelivery(
         return params.withRunSession({
           status: "error",
           error: params.abortReason(),
+          deliveryAttempted,
           ...params.telemetry,
         });
       }
+      deliveryAttempted = true;
       const didAnnounce = await runSubagentAnnounceFlow({
         childSessionKey: params.agentSessionKey,
         childRunId: `${params.job.id}:${params.runSessionId}:${params.runStartedAt}`,
@@ -295,6 +309,10 @@ export async function dispatchCronDelivery(
         timeoutMs: params.timeoutMs,
         cleanup: params.job.deleteAfterRun ? "delete" : "keep",
         roundOneReply: synthesizedText,
+        // Cron output is a finished completion message: send it directly to the
+        // target channel via the completion-direct-send path rather than injecting
+        // a trigger message into the (likely idle) main agent session.
+        expectsCompletionMessage: true,
         // Keep delivery outcome truthful for cron state: if outbound send fails,
         // announce flow must report false so caller can apply best-effort policy.
         bestEffortDeliver: false,
@@ -315,6 +333,7 @@ export async function dispatchCronDelivery(
             summary,
             outputText,
             error: message,
+            deliveryAttempted,
             ...params.telemetry,
           });
         }
@@ -327,6 +346,7 @@ export async function dispatchCronDelivery(
           summary,
           outputText,
           error: String(err),
+          deliveryAttempted,
           ...params.telemetry,
         });
       }
@@ -345,6 +365,7 @@ export async function dispatchCronDelivery(
         return {
           result: failDeliveryTarget(params.resolvedDelivery.error.message),
           delivered,
+          deliveryAttempted,
           summary,
           outputText,
           synthesizedText,
@@ -357,9 +378,11 @@ export async function dispatchCronDelivery(
           status: "ok",
           summary,
           outputText,
+          deliveryAttempted,
           ...params.telemetry,
         }),
         delivered,
+        deliveryAttempted,
         summary,
         outputText,
         synthesizedText,
@@ -383,6 +406,7 @@ export async function dispatchCronDelivery(
         return {
           result: directResult,
           delivered,
+          deliveryAttempted,
           summary,
           outputText,
           synthesizedText,
@@ -395,6 +419,7 @@ export async function dispatchCronDelivery(
         return {
           result: announceResult,
           delivered,
+          deliveryAttempted,
           summary,
           outputText,
           synthesizedText,
@@ -406,6 +431,7 @@ export async function dispatchCronDelivery(
 
   return {
     delivered,
+    deliveryAttempted,
     summary,
     outputText,
     synthesizedText,

@@ -31,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,6 +68,11 @@ private enum class StatusVisual {
 @Composable
 fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var activeTab by rememberSaveable { mutableStateOf(HomeTab.Connect) }
+
+  // Stop TTS when user navigates away from voice tab
+  LaunchedEffect(activeTab) {
+    viewModel.setVoiceScreenActive(activeTab == HomeTab.Voice)
+  }
 
   val statusText by viewModel.statusText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
@@ -117,7 +123,7 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
       when (activeTab) {
         HomeTab.Connect -> ConnectTabScreen(viewModel = viewModel)
         HomeTab.Chat -> ChatSheet(viewModel = viewModel)
-        HomeTab.Voice -> ComingSoonTabScreen(label = "VOICE", title = "Coming soon", description = "Voice mode is coming soon.")
+        HomeTab.Voice -> VoiceTabScreen(viewModel = viewModel)
         HomeTab.Screen -> ScreenTabScreen(viewModel = viewModel)
         HomeTab.Settings -> SettingsSheet(viewModel = viewModel)
       }
@@ -315,25 +321,6 @@ private fun BottomTabBar(
           }
         }
       }
-    }
-  }
-}
-
-@Composable
-private fun ComingSoonTabScreen(
-  label: String,
-  title: String,
-  description: String,
-) {
-  Box(modifier = Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 18.dp)) {
-    Column(
-      modifier = Modifier.align(Alignment.Center),
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-      Text(label, style = mobileCaption1.copy(fontWeight = FontWeight.Bold), color = mobileAccent)
-      Text(title, style = mobileTitle1, color = mobileText)
-      Text(description, style = mobileBody, color = mobileTextSecondary)
     }
   }
 }

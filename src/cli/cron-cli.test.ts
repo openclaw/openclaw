@@ -40,15 +40,27 @@ const { registerCronCli } = await import("./cron-cli.js");
 type CronUpdatePatch = {
   patch?: {
     schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
-    payload?: { message?: string; model?: string; thinking?: string };
-    delivery?: { mode?: string; channel?: string; to?: string; bestEffort?: boolean };
+    payload?: {
+      kind?: string;
+      message?: string;
+      model?: string;
+      thinking?: string;
+      lightContext?: boolean;
+    };
+    delivery?: {
+      mode?: string;
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      bestEffort?: boolean;
+    };
   };
 };
 
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
-  payload?: { model?: string; thinking?: string };
-  delivery?: { mode?: string };
+  payload?: { model?: string; thinking?: string; lightContext?: boolean };
+  delivery?: { mode?: string; accountId?: string };
   deleteAfterRun?: boolean;
   agentId?: string;
   sessionTarget?: string;
@@ -145,6 +157,62 @@ async function expectCronEditWithScheduleLookupExit(
 }
 
 describe("cron cli", () => {
+  it("exits 0 for cron run when job executes successfully", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.run") {
+          return { ok: true, params, ran: true };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const runtimeModule = await import("../runtime.js");
+    const runtime = runtimeModule.defaultRuntime as { exit: (code: number) => void };
+    const originalExit = runtime.exit;
+    const exitSpy = vi.fn();
+    runtime.exit = exitSpy;
+    try {
+      const program = buildProgram();
+      await program.parseAsync(["cron", "run", "job-1"], { from: "user" });
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      runtime.exit = originalExit;
+    }
+  });
+
+  it("exits 1 for cron run when job does not execute", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.run") {
+          return { ok: true, params, ran: false };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const runtimeModule = await import("../runtime.js");
+    const runtime = runtimeModule.defaultRuntime as { exit: (code: number) => void };
+    const originalExit = runtime.exit;
+    const exitSpy = vi.fn();
+    runtime.exit = exitSpy;
+    try {
+      const program = buildProgram();
+      await program.parseAsync(["cron", "run", "job-1"], { from: "user" });
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      runtime.exit = originalExit;
+    }
+  });
+
   it("trims model and thinking on cron add", { timeout: CRON_CLI_TEST_TIMEOUT_MS }, async () => {
     await runCronCommand([
       "cron",
@@ -246,6 +314,40 @@ describe("cron cli", () => {
     expect(params?.deleteAfterRun).toBe(false);
   });
 
+  it("includes --account on isolated cron add delivery", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "accounted add",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--account",
+      "  coordinator  ",
+    ]);
+    expect(params?.delivery?.mode).toBe("announce");
+    expect(params?.delivery?.accountId).toBe("coordinator");
+  });
+
+  it("rejects --account on non-isolated/systemEvent cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "invalid account add",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "main",
+      "--system-event",
+      "tick",
+      "--account",
+      "coordinator",
+    ]);
+  });
+
   it.each([
     { command: "enable" as const, expectedEnabled: true },
     { command: "disable" as const, expectedEnabled: false },
@@ -273,6 +375,22 @@ describe("cron cli", () => {
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { agentId?: string };
     expect(params?.agentId).toBe("ops");
+  });
+
+  it("sets lightContext on cron add when --light-context is passed", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Light context",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--light-context",
+    ]);
+
+    expect(params?.payload?.lightContext).toBe(true);
   });
 
   it.each([
@@ -317,6 +435,14 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload?.thinking).toBe("low");
   });
 
+  it("sets and clears lightContext on cron edit", async () => {
+    const setPatch = await runCronEditAndGetPatch(["--light-context", "--message", "hello"]);
+    expect(setPatch?.patch?.payload?.lightContext).toBe(true);
+
+    const clearPatch = await runCronEditAndGetPatch(["--no-light-context", "--message", "hello"]);
+    expect(clearPatch?.patch?.payload?.lightContext).toBe(false);
+  });
+
   it("updates delivery settings without requiring --message", async () => {
     await runCronCommand([
       "cron",
@@ -352,6 +478,13 @@ describe("cron cli", () => {
 
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
     expect(patch?.patch?.delivery?.mode).toBe("none");
+  });
+
+  it("updates delivery account without requiring --message on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch(["--account", "  coordinator  "]);
+    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.delivery?.accountId).toBe("coordinator");
+    expect(patch?.patch?.delivery?.mode).toBeUndefined();
   });
 
   it("does not include undefined delivery fields when updating message", async () => {
@@ -503,5 +636,54 @@ describe("cron cli", () => {
 
   it("rejects --exact on edit when existing job is not cron", async () => {
     await expectCronEditWithScheduleLookupExit({ kind: "every", everyMs: 60_000 }, ["--exact"]);
+  });
+
+  it("patches failure alert settings on cron edit", async () => {
+    callGatewayFromCli.mockClear();
+
+    const program = buildProgram();
+
+    await program.parseAsync(
+      [
+        "cron",
+        "edit",
+        "job-1",
+        "--failure-alert-after",
+        "3",
+        "--failure-alert-cooldown",
+        "1h",
+        "--failure-alert-channel",
+        "telegram",
+        "--failure-alert-to",
+        "19098680",
+      ],
+      { from: "user" },
+    );
+
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+    const patch = updateCall?.[2] as {
+      patch?: {
+        failureAlert?: { after?: number; cooldownMs?: number; channel?: string; to?: string };
+      };
+    };
+
+    expect(patch?.patch?.failureAlert?.after).toBe(3);
+    expect(patch?.patch?.failureAlert?.cooldownMs).toBe(3_600_000);
+    expect(patch?.patch?.failureAlert?.channel).toBe("telegram");
+    expect(patch?.patch?.failureAlert?.to).toBe("19098680");
+  });
+
+  it("supports --no-failure-alert on cron edit", async () => {
+    callGatewayFromCli.mockClear();
+
+    const program = buildProgram();
+
+    await program.parseAsync(["cron", "edit", "job-1", "--no-failure-alert"], {
+      from: "user",
+    });
+
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+    const patch = updateCall?.[2] as { patch?: { failureAlert?: boolean } };
+    expect(patch?.patch?.failureAlert).toBe(false);
   });
 });

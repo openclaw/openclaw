@@ -138,9 +138,9 @@ describe("resolveExtraParams", () => {
 
 describe("applyExtraParamsToAgent", () => {
   function createOptionsCaptureAgent() {
-    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const calls: Array<(SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      calls.push(options);
+      calls.push(options as (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined);
       return {} as ReturnType<StreamFn>;
     };
     return {
@@ -161,7 +161,7 @@ describe("applyExtraParamsToAgent", () => {
     };
   }
 
-  function runStoreMutationCase(params: {
+  function runResponsesPayloadMutationCase(params: {
     applyProvider: string;
     applyModelId: string;
     model:
@@ -169,14 +169,21 @@ describe("applyExtraParamsToAgent", () => {
       | Model<"openai-codex-responses">
       | Model<"openai-completions">;
     options?: SimpleStreamOptions;
+    cfg?: Record<string, unknown>;
+    payload?: Record<string, unknown>;
   }) {
-    const payload = { store: false };
+    const payload = params.payload ?? { store: false };
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       options?.onPayload?.(payload);
       return {} as ReturnType<StreamFn>;
     };
     const agent = { streamFn: baseStreamFn };
-    applyExtraParamsToAgent(agent, undefined, params.applyProvider, params.applyModelId);
+    applyExtraParamsToAgent(
+      agent,
+      params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
+      params.applyProvider,
+      params.applyModelId,
+    );
     const context: Context = { messages: [] };
     void agent.streamFn?.(params.model, context, params.options ?? {});
     return payload;
@@ -490,6 +497,240 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("passes configured websocket transport through stream options", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.3-codex": {
+              params: {
+                transport: "websocket",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.3-codex");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("websocket");
+  });
+
+  it("defaults Codex transport to auto (WebSocket-first)", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "openai-codex", "gpt-5.3-codex");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("auto");
+  });
+
+  it("defaults OpenAI transport to auto (WebSocket-first)", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("auto");
+    expect(calls[0]?.openaiWsWarmup).toBe(true);
+  });
+
+  it("lets runtime options override OpenAI default transport", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, { transport: "sse" });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("sse");
+  });
+
+  it("allows disabling OpenAI websocket warm-up via model params", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5": {
+              params: {
+                openaiWsWarmup: false,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.openaiWsWarmup).toBe(false);
+  });
+
+  it("lets runtime options override configured OpenAI websocket warm-up", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5": {
+              params: {
+                openaiWsWarmup: false,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {
+      openaiWsWarmup: true,
+    } as unknown as SimpleStreamOptions);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.openaiWsWarmup).toBe(true);
+  });
+
+  it("allows forcing Codex transport to SSE", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.3-codex": {
+              params: {
+                transport: "sse",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.3-codex");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("sse");
+  });
+
+  it("lets runtime options override configured transport", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.3-codex": {
+              params: {
+                transport: "websocket",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.3-codex");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, { transport: "sse" });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("sse");
+  });
+
+  it("falls back to Codex default transport when configured value is invalid", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.3-codex": {
+              params: {
+                transport: "udp",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.3-codex");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("auto");
+  });
+
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
@@ -585,6 +826,19 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("does not add Anthropic 1M beta header when context1m is not enabled", () => {
+    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", {
+      temperature: 0.2,
+    });
+    const headers = runAnthropicHeaderCase({
+      cfg,
+      modelId: "claude-opus-4-6",
+      options: { headers: { "X-Custom": "1" } },
+    });
+
+    expect(headers).toEqual({ "X-Custom": "1" });
+  });
+
   it("skips context1m beta for OAuth tokens but preserves OAuth-required betas", () => {
     const calls: Array<SimpleStreamOptions | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -660,7 +914,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("forces store=true for direct OpenAI Responses payloads", () => {
-    const payload = runStoreMutationCase({
+    const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5",
       model: {
@@ -674,7 +928,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("does not force store for OpenAI Responses routed through non-OpenAI base URLs", () => {
-    const payload = runStoreMutationCase({
+    const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5",
       model: {
@@ -687,11 +941,158 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(false);
   });
 
+  it("does not force store for OpenAI Responses when baseUrl is empty", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "",
+      } as Model<"openai-responses">,
+    });
+    expect(payload.store).toBe(false);
+  });
+
+  it("does not force store for models that declare supportsStore=false", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "azure-openai-responses",
+      applyModelId: "gpt-4o",
+      model: {
+        api: "openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-4o",
+        name: "gpt-4o",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 16_384,
+        compat: { supportsStore: false },
+      } as Model<"openai-responses"> & { compat?: { supportsStore?: boolean } },
+    });
+    expect(payload.store).toBe(false);
+  });
+
+  it("auto-injects OpenAI Responses context_management compaction for direct OpenAI models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 200_000,
+      } as Model<"openai-responses">,
+    });
+    expect(payload.context_management).toEqual([
+      {
+        type: "compaction",
+        compact_threshold: 140_000,
+      },
+    ]);
+  });
+
+  it("does not auto-inject OpenAI Responses context_management for Azure by default", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "azure-openai-responses",
+      applyModelId: "gpt-4o",
+      model: {
+        api: "openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-4o",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      } as Model<"openai-responses">,
+    });
+    expect(payload).not.toHaveProperty("context_management");
+  });
+
+  it("allows explicitly enabling OpenAI Responses context_management compaction", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "azure-openai-responses",
+      applyModelId: "gpt-4o",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "azure-openai-responses/gpt-4o": {
+                params: {
+                  responsesServerCompaction: true,
+                  responsesCompactThreshold: 42_000,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-4o",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      } as Model<"openai-responses">,
+    });
+    expect(payload.context_management).toEqual([
+      {
+        type: "compaction",
+        compact_threshold: 42_000,
+      },
+    ]);
+  });
+
+  it("preserves existing context_management payload values", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        store: false,
+        context_management: [{ type: "compaction", compact_threshold: 12_345 }],
+      },
+    });
+    expect(payload.context_management).toEqual([{ type: "compaction", compact_threshold: 12_345 }]);
+  });
+
+  it("allows disabling OpenAI Responses context_management compaction via model params", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5": {
+                params: {
+                  responsesServerCompaction: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+    });
+    expect(payload).not.toHaveProperty("context_management");
+  });
+
   it.each([
     {
       name: "with openai-codex provider config",
       run: () =>
-        runStoreMutationCase({
+        runResponsesPayloadMutationCase({
           applyProvider: "openai-codex",
           applyModelId: "codex-mini-latest",
           model: {
@@ -705,7 +1106,7 @@ describe("applyExtraParamsToAgent", () => {
     {
       name: "without config via provider/model hints",
       run: () =>
-        runStoreMutationCase({
+        runResponsesPayloadMutationCase({
           applyProvider: "openai-codex",
           applyModelId: "codex-mini-latest",
           model: {

@@ -49,19 +49,27 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     preferMacAppExecHost: boolean;
     runViaResponse?: ExecHostResponse | null;
     command?: string[];
+    cwd?: string;
     security?: "full" | "allowlist";
     ask?: "off" | "on-miss" | "always";
     approved?: boolean;
   }) {
-    const runCommand = vi.fn(async () => ({
-      success: true,
-      stdout: "local-ok",
-      stderr: "",
-      timedOut: false,
-      truncated: false,
-      exitCode: 0,
-      error: null,
-    }));
+    const runCommand = vi.fn(
+      async (
+        _command: string[],
+        _cwd?: string,
+        _env?: Record<string, string>,
+        _timeoutMs?: number,
+      ) => ({
+        success: true,
+        stdout: "local-ok",
+        stderr: "",
+        timedOut: false,
+        truncated: false,
+        exitCode: 0,
+        error: null,
+      }),
+    );
     const runViaMacAppExecHost = vi.fn(async () => params.runViaResponse ?? null);
     const sendInvokeResult = vi.fn(async () => {});
     const sendExecFinishedEvent = vi.fn(async () => {});
@@ -70,6 +78,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       client: {} as never,
       params: {
         command: params.command ?? ["echo", "ok"],
+        cwd: params.cwd,
         approved: params.approved ?? false,
         sessionKey: "agent:main:main",
       },
@@ -190,7 +199,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       return;
     }
 
-    expect(runCommand).toHaveBeenCalledWith(["tr", "a", "b"], undefined, undefined, undefined);
+    const runArgs = vi.mocked(runCommand).mock.calls[0]?.[0] as string[] | undefined;
+    expect(runArgs).toBeDefined();
+    expect(runArgs?.[0]).toMatch(/(^|[/\\])tr$/);
+    expect(runArgs?.slice(1)).toEqual(["a", "b"]);
     expect(sendInvokeResult).toHaveBeenCalledWith(
       expect.objectContaining({
         ok: true,
@@ -213,6 +225,230 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         }),
       }),
     );
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "pins PATH-token executable to canonical path for approval-based runs",
+    async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-path-pin-"));
+      const binDir = path.join(tmp, "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const link = path.join(binDir, "poccmd");
+      fs.symlinkSync("/bin/echo", link);
+      const expected = fs.realpathSync(link);
+      const oldPath = process.env.PATH;
+      process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+      try {
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["poccmd", "-n", "SAFE"],
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
+        expect(runCommand).toHaveBeenCalledWith(
+          [expected, "-n", "SAFE"],
+          undefined,
+          undefined,
+          undefined,
+        );
+        expect(sendInvokeResult).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ok: true,
+          }),
+        );
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "pins PATH-token executable to canonical path for allowlist runs",
+    async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-allowlist-path-pin-"));
+      const binDir = path.join(tmp, "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const link = path.join(binDir, "poccmd");
+      fs.symlinkSync("/bin/echo", link);
+      const expected = fs.realpathSync(link);
+      const oldPath = process.env.PATH;
+      process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+      const runCommand = vi.fn(async () => ({
+        success: true,
+        stdout: "local-ok",
+        stderr: "",
+        timedOut: false,
+        truncated: false,
+        exitCode: 0,
+        error: null,
+      }));
+      const sendInvokeResult = vi.fn(async () => {});
+      const sendNodeEvent = vi.fn(async () => {});
+      try {
+        await withTempApprovalsHome({
+          approvals: {
+            version: 1,
+            defaults: {
+              security: "allowlist",
+              ask: "off",
+              askFallback: "deny",
+            },
+            agents: {
+              main: {
+                allowlist: [{ pattern: link }],
+              },
+            },
+          },
+          run: async () => {
+            await handleSystemRunInvoke({
+              client: {} as never,
+              params: {
+                command: ["poccmd", "-n", "SAFE"],
+                sessionKey: "agent:main:main",
+              },
+              skillBins: {
+                current: async () => [],
+              },
+              execHostEnforced: false,
+              execHostFallbackAllowed: true,
+              resolveExecSecurity: () => "allowlist",
+              resolveExecAsk: () => "off",
+              isCmdExeInvocation: () => false,
+              sanitizeEnv: () => undefined,
+              runCommand,
+              runViaMacAppExecHost: vi.fn(async () => null),
+              sendNodeEvent,
+              buildExecEventPayload: (payload) => payload,
+              sendInvokeResult,
+              sendExecFinishedEvent: vi.fn(async () => {}),
+              preferMacAppExecHost: false,
+            });
+          },
+        });
+        expect(runCommand).toHaveBeenCalledWith(
+          [expected, "-n", "SAFE"],
+          undefined,
+          undefined,
+          undefined,
+        );
+        expect(sendInvokeResult).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ok: true,
+          }),
+        );
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "denies approval-based execution when cwd is a symlink",
+    async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-cwd-link-"));
+      const safeDir = path.join(tmp, "safe");
+      const linkDir = path.join(tmp, "cwd-link");
+      const script = path.join(safeDir, "run.sh");
+      fs.mkdirSync(safeDir, { recursive: true });
+      fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
+      fs.chmodSync(script, 0o755);
+      fs.symlinkSync(safeDir, linkDir, "dir");
+      try {
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["./run.sh"],
+          cwd: linkDir,
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
+        expect(runCommand).not.toHaveBeenCalled();
+        expect(sendInvokeResult).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ok: false,
+            error: expect.objectContaining({
+              message: expect.stringContaining("canonical cwd"),
+            }),
+          }),
+        );
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "denies approval-based execution when cwd contains a symlink parent component",
+    async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-cwd-parent-link-"));
+      const safeRoot = path.join(tmp, "safe-root");
+      const safeSub = path.join(safeRoot, "sub");
+      const linkRoot = path.join(tmp, "approved-link");
+      fs.mkdirSync(safeSub, { recursive: true });
+      fs.symlinkSync(safeRoot, linkRoot, "dir");
+      try {
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["./run.sh"],
+          cwd: path.join(linkRoot, "sub"),
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
+        expect(runCommand).not.toHaveBeenCalled();
+        expect(sendInvokeResult).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ok: false,
+            error: expect.objectContaining({
+              message: expect.stringContaining("no symlink path components"),
+            }),
+          }),
+        );
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("uses canonical executable path for approval-based relative command execution", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-cwd-real-"));
+    const script = path.join(tmp, "run.sh");
+    fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(script, 0o755);
+    try {
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: ["./run.sh", "--flag"],
+        cwd: tmp,
+        approved: true,
+        security: "full",
+        ask: "off",
+      });
+      expect(runCommand).toHaveBeenCalledWith(
+        [fs.realpathSync(script), "--flag"],
+        fs.realpathSync(tmp),
+        undefined,
+        undefined,
+      );
+      expect(sendInvokeResult).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ok: true,
+        }),
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
   it("denies ./sh wrapper spoof in allowlist on-miss mode before execution", async () => {
     const marker = path.join(os.tmpdir(), `openclaw-wrapper-spoof-${process.pid}-${Date.now()}`);
@@ -363,6 +599,31 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         }),
       }),
     );
+  });
+
+  it("denies semicolon-chained shell payloads in allowlist mode without explicit approval", async () => {
+    const payloads = ["openclaw status; id", "openclaw status; cat /etc/passwd"];
+    for (const payload of payloads) {
+      const command =
+        process.platform === "win32"
+          ? ["cmd.exe", "/d", "/s", "/c", payload]
+          : ["/bin/sh", "-lc", payload];
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        security: "allowlist",
+        ask: "on-miss",
+        command,
+      });
+      expect(runCommand, payload).not.toHaveBeenCalled();
+      expect(sendInvokeResult, payload).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({
+            message: "SYSTEM_RUN_DENIED: approval required",
+          }),
+        }),
+      );
+    }
   });
 
   it("denies nested env shell payloads when wrapper depth is exceeded", async () => {

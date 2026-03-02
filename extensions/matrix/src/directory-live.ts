@@ -174,7 +174,8 @@ export async function listMatrixDirectoryGroupsLive(
   }
 
   if (query.startsWith("!")) {
-    return [createGroupDirectoryEntry({ id: query, name: query })];
+    const originalId = params.query?.trim() ?? query;
+    return [createGroupDirectoryEntry({ id: originalId, name: originalId })];
   }
 
   const joined = await fetchMatrixJson<MatrixJoinedRoomsResponse>({

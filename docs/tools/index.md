@@ -174,6 +174,7 @@ Optional plugin tools:
 
 - [Lobster](/tools/lobster): typed workflow runtime with resumable approvals (requires the Lobster CLI on the gateway host).
 - [LLM Task](/tools/llm-task): JSON-only LLM step for structured workflow output (optional schema validation).
+- [Diffs](/tools/diffs): read-only diff viewer and PNG renderer for before/after text or unified patches.
 
 ## Tool inventory
 
@@ -354,8 +355,9 @@ Core actions:
 - `pending`, `approve`, `reject` (pairing)
 - `notify` (macOS `system.notify`)
 - `run` (macOS `system.run`)
-- `camera_snap`, `camera_clip`, `screen_record`
-- `location_get`
+- `camera_list`, `camera_snap`, `camera_clip`, `screen_record`
+- `location_get`, `notifications_list`, `notifications_action`
+- `device_status`, `device_info`, `device_permissions`, `device_health`
 
 Notes:
 
@@ -464,7 +466,7 @@ Core parameters:
 - `sessions_list`: `kinds?`, `limit?`, `activeMinutes?`, `messageLimit?` (0 = none)
 - `sessions_history`: `sessionKey` (or `sessionId`), `limit?`, `includeTools?`
 - `sessions_send`: `sessionKey` (or `sessionId`), `message`, `timeoutSeconds?` (0 = fire-and-forget)
-- `sessions_spawn`: `task`, `label?`, `agentId?`, `model?`, `thinking?`, `runTimeoutSeconds?`, `thread?`, `mode?`, `cleanup?`
+- `sessions_spawn`: `task`, `label?`, `runtime?`, `agentId?`, `model?`, `thinking?`, `cwd?`, `runTimeoutSeconds?`, `thread?`, `mode?`, `cleanup?`, `sandbox?`
 - `session_status`: `sessionKey?` (default current; accepts `sessionId`), `model?` (`default` clears override)
 
 Notes:
@@ -474,6 +476,7 @@ Notes:
 - Session targeting is controlled by `tools.sessions.visibility` (default `tree`: current session + spawned subagent sessions). If you run a shared agent for multiple users, consider setting `tools.sessions.visibility: "self"` to prevent cross-session browsing.
 - `sessions_send` waits for final completion when `timeoutSeconds > 0`.
 - Delivery/announce happens after completion and is best-effort; `status: "ok"` confirms the agent run finished, not that the announce was delivered.
+- `sessions_spawn` supports `runtime: "subagent" | "acp"` (`subagent` default). For ACP runtime behavior, see [ACP Agents](/tools/acp-agents).
 - `sessions_spawn` starts a sub-agent run and posts an announce reply back to the requester chat.
   - Supports one-shot mode (`mode: "run"`) and persistent thread-bound mode (`mode: "session"` with `thread: true`).
   - If `thread: true` and `mode` is omitted, mode defaults to `session`.

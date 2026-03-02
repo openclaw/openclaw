@@ -1,3 +1,5 @@
+import fsPromises from "node:fs/promises";
+import nodePath from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
@@ -332,6 +334,32 @@ export async function runConfigureWizard(
         runtime,
       );
       workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE);
+      if (!snapshot.exists) {
+        const indicators = ["MEMORY.md", "memory", ".git"].map((name) =>
+          nodePath.join(workspaceDir, name),
+        );
+        const hasExistingContent = (
+          await Promise.all(
+            indicators.map(async (candidate) => {
+              try {
+                await fsPromises.access(candidate);
+                return true;
+              } catch {
+                return false;
+              }
+            }),
+          )
+        ).some(Boolean);
+        if (hasExistingContent) {
+          note(
+            [
+              `Existing workspace detected at ${workspaceDir}`,
+              "Existing files are preserved. Missing templates may be created, never overwritten.",
+            ].join("\n"),
+            "Existing workspace",
+          );
+        }
+      }
       nextConfig = {
         ...nextConfig,
         agents: {
