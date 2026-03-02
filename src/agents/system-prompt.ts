@@ -414,8 +414,12 @@ export function buildAgentSystemPrompt(params: {
     return "You are a personal assistant running inside OpenClaw.";
   }
 
+  const modelIdentityLine = runtimeInfo?.model
+    ? `You are a personal assistant running inside OpenClaw, currently powered by ${runtimeInfo.model}. When asked what model you are, always answer: ${runtimeInfo.model}.`
+    : "You are a personal assistant running inside OpenClaw.";
+
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    modelIdentityLine,
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",

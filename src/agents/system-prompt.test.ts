@@ -559,6 +559,34 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("agent=work");
   });
 
+  it("includes explicit model identity in the prompt when runtimeInfo.model is set", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        host: "host",
+        os: "Linux",
+        arch: "x64",
+        node: "v22",
+        model: "minimax-portal/MiniMax-M2.5",
+      },
+    });
+
+    expect(prompt).toContain("currently powered by minimax-portal/MiniMax-M2.5");
+    expect(prompt).toContain(
+      "When asked what model you are, always answer: minimax-portal/MiniMax-M2.5",
+    );
+  });
+
+  it("uses generic identity line when runtimeInfo.model is not set", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("You are a personal assistant running inside OpenClaw.");
+    expect(prompt).not.toContain("currently powered by");
+    expect(prompt).not.toContain("When asked what model you are");
+  });
+
   it("includes reasoning visibility hint", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
