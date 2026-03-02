@@ -198,7 +198,7 @@ describe("config cli", () => {
 
     it("prints issues and exits 1 when config is invalid", async () => {
       setSnapshotOnce({
-        path: "/tmp/openclaw.json",
+        path: "/tmp/custom-openclaw.json",
         exists: true,
         raw: "{}",
         parsed: {},
@@ -226,7 +226,7 @@ describe("config cli", () => {
 
     it("returns machine-readable JSON with --json for invalid config", async () => {
       setSnapshotOnce({
-        path: "/tmp/openclaw.json",
+        path: "/tmp/custom-openclaw.json",
         exists: true,
         raw: "{}",
         parsed: {},
@@ -250,7 +250,7 @@ describe("config cli", () => {
         issues: Array<{ path: string; message: string }>;
       };
       expect(payload.valid).toBe(false);
-      expect(payload.path).toContain("openclaw.json");
+      expect(payload.path).toBe("/tmp/custom-openclaw.json");
       expect(payload.issues).toEqual([{ path: "gateway.bind", message: "Invalid enum value" }]);
       expect(mockError).not.toHaveBeenCalled();
     });

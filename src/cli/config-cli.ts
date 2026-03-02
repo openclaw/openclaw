@@ -17,6 +17,10 @@ type PathSegment = string;
 type ConfigSetParseOpts = {
   strictJson?: boolean;
 };
+type ConfigIssue = {
+  path: string;
+  message: string;
+};
 
 const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
 const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
@@ -93,6 +97,25 @@ function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
   } catch {
     return raw;
   }
+}
+
+function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function normalizeConfigIssues(issues: ReadonlyArray<ConfigIssue>): ConfigIssue[] {
+  return issues.map((issue) => ({
+    path: issue.path || "<root>",
+    message: issue.message,
+  }));
+}
+
+function formatConfigIssueLines(issues: ReadonlyArray<ConfigIssue>, marker: string): string[] {
+  return normalizeConfigIssues(issues).map((issue) => `${marker} ${issue.path}: ${issue.message}`);
+}
+
+function formatDoctorHint(message: string): string {
+  return `Run \`${formatCliCommand("openclaw doctor")}\` ${message}`;
 }
 
 function validatePathSegments(path: PathSegment[]): void {
@@ -227,10 +250,10 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
     return snapshot;
   }
   runtime.error(`Config invalid at ${shortenHomePath(snapshot.path)}.`);
-  for (const issue of snapshot.issues) {
-    runtime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
+  for (const line of formatConfigIssueLines(snapshot.issues, "-")) {
+    runtime.error(line);
   }
-  runtime.error(`Run \`${formatCliCommand("openclaw doctor")}\` to repair, then retry.`);
+  runtime.error(formatDoctorHint("to repair, then retry."));
   runtime.exit(1);
   return snapshot;
 }
@@ -335,15 +358,16 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
 
 export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
-  const configPath = CONFIG_PATH ?? "openclaw.json";
-  const shortPath = shortenHomePath(configPath);
+  let outputPath = CONFIG_PATH ?? "openclaw.json";
 
   try {
     const snapshot = await readConfigFileSnapshot();
+    outputPath = snapshot.path;
+    const shortPath = shortenHomePath(outputPath);
 
     if (!snapshot.exists) {
       if (opts.json) {
-        runtime.log(JSON.stringify({ valid: false, path: configPath, error: "file not found" }));
+        runtime.log(JSON.stringify({ valid: false, path: outputPath, error: "file not found" }));
       } else {
         runtime.error(danger(`Config file not found: ${shortPath}`));
       }
@@ -352,35 +376,30 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
     }
 
     if (!snapshot.valid) {
-      const issues = snapshot.issues.map((iss) => ({
-        path: iss.path || "<root>",
-        message: iss.message,
-      }));
+      const issues = normalizeConfigIssues(snapshot.issues);
 
       if (opts.json) {
-        runtime.log(JSON.stringify({ valid: false, path: configPath, issues }, null, 2));
+        runtime.log(JSON.stringify({ valid: false, path: outputPath, issues }, null, 2));
       } else {
         runtime.error(danger(`Config invalid at ${shortPath}:`));
-        for (const issue of issues) {
-          runtime.error(`  ${danger("×")} ${issue.path}: ${issue.message}`);
+        for (const line of formatConfigIssueLines(issues, danger("×"))) {
+          runtime.error(`  ${line}`);
         }
         runtime.error("");
-        runtime.error(
-          `Run \`${formatCliCommand("openclaw doctor")}\` to repair, or fix the keys above manually.`,
-        );
+        runtime.error(formatDoctorHint("to repair, or fix the keys above manually."));
       }
       runtime.exit(1);
       return;
     }
 
     if (opts.json) {
-      runtime.log(JSON.stringify({ valid: true, path: configPath }));
+      runtime.log(JSON.stringify({ valid: true, path: outputPath }));
     } else {
       runtime.log(success(`Config valid: ${shortPath}`));
     }
   } catch (err) {
     if (opts.json) {
-      runtime.log(JSON.stringify({ valid: false, path: configPath, error: String(err) }));
+      runtime.log(JSON.stringify({ valid: false, path: outputPath, error: String(err) }));
     } else {
       runtime.error(danger(`Config validation error: ${String(err)}`));
     }
