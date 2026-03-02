@@ -334,6 +334,83 @@ describe("resolveMediaList", () => {
     ]);
   });
 
+  it("falls back to URL when saveMediaBuffer fails", async () => {
+    const attachment = {
+      id: "att-save-fail",
+      url: "https://cdn.discordapp.com/attachments/1/photo.png",
+      filename: "photo.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockRejectedValueOnce(new Error("disk full"));
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([
+      {
+        path: attachment.url,
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+    ]);
+  });
+
+  it("preserves downloaded attachments alongside failed ones", async () => {
+    const goodAttachment = {
+      id: "att-good",
+      url: "https://cdn.discordapp.com/attachments/1/good.png",
+      filename: "good.png",
+      content_type: "image/png",
+    };
+    const badAttachment = {
+      id: "att-bad",
+      url: "https://cdn.discordapp.com/attachments/1/bad.pdf",
+      filename: "bad.pdf",
+      content_type: "application/pdf",
+    };
+
+    fetchRemoteMedia
+      .mockResolvedValueOnce({
+        buffer: Buffer.from("image"),
+        contentType: "image/png",
+      })
+      .mockRejectedValueOnce(new Error("network timeout"));
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/good.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [goodAttachment, badAttachment],
+      }),
+      512,
+    );
+
+    expect(result).toEqual([
+      {
+        path: "/tmp/good.png",
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+      {
+        path: badAttachment.url,
+        contentType: "application/pdf",
+        placeholder: "<media:document>",
+      },
+    ]);
+  });
+
   it("keeps sticker metadata when sticker download fails", async () => {
     const sticker = {
       id: "sticker-fallback",
