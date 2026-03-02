@@ -12,6 +12,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { maxBytesForKind } from "../media/constants.js";
 import { extensionForMime } from "../media/mime.js";
+import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { PollInput } from "../polls.js";
 import { loadWebMediaRaw } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
@@ -147,6 +148,9 @@ export async function sendMessageDiscord(
   const recipient = await parseAndResolveRecipient(to, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
+  // Use agent-scoped media local roots if not explicitly provided
+  const mediaLocalRoots = opts.mediaLocalRoots ?? getAgentScopedMediaLocalRoots(cfg, opts.accountId);
+
   // Forum/Media channels reject POST /messages; auto-create a thread post instead.
   const channelType = await resolveDiscordChannelType(rest, channelId);
 
@@ -204,7 +208,7 @@ export async function sendMessageDiscord(
           threadId,
           mediaCaption ?? "",
           opts.mediaUrl,
-          opts.mediaLocalRoots,
+          mediaLocalRoots,
           undefined,
           request,
           accountInfo.config.maxLinesPerMessage,
@@ -264,7 +268,7 @@ export async function sendMessageDiscord(
         channelId,
         textWithTables,
         opts.mediaUrl,
-        opts.mediaLocalRoots,
+        mediaLocalRoots,
         opts.replyTo,
         request,
         accountInfo.config.maxLinesPerMessage,
