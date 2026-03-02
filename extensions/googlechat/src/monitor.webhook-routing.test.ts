@@ -1,7 +1,9 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
+import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import { createMockServerResponse } from "../../../src/test-utils/mock-http-response.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { verifyGoogleChatRequest } from "./auth.js";
@@ -86,6 +88,47 @@ function registerTwoTargets() {
 }
 
 describe("Google Chat webhook routing", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("registers and unregisters plugin HTTP route at path boundaries", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+    const unregisterA = registerGoogleChatWebhookTarget({
+      account: baseAccount("A"),
+      config: {} as OpenClawConfig,
+      runtime: {},
+      core: {} as PluginRuntime,
+      path: "/googlechat",
+      statusSink: vi.fn(),
+      mediaMaxMb: 5,
+    });
+    const unregisterB = registerGoogleChatWebhookTarget({
+      account: baseAccount("B"),
+      config: {} as OpenClawConfig,
+      runtime: {},
+      core: {} as PluginRuntime,
+      path: "/googlechat",
+      statusSink: vi.fn(),
+      mediaMaxMb: 5,
+    });
+
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.httpRoutes[0]).toEqual(
+      expect.objectContaining({
+        pluginId: "googlechat",
+        path: "/googlechat",
+        source: "googlechat-webhook",
+      }),
+    );
+
+    unregisterA();
+    expect(registry.httpRoutes).toHaveLength(1);
+    unregisterB();
+    expect(registry.httpRoutes).toHaveLength(0);
+  });
+
   it("rejects ambiguous routing when multiple targets on the same path verify successfully", async () => {
     vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: true });
 

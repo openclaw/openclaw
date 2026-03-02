@@ -9,6 +9,7 @@ describe("registerPluginHttpRoute", () => {
 
     const unregister = registerPluginHttpRoute({
       path: "/plugins/demo",
+      auth: "plugin",
       handler,
       registry,
     });
@@ -16,6 +17,8 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(1);
     expect(registry.httpRoutes[0]?.path).toBe("/plugins/demo");
     expect(registry.httpRoutes[0]?.handler).toBe(handler);
+    expect(registry.httpRoutes[0]?.auth).toBe("plugin");
+    expect(registry.httpRoutes[0]?.match).toBe("exact");
 
     unregister();
     expect(registry.httpRoutes).toHaveLength(0);
@@ -26,6 +29,7 @@ describe("registerPluginHttpRoute", () => {
     const logs: string[] = [];
     const unregister = registerPluginHttpRoute({
       path: "",
+      auth: "plugin",
       handler: vi.fn(),
       registry,
       accountId: "default",
@@ -37,7 +41,7 @@ describe("registerPluginHttpRoute", () => {
     expect(() => unregister()).not.toThrow();
   });
 
-  it("replaces stale route on same path and keeps latest registration", () => {
+  it("replaces stale route on same path when replaceExisting=true", () => {
     const registry = createEmptyPluginRegistry();
     const logs: string[] = [];
     const firstHandler = vi.fn();
@@ -45,6 +49,7 @@ describe("registerPluginHttpRoute", () => {
 
     const unregisterFirst = registerPluginHttpRoute({
       path: "/plugins/synology",
+      auth: "plugin",
       handler: firstHandler,
       registry,
       accountId: "default",
@@ -54,6 +59,8 @@ describe("registerPluginHttpRoute", () => {
 
     const unregisterSecond = registerPluginHttpRoute({
       path: "/plugins/synology",
+      auth: "plugin",
+      replaceExisting: true,
       handler: secondHandler,
       registry,
       accountId: "default",
@@ -64,7 +71,7 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(1);
     expect(registry.httpRoutes[0]?.handler).toBe(secondHandler);
     expect(logs).toContain(
-      'plugin: replacing stale webhook path /plugins/synology for account "default" (synology-chat)',
+      'plugin: replacing stale webhook path /plugins/synology (exact) for account "default" (synology-chat)',
     );
 
     // Old unregister must not remove the replacement route.
@@ -74,5 +81,68 @@ describe("registerPluginHttpRoute", () => {
 
     unregisterSecond();
     expect(registry.httpRoutes).toHaveLength(0);
+  });
+
+  it("rejects conflicting route registrations without replaceExisting", () => {
+    const registry = createEmptyPluginRegistry();
+    const logs: string[] = [];
+
+    registerPluginHttpRoute({
+      path: "/plugins/demo",
+      auth: "plugin",
+      handler: vi.fn(),
+      registry,
+      pluginId: "demo-a",
+      source: "demo-a-src",
+      log: (msg) => logs.push(msg),
+    });
+
+    const unregister = registerPluginHttpRoute({
+      path: "/plugins/demo",
+      auth: "plugin",
+      handler: vi.fn(),
+      registry,
+      pluginId: "demo-b",
+      source: "demo-b-src",
+      log: (msg) => logs.push(msg),
+    });
+
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(logs.at(-1)).toContain("route conflict");
+
+    unregister();
+    expect(registry.httpRoutes).toHaveLength(1);
+  });
+
+  it("rejects route replacement when a different plugin owns the route", () => {
+    const registry = createEmptyPluginRegistry();
+    const logs: string[] = [];
+
+    registerPluginHttpRoute({
+      path: "/plugins/demo",
+      auth: "plugin",
+      handler: vi.fn(),
+      registry,
+      pluginId: "demo-a",
+      source: "demo-a-src",
+      log: (msg) => logs.push(msg),
+    });
+
+    const unregister = registerPluginHttpRoute({
+      path: "/plugins/demo",
+      auth: "plugin",
+      replaceExisting: true,
+      handler: vi.fn(),
+      registry,
+      pluginId: "demo-b",
+      source: "demo-b-src",
+      log: (msg) => logs.push(msg),
+    });
+
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(logs.at(-1)).toContain("route replacement denied");
+
+    unregister();
+    expect(registry.httpRoutes).toHaveLength(1);
   });
 });
