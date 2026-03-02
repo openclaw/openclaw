@@ -123,17 +123,28 @@ export { acquireFileLock, withFileLock } from "./file-lock.js";
 export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
 export {
   registerWebhookTarget,
+  registerWebhookTargetWithPluginRoute,
   rejectNonPostWebhookRequest,
   resolveSingleWebhookTarget,
   resolveSingleWebhookTargetAsync,
   resolveWebhookTargets,
 } from "./webhook-targets.js";
-export type { RegisterWebhookTargetOptions, WebhookTargetMatchResult } from "./webhook-targets.js";
+export type {
+  RegisterWebhookPluginRouteOptions,
+  RegisterWebhookTargetOptions,
+  WebhookTargetMatchResult,
+} from "./webhook-targets.js";
 export {
   applyBasicWebhookRequestGuards,
+  beginWebhookRequestPipelineOrReject,
+  createWebhookInFlightLimiter,
   isJsonContentType,
+  readWebhookBodyOrReject,
   readJsonWebhookBodyOrReject,
+  WEBHOOK_BODY_READ_DEFAULTS,
+  WEBHOOK_IN_FLIGHT_DEFAULTS,
 } from "./webhook-request-guards.js";
+export type { WebhookBodyReadProfile, WebhookInFlightLimiter } from "./webhook-request-guards.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {

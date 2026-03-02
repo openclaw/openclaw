@@ -379,13 +379,13 @@ describe("chrome extension relay server", () => {
     ext1.close();
     await ext1Closed;
 
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 80));
     const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
       headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
     });
     await waitForOpen(ext2);
 
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 80));
     expect(cdpClosed).toBe(false);
 
     cdp.close();
@@ -480,7 +480,7 @@ describe("chrome extension relay server", () => {
     await ext1Closed;
 
     cdp.send(JSON.stringify({ id: 41, method: "Runtime.enable" }));
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, 80));
 
     const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
       headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
@@ -561,7 +561,7 @@ describe("chrome extension relay server", () => {
     );
 
     ext.close();
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 170));
 
     const version = (await fetch(`${cdpUrl}/json/version`, {
       headers: relayAuthHeaders(cdpUrl),
@@ -1019,7 +1019,7 @@ describe("chrome extension relay server", () => {
       const ext1Closed = waitForClose(ext1, 2_000);
       ext1.close();
       await ext1Closed;
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 260));
 
       const listEmpty = (await fetch(`${cdpUrl}/json/list`, {
         headers: relayAuthHeaders(cdpUrl),
@@ -1103,7 +1103,7 @@ describe("chrome extension relay server", () => {
       const ext1Closed = waitForClose(ext1, 2_000);
       ext1.close();
       await ext1Closed;
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 25));
 
       // Tab should still be listed during grace period.
       const listDuringGrace = (await fetch(`${cdpUrl}/json/list`, {

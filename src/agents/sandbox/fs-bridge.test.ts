@@ -89,6 +89,9 @@ function installDockerReadMock(params?: { canonicalPath?: string }) {
     if (script.includes('cat -- "$1"')) {
       return dockerExecResult("content");
     }
+    if (script.includes("mktemp")) {
+      return dockerExecResult("/workspace/.openclaw-write-b.txt.ABC123\n");
+    }
     return dockerExecResult("");
   });
 }
@@ -200,6 +203,37 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(mockedExecDockerRaw).not.toHaveBeenCalled();
   });
 
+  it("writes via temp file + atomic rename (never direct truncation)", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.writeFile({ filePath: "b.txt", data: "hello" });
+
+    const scripts = getScriptsFromCalls();
+    expect(scripts.some((script) => script.includes('cat >"$1"'))).toBe(false);
+    expect(scripts.some((script) => script.includes('cat >"$tmp"'))).toBe(true);
+    expect(scripts.some((script) => script.includes('mv -f -- "$1" "$2"'))).toBe(true);
+  });
+
+  it("re-validates target before final rename and cleans temp file on failure", async () => {
+    mockedOpenBoundaryFile
+      .mockImplementationOnce(async () => ({ ok: false, reason: "path" }))
+      .mockImplementationOnce(async () => ({
+        ok: false,
+        reason: "validation",
+        error: new Error("Hardlinked path is not allowed"),
+      }));
+
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+    await expect(bridge.writeFile({ filePath: "b.txt", data: "hello" })).rejects.toThrow(
+      /hardlinked path/i,
+    );
+
+    const scripts = getScriptsFromCalls();
+    expect(scripts.some((script) => script.includes("mktemp"))).toBe(true);
+    expect(scripts.some((script) => script.includes('mv -f -- "$1" "$2"'))).toBe(false);
+    expect(scripts.some((script) => script.includes('rm -f -- "$1"'))).toBe(true);
+  });
+
   it("allows mkdirp for existing in-boundary subdirectories", async () => {
     await withTempDir("openclaw-fs-bridge-mkdirp-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
@@ -274,6 +308,10 @@ describe("sandbox fs bridge shell compatibility", () => {
   it("rejects pre-existing host symlink escapes before docker exec", async () => {
     await withTempDir("openclaw-fs-bridge-", async (stateDir) => {
       const { workspaceDir, outsideFile } = await createHostEscapeFixture(stateDir);
+      // File symlinks require SeCreateSymbolicLinkPrivilege on Windows.
+      if (process.platform === "win32") {
+        return;
+      }
       await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
 
       const bridge = createSandboxFsBridge({
