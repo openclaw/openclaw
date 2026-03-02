@@ -990,20 +990,20 @@
               {
                 "group": "Built-in tools",
                 "pages": [
+                  "tools/apply-patch",
                   "brave-search",
                   "perplexity",
-                  "tools/lobster",
-                  "tools/llm-task",
                   "tools/diffs",
+                  "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
                   "tools/firecrawl",
+                  "tools/llm-task",
+                  "tools/lobster",
                   "tools/loop-detection",
-                  "tools/web",
-                  "tools/apply-patch",
-                  "tools/elevated",
+                  "tools/reactions",
                   "tools/thinking",
-                  "tools/reactions"
+                  "tools/web"
                 ]
               },
               {
@@ -1585,18 +1585,19 @@
               {
                 "group": "内置工具",
                 "pages": [
+                  "zh-CN/tools/apply-patch",
                   "zh-CN/brave-search",
                   "zh-CN/perplexity",
-                  "zh-CN/tools/lobster",
-                  "zh-CN/tools/llm-task",
+                  "zh-CN/tools/diffs",
+                  "zh-CN/tools/elevated",
                   "zh-CN/tools/exec",
                   "zh-CN/tools/exec-approvals",
                   "zh-CN/tools/firecrawl",
-                  "zh-CN/tools/web",
-                  "zh-CN/tools/apply-patch",
-                  "zh-CN/tools/elevated",
+                  "zh-CN/tools/llm-task",
+                  "zh-CN/tools/lobster",
+                  "zh-CN/tools/reactions",
                   "zh-CN/tools/thinking",
-                  "zh-CN/tools/reactions"
+                  "zh-CN/tools/web"
                 ]
               },
               {
