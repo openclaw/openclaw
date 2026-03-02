@@ -363,18 +363,27 @@ export class FeishuStreamingSession {
     }
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
-    await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/note/content`, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${await getToken(this.creds)}`,
-        "Content-Type": "application/json",
+    await fetchWithSsrFGuard({
+      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/note/content`,
+      init: {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${await getToken(this.creds)}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          content: `<font color='grey'>${note}</font>`,
+          sequence: this.state.sequence,
+          uuid: `n_${this.state.cardId}_${this.state.sequence}`,
+        }),
       },
-      body: JSON.stringify({
-        content: `<font color='grey'>${note}</font>`,
-        sequence: this.state.sequence,
-        uuid: `n_${this.state.cardId}_${this.state.sequence}`,
-      }),
-    }).catch((e) => this.log?.(`Note update failed: ${String(e)}`));
+      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+      auditContext: "feishu.streaming-card.note-update",
+    })
+      .then(async ({ release }) => {
+        await release();
+      })
+      .catch((e) => this.log?.(`Note update failed: ${String(e)}`));
   }
 
   async close(finalText?: string, options?: { note?: string }): Promise<void> {
