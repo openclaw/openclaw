@@ -8,6 +8,7 @@ import {
   openWs,
   originForPort,
   rpcReq,
+  restoreGatewayToken,
   startGatewayServer,
   testState,
   testTailscaleWhois,
@@ -58,11 +59,7 @@ export function registerAuthModesSuite(): void {
 
     afterAll(async () => {
       await server.close();
-      if (prevToken === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
-      }
+      restoreGatewayToken(prevToken);
     });
 
     test("rejects invalid token", async () => {
@@ -119,11 +116,7 @@ export function registerAuthModesSuite(): void {
 
     afterAll(async () => {
       await server.close();
-      if (prevToken === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
-      }
+      restoreGatewayToken(prevToken);
     });
 
     test("allows loopback connect without shared secret when mode is none", async () => {

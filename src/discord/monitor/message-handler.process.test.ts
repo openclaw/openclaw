@@ -168,6 +168,18 @@ function getLastDispatchCtx():
   return params?.ctx;
 }
 
+async function runProcessDiscordMessage(ctx: unknown): Promise<void> {
+  // oxlint-disable-next-line typescript/no-explicit-any
+  await processDiscordMessage(ctx as any);
+}
+
+async function runInPartialStreamMode(): Promise<void> {
+  const ctx = await createBaseContext({
+    discordConfig: { streamMode: "partial" },
+  });
+  await runProcessDiscordMessage(ctx);
+}
+
 describe("processDiscordMessage ack reactions", () => {
   it("skips ack reactions for group-mentions when mentions are not required", async () => {
     const ctx = await createBaseContext({
@@ -543,12 +555,7 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({
-      discordConfig: { streamMode: "partial" },
-    });
-
-    // oxlint-disable-next-line typescript/no-explicit-any
-    await processDiscordMessage(ctx as any);
+    await runInPartialStreamMode();
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     for (const text of updates) {
@@ -567,12 +574,7 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({
-      discordConfig: { streamMode: "partial" },
-    });
-
-    // oxlint-disable-next-line typescript/no-explicit-any
-    await processDiscordMessage(ctx as any);
+    await runInPartialStreamMode();
 
     expect(draftStream.update).not.toHaveBeenCalled();
   });
