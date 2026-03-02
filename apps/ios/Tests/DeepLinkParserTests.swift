@@ -2,6 +2,14 @@ import OpenClawKit
 import Foundation
 import Testing
 
+private func setupCode(from payload: String) -> String {
+    Data(payload.utf8)
+        .base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+}
+
 @Suite struct DeepLinkParserTests {
     @Test func parseRejectsUnknownHost() {
         let url = URL(string: "openclaw://nope?message=hi")!
@@ -99,13 +107,7 @@ import Testing
 
     @Test func parseGatewaySetupCodeParsesBase64UrlPayload() {
         let payload = #"{"url":"wss://gateway.example.com:443","token":"tok","password":"pw"}"#
-        let encoded = Data(payload.utf8)
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-
-        let link = GatewayConnectDeepLink.fromSetupCode(encoded)
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
 
         #expect(link == .init(
             host: "gateway.example.com",
@@ -121,13 +123,7 @@ import Testing
 
     @Test func parseGatewaySetupCodeDefaultsTo443ForWssWithoutPort() {
         let payload = #"{"url":"wss://gateway.example.com","token":"tok"}"#
-        let encoded = Data(payload.utf8)
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-
-        let link = GatewayConnectDeepLink.fromSetupCode(encoded)
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
 
         #expect(link == .init(
             host: "gateway.example.com",
@@ -139,37 +135,19 @@ import Testing
 
     @Test func parseGatewaySetupCodeRejectsInsecureNonLoopbackWs() {
         let payload = #"{"url":"ws://attacker.example:18789","token":"tok"}"#
-        let encoded = Data(payload.utf8)
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-
-        let link = GatewayConnectDeepLink.fromSetupCode(encoded)
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
         #expect(link == nil)
     }
 
     @Test func parseGatewaySetupCodeRejectsInsecurePrefixBypassHost() {
         let payload = #"{"url":"ws://127.attacker.example:18789","token":"tok"}"#
-        let encoded = Data(payload.utf8)
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-
-        let link = GatewayConnectDeepLink.fromSetupCode(encoded)
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
         #expect(link == nil)
     }
 
     @Test func parseGatewaySetupCodeAllowsLoopbackWs() {
         let payload = #"{"url":"ws://127.0.0.1:18789","token":"tok"}"#
-        let encoded = Data(payload.utf8)
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-
-        let link = GatewayConnectDeepLink.fromSetupCode(encoded)
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
 
         #expect(link == .init(
             host: "127.0.0.1",
