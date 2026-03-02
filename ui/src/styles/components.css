@@ -606,10 +606,7 @@
 }
 
 .cron-workspace-form {
-  position: sticky;
-  top: 74px;
-  max-height: calc(100vh - 74px - 32px);
-  overflow-y: auto;
+  /* Scroll with left column; no sticky positioning or own scroller. */
 }
 
 .cron-form {
