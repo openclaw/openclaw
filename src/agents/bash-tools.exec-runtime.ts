@@ -2,6 +2,7 @@ import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { mergePathPrepend } from "../infra/path-prepend.js";
 import { requestSessionEventRun } from "../infra/session-event-run.js";
@@ -258,7 +259,9 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   }
   if (session.wakeOnExit === true) {
     requestExecEventWake({ sessionKey, agentId: session.agentId });
+    return;
   }
+  requestHeartbeatNow({ reason: `exec:${session.id}:exit`, sessionKey });
 }
 
 export function createApprovalSlug(id: string) {
@@ -289,7 +292,9 @@ export function emitExecSystemEvent(
   }
   if (opts.wakeOnExit === true) {
     requestExecEventWake({ sessionKey, agentId: opts.agentId });
+    return;
   }
+  requestHeartbeatNow({ reason: "exec-event", sessionKey });
 }
 
 export async function runExecProcess(opts: {

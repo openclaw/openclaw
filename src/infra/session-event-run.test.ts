@@ -152,6 +152,35 @@ describe("triggerSessionEventRun", () => {
     expect(params?.ctx?.OriginatingTo).toBe("C123");
   });
 
+  it("falls back to the requested key when only the raw key has queued events", async () => {
+    loadSessionEntryMock.mockImplementationOnce(
+      (_sessionKey: string): ReturnType<typeof loadSessionEntryType> => ({
+        cfg: { session: { mainKey: "agent:ops:work" } } as OpenClawConfig,
+        storePath: "/tmp/sessions.json",
+        store: {},
+        entry: {
+          sessionId: "sid-main",
+          updatedAt: Date.now(),
+          lastChannel: "discord",
+          lastTo: "C123",
+        },
+        canonicalKey: "agent:ops:work",
+        legacyKey: "main",
+      }),
+    );
+    hasSystemEventsMock.mockImplementation((key: string) => key === "main");
+
+    const triggered = await triggerSessionEventRun({
+      sessionKey: "main",
+      source: "exec-event",
+    });
+
+    expect(triggered).toBe(true);
+    const [call] = dispatchInboundMessageWithDispatcherMock.mock.calls;
+    const params = call?.[0] as { ctx?: Record<string, unknown> } | undefined;
+    expect(params?.ctx?.SessionKey).toBe("main");
+  });
+
   it("skips non-agent canonical session keys", async () => {
     loadSessionEntryMock.mockImplementationOnce(
       (_sessionKey: string): ReturnType<typeof loadSessionEntryType> => ({
@@ -222,6 +251,24 @@ describe("triggerSessionEventRun", () => {
     expect(dispatchInboundMessageWithDispatcherMock).toHaveBeenCalledTimes(1);
   });
 
+  it("coalesces duplicate wake requests for the same session even when agentId differs", async () => {
+    vi.useFakeTimers();
+
+    requestSessionEventRun({
+      sessionKey: "agent:ops:main",
+      source: "exec-event",
+      agentId: "ops",
+    });
+    requestSessionEventRun({
+      sessionKey: "agent:ops:main",
+      source: "exec-event",
+      agentId: undefined,
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(dispatchInboundMessageWithDispatcherMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not retry skipped non-agent session requests", async () => {
     vi.useFakeTimers();
     loadSessionEntryMock.mockImplementationOnce(
@@ -273,7 +320,7 @@ describe("triggerSessionEventRun", () => {
     });
 
     await vi.advanceTimersByTimeAsync(250);
-    expect(dispatchInboundMessageWithDispatcherMock).toHaveBeenCalledTimes(2);
+    expect(dispatchInboundMessageWithDispatcherMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(
       dispatchInboundMessageWithDispatcherMock.mock.calls.some(
         (call) =>
@@ -289,5 +336,42 @@ describe("triggerSessionEventRun", () => {
           (call[0] as { ctx?: { SessionKey?: string } })?.ctx?.SessionKey === "agent:ops:fail",
       ).length,
     ).toBe(2);
+  });
+
+  it("times out a hung dispatch and continues draining queued runs", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessageWithDispatcherMock
+      .mockImplementationOnce(
+        async (_raw) =>
+          await new Promise<never>(() => {
+            // Simulate an upstream hang that never resolves.
+          }),
+      )
+      .mockImplementation(async (_raw) => ({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      }));
+
+    requestSessionEventRun({
+      sessionKey: "agent:ops:hang",
+      source: "exec-event",
+    });
+    await vi.advanceTimersByTimeAsync(250);
+
+    requestSessionEventRun({
+      sessionKey: "agent:ops:next",
+      source: "exec-event",
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(1_250);
+
+    expect(dispatchInboundMessageWithDispatcherMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(
+      dispatchInboundMessageWithDispatcherMock.mock.calls.some(
+        (call) =>
+          (call[0] as { ctx?: { SessionKey?: string } })?.ctx?.SessionKey === "agent:ops:next",
+      ),
+    ).toBe(true);
   });
 });

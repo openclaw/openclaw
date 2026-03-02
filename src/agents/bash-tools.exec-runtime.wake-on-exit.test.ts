@@ -1,15 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { enqueueSystemEventMock, requestSessionEventRunMock } = vi.hoisted(() => ({
-  enqueueSystemEventMock: vi.fn(() => true),
-  requestSessionEventRunMock: vi.fn(),
-}));
+const { enqueueSystemEventMock, requestSessionEventRunMock, requestHeartbeatNowMock } = vi.hoisted(
+  () => ({
+    enqueueSystemEventMock: vi.fn(() => true),
+    requestSessionEventRunMock: vi.fn(),
+    requestHeartbeatNowMock: vi.fn(),
+  }),
+);
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
 }));
 vi.mock("../infra/session-event-run.js", () => ({
   requestSessionEventRun: requestSessionEventRunMock,
+}));
+vi.mock("../infra/heartbeat-wake.js", () => ({
+  requestHeartbeatNow: requestHeartbeatNowMock,
 }));
 
 import { markBackgrounded, resetProcessRegistryForTests } from "./bash-process-registry.js";
@@ -55,6 +61,7 @@ describe("exec wakeOnExit", () => {
     enqueueSystemEventMock.mockReset();
     enqueueSystemEventMock.mockReturnValue(true);
     requestSessionEventRunMock.mockReset();
+    requestHeartbeatNowMock.mockReset();
     resetProcessRegistryForTests();
   });
 
@@ -64,6 +71,10 @@ describe("exec wakeOnExit", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEventMock.mock.calls[0]?.[0]).toContain(`session=${sessionId}`);
     expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: expect.stringMatching(/^exec:.*:exit$/),
+      sessionKey: "agent:main:main",
+    });
   });
 
   it("triggers a session event run for background exits when wakeOnExit is true", async () => {
@@ -75,6 +86,7 @@ describe("exec wakeOnExit", () => {
       sessionKey: "agent:main:main",
       agentId: undefined,
     });
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
   it("does not trigger wake when enqueueing an exec event fails", () => {
@@ -86,9 +98,10 @@ describe("exec wakeOnExit", () => {
     });
 
     expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
-  it("triggers wake only when emitExecSystemEvent receives wakeOnExit=true", () => {
+  it("uses heartbeat by default and session wake when wakeOnExit=true", () => {
     emitExecSystemEvent("Exec finished", {
       sessionKey: "agent:main:main",
       wakeOnExit: false,
@@ -98,6 +111,11 @@ describe("exec wakeOnExit", () => {
       wakeOnExit: true,
     });
 
+    expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
     expect(requestSessionEventRunMock).toHaveBeenCalledTimes(1);
     expect(requestSessionEventRunMock).toHaveBeenCalledWith({
       source: "exec-event",

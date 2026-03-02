@@ -13,6 +13,7 @@ import { hasSystemEvents } from "./system-events.js";
 
 const DEFAULT_COALESCE_MS = 250;
 const DEFAULT_RETRY_MS = 1_000;
+const DEFAULT_DISPATCH_TIMEOUT_MS = 30_000;
 
 type SessionEventRunResult =
   | { status: "ran" }
@@ -46,10 +47,93 @@ function normalizePendingTarget(value?: string): string | undefined {
   return trimmed || undefined;
 }
 
-function getPendingKey(params: { sessionKey: string; agentId?: string }) {
-  const sessionKey = params.sessionKey.trim();
-  const agentId = normalizePendingTarget(params.agentId);
-  return `${agentId ?? ""}::${sessionKey}`;
+function getPendingKey(params: { sessionKey: string }) {
+  return params.sessionKey.trim();
+}
+
+function resolveSessionEventQueueKey(keys: Array<string | null | undefined>): string | undefined {
+  const visited = new Set<string>();
+  for (const candidate of keys) {
+    const key = normalizePendingTarget(candidate);
+    if (!key || visited.has(key)) {
+      continue;
+    }
+    visited.add(key);
+    if (hasSystemEvents(key)) {
+      return key;
+    }
+  }
+  return undefined;
+}
+
+async function dispatchSessionEventWithTimeout(params: {
+  cfg: ReturnType<typeof loadSessionEntry>["cfg"];
+  dispatchSessionKey: string;
+  source: string;
+  agentId: string;
+  delivery: ReturnType<typeof deliveryContextFromSession>;
+}) {
+  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: params.delivery?.channel
+      ? (normalizeChannelId(params.delivery.channel) ?? params.delivery.channel)
+      : undefined,
+    accountId: params.delivery?.accountId,
+  });
+
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      dispatchInboundMessageWithDispatcher({
+        cfg: params.cfg,
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          BodyForAgent: "",
+          BodyForCommands: "",
+          SessionKey: params.dispatchSessionKey,
+          Provider: INTERNAL_MESSAGE_CHANNEL,
+          Surface: INTERNAL_MESSAGE_CHANNEL,
+          OriginatingChannel: params.delivery?.channel
+            ? (normalizeChannelId(params.delivery.channel) ?? params.delivery.channel)
+            : undefined,
+          OriginatingTo: params.delivery?.to?.trim() || undefined,
+          AccountId: params.delivery?.accountId,
+          MessageThreadId: params.delivery?.threadId,
+          MessageSid: `${params.source}:${randomUUID()}`,
+          CommandAuthorized: true,
+        },
+        dispatcherOptions: {
+          ...prefixOptions,
+          deliver: async () => {},
+          onError: (err, info) => {
+            logWarn(`session event dispatch ${info.kind} failed: ${String(err)}`);
+          },
+        },
+        replyOptions: {
+          suppressTyping: true,
+          allowEmptyBodyForSystemEvent: true,
+          onModelSelected,
+        },
+      }),
+      new Promise<never>((_resolve, reject) => {
+        timeoutHandle = setTimeout(
+          () =>
+            reject(
+              new Error(`session event dispatch timed out (${DEFAULT_DISPATCH_TIMEOUT_MS}ms)`),
+            ),
+          DEFAULT_DISPATCH_TIMEOUT_MS,
+        );
+        timeoutHandle.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }
 
 function queuePendingSessionRun(params: {
@@ -64,7 +148,7 @@ function queuePendingSessionRun(params: {
   }
   const source = params.source.trim() || "system-event";
   const requestedAt = params.requestedAt ?? Date.now();
-  const key = getPendingKey({ sessionKey, agentId: params.agentId });
+  const key = getPendingKey({ sessionKey });
   const next: PendingSessionEventRun = {
     sessionKey,
     source,
@@ -163,7 +247,8 @@ async function runSessionEventOnce(params: {
   if (!shouldUseSessionScopedEventRun(canonicalKey)) {
     return { status: "skipped", reason: "non-agent-session" };
   }
-  if (!hasSystemEvents(canonicalKey)) {
+  const dispatchSessionKey = resolveSessionEventQueueKey([canonicalKey, sessionKey]);
+  if (!dispatchSessionKey) {
     return { status: "skipped", reason: "no-system-events" };
   }
   if (getQueueSize(CommandLane.Main) > 0) {
@@ -173,49 +258,14 @@ async function runSessionEventOnce(params: {
   const delivery = deliveryContextFromSession(entry);
   // Follow-up: internal webchat sessions are currently non-routable in route-reply,
   // so event-driven runs may not produce outbound replies on webchat-bound sessions.
-  const originatingChannel = delivery?.channel
-    ? (normalizeChannelId(delivery.channel) ?? delivery.channel)
-    : undefined;
-  const originatingTo = delivery?.to?.trim() || undefined;
   const resolvedAgentId = params.agentId ?? resolveAgentIdFromSessionKey(canonicalKey);
   const source = params.source.trim() || "system-event";
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  await dispatchSessionEventWithTimeout({
     cfg,
+    dispatchSessionKey,
+    source,
     agentId: resolvedAgentId,
-    channel: originatingChannel,
-    accountId: delivery?.accountId,
-  });
-
-  await dispatchInboundMessageWithDispatcher({
-    cfg,
-    ctx: {
-      Body: "",
-      RawBody: "",
-      CommandBody: "",
-      BodyForAgent: "",
-      BodyForCommands: "",
-      SessionKey: canonicalKey,
-      Provider: INTERNAL_MESSAGE_CHANNEL,
-      Surface: INTERNAL_MESSAGE_CHANNEL,
-      OriginatingChannel: originatingChannel,
-      OriginatingTo: originatingTo,
-      AccountId: delivery?.accountId,
-      MessageThreadId: delivery?.threadId,
-      MessageSid: `${source}:${randomUUID()}`,
-      CommandAuthorized: true,
-    },
-    dispatcherOptions: {
-      ...prefixOptions,
-      deliver: async () => {},
-      onError: (err, info) => {
-        logWarn(`session event dispatch ${info.kind} failed: ${String(err)}`);
-      },
-    },
-    replyOptions: {
-      suppressTyping: true,
-      allowEmptyBodyForSystemEvent: true,
-      onModelSelected,
-    },
+    delivery,
   });
 
   return { status: "ran" };

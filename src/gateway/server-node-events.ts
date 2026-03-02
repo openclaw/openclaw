@@ -531,7 +531,6 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!sessionKeyRaw) {
         return;
       }
-      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
       const wakeOnExit = obj.wakeOnExit === true;
 
       // Respect tools.exec.notifyOnExit setting (default: true)
@@ -578,14 +577,21 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
 
       const queued = enqueueSystemEvent(text, {
-        sessionKey,
+        sessionKey: sessionKeyRaw,
         contextKey: runId ? `exec:${runId}` : "exec",
       });
-      if (queued && wakeOnExit && evt.event === "exec.finished") {
-        // Known limitation: runs originating from internal webchat sessions may not emit
-        // routable outbound replies because webchat is not supported by route-reply.
-        requestSessionEventRun({ source: "exec-event", sessionKey });
+      if (!queued) {
+        return;
       }
+      if (wakeOnExit) {
+        if (evt.event === "exec.finished") {
+          // Known limitation: runs originating from internal webchat sessions may not emit
+          // routable outbound replies because webchat is not supported by route-reply.
+          requestSessionEventRun({ source: "exec-event", sessionKey: sessionKeyRaw });
+        }
+        return;
+      }
+      requestHeartbeatNow({ reason: "exec-event", sessionKey: sessionKeyRaw });
       return;
     }
     case "push.apns.register": {

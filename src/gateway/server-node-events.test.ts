@@ -111,7 +111,6 @@ describe("node exec events", () => {
         sessionKey: "agent:main:main",
         runId: "run-1",
         command: "ls -la",
-        wakeOnExit: true,
       }),
     });
 
@@ -120,7 +119,10 @@ describe("node exec events", () => {
       { sessionKey: "agent:main:main", contextKey: "exec:run-1" },
     );
     expect(requestSessionEventRunMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
   });
 
   it("enqueues exec.finished events with output", async () => {
@@ -147,7 +149,7 @@ describe("node exec events", () => {
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
-  it("uses canonical agent session keys for exec event runs", async () => {
+  it("keeps raw session keys for exec event runs", async () => {
     loadSessionEntryMock.mockReturnValueOnce({
       ...buildSessionLookup("node-node-2"),
       canonicalKey: "agent:main:node-node-2",
@@ -164,19 +166,19 @@ describe("node exec events", () => {
       }),
     });
 
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-2");
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2 id=run-2, code 0)\ndone",
-      { sessionKey: "agent:main:node-node-2", contextKey: "exec:run-2" },
+      { sessionKey: "node-node-2", contextKey: "exec:run-2" },
     );
     expect(requestSessionEventRunMock).toHaveBeenCalledWith({
       source: "exec-event",
-      sessionKey: "agent:main:node-node-2",
+      sessionKey: "node-node-2",
     });
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
-  it("passes non-agent canonical keys to exec event run helper", async () => {
+  it("passes raw non-agent session keys to exec event run helper", async () => {
     loadSessionEntryMock.mockReturnValueOnce({
       ...buildSessionLookup("global"),
       canonicalKey: "global",
@@ -194,7 +196,7 @@ describe("node exec events", () => {
       }),
     });
 
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("global");
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2 id=run-global, code 0)\ndone",
       { sessionKey: "global", contextKey: "exec:run-global" },
@@ -240,7 +242,10 @@ describe("node exec events", () => {
       { sessionKey: "node-node-2", contextKey: "exec:run-no-wake" },
     );
     expect(requestSessionEventRunMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "node-node-2",
+    });
   });
 
   it("truncates long exec.finished output in system events", async () => {
@@ -287,6 +292,29 @@ describe("node exec events", () => {
     );
     expect(requestSessionEventRunMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("heartbeats on exec.denied when wakeOnExit is false", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-3", {
+      event: "exec.denied",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:demo:main",
+        runId: "run-3b",
+        command: "rm -rf /",
+        reason: "allowlist-miss",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec denied (node=node-3 id=run-3b, allowlist-miss): rm -rf /",
+      { sessionKey: "agent:demo:main", contextKey: "exec:run-3b" },
+    );
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:demo:main",
+    });
   });
 
   it("suppresses exec.started when notifyOnExit is false", async () => {
@@ -384,10 +412,12 @@ describe("voice transcript events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
     updateSessionStoreMock.mockClear();
+    loadSessionEntryMock.mockReset();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
       update({});
     });
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
   });
 
   it("dedupes repeated transcript payloads for the same session", async () => {

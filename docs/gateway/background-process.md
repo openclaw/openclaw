@@ -48,6 +48,8 @@ Config (preferred):
 - `tools.exec.timeoutSec` (default 1800)
 - `tools.exec.cleanupMs` (default 1800000)
 - `tools.exec.notifyOnExit` (default true): enqueue a system event when a backgrounded exec exits.
+  By default this also requests a heartbeat wake (legacy behavior).
+  If `wakeOnExit=true` is set on the run, completion wakes switch to immediate session-event runs instead of heartbeat.
   Completion events include `session=<id>` so follow-up turns can call `process poll/log` for full output.
 - `tools.exec.notifyOnExitEmptySuccess` (default false): when true, also enqueue completion events for successful backgrounded runs that produced no output.
 
