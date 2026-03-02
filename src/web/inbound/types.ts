@@ -31,6 +31,7 @@ export type WebInboundMessage = {
   mentionedJids?: string[];
   selfJid?: string | null;
   selfE164?: string | null;
+  fromMe?: boolean;
   location?: NormalizedLocation;
   sendComposing: () => Promise<void>;
   reply: (text: string) => Promise<void>;
