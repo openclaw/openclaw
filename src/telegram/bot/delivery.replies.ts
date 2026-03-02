@@ -6,9 +6,8 @@ import type { MarkdownTableMode } from "../../config/types.base.js";
 import { danger, logVerbose } from "../../globals.js";
 import { runOutboundMessageHook } from "../../plugins/outbound-hook.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { mediaKindFromMime } from "../../media/constants.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
-import { isGifMedia } from "../../media/mime.js";
+import { isGifMedia, kindFromMime } from "../../media/mime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
 import type { TelegramInlineButtons } from "../button-types.js";
@@ -235,7 +234,7 @@ async function deliverMediaReply(params: {
       mediaUrl,
       buildOutboundMediaLoadOptions({ mediaLocalRoots: params.mediaLocalRoots }),
     );
-    const kind = mediaKindFromMime(media.contentType ?? undefined);
+    const kind = kindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
       contentType: media.contentType,
       fileName: media.fileName,
