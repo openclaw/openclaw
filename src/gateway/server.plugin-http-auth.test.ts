@@ -145,8 +145,9 @@ describe("gateway plugin HTTP auth boundary", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: (requestPath) =>
-          isProtectedPluginRoutePath(requestPath) || requestPath === "/plugin/public",
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          isProtectedPluginRoutePath(pathContext.pathname) ||
+          pathContext.pathname === "/plugin/public",
       },
       run: async (server) => {
         const unauthenticated = await sendRequest(server, {
@@ -197,8 +198,9 @@ describe("gateway plugin HTTP auth boundary", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: (requestPath) =>
-          requestPath.startsWith("/api/channels") || requestPath === "/plugin/routed",
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          pathContext.pathname.startsWith("/api/channels") ||
+          pathContext.pathname === "/plugin/routed",
       },
       run: async (server) => {
         const unauthenticatedRouted = await sendRequest(server, { path: "/plugin/routed" });
@@ -346,13 +348,13 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
-  test("does not let plugin handlers shadow control ui routes", async () => {
+  test("plugin routes take priority over control ui catch-all", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/chat") {
+      if (pathname === "/my-plugin/inbound") {
         res.statusCode = 200;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("plugin-shadow");
+        res.end("plugin-handled");
         return true;
       }
       return false;
@@ -368,11 +370,33 @@ describe("gateway plugin HTTP auth boundary", () => {
         handlePluginRequest,
       },
       run: async (server) => {
+        const response = await sendRequest(server, { path: "/my-plugin/inbound" });
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toContain("plugin-handled");
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
+  test("unmatched plugin paths fall through to control ui", async () => {
+    const handlePluginRequest = vi.fn(async () => false);
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-control-ui-fallthrough-test-",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        controlUiRoot: { kind: "missing" },
+        handlePluginRequest,
+      },
+      run: async (server) => {
         const response = await sendRequest(server, { path: "/chat" });
 
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
         expect(response.res.statusCode).toBe(503);
         expect(response.getBody()).toContain("Control UI assets not found");
-        expect(handlePluginRequest).not.toHaveBeenCalled();
       },
     });
   });
@@ -385,7 +409,8 @@ describe("gateway plugin HTTP auth boundary", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: isProtectedPluginRoutePath,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          isProtectedPluginRoutePath(pathContext.pathname),
       },
       run: async (server) => {
         await expectUnauthorizedVariants({ server, variants: CANONICAL_UNAUTH_VARIANTS });
@@ -409,16 +434,42 @@ describe("gateway plugin HTTP auth boundary", () => {
       resolvedAuth: AUTH_TOKEN,
       overrides: {
         handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: isProtectedPluginRoutePath,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          isProtectedPluginRoutePath(pathContext.pathname),
       },
       run: async (server) => {
         for (const variant of buildChannelPathFuzzCorpus()) {
           const response = await sendRequest(server, { path: variant.path });
-          expect(response.res.statusCode, variant.label).not.toBe(200);
-          expect(response.getBody(), variant.label).not.toContain(
-            '"route":"channel-canonicalized"',
-          );
+          expect(response.res.statusCode, variant.label).toBe(401);
+          expect(response.getBody(), variant.label).toContain("Unauthorized");
         }
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("enforces auth before plugin handlers on encoded protected-path variants", async () => {
+    const encodedVariants = buildChannelPathFuzzCorpus().filter((variant) =>
+      variant.path.includes("%"),
+    );
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ ok: true, route: "should-not-run" }));
+      return true;
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-auth-encoded-order-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { handlePluginRequest },
+      run: async (server) => {
+        for (const variant of encodedVariants) {
+          const response = await sendRequest(server, { path: variant.path });
+          expect(response.res.statusCode, variant.label).toBe(401);
+          expect(response.getBody(), variant.label).toContain("Unauthorized");
+        }
+        expect(handlePluginRequest).not.toHaveBeenCalled();
       },
     });
   });

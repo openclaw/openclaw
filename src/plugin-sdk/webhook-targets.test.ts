@@ -1,11 +1,16 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   registerWebhookTarget,
+  registerWebhookTargetWithPluginRoute,
   rejectNonPostWebhookRequest,
   resolveSingleWebhookTarget,
   resolveSingleWebhookTargetAsync,
+  resolveWebhookTargetWithAuthOrReject,
+  resolveWebhookTargetWithAuthOrRejectSync,
   resolveWebhookTargets,
 } from "./webhook-targets.js";
 
@@ -16,6 +21,10 @@ function createRequest(method: string, url: string): IncomingMessage {
   req.headers = {};
   return req;
 }
+
+afterEach(() => {
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
 
 describe("registerWebhookTarget", () => {
   it("normalizes the path and unregisters cleanly", () => {
@@ -83,6 +92,49 @@ describe("registerWebhookTarget", () => {
       ),
     ).toThrow("boom");
     expect(targets.has("/hook")).toBe(false);
+  });
+});
+
+describe("registerWebhookTargetWithPluginRoute", () => {
+  it("registers plugin route on first target and removes it on last target", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+    const targets = new Map<string, Array<{ path: string; id: string }>>();
+
+    const registeredA = registerWebhookTargetWithPluginRoute({
+      targetsByPath: targets,
+      target: { path: "/hook", id: "A" },
+      route: {
+        auth: "plugin",
+        pluginId: "demo",
+        source: "demo-webhook",
+        handler: () => {},
+      },
+    });
+    const registeredB = registerWebhookTargetWithPluginRoute({
+      targetsByPath: targets,
+      target: { path: "/hook", id: "B" },
+      route: {
+        auth: "plugin",
+        pluginId: "demo",
+        source: "demo-webhook",
+        handler: () => {},
+      },
+    });
+
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.httpRoutes[0]).toEqual(
+      expect.objectContaining({
+        pluginId: "demo",
+        path: "/hook",
+        source: "demo-webhook",
+      }),
+    );
+
+    registeredA.unregister();
+    expect(registry.httpRoutes).toHaveLength(1);
+    registeredB.unregister();
+    expect(registry.httpRoutes).toHaveLength(0);
   });
 });
 
@@ -160,5 +212,74 @@ describe("resolveSingleWebhookTarget", () => {
     });
     expect(result).toEqual({ kind: "ambiguous" });
     expect(calls).toEqual(["a", "b"]);
+  });
+});
+
+describe("resolveWebhookTargetWithAuthOrReject", () => {
+  it("returns matched target", async () => {
+    const res = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: vi.fn(),
+    } as unknown as ServerResponse;
+    await expect(
+      resolveWebhookTargetWithAuthOrReject({
+        targets: [{ id: "a" }, { id: "b" }],
+        res,
+        isMatch: (target) => target.id === "b",
+      }),
+    ).resolves.toEqual({ id: "b" });
+  });
+
+  it("writes unauthorized response on no match", async () => {
+    const endMock = vi.fn();
+    const res = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: endMock,
+    } as unknown as ServerResponse;
+    await expect(
+      resolveWebhookTargetWithAuthOrReject({
+        targets: [{ id: "a" }],
+        res,
+        isMatch: () => false,
+      }),
+    ).resolves.toBeNull();
+    expect(res.statusCode).toBe(401);
+    expect(endMock).toHaveBeenCalledWith("unauthorized");
+  });
+
+  it("writes ambiguous response on multi-match", async () => {
+    const endMock = vi.fn();
+    const res = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: endMock,
+    } as unknown as ServerResponse;
+    await expect(
+      resolveWebhookTargetWithAuthOrReject({
+        targets: [{ id: "a" }, { id: "b" }],
+        res,
+        isMatch: () => true,
+      }),
+    ).resolves.toBeNull();
+    expect(res.statusCode).toBe(401);
+    expect(endMock).toHaveBeenCalledWith("ambiguous webhook target");
+  });
+});
+
+describe("resolveWebhookTargetWithAuthOrRejectSync", () => {
+  it("returns matched target synchronously", () => {
+    const res = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: vi.fn(),
+    } as unknown as ServerResponse;
+    const target = resolveWebhookTargetWithAuthOrRejectSync({
+      targets: [{ id: "a" }, { id: "b" }],
+      res,
+      isMatch: (entry) => entry.id === "a",
+    });
+    expect(target).toEqual({ id: "a" });
   });
 });

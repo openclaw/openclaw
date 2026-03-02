@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { normalizeWebhookPath } from "./webhook-path.js";
 
 export type RegisteredWebhookTarget<T> = {
@@ -10,6 +11,30 @@ export type RegisterWebhookTargetOptions<T extends { path: string }> = {
   onFirstPathTarget?: (params: { path: string; target: T }) => void | (() => void);
   onLastPathTargetRemoved?: (params: { path: string }) => void;
 };
+
+type RegisterPluginHttpRouteParams = Parameters<typeof registerPluginHttpRoute>[0];
+
+export type RegisterWebhookPluginRouteOptions = Omit<
+  RegisterPluginHttpRouteParams,
+  "path" | "fallbackPath"
+>;
+
+export function registerWebhookTargetWithPluginRoute<T extends { path: string }>(params: {
+  targetsByPath: Map<string, T[]>;
+  target: T;
+  route: RegisterWebhookPluginRouteOptions;
+  onLastPathTargetRemoved?: RegisterWebhookTargetOptions<T>["onLastPathTargetRemoved"];
+}): RegisteredWebhookTarget<T> {
+  return registerWebhookTarget(params.targetsByPath, params.target, {
+    onFirstPathTarget: ({ path }) =>
+      registerPluginHttpRoute({
+        ...params.route,
+        path,
+        replaceExisting: params.route.replaceExisting ?? true,
+      }),
+    onLastPathTargetRemoved: params.onLastPathTargetRemoved,
+  });
+}
 
 const pathTeardownByTargetMap = new WeakMap<Map<string, unknown[]>, Map<string, () => void>>();
 
@@ -125,6 +150,57 @@ export async function resolveSingleWebhookTargetAsync<T>(
     return { kind: "none" };
   }
   return { kind: "single", target: matched };
+}
+
+export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
+  targets: readonly T[];
+  res: ServerResponse;
+  isMatch: (target: T) => boolean | Promise<boolean>;
+  unauthorizedStatusCode?: number;
+  unauthorizedMessage?: string;
+  ambiguousStatusCode?: number;
+  ambiguousMessage?: string;
+}): Promise<T | null> {
+  const match = await resolveSingleWebhookTargetAsync(params.targets, async (target) =>
+    Boolean(await params.isMatch(target)),
+  );
+  return resolveWebhookTargetMatchOrReject(params, match);
+}
+
+export function resolveWebhookTargetWithAuthOrRejectSync<T>(params: {
+  targets: readonly T[];
+  res: ServerResponse;
+  isMatch: (target: T) => boolean;
+  unauthorizedStatusCode?: number;
+  unauthorizedMessage?: string;
+  ambiguousStatusCode?: number;
+  ambiguousMessage?: string;
+}): T | null {
+  const match = resolveSingleWebhookTarget(params.targets, params.isMatch);
+  return resolveWebhookTargetMatchOrReject(params, match);
+}
+
+function resolveWebhookTargetMatchOrReject<T>(
+  params: {
+    res: ServerResponse;
+    unauthorizedStatusCode?: number;
+    unauthorizedMessage?: string;
+    ambiguousStatusCode?: number;
+    ambiguousMessage?: string;
+  },
+  match: WebhookTargetMatchResult<T>,
+): T | null {
+  if (match.kind === "single") {
+    return match.target;
+  }
+  if (match.kind === "ambiguous") {
+    params.res.statusCode = params.ambiguousStatusCode ?? 401;
+    params.res.end(params.ambiguousMessage ?? "ambiguous webhook target");
+    return null;
+  }
+  params.res.statusCode = params.unauthorizedStatusCode ?? 401;
+  params.res.end(params.unauthorizedMessage ?? "unauthorized");
+  return null;
 }
 
 export function rejectNonPostWebhookRequest(req: IncomingMessage, res: ServerResponse): boolean {
