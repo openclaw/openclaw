@@ -88,6 +88,7 @@ export function startGatewayConfigReloader(opts: {
   let stopped = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
+  let lastInvalidIssues: string | null = null;
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -139,10 +140,14 @@ export function startGatewayConfigReloader(opts: {
 
   const handleInvalidSnapshot = (snapshot: ConfigFileSnapshot): boolean => {
     if (snapshot.valid) {
+      lastInvalidIssues = null;
       return false;
     }
     const issues = snapshot.issues.map((issue) => `${issue.path}: ${issue.message}`).join(", ");
-    opts.log.warn(`config reload skipped (invalid config): ${issues}`);
+    if (issues !== lastInvalidIssues) {
+      lastInvalidIssues = issues;
+      opts.log.warn(`config reload skipped (invalid config): ${issues}`);
+    }
     return true;
   };
 

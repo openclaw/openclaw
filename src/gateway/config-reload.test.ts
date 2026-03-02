@@ -358,6 +358,84 @@ describe("startGatewayConfigReloader", () => {
     await reloader.stop();
   });
 
+  it("deduplicates repeated invalid config warnings", async () => {
+    const invalidSnapshot = makeSnapshot({
+      valid: false,
+      issues: [{ path: "gateway.port", message: "must be a number" }],
+      hash: "invalid-1",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValue(invalidSnapshot);
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+
+    // First file change → should log the warning
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    // Second file change with identical issues → should NOT log again
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    // Third file change → still no duplicate
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
+    expect(onHotReload).not.toHaveBeenCalled();
+    expect(onRestart).not.toHaveBeenCalled();
+    // The warning should have been logged exactly once
+    const warnCalls = log.warn.mock.calls.filter(
+      ([msg]: unknown[]) => typeof msg === "string" && msg.includes("invalid config"),
+    );
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0][0]).toContain("gateway.port: must be a number");
+
+    await reloader.stop();
+  });
+
+  it("re-logs invalid config warning after config becomes valid then invalid again", async () => {
+    const invalidSnapshot = makeSnapshot({
+      valid: false,
+      issues: [{ path: "gateway.port", message: "must be a number" }],
+      hash: "invalid-1",
+    });
+    const validSnapshot = makeSnapshot({
+      config: {
+        gateway: { reload: { debounceMs: 0 } },
+        hooks: { enabled: true },
+      },
+      hash: "valid-1",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(invalidSnapshot)
+      .mockResolvedValueOnce(validSnapshot)
+      .mockResolvedValueOnce(invalidSnapshot);
+    const { watcher, onHotReload, log, reloader } = createReloaderHarness(readSnapshot);
+
+    // First: invalid → logs warning
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    // Second: valid → clears dedup state
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    // Third: invalid again with same issues → should log again
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
+    const warnCalls = log.warn.mock.calls.filter(
+      ([msg]: unknown[]) => typeof msg === "string" && msg.includes("invalid config"),
+    );
+    expect(warnCalls).toHaveLength(2);
+    expect(onHotReload).toHaveBeenCalledTimes(1); // the valid snapshot triggers hot reload
+
+    await reloader.stop();
+  });
+
   it("contains restart callback failures and retries on subsequent changes", async () => {
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()

@@ -82,6 +82,7 @@ const OPEN_DM_POLICY_ALLOW_FROM_RE =
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const loggedInvalidConfigs = new Set<string>();
+const loggedConfigWarnings = new Set<string>();
 
 type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
 
@@ -729,7 +730,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         const details = validated.warnings
           .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
           .join("\n");
-        deps.logger.warn(`Config warnings:\\n${details}`);
+        const warningKey = `${configPath}:${details}`;
+        if (!loggedConfigWarnings.has(warningKey)) {
+          loggedConfigWarnings.add(warningKey);
+          deps.logger.warn(`Config warnings:\\n${details}`);
+        }
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
       const cfg = applyTalkConfigNormalization(
@@ -1077,7 +1082,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const details = validated.warnings
         .map((warning) => `- ${warning.path}: ${warning.message}`)
         .join("\n");
-      deps.logger.warn(`Config warnings:\n${details}`);
+      const warningKey = `write:${details}`;
+      if (!loggedConfigWarnings.has(warningKey)) {
+        loggedConfigWarnings.add(warningKey);
+        deps.logger.warn(`Config warnings:\n${details}`);
+      }
     }
 
     // Restore ${VAR} env var references that were resolved during config loading.
