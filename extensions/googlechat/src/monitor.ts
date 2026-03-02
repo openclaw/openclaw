@@ -153,6 +153,7 @@ export async function handleGoogleChatWebhookRequest(
   }
 
   let raw = body.value;
+  let isWorkspaceAddonPayload = false;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     res.statusCode = 400;
     res.end("invalid payload");
@@ -171,6 +172,7 @@ export async function handleGoogleChatWebhookRequest(
   };
 
   if (rawObj.commonEventObject?.hostApp === "CHAT" && rawObj.chat?.messagePayload) {
+    isWorkspaceAddonPayload = true;
     const chat = rawObj.chat;
     const messagePayload = chat.messagePayload;
     raw = {
@@ -249,7 +251,19 @@ export async function handleGoogleChatWebhookRequest(
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");
-  res.end("{}");
+  if (isWorkspaceAddonPayload) {
+    // Google Workspace add-ons require hostAppDataAction response shape.
+    // Without this, Chat can display "not responding" despite successful processing.
+    res.end(
+      JSON.stringify({
+        hostAppDataAction: {
+          chatDataAction: {},
+        },
+      }),
+    );
+  } else {
+    res.end("{}");
+  }
   return true;
 }
 
