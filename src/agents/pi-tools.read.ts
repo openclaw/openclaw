@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -856,9 +857,6 @@ function createHostEditOperations(
   // When workspaceOnly is true, enforce workspace boundary
   return {
     readFile: async (absolutePath: string) => {
-      if (isPathReadOnly(absolutePath, readOnlyPaths)) {
-        throw new Error(`Path is read-only: ${absolutePath}`);
-      }
       const relative = toRelativePathInRoot(root, absolutePath);
       const safeRead = await readFileWithinRoot({
         rootDir: root,
@@ -916,9 +914,19 @@ function createHostEditOperations(
  * Supports exact paths and glob patterns with * wildcard.
  */
 function matchesPathPattern(targetPath: string, patterns: string[]): boolean {
-  const resolved = path.resolve(targetPath);
+  let resolved: string;
+  try {
+    resolved = fsSync.realpathSync(targetPath);
+  } catch {
+    resolved = path.resolve(targetPath);
+  }
   for (const pattern of patterns) {
-    const patternResolved = path.resolve(pattern.replace(/\*/g, ""));
+    let patternResolved: string;
+    try {
+      patternResolved = fsSync.realpathSync(pattern.replace(/\*/g, ""));
+    } catch {
+      patternResolved = path.resolve(pattern.replace(/\*/g, ""));
+    }
     // Exact match
     if (resolved === patternResolved) {
       return true;
@@ -945,10 +953,30 @@ function matchesPathPattern(targetPath: string, patterns: string[]): boolean {
  * Check if a path is in a read-only directory.
  */
 function isPathReadOnly(targetPath: string, readOnlyPaths?: string[]): boolean {
+  // console.error("[DEBUG isPathReadOnly] targetPath:", targetPath, "readOnlyPaths:", readOnlyPaths);
   if (!readOnlyPaths || readOnlyPaths.length === 0) {
     return false;
   }
-  return matchesPathPattern(targetPath, readOnlyPaths);
+  try {
+    // Resolve symlinks to handle symbolic links correctly
+    const resolvedPath = fsSync.realpathSync(targetPath);
+    // console.error("[DEBUG isPathReadOnly] resolvedPath:", resolvedPath, "matches:", matchesPathPattern(resolvedPath, readOnlyPaths));
+    if (matchesPathPattern(resolvedPath, readOnlyPaths)) {
+      return true;
+    }
+  } catch {
+    // Path doesn't exist yet - check if parent directory is in readOnlyPaths
+    const parentDir = path.dirname(targetPath);
+    // console.error("[DEBUG isPathReadOnly] parentDir:", parentDir);
+    try {
+      const resolvedParent = fsSync.realpathSync(parentDir);
+      // console.error("[DEBUG isPathReadOnly] resolvedParent:", resolvedParent, "matches:", matchesPathPattern(resolvedParent, readOnlyPaths));
+      return matchesPathPattern(resolvedParent, readOnlyPaths);
+    } catch {
+      // Parent also doesn't exist, check other ancestors
+    }
+  }
+  return false;
 }
 
 function toRelativePathInRoot(
