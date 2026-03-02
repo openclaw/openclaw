@@ -9,9 +9,9 @@ import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
-import { resolveAgentConfig } from "./views/agents-utils.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
+import { resolveAgentConfig } from "./views/agents-utils.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
