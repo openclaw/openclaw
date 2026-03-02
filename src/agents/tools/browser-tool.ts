@@ -91,6 +91,53 @@ function readTargetUrlParam(params: Record<string, unknown>) {
   );
 }
 
+const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
+  "targetId",
+  "ref",
+  "doubleClick",
+  "button",
+  "modifiers",
+  "text",
+  "submit",
+  "slowly",
+  "key",
+  "delayMs",
+  "startRef",
+  "endRef",
+  "values",
+  "fields",
+  "width",
+  "height",
+  "timeMs",
+  "textGone",
+  "selector",
+  "url",
+  "loadState",
+  "fn",
+  "timeoutMs",
+] as const;
+
+function readActRequestParam(params: Record<string, unknown>) {
+  const requestParam = params.request;
+  if (requestParam && typeof requestParam === "object") {
+    return requestParam as Parameters<typeof browserAct>[1];
+  }
+
+  const kind = readStringParam(params, "kind");
+  if (!kind) {
+    return undefined;
+  }
+
+  const request: Record<string, unknown> = { kind };
+  for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
+    if (!Object.hasOwn(params, key)) {
+      continue;
+    }
+    request[key] = params[key];
+  }
+  return request as Parameters<typeof browserAct>[1];
+}
+
 type BrowserProxyFile = {
   path: string;
   base64: string;
@@ -796,8 +843,8 @@ export function createBrowserTool(opts?: {
           );
         }
         case "act": {
-          const request = params.request as Record<string, unknown> | undefined;
-          if (!request || typeof request !== "object") {
+          const request = readActRequestParam(params);
+          if (!request) {
             throw new Error("request required");
           }
           try {
@@ -808,7 +855,7 @@ export function createBrowserTool(opts?: {
                   profile,
                   body: request,
                 })
-              : await browserAct(baseUrl, request as Parameters<typeof browserAct>[1], {
+              : await browserAct(baseUrl, request, {
                   profile,
                 });
             return jsonResult(result);
