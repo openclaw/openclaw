@@ -1,24 +1,13 @@
 import Foundation
 
-final class CanvasFileWatcher: @unchecked Sendable {
-    private let watcher: CoalescingFSEventsWatcher
+final class CanvasFileWatcher: @unchecked Sendable, SimpleFileWatcherOwner {
+    let watcher: SimpleFileWatcher
 
     init(url: URL, onChange: @escaping () -> Void) {
-        self.watcher = CoalescingFSEventsWatcher(
+        self.watcher = SimpleFileWatcher(CoalescingFSEventsWatcher(
             paths: [url.path],
             queueLabel: "ai.openclaw.canvaswatcher",
-            onChange: onChange)
+            onChange: onChange))
     }
 
-    deinit {
-        self.stop()
-    }
-
-    func start() {
-        self.watcher.start()
-    }
-
-    func stop() {
-        self.watcher.stop()
-    }
 }
