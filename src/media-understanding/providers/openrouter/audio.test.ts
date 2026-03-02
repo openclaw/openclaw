@@ -156,6 +156,7 @@ describe("mimeToAudioFormat", () => {
     expect(mimeToAudioFormat("audio/flac")).toBe("flac");
     expect(mimeToAudioFormat("audio/m4a")).toBe("m4a");
     expect(mimeToAudioFormat("audio/x-m4a")).toBe("m4a");
+    expect(mimeToAudioFormat("audio/mp4")).toBe("m4a");
     expect(mimeToAudioFormat("audio/aac")).toBe("aac");
   });
 

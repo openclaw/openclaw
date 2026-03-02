@@ -18,6 +18,7 @@ const MIME_FORMAT_MAP: Record<string, string> = {
   "audio/flac": "flac",
   "audio/m4a": "m4a",
   "audio/x-m4a": "m4a",
+  "audio/mp4": "m4a",
   "audio/aac": "aac",
 };
 
