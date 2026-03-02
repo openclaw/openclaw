@@ -597,7 +597,7 @@
     },
     {
       "source": "/sessions",
-      "destination": "/concepts/sessions"
+      "destination": "/concepts/session"
     },
     {
       "source": "/setup",
@@ -959,7 +959,6 @@
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/session",
-                  "concepts/sessions",
                   "concepts/session-pruning",
                   "concepts/session-tool",
                   "concepts/memory",
@@ -1555,7 +1554,6 @@
                 "group": "会话与记忆",
                 "pages": [
                   "zh-CN/concepts/session",
-                  "zh-CN/concepts/sessions",
                   "zh-CN/concepts/session-pruning",
                   "zh-CN/concepts/session-tool",
                   "zh-CN/concepts/memory",
