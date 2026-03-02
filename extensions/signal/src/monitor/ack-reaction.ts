@@ -12,6 +12,7 @@ import { sendReactionSignal } from "../send-reactions.js";
 
 export function maybeSendSignalAckReaction(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   senderRecipient: string;
   targetTimestamp: number;
   isGroup: boolean;
@@ -34,7 +35,7 @@ export function maybeSendSignalAckReaction(params: {
     return;
   }
 
-  const emoji = resolveAckReaction(params.cfg, "main", {
+  const emoji = resolveAckReaction(params.cfg, params.agentId, {
     channel: "signal",
     accountId: params.accountId,
   }).trim();
