@@ -28,3 +28,5 @@ export {
   extractNumericId,
   formatTarget,
 } from "./peer.js";
+
+export { SessionStore } from "./session-store.js";
