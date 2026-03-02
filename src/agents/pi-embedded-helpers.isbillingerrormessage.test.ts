@@ -491,9 +491,9 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("Connection error.")).toBe("timeout");
     expect(classifyFailoverReason("fetch failed")).toBe("timeout");
     expect(classifyFailoverReason("network error: ECONNREFUSED")).toBe("timeout");
-    expect(classifyFailoverReason("dial tcp: lookup api.example.com: no such host (ENOTFOUND)")).toBe(
-      "timeout",
-    );
+    expect(
+      classifyFailoverReason("dial tcp: lookup api.example.com: no such host (ENOTFOUND)"),
+    ).toBe("timeout");
     expect(classifyFailoverReason("temporary dns failure EAI_AGAIN")).toBe("timeout");
     expect(
       classifyFailoverReason(
