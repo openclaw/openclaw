@@ -36,7 +36,7 @@ export function mergeAllowlist(params: {
 
 export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutionLike>(
   resolvedUsers: T[],
-  opts?: { formatResolved?: (entry: T) => string },
+  opts?: { formatResolved?: (entry: T) => string; formatUnresolved?: (entry: T) => string },
 ): {
   resolvedMap: Map<string, T>;
   mapping: string[];
@@ -46,14 +46,13 @@ export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutio
   const resolvedMap = new Map(resolvedUsers.map((entry) => [entry.input, entry]));
   const resolvedOk = (entry: T) => Boolean(entry.resolved && entry.id);
   const formatResolved = opts?.formatResolved ?? ((entry: T) => `${entry.input}→${entry.id}`);
+  const formatUnresolved = opts?.formatUnresolved ?? ((entry: T) => entry.input);
   const mapping = resolvedUsers.filter(resolvedOk).map(formatResolved);
   const additions = resolvedUsers
     .filter(resolvedOk)
     .map((entry) => entry.id)
     .filter((entry): entry is string => Boolean(entry));
-  const unresolved = resolvedUsers
-    .filter((entry) => !resolvedOk(entry))
-    .map((entry) => entry.input);
+  const unresolved = resolvedUsers.filter((entry) => !resolvedOk(entry)).map(formatUnresolved);
   return { resolvedMap, mapping, unresolved, additions };
 }
 

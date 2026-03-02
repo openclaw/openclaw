@@ -53,6 +53,66 @@ describe("resolveDiscordChannelAllowlist", () => {
     expect(res[0]?.channelId).toBe("123");
   });
 
+  it("resolves guildId/channelId entries via channel lookup", async () => {
+    const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = urlToString(input);
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([{ id: "111", name: "Guild One" }]);
+      }
+      if (url.endsWith("/channels/222")) {
+        return jsonResponse({ id: "222", name: "general", guild_id: "111", type: 0 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const res = await resolveDiscordChannelAllowlist({
+      token: "test",
+      entries: ["111/222"],
+      fetcher,
+    });
+
+    expect(res[0]).toMatchObject({
+      input: "111/222",
+      resolved: true,
+      guildId: "111",
+      channelId: "222",
+      channelName: "general",
+      guildName: "Guild One",
+    });
+  });
+
+  it("reports unresolved when channel id belongs to a different guild", async () => {
+    const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = urlToString(input);
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([
+          { id: "111", name: "Guild One" },
+          { id: "333", name: "Guild Two" },
+        ]);
+      }
+      if (url.endsWith("/channels/222")) {
+        return jsonResponse({ id: "222", name: "general", guild_id: "333", type: 0 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const res = await resolveDiscordChannelAllowlist({
+      token: "test",
+      entries: ["111/222"],
+      fetcher,
+    });
+
+    expect(res[0]).toMatchObject({
+      input: "111/222",
+      resolved: false,
+      guildId: "111",
+      guildName: "Guild One",
+      channelId: "222",
+      channelName: "general",
+      note: "channel belongs to guild Guild Two",
+    });
+  });
+
   it("resolves guild: prefixed id as guild (not channel)", async () => {
     const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
       const url = urlToString(input);
