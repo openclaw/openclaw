@@ -9,8 +9,8 @@ import {
 } from "./extension-relay.js";
 import { getFreePort } from "./test-port.js";
 
-const RELAY_MESSAGE_TIMEOUT_MS = 2_000;
-const RELAY_LIST_MATCH_TIMEOUT_MS = 1_500;
+const RELAY_MESSAGE_TIMEOUT_MS = 1_200;
+const RELAY_LIST_MATCH_TIMEOUT_MS = 1_000;
 const RELAY_TEST_TIMEOUT_MS = 10_000;
 
 function waitForOpen(ws: WebSocket) {
@@ -124,7 +124,7 @@ async function waitForListMatch<T>(
   fetchList: () => Promise<T>,
   predicate: (value: T) => boolean,
   timeoutMs = RELAY_LIST_MATCH_TIMEOUT_MS,
-  intervalMs = 50,
+  intervalMs = 20,
 ): Promise<T> {
   let latest: T | undefined;
   await expect
