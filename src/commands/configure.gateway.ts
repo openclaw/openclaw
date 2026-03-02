@@ -1,11 +1,13 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/config.js";
 import {
+  appendAllowedOrigin,
+  buildTailnetHttpsOrigin,
   TAILSCALE_DOCS_LINES,
   TAILSCALE_EXPOSURE_OPTIONS,
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
-import { findTailscaleBinary } from "../infra/tailscale.js";
+import { findTailscaleBinary, getTailnetHostname } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { note } from "../terminal/note.js";
@@ -111,8 +113,10 @@ export async function promptGatewayConfig(
   );
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
+  // Persist the path so getTailnetHostname can reuse it for origin injection.
+  let tailscaleBin: string | null = null;
   if (tailscaleMode !== "off") {
-    const tailscaleBin = await findTailscaleBinary();
+    tailscaleBin = await findTailscaleBinary();
     if (!tailscaleBin) {
       note(TAILSCALE_MISSING_BIN_NOTE_LINES.join("\n"), "Tailscale Warning");
     }
@@ -284,6 +288,28 @@ export async function promptGatewayConfig(
       },
     },
   };
+
+  // Auto-add Tailscale origin to controlUi.allowedOrigins so the Control UI
+  // is accessible via the Tailscale hostname without manual config.
+  if (tailscaleMode === "serve" || tailscaleMode === "funnel") {
+    const tsOrigin = await getTailnetHostname(undefined, tailscaleBin ?? undefined)
+      .then((host) => buildTailnetHttpsOrigin(host))
+      .catch(() => null);
+    if (tsOrigin) {
+      const existing = next.gateway?.controlUi?.allowedOrigins ?? [];
+      const updatedOrigins = appendAllowedOrigin(existing, tsOrigin);
+      next = {
+        ...next,
+        gateway: {
+          ...next.gateway,
+          controlUi: {
+            ...next.gateway?.controlUi,
+            allowedOrigins: updatedOrigins,
+          },
+        },
+      };
+    }
+  }
 
   return { config: next, port, token: gatewayToken };
 }
