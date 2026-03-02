@@ -714,4 +714,4 @@ describe("cron cli", () => {
     expect(patch?.patch?.failureAlert?.mode).toBe("webhook");
     expect(patch?.patch?.failureAlert?.accountId).toBe("bot-a");
   });
-  });
+});
