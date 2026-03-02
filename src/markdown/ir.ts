@@ -23,6 +23,7 @@ type MarkdownToken = {
   children?: MarkdownToken[];
   attrs?: [string, string][];
   attrGet?: (name: string) => string | null;
+  markup?: string;
 };
 
 export type MarkdownStyle = "bold" | "italic" | "strikethrough" | "code" | "code_block" | "spoiler";

@@ -31,4 +31,11 @@ export default defineConfig([
     fixedExtension: false,
     platform: "node",
   },
+  {
+    entry: "src/agents/mcp-bridge/server.ts",
+    outDir: "dist/mcp-bridge",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
 ]);
