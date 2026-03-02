@@ -175,6 +175,14 @@ describe("loadWorkspaceBootstrapFiles", () => {
     await writeWorkspaceFile({ dir: tempDir, name: "MEMORY.md", content: "primary" });
     await writeWorkspaceFile({ dir: tempDir, name: "memory.md", content: "duplicate" });
 
+    // On case-insensitive filesystems (Windows/macOS default), both names
+    // resolve to the same file so the second write overwrites the first.
+    // The dedup logic only matters on case-sensitive filesystems.
+    const primaryContent = await fs.readFile(path.join(tempDir, "MEMORY.md"), "utf-8");
+    if (primaryContent !== "primary") {
+      return; // case-insensitive FS — not applicable
+    }
+
     const files = await loadWorkspaceBootstrapFiles(tempDir);
     const memoryEntries = getMemoryEntries(files);
     expect(memoryEntries).toHaveLength(1);
