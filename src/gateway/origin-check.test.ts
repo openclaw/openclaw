@@ -36,6 +36,15 @@ describe("checkBrowserOrigin", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts wildcard allowedOrigins", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.example.com:18789",
+      origin: "https://any-origin.example.com",
+      allowedOrigins: ["*"],
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects missing origin", () => {
     const result = checkBrowserOrigin({
       requestHost: "gateway.example.com:18789",
