@@ -2,26 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runCapability } from "./runner.js";
-import { withMediaFixture } from "./runner.test-utils.js";
-
-async function withVideoFixture(
-  filePrefix: string,
-  run: (params: {
-    ctx: { MediaPath: string; MediaType: string };
-    media: ReturnType<typeof import("./runner.js").normalizeMediaAttachments>;
-    cache: ReturnType<typeof import("./runner.js").createMediaAttachmentCache>;
-  }) => Promise<void>,
-) {
-  await withMediaFixture(
-    {
-      filePrefix,
-      extension: "mp4",
-      mediaType: "video/mp4",
-      fileContents: Buffer.from("video"),
-    },
-    run,
-  );
-}
+import { withVideoFixture } from "./runner.test-utils.js";
 
 describe("runCapability video provider wiring", () => {
   it("merges video baseUrl and headers with entry precedence", async () => {
