@@ -170,4 +170,35 @@ export class ExecApprovalManager {
     const entry = this.pending.get(recordId);
     return entry?.promise ?? null;
   }
+
+  resolvePendingId(inputId: string): { id: string | null; ambiguous: boolean } {
+    const normalized = inputId.trim();
+    if (!normalized) {
+      return { id: null, ambiguous: false };
+    }
+
+    const normalizedLower = normalized.toLowerCase();
+    for (const id of this.pending.keys()) {
+      if (id.toLowerCase() === normalizedLower) {
+        return { id, ambiguous: false };
+      }
+    }
+
+    // Keep short IDs strict to reduce accidental collisions/noisy matches.
+    if (normalized.length < 8) {
+      return { id: null, ambiguous: false };
+    }
+
+    let matched: string | null = null;
+    for (const id of this.pending.keys()) {
+      if (!id.toLowerCase().startsWith(normalizedLower)) {
+        continue;
+      }
+      if (matched && matched !== id) {
+        return { id: null, ambiguous: true };
+      }
+      matched = id;
+    }
+    return { id: matched, ambiguous: false };
+  }
 }

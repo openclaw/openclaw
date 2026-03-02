@@ -318,7 +318,7 @@ describe("exec approval handlers", () => {
       },
       hasExecApprovalClients: () => true,
     };
-    return { handlers, broadcasts, respond, context };
+    return { manager, handlers, broadcasts, respond, context };
   }
 
   describe("ExecApprovalRequestParams validation", () => {
@@ -577,6 +577,85 @@ describe("exec approval handlers", () => {
       undefined,
     );
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("accepts unique approval-id prefixes when resolving", async () => {
+    const { manager, handlers, context } = createExecApprovalFixture();
+    const respond = vi.fn();
+    const decisionPromise = manager.register(
+      manager.create(
+        {
+          command: "echo ok",
+          commandArgv: ["echo", "ok"],
+          cwd: "/tmp",
+          host: "node",
+          nodeId: "node-1",
+        },
+        2_000,
+        "a17b4920-1111-4000-8000-123456789abc",
+      ),
+      2_000,
+    );
+
+    await resolveExecApproval({
+      handlers,
+      id: "a17b4920",
+      respond,
+      context,
+    });
+
+    await expect(decisionPromise).resolves.toBe("allow-once");
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("rejects ambiguous approval-id prefixes", async () => {
+    const { manager, handlers, context } = createExecApprovalFixture();
+    const respond = vi.fn();
+    const firstDecision = manager.register(
+      manager.create(
+        {
+          command: "echo first",
+          commandArgv: ["echo", "first"],
+          cwd: "/tmp",
+          host: "node",
+          nodeId: "node-1",
+        },
+        2_000,
+        "deadbeef-1111-4000-8000-123456789abc",
+      ),
+      2_000,
+    );
+    const secondDecision = manager.register(
+      manager.create(
+        {
+          command: "echo second",
+          commandArgv: ["echo", "second"],
+          cwd: "/tmp",
+          host: "node",
+          nodeId: "node-1",
+        },
+        2_000,
+        "deadbeef-2222-4000-8000-abcdef123456",
+      ),
+      2_000,
+    );
+
+    await resolveExecApproval({
+      handlers,
+      id: "deadbeef",
+      respond,
+      context,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "approval id is ambiguous" }),
+    );
+
+    manager.resolve("deadbeef-1111-4000-8000-123456789abc", "deny", "test");
+    manager.resolve("deadbeef-2222-4000-8000-abcdef123456", "deny", "test");
+    await Promise.all([firstDecision, secondDecision]);
   });
 
   it("forwards turn-source metadata to exec approval forwarding", async () => {

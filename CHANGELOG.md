@@ -92,6 +92,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Exec approvals/ID resolution: allow unique prefix IDs (for example 8-char slugs from chat surfaces) in `exec.approval.resolve` and `exec.approval.waitDecision`, while rejecting ambiguous prefixes explicitly, so `/approve <short-id>` flows can succeed without requiring full UUID copy/paste. Fixes #31043.
 - Security/Node metadata policy: harden node platform classification against Unicode confusables and switch unknown platform defaults to a conservative allowlist that excludes `system.run`/`system.which` unless explicitly allowlisted, preventing metadata canonicalization drift from broadening node command permissions. Thanks @tdjackey for reporting.
 - Plugins/Discovery precedence: load bundled plugins before auto-discovered global extensions so bundled channel plugins win duplicate-ID resolution by default (explicit `plugins.load.paths` overrides remain highest precedence), with loader regression coverage. Landed from contributor PR #29710 by @Sid-Qin. Thanks @Sid-Qin.
 - Discord/Reconnect integrity: release Discord message listener lane immediately while preserving serialized handler execution, add HELLO-stall resume-first recovery with bounded fresh-identify fallback after repeated stalls, and extend lifecycle/listener regression coverage for forced reconnect scenarios. Landed from contributor PR #29508 by @cgdusek. Thanks @cgdusek.

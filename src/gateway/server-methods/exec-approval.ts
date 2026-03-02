@@ -223,7 +223,24 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "id is required"));
         return;
       }
-      const decisionPromise = manager.awaitDecision(id);
+      const resolvedId = manager.resolvePendingId(id);
+      if (resolvedId.ambiguous) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "approval id is ambiguous"),
+        );
+        return;
+      }
+      if (!resolvedId.id) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "approval expired or not found"),
+        );
+        return;
+      }
+      const decisionPromise = manager.awaitDecision(resolvedId.id);
       if (!decisionPromise) {
         respond(
           false,
@@ -233,13 +250,13 @@ export function createExecApprovalHandlers(
         return;
       }
       // Capture snapshot before await (entry may be deleted after grace period)
-      const snapshot = manager.getSnapshot(id);
+      const snapshot = manager.getSnapshot(resolvedId.id);
       const decision = await decisionPromise;
       // Return decision (can be null on timeout) - let clients handle via askFallback
       respond(
         true,
         {
-          id,
+          id: resolvedId.id,
           decision,
           createdAtMs: snapshot?.createdAtMs,
           expiresAtMs: snapshot?.expiresAtMs,
@@ -267,21 +284,34 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
-      const snapshot = manager.getSnapshot(p.id);
+      const resolvedId = manager.resolvePendingId(p.id);
+      if (resolvedId.ambiguous) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "approval id is ambiguous"),
+        );
+        return;
+      }
+      if (!resolvedId.id) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
+        return;
+      }
+      const snapshot = manager.getSnapshot(resolvedId.id);
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
-      const ok = manager.resolve(p.id, decision, resolvedBy ?? null);
+      const ok = manager.resolve(resolvedId.id, decision, resolvedBy ?? null);
       if (!ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
         return;
       }
       context.broadcast(
         "exec.approval.resolved",
-        { id: p.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
+        { id: resolvedId.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
         { dropIfSlow: true },
       );
       void opts?.forwarder
         ?.handleResolved({
-          id: p.id,
+          id: resolvedId.id,
           decision,
           resolvedBy,
           ts: Date.now(),
