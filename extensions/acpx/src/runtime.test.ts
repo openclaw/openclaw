@@ -102,6 +102,7 @@ describe("AcpxRuntime", () => {
     const prompt = logs.find((entry) => entry.kind === "prompt");
     expect(ensure).toBeDefined();
     expect(prompt).toBeDefined();
+    expect(prompt?.openclawShell).toBe("acp");
     expect(Array.isArray(prompt?.args)).toBe(true);
     const promptArgs = (prompt?.args as string[]) ?? [];
     expect(promptArgs).toContain("--ttl");

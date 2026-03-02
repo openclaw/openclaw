@@ -132,7 +132,7 @@ export function spawnWithResolvedCommand(
 
   return spawn(resolved.command, resolved.args, {
     cwd: params.cwd,
-    env: process.env,
+    env: { ...process.env, OPENCLAW_SHELL: "acp" },
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
     windowsHide: resolved.windowsHide,
