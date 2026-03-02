@@ -699,6 +699,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.proxy": "Discord Proxy URL",
   "channels.discord.commands.native": "Discord Native Commands",
   "channels.discord.commands.nativeSkills": "Discord Native Skill Commands",
+  "channels.discord.autoHardBreaks": "Discord Auto Hard Breaks",
   "channels.discord.streaming": "Discord Streaming Mode",
   "channels.discord.streamMode": "Discord Stream Mode (Legacy)",
   "channels.discord.draftChunk.minChars": "Discord Draft Chunk Min Chars",

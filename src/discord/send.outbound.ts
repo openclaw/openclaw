@@ -15,6 +15,7 @@ import { extensionForMime } from "../media/mime.js";
 import type { PollInput } from "../polls.js";
 import { loadWebMediaRaw } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
+import { applyDiscordAutoHardBreaks } from "./hard-breaks.js";
 import {
   buildDiscordMessagePayload,
   buildDiscordSendError,
@@ -143,6 +144,9 @@ export async function sendMessageDiscord(
   });
   const chunkMode = resolveChunkMode(cfg, "discord", accountInfo.accountId);
   const textWithTables = convertMarkdownTables(text ?? "", tableMode);
+  const textWithDiscordLineBreaks = accountInfo.config.autoHardBreaks
+    ? applyDiscordAutoHardBreaks(textWithTables)
+    : textWithTables;
   const { token, rest, request } = createDiscordClient(opts, cfg);
   const recipient = await parseAndResolveRecipient(to, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
@@ -152,7 +156,7 @@ export async function sendMessageDiscord(
 
   if (isForumLikeType(channelType)) {
     const threadName = deriveForumThreadName(textWithTables);
-    const chunks = buildDiscordTextChunks(textWithTables, {
+    const chunks = buildDiscordTextChunks(textWithDiscordLineBreaks, {
       maxLinesPerMessage: accountInfo.config.maxLinesPerMessage,
       chunkMode,
     });
@@ -262,7 +266,7 @@ export async function sendMessageDiscord(
       result = await sendDiscordMedia(
         rest,
         channelId,
-        textWithTables,
+        textWithDiscordLineBreaks,
         opts.mediaUrl,
         opts.mediaLocalRoots,
         opts.replyTo,
@@ -277,7 +281,7 @@ export async function sendMessageDiscord(
       result = await sendDiscordText(
         rest,
         channelId,
-        textWithTables,
+        textWithDiscordLineBreaks,
         opts.replyTo,
         request,
         accountInfo.config.maxLinesPerMessage,

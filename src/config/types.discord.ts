@@ -214,6 +214,8 @@ export type DiscordAccountConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Convert single newlines to hard breaks (`"  \n"`) for Discord markdown rendering. */
+  autoHardBreaks?: boolean;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /**

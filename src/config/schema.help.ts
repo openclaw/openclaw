@@ -1354,6 +1354,8 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.commands.native": 'Override native commands for Discord (bool or "auto").',
   "channels.discord.commands.nativeSkills":
     'Override native skill commands for Discord (bool or "auto").',
+  "channels.discord.autoHardBreaks":
+    'Convert single newlines to Discord markdown hard breaks ("  \\n"). Preserves paragraph breaks and fenced code blocks. Default: false.',
   "channels.telegram.commands.native": 'Override native commands for Telegram (bool or "auto").',
   "channels.telegram.commands.nativeSkills":
     'Override native skill commands for Telegram (bool or "auto").',

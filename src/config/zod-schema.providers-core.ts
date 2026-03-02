@@ -437,6 +437,7 @@ export const DiscordAccountSchema = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    autoHardBreaks: z.boolean().optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     // Canonical streaming mode. Legacy aliases (`streamMode`, boolean `streaming`) are auto-mapped.
