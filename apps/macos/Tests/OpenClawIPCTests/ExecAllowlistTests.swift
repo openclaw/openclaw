@@ -200,7 +200,12 @@ struct ExecAllowlistTests {
     }
 
     @Test func resolveForAllowlistUnwrapsEnvShellWrapperChains() {
-        let command = ["/usr/bin/env", "/bin/sh", "-lc", "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test"]
+        let command = [
+            "/usr/bin/env",
+            "/bin/sh",
+            "-lc",
+            "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test",
+        ]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: nil,

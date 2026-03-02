@@ -11,9 +11,21 @@
       "label": "Default Font Size",
       "help": "Base diff font size in pixels."
     },
+    "defaults.lineSpacing": {
+      "label": "Default Line Spacing",
+      "help": "Line-height multiplier applied to diff rows."
+    },
     "defaults.layout": {
       "label": "Default Layout",
       "help": "Initial diff layout shown in the viewer."
+    },
+    "defaults.showLineNumbers": {
+      "label": "Show Line Numbers",
+      "help": "Show line numbers by default."
+    },
+    "defaults.diffIndicators": {
+      "label": "Diff Indicator Style",
+      "help": "Choose added/removed indicators style."
     },
     "defaults.wordWrap": {
       "label": "Default Word Wrap",
@@ -50,10 +62,25 @@
             "maximum": 24,
             "default": 15
           },
+          "lineSpacing": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 3,
+            "default": 1.6
+          },
           "layout": {
             "type": "string",
             "enum": ["unified", "split"],
             "default": "unified"
+          },
+          "showLineNumbers": {
+            "type": "boolean",
+            "default": true
+          },
+          "diffIndicators": {
+            "type": "string",
+            "enum": ["bars", "classic", "none"],
+            "default": "bars"
           },
           "wordWrap": {
             "type": "boolean",

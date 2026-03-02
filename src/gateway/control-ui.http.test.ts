@@ -341,6 +341,21 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("does not handle /plugins paths when basePath is empty", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        for (const pluginPath of ["/plugins", "/plugins/diffs/view/abc/def"]) {
+          const { handled } = runControlUiRequest({
+            url: pluginPath,
+            method: "GET",
+            rootPath: tmp,
+          });
+          expect(handled, `expected ${pluginPath} to not be handled`).toBe(false);
+        }
+      },
+    });
+  });
+
   it("rejects absolute-path escape attempts under basePath routes", async () => {
     await withBasePathRootFixture({
       siblingDir: "ui-secrets",

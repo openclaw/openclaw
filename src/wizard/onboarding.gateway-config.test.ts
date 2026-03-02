@@ -88,6 +88,40 @@ describe("configureGatewayForOnboarding", () => {
       "reminders.add",
     ]);
   });
+
+  it("prefers OPENCLAW_GATEWAY_TOKEN during quickstart token setup", async () => {
+    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "token-from-env";
+    mocks.randomToken.mockReturnValue("generated-token");
+    mocks.randomToken.mockClear();
+
+    const prompter = createPrompter({
+      selectQueue: ["loopback", "token", "off"],
+      textQueue: [],
+    });
+    const runtime = createRuntime();
+
+    try {
+      const result = await configureGatewayForOnboarding({
+        flow: "quickstart",
+        baseConfig: {},
+        nextConfig: {},
+        localPort: 18789,
+        quickstartGateway: createQuickstartGateway("token"),
+        prompter,
+        runtime,
+      });
+
+      expect(result.settings.gatewayToken).toBe("token-from-env");
+    } finally {
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
+    }
+  });
+
   it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
     mocks.randomToken.mockReturnValue("unused");
 

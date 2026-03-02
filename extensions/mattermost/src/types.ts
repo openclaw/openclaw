@@ -59,4 +59,6 @@ export type MattermostAccountConfig = {
 export type MattermostConfig = {
   /** Optional per-account Mattermost configuration (multi-account). */
   accounts?: Record<string, MattermostAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & MattermostAccountConfig;
