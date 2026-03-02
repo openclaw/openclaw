@@ -11,7 +11,7 @@ import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { hasRelaySkipToken, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
 import {
@@ -97,6 +97,9 @@ export function createFollowupRunner(params: {
         !payload.mediaUrl &&
         !payload.mediaUrls?.length
       ) {
+        continue;
+      }
+      if (relayMode === "read-only" && hasRelaySkipToken(payload.text)) {
         continue;
       }
       await typingSignals.signalTextDelta(payload.text);

@@ -617,6 +617,75 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("suppresses SKIP_RELAY per payload for non-ACP read-only immediate dispatch", async () => {
+    setNoAbort();
+    const cfg = {
+      session: {
+        relayRouting: {
+          defaultMode: "read-only",
+          targets: {
+            relay: {
+              channel: "telegram",
+              to: "telegram:relay",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    });
+
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({ text: "tool SKIP_RELAY drop" });
+      await opts?.onToolResult?.({ text: "tool visible" });
+      await opts?.onBlockReply?.({ text: "block SKIP_RELAY drop" });
+      await opts?.onBlockReply?.({ text: "block visible" });
+      return [
+        { text: "final SKIP_RELAY drop" },
+        { text: "final visible" },
+        { text: "final skip_relay visible" },
+      ] satisfies ReplyPayload[];
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledTimes(4);
+    const routedTexts = mocks.routeReply.mock.calls
+      .map((call) => (call?.[0] as { payload?: ReplyPayload } | undefined)?.payload?.text)
+      .filter((text): text is string => typeof text === "string");
+    expect(routedTexts).toEqual([
+      "tool visible",
+      "block visible",
+      "final visible",
+      "final skip_relay visible",
+    ]);
+  });
+
+  it("does not suppress SKIP_RELAY in non-read-only immediate dispatch", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+    });
+
+    const replyResolver = async () => ({ text: "final SKIP_RELAY visible" }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "final SKIP_RELAY visible" }),
+    );
+  });
+
   it("routes media-only tool results when summaries are suppressed", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

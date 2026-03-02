@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { isSilentReplyPrefixText, isSilentReplyText, stripSilentToken } from "./tokens.js";
+import {
+  hasRelaySkipToken,
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  stripSilentToken,
+} from "./tokens.js";
 
 describe("isSilentReplyText", () => {
   it("returns true for exact token", () => {
@@ -91,5 +96,17 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("NO_X")).toBe(false);
     expect(isSilentReplyPrefixText("NO_REPLY more")).toBe(false);
     expect(isSilentReplyPrefixText("NO-")).toBe(false);
+  });
+});
+
+describe("hasRelaySkipToken", () => {
+  it("matches the exact SKIP_RELAY token case-sensitively", () => {
+    expect(hasRelaySkipToken("hello SKIP_RELAY world")).toBe(true);
+    expect(hasRelaySkipToken("hello skip_relay world")).toBe(false);
+  });
+
+  it("returns false for undefined/empty text", () => {
+    expect(hasRelaySkipToken(undefined)).toBe(false);
+    expect(hasRelaySkipToken("")).toBe(false);
   });
 });

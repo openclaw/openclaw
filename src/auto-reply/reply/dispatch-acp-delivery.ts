@@ -6,6 +6,7 @@ import type { RelayRouteTarget } from "../../sessions/relay-routing.js";
 import { maybeApplyTtsToPayload } from "../../tts/tts.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { FinalizedMsgContext } from "../templating.js";
+import { hasRelaySkipToken } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { routeReply } from "./route-reply.js";
@@ -55,6 +56,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
+  shouldSwallowRelaySkipToken: boolean;
   onReplyStart?: () => Promise<void> | void;
 }): AcpDispatchDeliveryCoordinator {
   const routeTarget =
@@ -133,6 +135,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     meta?: AcpDispatchDeliveryMeta,
   ): Promise<boolean> => {
+    if (params.shouldSwallowRelaySkipToken && hasRelaySkipToken(payload.text)) {
+      return false;
+    }
     if (kind === "block" && payload.text?.trim()) {
       if (state.accumulatedBlockText.length > 0) {
         state.accumulatedBlockText += "\n";

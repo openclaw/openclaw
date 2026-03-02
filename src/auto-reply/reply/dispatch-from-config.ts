@@ -27,6 +27,7 @@ import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext, OriginatingChannelType } from "../templating.js";
+import { hasRelaySkipToken } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
@@ -242,6 +243,7 @@ export async function dispatchReplyFromConfig(params: {
     },
   });
   const relayMode: RelayRoutingMode = relayRoute.mode;
+  const shouldSwallowRelaySkipToken = relayMode === "read-only";
   const relayRouteTarget: RelayRouteTarget | undefined =
     relayRoute.mode === "read-only" ? relayRoute.target : undefined;
   const routeTarget: DispatchRouteTarget | undefined =
@@ -380,6 +382,7 @@ export async function dispatchReplyFromConfig(params: {
       originatingChannel,
       originatingTo,
       shouldSendToolSummaries,
+      shouldSwallowRelaySkipToken,
       bypassForCommand: bypassAcpForCommand,
       onReplyStart: params.replyOptions?.onReplyStart,
       recordProcessed,
@@ -434,6 +437,9 @@ export async function dispatchReplyFromConfig(params: {
             if (!deliveryPayload) {
               return;
             }
+            if (shouldSwallowRelaySkipToken && hasRelaySkipToken(deliveryPayload.text)) {
+              return;
+            }
             if (hasRouteTarget) {
               await sendPayloadAsync(deliveryPayload, undefined, false);
             } else {
@@ -448,6 +454,9 @@ export async function dispatchReplyFromConfig(params: {
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
             // Telegram has its own dispatch path that handles reasoning splitting.
             if (shouldSuppressReasoningPayload(payload)) {
+              return;
+            }
+            if (shouldSwallowRelaySkipToken && hasRelaySkipToken(payload.text)) {
               return;
             }
             // Accumulate block text for TTS generation after streaming
@@ -486,6 +495,9 @@ export async function dispatchReplyFromConfig(params: {
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
       if (shouldSuppressReasoningPayload(reply)) {
+        continue;
+      }
+      if (shouldSwallowRelaySkipToken && hasRelaySkipToken(reply.text)) {
         continue;
       }
       const ttsReply = await maybeApplyTtsToPayload({

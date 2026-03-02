@@ -37,6 +37,7 @@ function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>)
     dispatcher: createDispatcher(),
     inboundAudio: false,
     shouldRouteToOriginating: false,
+    shouldSwallowRelaySkipToken: false,
     ...(onReplyStart ? { onReplyStart } : {}),
   });
 }
@@ -71,5 +72,49 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await coordinator.deliver("final", {});
 
     expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("suppresses SKIP_RELAY payloads when read-only suppression is enabled", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+      shouldSwallowRelaySkipToken: true,
+    });
+
+    const delivered = await coordinator.deliver("final", { text: "hello SKIP_RELAY world" });
+
+    expect(delivered).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress lowercase skip_relay when suppression is enabled", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+      shouldSwallowRelaySkipToken: true,
+    });
+
+    const delivered = await coordinator.deliver("final", { text: "hello skip_relay world" });
+
+    expect(delivered).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello skip_relay world" }),
+    );
   });
 });

@@ -30,6 +30,7 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import {
   HEARTBEAT_TOKEN,
+  hasRelaySkipToken,
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -142,6 +143,9 @@ export async function runAgentTurnWithFallback(params: {
             return { skip: true };
           }
           text = stripped.text;
+        }
+        if (params.followupRun.relayMode === "read-only" && hasRelaySkipToken(text)) {
+          return { skip: true };
         }
         if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
           return { skip: true };

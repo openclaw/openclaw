@@ -108,6 +108,7 @@ function createMinimalRun(params?: {
   isActive?: boolean;
   shouldFollowup?: boolean;
   resolvedQueueMode?: string;
+  relayMode?: FollowupRun["relayMode"];
   runOverrides?: Partial<FollowupRun["run"]>;
 }) {
   const typing = createMockTypingController();
@@ -124,6 +125,7 @@ function createMinimalRun(params?: {
     prompt: "hello",
     summaryLine: "hello",
     enqueuedAt: Date.now(),
+    relayMode: params?.relayMode,
     run: {
       sessionId: "session",
       sessionKey,
@@ -588,6 +590,59 @@ describe("runReplyAgent typing (heartbeat)", () => {
         });
       } else {
         expect(onToolResult).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it("suppresses streaming SKIP_RELAY tool payloads only in read-only relay mode", async () => {
+    const cases = [
+      {
+        relayMode: "read-only" as const,
+        toolText: "visible SKIP_RELAY payload",
+        shouldForward: false,
+        shouldType: false,
+      },
+      {
+        relayMode: "read-only" as const,
+        toolText: "visible skip_relay payload",
+        shouldForward: true,
+        shouldType: true,
+      },
+      {
+        relayMode: "read-write" as const,
+        toolText: "visible SKIP_RELAY payload",
+        shouldForward: true,
+        shouldType: true,
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const onToolResult = vi.fn();
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onToolResult?.({ text: testCase.toolText, mediaUrls: [] });
+        return { payloads: [{ text: "final" }], meta: {} };
+      });
+
+      const { run, typing } = createMinimalRun({
+        relayMode: testCase.relayMode,
+        typingMode: "message",
+        opts: { onToolResult },
+      });
+      await run();
+
+      if (testCase.shouldForward) {
+        expect(onToolResult).toHaveBeenCalledWith({
+          text: testCase.toolText,
+          mediaUrls: [],
+        });
+      } else {
+        expect(onToolResult).not.toHaveBeenCalled();
+      }
+
+      if (testCase.shouldType) {
+        expect(typing.startTypingOnText).toHaveBeenCalledWith(testCase.toolText);
+      } else {
+        expect(typing.startTypingOnText).not.toHaveBeenCalled();
       }
     }
   });

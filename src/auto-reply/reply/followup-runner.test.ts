@@ -459,6 +459,93 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("suppresses each SKIP_RELAY followup payload independently in read-only mode", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [
+        { text: "one SKIP_RELAY token" },
+        { text: "visible payload" },
+        { text: "two SKIP_RELAY token" },
+      ],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("slack"),
+      relayMode: "read-only",
+      relayOutput: {
+        channel: "slack",
+        to: "channel:relay",
+      },
+      originatingChannel: "slack",
+      originatingTo: "channel:source",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "visible payload" }),
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress lowercase skip_relay followup payloads in read-only mode", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "visible skip_relay payload" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("slack"),
+      relayMode: "read-only",
+      relayOutput: {
+        channel: "slack",
+        to: "channel:relay",
+      },
+      originatingChannel: "slack",
+      originatingTo: "channel:source",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "visible skip_relay payload" }),
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress SKIP_RELAY followup payloads in read-write mode", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "visible SKIP_RELAY payload" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("slack"),
+      relayMode: "read-write",
+      originatingChannel: "slack",
+      originatingTo: "channel:source",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "visible SKIP_RELAY payload" }),
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("falls back to dispatcher when same-channel origin routing fails", async () => {
     routeReplyMock.mockResolvedValueOnce({
       ok: false,

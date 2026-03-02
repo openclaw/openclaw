@@ -157,6 +157,7 @@ export async function tryDispatchAcpReply(params: {
   originatingChannel?: string;
   originatingTo?: string;
   shouldSendToolSummaries: boolean;
+  shouldSwallowRelaySkipToken: boolean;
   bypassForCommand: boolean;
   onReplyStart?: () => Promise<void> | void;
   recordProcessed: DispatchProcessedRecorder;
@@ -188,6 +189,7 @@ export async function tryDispatchAcpReply(params: {
     shouldRouteToOriginating: params.shouldRouteToOriginating,
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
+    shouldSwallowRelaySkipToken: params.shouldSwallowRelaySkipToken,
     onReplyStart: params.onReplyStart,
   });
 

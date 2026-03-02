@@ -2,6 +2,7 @@ import { escapeRegExp } from "../utils.js";
 
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
+export const RELAY_SKIP_TOKEN = "SKIP_RELAY";
 
 const silentExactRegexByToken = new Map<string, RegExp>();
 const silentTrailingRegexByToken = new Map<string, RegExp>();
@@ -67,4 +68,14 @@ export function isSilentReplyPrefixText(
     return false;
   }
   return token.toUpperCase().startsWith(normalized);
+}
+
+export function hasRelaySkipToken(
+  text: string | undefined,
+  token: string = RELAY_SKIP_TOKEN,
+): boolean {
+  if (!text) {
+    return false;
+  }
+  return text.includes(token);
 }
