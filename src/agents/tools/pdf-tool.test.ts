@@ -3,8 +3,22 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { parsePageRange, providerSupportsNativePdf } from "./pdf-tool.helpers.js";
+import {
+  coercePdfAssistantText,
+  coercePdfModelConfig,
+  parsePageRange,
+  providerSupportsNativePdf,
+  resolvePdfToolMaxTokens,
+} from "./pdf-tool.helpers.js";
 import { createPdfTool, resolvePdfModelConfigForTool } from "./pdf-tool.js";
+
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  return {
+    ...actual,
+    complete: vi.fn(),
+  };
+});
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-"));
@@ -195,6 +209,7 @@ describe("createPdfTool", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     global.fetch = priorFetch;
   });
@@ -283,23 +298,226 @@ describe("createPdfTool", () => {
     });
   });
 
-  it("deduplicates pdf inputs", async () => {
+  it("deduplicates pdf inputs before loading", async () => {
     await withTempAgentDir(async (agentDir) => {
-      vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
+      const webMedia = await import("../../web/media.js");
+      const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue({
+        kind: "document",
+        buffer: Buffer.from("%PDF-1.4 fake"),
+        contentType: "application/pdf",
+        fileName: "doc.pdf",
+      } as never);
+
+      const modelDiscovery = await import("../pi-model-discovery.js");
+      vi.spyOn(modelDiscovery, "discoverAuthStorage").mockReturnValue({
+        setRuntimeApiKey: vi.fn(),
+      } as never);
+      vi.spyOn(modelDiscovery, "discoverModels").mockReturnValue({ find: () => null } as never);
+
+      const modelsConfig = await import("../models-config.js");
+      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue(undefined);
+
+      const modelAuth = await import("../model-auth.js");
+      vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
+      vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
+
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+        agents: {
+          defaults: {
+            pdfModel: { primary: "anthropic/claude-opus-4-6" },
+          },
+        },
       };
       const tool = createPdfTool({ config: cfg, agentDir });
       expect(tool).not.toBeNull();
-      // The tool should deduplicate but will fail on file not found
-      // (we're testing the dedup logic, not the actual file loading)
+
       await expect(
         tool!.execute("t1", {
           prompt: "test",
           pdf: "/tmp/nonexistent.pdf",
           pdfs: ["/tmp/nonexistent.pdf"],
         }),
-      ).rejects.toThrow(); // Will fail on file load, but should only try once
+      ).rejects.toThrow("Unknown model");
+
+      expect(loadSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("uses native PDF path without eager extraction", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const webMedia = await import("../../web/media.js");
+      vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue({
+        kind: "document",
+        buffer: Buffer.from("%PDF-1.4 fake"),
+        contentType: "application/pdf",
+        fileName: "doc.pdf",
+      } as never);
+
+      const modelDiscovery = await import("../pi-model-discovery.js");
+      vi.spyOn(modelDiscovery, "discoverAuthStorage").mockReturnValue({
+        setRuntimeApiKey: vi.fn(),
+      } as never);
+      vi.spyOn(modelDiscovery, "discoverModels").mockReturnValue({
+        find: () =>
+          ({
+            provider: "anthropic",
+            maxTokens: 8192,
+            input: ["text", "document"],
+          }) as never,
+      } as never);
+
+      const modelsConfig = await import("../models-config.js");
+      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue(undefined);
+
+      const modelAuth = await import("../model-auth.js");
+      vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
+      vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
+
+      const nativeProviders = await import("./pdf-native-providers.js");
+      vi.spyOn(nativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+
+      const extractModule = await import("../../media/pdf-extract.js");
+      const extractSpy = vi.spyOn(extractModule, "extractPdfContent");
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            pdfModel: { primary: "anthropic/claude-opus-4-6" },
+          },
+        },
+      };
+
+      const tool = createPdfTool({ config: cfg, agentDir });
+      expect(tool).not.toBeNull();
+
+      const result = await tool!.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(extractSpy).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: "native summary" }],
+        details: { native: true, model: "anthropic/claude-opus-4-6" },
+      });
+    });
+  });
+
+  it("rejects pages parameter for native PDF providers", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const webMedia = await import("../../web/media.js");
+      vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue({
+        kind: "document",
+        buffer: Buffer.from("%PDF-1.4 fake"),
+        contentType: "application/pdf",
+        fileName: "doc.pdf",
+      } as never);
+
+      const modelDiscovery = await import("../pi-model-discovery.js");
+      vi.spyOn(modelDiscovery, "discoverAuthStorage").mockReturnValue({
+        setRuntimeApiKey: vi.fn(),
+      } as never);
+      vi.spyOn(modelDiscovery, "discoverModels").mockReturnValue({
+        find: () =>
+          ({
+            provider: "anthropic",
+            maxTokens: 8192,
+            input: ["text", "document"],
+          }) as never,
+      } as never);
+
+      const modelsConfig = await import("../models-config.js");
+      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue(undefined);
+
+      const modelAuth = await import("../model-auth.js");
+      vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
+      vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            pdfModel: { primary: "anthropic/claude-opus-4-6" },
+          },
+        },
+      };
+
+      const tool = createPdfTool({ config: cfg, agentDir });
+      expect(tool).not.toBeNull();
+
+      await expect(
+        tool!.execute("t1", {
+          prompt: "summarize",
+          pdf: "/tmp/doc.pdf",
+          pages: "1-2",
+        }),
+      ).rejects.toThrow("pages is not supported with native PDF providers");
+    });
+  });
+
+  it("uses extraction fallback for non-native models", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const webMedia = await import("../../web/media.js");
+      vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue({
+        kind: "document",
+        buffer: Buffer.from("%PDF-1.4 fake"),
+        contentType: "application/pdf",
+        fileName: "doc.pdf",
+      } as never);
+
+      const modelDiscovery = await import("../pi-model-discovery.js");
+      vi.spyOn(modelDiscovery, "discoverAuthStorage").mockReturnValue({
+        setRuntimeApiKey: vi.fn(),
+      } as never);
+      vi.spyOn(modelDiscovery, "discoverModels").mockReturnValue({
+        find: () =>
+          ({
+            provider: "openai",
+            maxTokens: 8192,
+            input: ["text"],
+          }) as never,
+      } as never);
+
+      const modelsConfig = await import("../models-config.js");
+      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue(undefined);
+
+      const modelAuth = await import("../model-auth.js");
+      vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
+      vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
+
+      const extractModule = await import("../../media/pdf-extract.js");
+      const extractSpy = vi.spyOn(extractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted content",
+        images: [],
+      });
+
+      const piAi = await import("@mariozechner/pi-ai");
+      vi.mocked(piAi.complete).mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "fallback summary" }],
+      } as never);
+
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            pdfModel: { primary: "openai/gpt-5-mini" },
+          },
+        },
+      };
+
+      const tool = createPdfTool({ config: cfg, agentDir });
+      expect(tool).not.toBeNull();
+
+      const result = await tool!.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(extractSpy).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({
+        content: [{ type: "text", text: "fallback summary" }],
+        details: { native: false, model: "openai/gpt-5-mini" },
+      });
     });
   });
 
@@ -555,11 +773,55 @@ describe("native PDF provider API calls", () => {
 // ---------------------------------------------------------------------------
 
 describe("pdf-tool.helpers", () => {
-  it("resolvePdfToolMaxTokens respects model limit", async () => {
-    const { resolvePdfToolMaxTokens } = await import("./pdf-tool.helpers.js");
+  it("resolvePdfToolMaxTokens respects model limit", () => {
     expect(resolvePdfToolMaxTokens(2048, 4096)).toBe(2048);
     expect(resolvePdfToolMaxTokens(8192, 4096)).toBe(4096);
     expect(resolvePdfToolMaxTokens(undefined, 4096)).toBe(4096);
+  });
+
+  it("coercePdfModelConfig reads primary and fallbacks", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          pdfModel: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["google/gemini-2.5-pro"],
+          },
+        },
+      },
+    };
+    expect(coercePdfModelConfig(cfg)).toEqual({
+      primary: "anthropic/claude-opus-4-6",
+      fallbacks: ["google/gemini-2.5-pro"],
+    });
+  });
+
+  it("coercePdfAssistantText returns trimmed text", () => {
+    const text = coercePdfAssistantText({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "  summary  " }],
+      } as never,
+    });
+    expect(text).toBe("summary");
+  });
+
+  it("coercePdfAssistantText throws clear error for failed model output", () => {
+    expect(() =>
+      coercePdfAssistantText({
+        provider: "google",
+        model: "gemini-2.5-pro",
+        message: {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "bad request",
+          content: [],
+        } as never,
+      }),
+    ).toThrow("PDF model failed (google/gemini-2.5-pro): bad request");
   });
 });
 

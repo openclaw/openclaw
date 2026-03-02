@@ -1,7 +1,7 @@
 import { type Api, type Context, complete, type Model } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { InputImageContent } from "../../media/input-files.js";
+import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { resolveUserPath } from "../../utils.js";
 import { getDefaultLocalRoots, loadWebMediaRaw } from "../../web/media.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
@@ -41,112 +41,8 @@ const DEFAULT_MAX_PAGES = 20;
 const ANTHROPIC_PDF_PRIMARY = "anthropic/claude-opus-4-6";
 const ANTHROPIC_PDF_FALLBACK = "anthropic/claude-opus-4-5";
 
-type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
-type CanvasModule = typeof import("@napi-rs/canvas");
-
-let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
-let canvasModulePromise: Promise<CanvasModule> | null = null;
-
-async function loadPdfJsModule(): Promise<PdfJsModule> {
-  if (!pdfJsModulePromise) {
-    pdfJsModulePromise = import("pdfjs-dist/legacy/build/pdf.mjs").catch((err) => {
-      pdfJsModulePromise = null;
-      throw new Error(
-        `Optional dependency pdfjs-dist is required for PDF extraction: ${String(err)}`,
-      );
-    });
-  }
-  return pdfJsModulePromise;
-}
-
-async function loadCanvasModule(): Promise<CanvasModule> {
-  if (!canvasModulePromise) {
-    canvasModulePromise = import("@napi-rs/canvas").catch((err) => {
-      canvasModulePromise = null;
-      throw new Error(
-        `Optional dependency @napi-rs/canvas is required for PDF image extraction: ${String(err)}`,
-      );
-    });
-  }
-  return canvasModulePromise;
-}
-
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
-
-type PdfExtractedContent = {
-  text: string;
-  images: InputImageContent[];
-};
-
-/**
- * Extract text and/or rasterized images from a PDF buffer.
- * Supports optional page range filtering.
- */
-async function extractPdfContent(params: {
-  buffer: Buffer;
-  maxPages: number;
-  pageNumbers?: number[];
-}): Promise<PdfExtractedContent> {
-  const { buffer, maxPages, pageNumbers } = params;
-  const { getDocument } = await loadPdfJsModule();
-  const pdf = await getDocument({
-    data: new Uint8Array(buffer),
-    disableWorker: true,
-  }).promise;
-
-  // Determine which pages to process
-  const effectivePages: number[] = pageNumbers
-    ? pageNumbers.filter((p) => p >= 1 && p <= pdf.numPages).slice(0, maxPages)
-    : Array.from({ length: Math.min(pdf.numPages, maxPages) }, (_, i) => i + 1);
-
-  const textParts: string[] = [];
-  for (const pageNum of effectivePages) {
-    const page = await pdf.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item) => ("str" in item ? String(item.str) : ""))
-      .filter(Boolean)
-      .join(" ");
-    if (pageText) {
-      textParts.push(pageText);
-    }
-  }
-
-  const text = textParts.join("\n\n");
-
-  // If the PDF has enough text, use text-only path
-  if (text.trim().length >= PDF_MIN_TEXT_CHARS) {
-    return { text, images: [] };
-  }
-
-  // Otherwise, rasterize pages to images (scanned/image-heavy PDF)
-  let canvasModule: CanvasModule;
-  try {
-    canvasModule = await loadCanvasModule();
-  } catch {
-    // Canvas not available; return whatever text we have
-    return { text, images: [] };
-  }
-  const { createCanvas } = canvasModule;
-  const images: InputImageContent[] = [];
-  for (const pageNum of effectivePages) {
-    const page = await pdf.getPage(pageNum);
-    const viewport = page.getViewport({ scale: 1 });
-    const pagePixels = viewport.width * viewport.height;
-    const scale = Math.min(1, Math.sqrt(PDF_MAX_PIXELS / Math.max(1, pagePixels)));
-    const scaled = page.getViewport({ scale: Math.max(0.1, scale) });
-    const canvas = createCanvas(Math.ceil(scaled.width), Math.ceil(scaled.height));
-    await page.render({
-      canvas: canvas as unknown as HTMLCanvasElement,
-      viewport: scaled,
-    }).promise;
-    const png = canvas.toBuffer("image/png");
-    images.push({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
-  }
-
-  return { text, images };
-}
 
 // ---------------------------------------------------------------------------
 // Model resolution (mirrors image tool pattern)
@@ -291,7 +187,8 @@ async function runPdfPrompt(params: {
   modelOverride?: string;
   prompt: string;
   pdfBuffers: Array<{ base64: string; filename: string }>;
-  extractions: PdfExtractedContent[];
+  pageNumbers?: number[];
+  getExtractions: () => Promise<PdfExtractedContent[]>;
 }): Promise<{
   text: string;
   provider: string;
@@ -316,6 +213,14 @@ async function runPdfPrompt(params: {
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
 
+  let extractionCache: PdfExtractedContent[] | null = null;
+  const getExtractions = async (): Promise<PdfExtractedContent[]> => {
+    if (!extractionCache) {
+      extractionCache = await params.getExtractions();
+    }
+    return extractionCache;
+  };
+
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
@@ -333,8 +238,13 @@ async function runPdfPrompt(params: {
       const apiKey = requireApiKey(apiKeyInfo, model.provider);
       authStorage.setRuntimeApiKey(model.provider, apiKey);
 
-      // Try native PDF path for supported providers
       if (providerSupportsNativePdf(provider)) {
+        if (params.pageNumbers && params.pageNumbers.length > 0) {
+          throw new Error(
+            `pages is not supported with native PDF providers (${provider}/${modelId}). Remove pages, or use a non-native model for page filtering.`,
+          );
+        }
+
         const pdfs = params.pdfBuffers.map((p) => ({
           base64: p.base64,
           filename: p.filename,
@@ -364,20 +274,18 @@ async function runPdfPrompt(params: {
         }
       }
 
-      // Extraction fallback: check the model can handle images or text
-      const hasImages = params.extractions.some((e) => e.images.length > 0);
+      const extractions = await getExtractions();
+      const hasImages = extractions.some((e) => e.images.length > 0);
       if (hasImages && !model.input?.includes("image")) {
-        // Model can't handle images; check if we have enough text
-        const hasText = params.extractions.some((e) => e.text.trim().length > 0);
+        const hasText = extractions.some((e) => e.text.trim().length > 0);
         if (!hasText) {
           throw new Error(
             `Model ${provider}/${modelId} does not support images and PDF has no extractable text.`,
           );
         }
-        // Strip images, use text-only
-        const textOnlyExtractions = params.extractions.map((e) => ({
+        const textOnlyExtractions: PdfExtractedContent[] = extractions.map((e) => ({
           text: e.text,
-          images: [] as InputImageContent[],
+          images: [],
         }));
         const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions);
         const message = await complete(model, context, {
@@ -388,7 +296,7 @@ async function runPdfPrompt(params: {
         return { text, provider, model: modelId, native: false };
       }
 
-      const context = buildPdfExtractionContext(params.prompt, params.extractions);
+      const context = buildPdfExtractionContext(params.prompt, extractions);
       const message = await complete(model, context, {
         apiKey,
         maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
@@ -639,20 +547,23 @@ export function createPdfTool(options?: {
         });
       }
 
-      // MARK: - Extract content for fallback path (done upfront)
       const pageNumbers = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
 
-      const extractions: PdfExtractedContent[] = [];
-      for (const pdf of loadedPdfs) {
-        const extracted = await extractPdfContent({
-          buffer: pdf.buffer,
-          maxPages: configuredMaxPages,
-          pageNumbers,
-        });
-        extractions.push(extracted);
-      }
+      const getExtractions = async (): Promise<PdfExtractedContent[]> => {
+        const extractedAll: PdfExtractedContent[] = [];
+        for (const pdf of loadedPdfs) {
+          const extracted = await extractPdfContent({
+            buffer: pdf.buffer,
+            maxPages: configuredMaxPages,
+            maxPixels: PDF_MAX_PIXELS,
+            minTextChars: PDF_MIN_TEXT_CHARS,
+            pageNumbers,
+          });
+          extractedAll.push(extracted);
+        }
+        return extractedAll;
+      };
 
-      // MARK: - Run model prompt
       const result = await runPdfPrompt({
         cfg: options?.config,
         agentDir,
@@ -660,7 +571,8 @@ export function createPdfTool(options?: {
         modelOverride,
         prompt: promptRaw,
         pdfBuffers: loadedPdfs.map((p) => ({ base64: p.base64, filename: p.filename })),
-        extractions,
+        pageNumbers,
+        getExtractions,
       });
 
       const pdfDetails =
