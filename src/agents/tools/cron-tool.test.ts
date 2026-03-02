@@ -512,4 +512,50 @@ describe("cron tool", () => {
     ).rejects.toThrow('delivery.mode="webhook" requires delivery.to to be a valid http(s) URL');
     expect(callGatewayMock).toHaveBeenCalledTimes(0);
   });
+
+  it("recovers flat patch params for update action", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-update-flat", {
+      action: "update",
+      jobId: "job-1",
+      name: "new-name",
+      enabled: false,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { id?: string; patch?: { name?: string; enabled?: boolean } };
+    };
+    expect(call.method).toBe("cron.update");
+    expect(call.params?.id).toBe("job-1");
+    expect(call.params?.patch?.name).toBe("new-name");
+    expect(call.params?.patch?.enabled).toBe(false);
+  });
+
+  it("recovers additional flat patch params for update action", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-update-flat-extra", {
+      action: "update",
+      id: "job-2",
+      sessionTarget: "main",
+      failureAlert: { after: 3, cooldownMs: 60_000 },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: {
+        id?: string;
+        patch?: { sessionTarget?: string; failureAlert?: { after?: number; cooldownMs?: number } };
+      };
+    };
+    expect(call.method).toBe("cron.update");
+    expect(call.params?.id).toBe("job-2");
+    expect(call.params?.patch?.sessionTarget).toBe("main");
+    expect(call.params?.patch?.failureAlert).toEqual({ after: 3, cooldownMs: 60_000 });
+  });
 });

@@ -84,10 +84,25 @@ function resolveAccountConfig(
 }
 
 function mergeTelegramAccountConfig(cfg: OpenClawConfig, accountId: string): TelegramAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.telegram ??
-    {}) as TelegramAccountConfig & { accounts?: unknown };
+  const {
+    accounts: _ignored,
+    groups: channelGroups,
+    ...base
+  } = (cfg.channels?.telegram ?? {}) as TelegramAccountConfig & { accounts?: unknown };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+
+  // In multi-account setups, channel-level `groups` must NOT be inherited by
+  // accounts that don't have their own `groups` config.  A bot that is not a
+  // member of a configured group will fail when handling group messages, and
+  // this failure disrupts message delivery for *all* accounts.
+  // Single-account setups keep backward compat: channel-level groups still
+  // applies when the account has no override.
+  // See: https://github.com/openclaw/openclaw/issues/30673
+  const configuredAccountIds = Object.keys(cfg.channels?.telegram?.accounts ?? {});
+  const isMultiAccount = configuredAccountIds.length > 1;
+  const groups = account.groups ?? (isMultiAccount ? undefined : channelGroups);
+
+  return { ...base, ...account, groups };
 }
 
 export function createTelegramActionGate(params: {

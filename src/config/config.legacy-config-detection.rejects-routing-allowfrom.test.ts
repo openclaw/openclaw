@@ -365,7 +365,11 @@ describe("legacy config detection", () => {
       gateway: { bind: "tailnet" as const },
     });
     expect(res.changes).not.toContain("Migrated gateway.bind from 'tailnet' to 'auto'.");
-    expect(res.config).toBeNull();
+    expect(res.config?.gateway?.bind).toBe("tailnet");
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+    ]);
 
     const validated = validateConfigObject({ gateway: { bind: "tailnet" as const } });
     expect(validated.ok).toBe(true);
@@ -597,7 +601,7 @@ describe("legacy config detection", () => {
           },
         },
         assert: (config: NonNullable<OpenClawConfig>) => {
-          expect(config.channels?.slack?.streaming).toBe("partial");
+          expect(config.channels?.slack?.streaming).toBe("off");
           expect(config.channels?.slack?.nativeStreaming).toBe(false);
         },
       },

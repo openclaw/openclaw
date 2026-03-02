@@ -307,4 +307,57 @@ describe("models-config", () => {
       }
     });
   });
+
+  it("preserves explicit larger token limits when they exceed implicit catalog defaults", async () => {
+    await withTempHome(async () => {
+      const prevKey = process.env.MOONSHOT_API_KEY;
+      process.env.MOONSHOT_API_KEY = "sk-moonshot-test";
+      try {
+        const cfg: OpenClawConfig = {
+          models: {
+            providers: {
+              moonshot: {
+                baseUrl: "https://api.moonshot.ai/v1",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "kimi-k2.5",
+                    name: "Kimi K2.5",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 123, output: 456, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 350000,
+                    maxTokens: 16384,
+                  },
+                ],
+              },
+            },
+          },
+        };
+
+        await ensureOpenClawModelsJson(cfg);
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<
+            string,
+            {
+              models?: Array<{
+                id: string;
+                contextWindow?: number;
+                maxTokens?: number;
+              }>;
+            }
+          >;
+        }>();
+        const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
+        expect(kimi?.contextWindow).toBe(350000);
+        expect(kimi?.maxTokens).toBe(16384);
+      } finally {
+        if (prevKey === undefined) {
+          delete process.env.MOONSHOT_API_KEY;
+        } else {
+          process.env.MOONSHOT_API_KEY = prevKey;
+        }
+      }
+    });
+  });
 });

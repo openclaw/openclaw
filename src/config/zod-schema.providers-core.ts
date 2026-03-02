@@ -295,6 +295,27 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
     if (account.enabled === false) {
       continue;
     }
+    const effectiveDmPolicy = account.dmPolicy ?? value.dmPolicy;
+    const effectiveAllowFrom = Array.isArray(account.allowFrom)
+      ? account.allowFrom
+      : value.allowFrom;
+    requireOpenAllowFrom({
+      policy: effectiveDmPolicy,
+      allowFrom: effectiveAllowFrom,
+      ctx,
+      path: ["accounts", accountId, "allowFrom"],
+      message:
+        'channels.telegram.accounts.*.dmPolicy="open" requires channels.telegram.allowFrom or channels.telegram.accounts.*.allowFrom to include "*"',
+    });
+    requireAllowlistAllowFrom({
+      policy: effectiveDmPolicy,
+      allowFrom: effectiveAllowFrom,
+      ctx,
+      path: ["accounts", accountId, "allowFrom"],
+      message:
+        'channels.telegram.accounts.*.dmPolicy="allowlist" requires channels.telegram.allowFrom or channels.telegram.accounts.*.allowFrom to contain at least one sender ID',
+    });
+
     const accountWebhookUrl =
       typeof account.webhookUrl === "string" ? account.webhookUrl.trim() : "";
     if (!accountWebhookUrl) {
@@ -463,7 +484,8 @@ export const DiscordAccountSchema = z
     threadBindings: z
       .object({
         enabled: z.boolean().optional(),
-        ttlHours: z.number().nonnegative().optional(),
+        idleHours: z.number().nonnegative().optional(),
+        maxAgeHours: z.number().nonnegative().optional(),
         spawnSubagentSessions: z.boolean().optional(),
         spawnAcpSessions: z.boolean().optional(),
       })
@@ -486,12 +508,23 @@ export const DiscordAccountSchema = z
       .optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    ackReactionScope: z
+      .enum(["group-mentions", "group-all", "direct", "all", "off", "none"])
+      .optional(),
     activity: z.string().optional(),
     status: z.enum(["online", "dnd", "idle", "invisible"]).optional(),
     activityType: z
       .union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
       .optional(),
     activityUrl: z.string().url().optional(),
+    eventQueue: z
+      .object({
+        listenerTimeout: z.number().int().positive().optional(),
+        maxQueueSize: z.number().int().positive().optional(),
+        maxConcurrency: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
