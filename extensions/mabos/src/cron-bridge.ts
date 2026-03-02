@@ -236,7 +236,11 @@ function mapToParentCreate(job: MabosCronJob): ParentCronJobCreate {
     },
   };
 
-  // Pass through delivery config if present.
+  // Pass through delivery config if present, otherwise default to "none".
+  // Without an explicit delivery mode, the gateway's normalizeCronJobCreate
+  // defaults isolated agentTurn jobs to delivery.mode="announce", which
+  // triggers a WebSocket self-connection for result delivery. Bridge jobs
+  // don't need announce delivery — they just execute and write results.
   const delivery = job.delivery;
   if (delivery && typeof delivery === "object" && !Array.isArray(delivery)) {
     const d = delivery as Record<string, unknown>;
@@ -247,7 +251,11 @@ function mapToParentCreate(job: MabosCronJob): ParentCronJobCreate {
         to: typeof d.to === "string" ? d.to : undefined,
         bestEffort: typeof d.bestEffort === "boolean" ? d.bestEffort : undefined,
       };
+    } else {
+      result.delivery = { mode: "none" };
     }
+  } else {
+    result.delivery = { mode: "none" };
   }
 
   return result;
