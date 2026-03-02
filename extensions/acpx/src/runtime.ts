@@ -12,12 +12,8 @@ import type {
   PluginLogger,
 } from "openclaw/plugin-sdk";
 import { AcpRuntimeError } from "openclaw/plugin-sdk";
-import {
-  ACPX_LOCAL_INSTALL_COMMAND,
-  ACPX_PINNED_VERSION,
-  type ResolvedAcpxPluginConfig,
-} from "./config.js";
-import { checkPinnedAcpxVersion } from "./ensure.js";
+import { type ResolvedAcpxPluginConfig } from "./config.js";
+import { checkAcpxVersion } from "./ensure.js";
 import {
   parseJsonLines,
   parsePromptEventLine,
@@ -25,6 +21,8 @@ import {
 } from "./runtime-internals/events.js";
 import {
   resolveSpawnFailure,
+  type SpawnCommandCache,
+  type SpawnCommandOptions,
   spawnAndCollect,
   spawnWithResolvedCommand,
   waitForExit,
@@ -98,6 +96,8 @@ export class AcpxRuntime implements AcpRuntime {
   private healthy = false;
   private readonly logger?: PluginLogger;
   private readonly queueOwnerTtlSeconds: number;
+  private readonly spawnCommandCache: SpawnCommandCache = {};
+  private readonly spawnCommandOptions: SpawnCommandOptions;
 
   constructor(
     private readonly config: ResolvedAcpxPluginConfig,
@@ -114,6 +114,10 @@ export class AcpxRuntime implements AcpRuntime {
       requestedQueueOwnerTtlSeconds >= 0
         ? requestedQueueOwnerTtlSeconds
         : this.config.queueOwnerTtlSeconds;
+    this.spawnCommandOptions = {
+      strictWindowsCmdWrapper: this.config.strictWindowsCmdWrapper,
+      cache: this.spawnCommandCache,
+    };
   }
 
   isHealthy(): boolean {
@@ -121,10 +125,11 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async probeAvailability(): Promise<void> {
-    const versionCheck = await checkPinnedAcpxVersion({
+    const versionCheck = await checkAcpxVersion({
       command: this.config.command,
       cwd: this.config.cwd,
-      expectedVersion: ACPX_PINNED_VERSION,
+      expectedVersion: this.config.expectedVersion,
+      spawnOptions: this.spawnCommandOptions,
     });
     if (!versionCheck.ok) {
       this.healthy = false;
@@ -132,11 +137,14 @@ export class AcpxRuntime implements AcpRuntime {
     }
 
     try {
-      const result = await spawnAndCollect({
-        command: this.config.command,
-        args: ["--help"],
-        cwd: this.config.cwd,
-      });
+      const result = await spawnAndCollect(
+        {
+          command: this.config.command,
+          args: ["--help"],
+          cwd: this.config.cwd,
+        },
+        this.spawnCommandOptions,
+      );
       this.healthy = result.error == null && (result.code ?? 0) === 0;
     } catch {
       this.healthy = false;
@@ -221,11 +229,14 @@ export class AcpxRuntime implements AcpRuntime {
     if (input.signal) {
       input.signal.addEventListener("abort", onAbort, { once: true });
     }
-    const child = spawnWithResolvedCommand({
-      command: this.config.command,
-      args,
-      cwd: state.cwd,
-    });
+    const child = spawnWithResolvedCommand(
+      {
+        command: this.config.command,
+        args,
+        cwd: state.cwd,
+      },
+      this.spawnCommandOptions,
+    );
     child.stdin.on("error", () => {
       // Ignore EPIPE when the child exits before stdin flush completes.
     });
@@ -247,6 +258,9 @@ export class AcpxRuntime implements AcpRuntime {
           continue;
         }
         if (parsed.type === "done") {
+          if (sawDone) {
+            continue;
+          }
           sawDone = true;
         }
         if (parsed.type === "error") {
@@ -376,15 +390,16 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async doctor(): Promise<AcpRuntimeDoctorReport> {
-    const versionCheck = await checkPinnedAcpxVersion({
+    const versionCheck = await checkAcpxVersion({
       command: this.config.command,
       cwd: this.config.cwd,
-      expectedVersion: ACPX_PINNED_VERSION,
+      expectedVersion: this.config.expectedVersion,
+      spawnOptions: this.spawnCommandOptions,
     });
     if (!versionCheck.ok) {
       this.healthy = false;
       const details = [
-        `expected=${versionCheck.expectedVersion}`,
+        versionCheck.expectedVersion ? `expected=${versionCheck.expectedVersion}` : null,
         versionCheck.installedVersion ? `installed=${versionCheck.installedVersion}` : null,
       ].filter((detail): detail is string => Boolean(detail));
       return {
@@ -397,11 +412,14 @@ export class AcpxRuntime implements AcpRuntime {
     }
 
     try {
-      const result = await spawnAndCollect({
-        command: this.config.command,
-        args: ["--help"],
-        cwd: this.config.cwd,
-      });
+      const result = await spawnAndCollect(
+        {
+          command: this.config.command,
+          args: ["--help"],
+          cwd: this.config.cwd,
+        },
+        this.spawnCommandOptions,
+      );
       if (result.error) {
         const spawnFailure = resolveSpawnFailure(result.error, this.config.cwd);
         if (spawnFailure === "missing-command") {
@@ -410,7 +428,7 @@ export class AcpxRuntime implements AcpRuntime {
             ok: false,
             code: "ACP_BACKEND_UNAVAILABLE",
             message: `acpx command not found: ${this.config.command}`,
-            installCommand: ACPX_LOCAL_INSTALL_COMMAND,
+            installCommand: this.config.installCommand,
           };
         }
         if (spawnFailure === "missing-cwd") {
@@ -440,7 +458,7 @@ export class AcpxRuntime implements AcpRuntime {
       this.healthy = true;
       return {
         ok: true,
-        message: `acpx command available (${this.config.command}, version ${versionCheck.version})`,
+        message: `acpx command available (${this.config.command}, version ${versionCheck.version}${this.config.expectedVersion ? `, expected ${this.config.expectedVersion}` : ""})`,
       };
     } catch (error) {
       this.healthy = false;
@@ -529,11 +547,14 @@ export class AcpxRuntime implements AcpRuntime {
     fallbackCode: AcpRuntimeErrorCode;
     ignoreNoSession?: boolean;
   }): Promise<AcpxJsonObject[]> {
-    const result = await spawnAndCollect({
-      command: this.config.command,
-      args: params.args,
-      cwd: params.cwd,
-    });
+    const result = await spawnAndCollect(
+      {
+        command: this.config.command,
+        args: params.args,
+        cwd: params.cwd,
+      },
+      this.spawnCommandOptions,
+    );
 
     if (result.error) {
       const spawnFailure = resolveSpawnFailure(result.error, params.cwd);
