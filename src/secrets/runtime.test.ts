@@ -149,6 +149,38 @@ describe("secrets runtime snapshot", () => {
     expect(profile.key).toBe("resolved-key-value");
   });
 
+  it("keeps explicit keyRef when inline key SecretRef is also present", async () => {
+    const config: OpenClawConfig = { models: {}, secrets: {} };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {
+        PRIMARY_KEY: "primary-key-value",
+        SHADOW_KEY: "shadow-key-value",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () =>
+        ({
+          version: 1,
+          profiles: {
+            "custom:explicit-keyref": {
+              type: "api_key",
+              provider: "custom",
+              keyRef: { source: "env", provider: "default", id: "PRIMARY_KEY" },
+              key: { source: "env", provider: "default", id: "SHADOW_KEY" },
+            },
+          },
+        }) as AuthProfileStore,
+    });
+
+    const profile = snapshot.authStores[0]?.store.profiles["custom:explicit-keyref"] as Record<
+      string,
+      unknown
+    >;
+    expect(profile.keyRef).toEqual({ source: "env", provider: "default", id: "PRIMARY_KEY" });
+    activateSecretsRuntimeSnapshot(snapshot);
+    expect(profile.key).toBe("primary-key-value");
+  });
+
   it("resolves file refs via configured file provider", async () => {
     if (process.platform === "win32") {
       return;
