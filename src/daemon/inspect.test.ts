@@ -181,4 +181,26 @@ describe("findExtraGatewayServices (linux)", () => {
 
     expect(result).toEqual([]);
   });
+
+  it("does not treat non-browser commands as browser services when path contains chrome", async () => {
+    vi.spyOn(fs, "readdir").mockResolvedValue(["openclaw-helper.service"] as unknown as Awaited<
+      ReturnType<typeof fs.readdir>
+    >);
+    vi.spyOn(fs, "readFile").mockResolvedValue(
+      ["[Service]", "ExecStart=/home/chrome/.local/bin/openclaw gateway run"].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: "/home/test" });
+
+    expect(result).toEqual([
+      {
+        platform: "linux",
+        label: "openclaw-helper.service",
+        detail: "unit: /home/test/.config/systemd/user/openclaw-helper.service",
+        scope: "user",
+        marker: "openclaw",
+        legacy: false,
+      },
+    ]);
+  });
 });

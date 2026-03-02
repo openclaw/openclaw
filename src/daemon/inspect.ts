@@ -132,6 +132,66 @@ function collectSystemdExecStartLines(contents: string): string[] {
   return logicalLines.filter((line) => /^execstart\s*=/i.test(line));
 }
 
+function stripShellQuotes(token: string): string {
+  if (
+    (token.startsWith('"') && token.endsWith('"')) ||
+    (token.startsWith("'") && token.endsWith("'"))
+  ) {
+    return token.slice(1, -1);
+  }
+  return token;
+}
+
+function isBrowserExecutableToken(token: string): boolean {
+  const unquoted = stripShellQuotes(token).toLowerCase();
+  const base = unquoted.split("/").pop() ?? unquoted;
+  return (
+    base === "chromium" ||
+    base === "chromium-browser" ||
+    base === "google-chrome" ||
+    base === "chrome"
+  );
+}
+
+function extractExecStartCommandToken(execStartLine: string): string | null {
+  const value = execStartLine.replace(/^execstart\s*=/i, "").trim();
+  if (!value) {
+    return null;
+  }
+
+  const tokens = value.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  let index = 0;
+  while (index < tokens.length && /^[-@:+!]/.test(tokens[index])) {
+    index += 1;
+  }
+
+  if (index >= tokens.length) {
+    return null;
+  }
+
+  if (
+    stripShellQuotes(tokens[index]).toLowerCase().endsWith("/env") ||
+    stripShellQuotes(tokens[index]).toLowerCase() === "env"
+  ) {
+    index += 1;
+    while (index < tokens.length) {
+      const token = stripShellQuotes(tokens[index]);
+      if (token.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token)) {
+        index += 1;
+        continue;
+      }
+      return tokens[index];
+    }
+    return null;
+  }
+
+  return tokens[index];
+}
+
 /**
  * Returns true when a systemd unit is a browser/CDP service (e.g. a snap-installed
  * Chromium running headless with --remote-debugging-port as a persistent workaround
@@ -150,7 +210,8 @@ function isBrowserCdpService(contents: string): boolean {
     if (lower.includes("--remote-debugging-port")) {
       return true;
     }
-    if (/\b(chromium|chromium-browser|google-chrome|chrome)\b/.test(lower)) {
+    const commandToken = extractExecStartCommandToken(line);
+    if (commandToken && isBrowserExecutableToken(commandToken)) {
       return true;
     }
   }
