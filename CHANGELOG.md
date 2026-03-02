@@ -112,6 +112,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Google Chat/Thread replies: set `messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD` on threaded sends so replies attach to existing threads instead of silently failing thread placement. Landed from contributor PR #30965 by @novan. Thanks @novan.
 - Mattermost/Private channel policy routing: map Mattermost private channel type `P` to group chat type so `groupPolicy`/`groupAllowFrom` gates apply correctly instead of being treated as open public channels. Landed from contributor PR #30891 by @BlueBirdBack. Thanks @BlueBirdBack.
 - Models/Custom provider keys: trim custom provider map keys during normalization so image-capable models remain discoverable when provider keys are configured with leading/trailing whitespace. Landed from contributor PR #31202 by @stakeswky. Thanks @stakeswky.
 - Discord/Agent component interactions: accept Components v2 `cid` payloads alongside legacy `componentId`, and safely decode percent-encoded IDs without throwing on malformed `%` sequences. Landed from contributor PR #29013 by @Jacky1n7. Thanks @Jacky1n7.
