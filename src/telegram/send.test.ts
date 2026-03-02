@@ -872,6 +872,16 @@ describe("sendMessageTelegram", () => {
         expectedMethod: "sendVoice" as const,
         expectedOptions: { caption: "caption", parse_mode: "HTML" },
       },
+      {
+        name: "normalizes parameterized audio MIME with mixed casing",
+        chatId: "123",
+        text: "caption",
+        mediaUrl: "https://example.com/note",
+        contentType: " Audio/Ogg; codecs=opus ",
+        fileName: "note.ogg",
+        expectedMethod: "sendAudio" as const,
+        expectedOptions: { caption: "caption", parse_mode: "HTML" },
+      },
     ];
 
     for (const testCase of cases) {

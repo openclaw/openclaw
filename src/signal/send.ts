@@ -1,6 +1,6 @@
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import { mediaKindFromMime } from "../media/constants.js";
+import { kindFromMime } from "../media/mime.js";
 import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
@@ -130,7 +130,7 @@ export async function sendMessageSignal(
       localRoots: opts.mediaLocalRoots,
     });
     attachments = [resolved.path];
-    const kind = mediaKindFromMime(resolved.contentType ?? undefined);
+    const kind = kindFromMime(resolved.contentType ?? undefined);
     if (!message && kind) {
       // Avoid sending an empty body when only attachments exist.
       message = kind === "image" ? "<media:image>" : `<media:${kind}>`;

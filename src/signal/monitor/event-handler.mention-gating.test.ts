@@ -146,6 +146,31 @@ describe("signal mention gating", () => {
     );
   });
 
+  it("normalizes mixed-case parameterized attachment MIME in skipped pending history", async () => {
+    capturedCtx = undefined;
+    const groupHistories = new Map();
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: createSignalConfig({ requireMention: true }),
+        historyLimit: 5,
+        groupHistories,
+        ignoreAttachments: false,
+      }),
+    );
+
+    await handler(
+      makeGroupEvent({
+        message: "",
+        attachments: [{ contentType: " Audio/Ogg; codecs=opus " }],
+      }),
+    );
+
+    expect(capturedCtx).toBeUndefined();
+    const entries = groupHistories.get("g1");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].body).toBe("<media:audio>");
+  });
+
   it("records quote text in pending history for skipped quote-only group messages", async () => {
     await expectSkippedGroupHistory({ message: "", quoteText: "quoted context" }, "quoted context");
   });
