@@ -70,6 +70,14 @@ function getErrorName(err: unknown): string {
   return typeof name === "string" ? name : "";
 }
 
+function getErrorMessage(err: unknown): string {
+  if (!err || typeof err !== "object") {
+    return "";
+  }
+  const message = (err as { message?: unknown }).message;
+  return typeof message === "string" ? message : "";
+}
+
 function extractErrorCodeOrErrno(err: unknown): string | undefined {
   const code = extractErrorCode(err);
   if (code) {
@@ -142,13 +150,46 @@ export function isAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
-  const name = "name" in err ? String(err.name) : "";
+  const name = getErrorName(err);
   if (name === "AbortError") {
     return true;
   }
   // Check for "This operation was aborted" message from Node's undici
-  const message = "message" in err && typeof err.message === "string" ? err.message : "";
+  const message = getErrorMessage(err);
   if (message === "This operation was aborted") {
+    return true;
+  }
+  return false;
+}
+
+function isUndiciTerminatedFetchError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const name = getErrorName(err);
+  const message = getErrorMessage(err);
+  if (name !== "TypeError" || message !== "terminated") {
+    return false;
+  }
+
+  const stack = (err as { stack?: unknown }).stack;
+  if (typeof stack === "string") {
+    const lowerStack = stack.toLowerCase();
+    if (lowerStack.includes("undici") || lowerStack.includes("fetch.onaborted")) {
+      return true;
+    }
+  }
+
+  const cause = getErrorCause(err);
+  if (isAbortError(cause)) {
+    return true;
+  }
+  const causeCode = extractErrorCodeOrErrno(cause);
+  if (causeCode?.startsWith("UND_ERR_")) {
+    return true;
+  }
+  const causeMessage = getErrorMessage(cause).toLowerCase();
+  if (causeMessage.includes("aborted") || causeMessage.includes("terminated")) {
     return true;
   }
   return false;
@@ -173,6 +214,10 @@ export function isTransientNetworkError(err: unknown): boolean {
     return false;
   }
   for (const candidate of collectErrorCandidates(err)) {
+    if (isUndiciTerminatedFetchError(candidate)) {
+      return true;
+    }
+
     const code = extractErrorCodeOrErrno(candidate);
     if (code && TRANSIENT_NETWORK_CODES.has(code)) {
       return true;
@@ -190,8 +235,7 @@ export function isTransientNetworkError(err: unknown): boolean {
     if (!candidate || typeof candidate !== "object") {
       continue;
     }
-    const rawMessage = (candidate as { message?: unknown }).message;
-    const message = typeof rawMessage === "string" ? rawMessage.toLowerCase().trim() : "";
+    const message = getErrorMessage(candidate).toLowerCase().trim();
     if (!message) {
       continue;
     }

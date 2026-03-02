@@ -90,6 +90,12 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         Object.assign(new TypeError("fetch failed"), {
           cause: { code: "UND_ERR_CONNECT_TIMEOUT", syscall: "connect" },
         }),
+        Object.assign(new TypeError("terminated"), {
+          stack:
+            "TypeError: terminated\n" +
+            "    at Fetch.onAborted (node:internal/deps/undici/undici:1234:56)\n" +
+            "    at Fetch.emit (node:events:525:35)",
+        }),
         Object.assign(new Error("DNS resolve failed"), { code: "UND_ERR_DNS_RESOLVE_FAILED" }),
         Object.assign(new Error("Connection reset"), { code: "ECONNRESET" }),
         Object.assign(new Error("Timeout"), { code: "ETIMEDOUT" }),

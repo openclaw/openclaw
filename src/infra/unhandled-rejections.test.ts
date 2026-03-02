@@ -73,6 +73,16 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it('returns true for undici "terminated" TypeError from Fetch.onAborted', () => {
+    const error = Object.assign(new TypeError("terminated"), {
+      stack:
+        "TypeError: terminated\n" +
+        "    at Fetch.onAborted (node:internal/deps/undici/undici:1234:56)\n" +
+        "    at Fetch.emit (node:events:525:35)",
+    });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns true for fetch failed with network cause", () => {
     const cause = Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" });
     const error = Object.assign(new TypeError("fetch failed"), { cause });
@@ -126,6 +136,7 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(new Error("Something went wrong"))).toBe(false);
     expect(isTransientNetworkError(new TypeError("Cannot read property"))).toBe(false);
     expect(isTransientNetworkError(new RangeError("Invalid array length"))).toBe(false);
+    expect(isTransientNetworkError(new TypeError("terminated"))).toBe(false);
   });
 
   it("returns false for errors with non-network codes", () => {
