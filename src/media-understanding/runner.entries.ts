@@ -400,33 +400,21 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
-    const result = provider?.describeImage
-      ? await provider.describeImage({
-          buffer: media.buffer,
-          fileName: media.fileName,
-          mime: media.mime,
-          model: modelId,
-          provider: providerId,
-          prompt,
-          timeoutMs,
-          profile: entry.profile,
-          preferredProfile: entry.preferredProfile,
-          agentDir: params.agentDir,
-          cfg: params.cfg,
-        })
-      : await describeImageWithModel({
-          buffer: media.buffer,
-          fileName: media.fileName,
-          mime: media.mime,
-          model: modelId,
-          provider: providerId,
-          prompt,
-          timeoutMs,
-          profile: entry.profile,
-          preferredProfile: entry.preferredProfile,
-          agentDir: params.agentDir,
-          cfg: params.cfg,
-        });
+    const imageInput = {
+      buffer: media.buffer,
+      fileName: media.fileName,
+      mime: media.mime,
+      model: modelId,
+      provider: providerId,
+      prompt,
+      timeoutMs,
+      profile: entry.profile,
+      preferredProfile: entry.preferredProfile,
+      agentDir: params.agentDir,
+      cfg: params.cfg,
+    };
+    const describeImage = provider?.describeImage ?? describeImageWithModel;
+    const result = await describeImage(imageInput);
     return {
       kind: "image.description",
       attachmentIndex: params.attachmentIndex,

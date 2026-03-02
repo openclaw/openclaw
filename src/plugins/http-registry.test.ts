@@ -2,6 +2,41 @@ import { describe, expect, it, vi } from "vitest";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 
+function expectRouteRegistrationDenied(params: {
+  replaceExisting: boolean;
+  expectedLogFragment: string;
+}) {
+  const registry = createEmptyPluginRegistry();
+  const logs: string[] = [];
+
+  registerPluginHttpRoute({
+    path: "/plugins/demo",
+    auth: "plugin",
+    handler: vi.fn(),
+    registry,
+    pluginId: "demo-a",
+    source: "demo-a-src",
+    log: (msg) => logs.push(msg),
+  });
+
+  const unregister = registerPluginHttpRoute({
+    path: "/plugins/demo",
+    auth: "plugin",
+    ...(params.replaceExisting ? { replaceExisting: true } : {}),
+    handler: vi.fn(),
+    registry,
+    pluginId: "demo-b",
+    source: "demo-b-src",
+    log: (msg) => logs.push(msg),
+  });
+
+  expect(registry.httpRoutes).toHaveLength(1);
+  expect(logs.at(-1)).toContain(params.expectedLogFragment);
+
+  unregister();
+  expect(registry.httpRoutes).toHaveLength(1);
+}
+
 describe("registerPluginHttpRoute", () => {
   it("registers route and unregisters it", () => {
     const registry = createEmptyPluginRegistry();
@@ -84,65 +119,16 @@ describe("registerPluginHttpRoute", () => {
   });
 
   it("rejects conflicting route registrations without replaceExisting", () => {
-    const registry = createEmptyPluginRegistry();
-    const logs: string[] = [];
-
-    registerPluginHttpRoute({
-      path: "/plugins/demo",
-      auth: "plugin",
-      handler: vi.fn(),
-      registry,
-      pluginId: "demo-a",
-      source: "demo-a-src",
-      log: (msg) => logs.push(msg),
+    expectRouteRegistrationDenied({
+      replaceExisting: false,
+      expectedLogFragment: "route conflict",
     });
-
-    const unregister = registerPluginHttpRoute({
-      path: "/plugins/demo",
-      auth: "plugin",
-      handler: vi.fn(),
-      registry,
-      pluginId: "demo-b",
-      source: "demo-b-src",
-      log: (msg) => logs.push(msg),
-    });
-
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(logs.at(-1)).toContain("route conflict");
-
-    unregister();
-    expect(registry.httpRoutes).toHaveLength(1);
   });
 
   it("rejects route replacement when a different plugin owns the route", () => {
-    const registry = createEmptyPluginRegistry();
-    const logs: string[] = [];
-
-    registerPluginHttpRoute({
-      path: "/plugins/demo",
-      auth: "plugin",
-      handler: vi.fn(),
-      registry,
-      pluginId: "demo-a",
-      source: "demo-a-src",
-      log: (msg) => logs.push(msg),
-    });
-
-    const unregister = registerPluginHttpRoute({
-      path: "/plugins/demo",
-      auth: "plugin",
+    expectRouteRegistrationDenied({
       replaceExisting: true,
-      handler: vi.fn(),
-      registry,
-      pluginId: "demo-b",
-      source: "demo-b-src",
-      log: (msg) => logs.push(msg),
+      expectedLogFragment: "route replacement denied",
     });
-
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(logs.at(-1)).toContain("route replacement denied");
-
-    unregister();
-    expect(registry.httpRoutes).toHaveLength(1);
   });
 });

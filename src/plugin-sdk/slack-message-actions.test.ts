@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleSlackMessageAction } from "./slack-message-actions.js";
 
+function createInvokeSpy() {
+  return vi.fn(async (action: Record<string, unknown>) => ({
+    ok: true,
+    content: action,
+  }));
+}
+
 describe("handleSlackMessageAction", () => {
   it("maps download-file to the internal downloadFile action", async () => {
-    const invoke = vi.fn(async (action: Record<string, unknown>) => ({
-      ok: true,
-      content: action,
-    }));
+    const invoke = createInvokeSpy();
 
     await handleSlackMessageAction({
       providerId: "slack",
@@ -34,10 +38,7 @@ describe("handleSlackMessageAction", () => {
   });
 
   it("maps download-file target aliases to scope fields", async () => {
-    const invoke = vi.fn(async (action: Record<string, unknown>) => ({
-      ok: true,
-      content: action,
-    }));
+    const invoke = createInvokeSpy();
 
     await handleSlackMessageAction({
       providerId: "slack",
