@@ -265,7 +265,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         cfg,
         to,
         text,
-        accountId,
+        accountId: accountId ?? undefined,
         deps,
       });
       return { channel: "signal", ...result };
@@ -276,7 +276,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         to,
         text,
         mediaUrl,
-        accountId,
+        accountId: accountId ?? undefined,
         deps,
       });
       return { channel: "signal", ...result };
