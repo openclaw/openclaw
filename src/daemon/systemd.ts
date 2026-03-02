@@ -159,6 +159,22 @@ function isSystemctlMissing(detail: string): boolean {
   );
 }
 
+function isSystemdUnitNotEnabled(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("disabled") ||
+    normalized.includes("static") ||
+    normalized.includes("indirect") ||
+    normalized.includes("masked") ||
+    normalized.includes("not-found") ||
+    normalized.includes("could not be found") ||
+    normalized.includes("failed to get unit file state")
+  );
+}
+
 export async function isSystemdUserServiceAvailable(): Promise<boolean> {
   const res = await execSystemctl(["--user", "status"]);
   if (res.code === 0) {
@@ -332,7 +348,14 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
-  return res.code === 0;
+  if (res.code === 0) {
+    return true;
+  }
+  const detail = readSystemctlDetail(res);
+  if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
+    return false;
+  }
+  throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
 }
 
 export async function readSystemdServiceRuntime(
