@@ -469,7 +469,7 @@ async function createSandboxContainer(params: {
   await execDocker(["start", name]);
 
   if (cfg.setupCommand?.trim()) {
-    await execDocker(["exec", "-i", name, "sh", "-lc", cfg.setupCommand]);
+    await execDocker(["exec", "-i", name, "/bin/sh", "-lc", cfg.setupCommand]);
   }
 }
 
