@@ -106,6 +106,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Docs/Docker images: clarify the official GHCR image source and tag guidance (`main`, `latest`, `<version>`), and document that `OPENCLAW_IMAGE` skips local image builds but still uses the repo-local compose/setup flow. (#27214, #31180) Fixes #15655. Thanks @ipl31.
 - Agents/Model fallback: classify additional network transport errors (`ECONNREFUSED`, `ENETUNREACH`, `EHOSTUNREACH`, `ENETRESET`, `EAI_AGAIN`) as failover-worthy so fallback chains advance when primary providers are unreachable. Landed from contributor PR #19077 by @ayanesakura. Thanks @ayanesakura.
 - Agents/Copilot token refresh: refresh GitHub Copilot runtime API tokens after auth-expiry failures and re-run with the renewed token so long-running embedded/subagent turns do not fail on mid-session 401 expiry. Landed from contributor PR #8805 by @Arthur742Ramos. Thanks @Arthur742Ramos.
 - Discord/Allowlist diagnostics: add debug logs for guild/channel allowlist drops so operators can quickly identify ignored inbound messages and required allowlist entries. Landed from contributor PR #30966 by @haosenwang1018. Thanks @haosenwang1018.
