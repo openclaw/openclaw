@@ -40,6 +40,10 @@ const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 // for incremental text display with a "Thinking..." placeholder
 const StreamingModeSchema = z.boolean().optional();
 
+// Streaming throttle: controls the minimum interval between card updates (in milliseconds)
+// Higher values reduce API call consumption but decrease real-time responsiveness
+const StreamingThrottleMsSchema = z.number().int().positive().optional();
+
 const BlockStreamingCoalesceSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -160,6 +164,7 @@ const FeishuSharedConfigShape = {
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
   streaming: StreamingModeSchema,
+  streamingThrottleMs: StreamingThrottleMsSchema.default(1000).optional(),
   tools: FeishuToolsConfigSchema,
   replyInThread: ReplyInThreadSchema,
   reactionNotifications: ReactionNotificationModeSchema,

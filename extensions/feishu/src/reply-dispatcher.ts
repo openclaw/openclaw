@@ -120,8 +120,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         return;
       }
 
+      const throttleMs = account.config?.streamingThrottleMs ?? 1000;
+
       streaming = new FeishuStreamingSession(createFeishuClient(account), creds, (message) =>
         params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
+        throttleMs,
       );
       try {
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
