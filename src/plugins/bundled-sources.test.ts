@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { findBundledPluginByNpmSpec, resolveBundledPluginSources } from "./bundled-sources.js";
+import {
+  findBundledPluginByNpmSpec,
+  findBundledPluginByPluginId,
+  resolveBundledPluginSources,
+} from "./bundled-sources.js";
 
 const discoverOpenClawPluginsMock = vi.fn();
 const loadPluginManifestMock = vi.fn();
@@ -95,25 +99,25 @@ describe("bundled plugin sources", () => {
     expect(missing).toBeUndefined();
   });
 
-  it("finds bundled source by plugin id when npm spec does not match (#32019)", () => {
+  it("finds bundled source by plugin id", () => {
     discoverOpenClawPluginsMock.mockReturnValue({
       candidates: [
         {
           origin: "bundled",
           rootDir: "/app/extensions/diffs",
           packageName: "@openclaw/diffs",
-          packageManifest: {},
+          packageManifest: { install: { npmSpec: "@openclaw/diffs" } },
         },
       ],
       diagnostics: [],
     });
     loadPluginManifestMock.mockReturnValue({ ok: true, manifest: { id: "diffs" } });
 
-    // Searching by unscoped name "diffs" should match by pluginId even though
-    // the npmSpec is "@openclaw/diffs".
-    const resolved = findBundledPluginByNpmSpec({ spec: "diffs" });
+    const resolved = findBundledPluginByPluginId({ pluginId: "diffs" });
+    const missing = findBundledPluginByPluginId({ pluginId: "not-found" });
 
     expect(resolved?.pluginId).toBe("diffs");
     expect(resolved?.localPath).toBe("/app/extensions/diffs");
+    expect(missing).toBeUndefined();
   });
 });
