@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import {
   connectOk,
@@ -36,6 +36,15 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 installGatewayTestHooks({ scope: "suite" });
 const CRON_WAIT_INTERVAL_MS = 5;
 const CRON_WAIT_TIMEOUT_MS = 3_000;
+let cronSuiteTempRootPromise: Promise<string> | null = null;
+let cronSuiteCaseId = 0;
+
+async function getCronSuiteTempRoot(): Promise<string> {
+  if (!cronSuiteTempRootPromise) {
+    cronSuiteTempRootPromise = fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-cron-suite-"));
+  }
+  return await cronSuiteTempRootPromise;
+}
 
 async function yieldToEventLoop() {
   await setImmediatePromise();
@@ -79,7 +88,6 @@ async function cleanupCronTestRun(params: {
 }) {
   params.ws.close();
   await params.server.close();
-  await rmTempDir(params.dir);
   testState.cronStorePath = undefined;
   if (params.clearSessionConfig) {
     testState.sessionConfig = undefined;
@@ -100,7 +108,9 @@ async function setupCronTestRun(params: {
 }): Promise<{ prevSkipCron: string | undefined; dir: string }> {
   const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
   process.env.OPENCLAW_SKIP_CRON = "0";
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
+  const suiteRoot = await getCronSuiteTempRoot();
+  const dir = path.join(suiteRoot, `${params.tempPrefix}${cronSuiteCaseId++}`);
+  await fs.mkdir(dir, { recursive: true });
   testState.cronStorePath = path.join(dir, "cron", "jobs.json");
   testState.sessionConfig = params.sessionConfig;
   testState.cronEnabled = params.cronEnabled;
@@ -113,6 +123,15 @@ async function setupCronTestRun(params: {
 }
 
 describe("gateway server cron", () => {
+  afterAll(async () => {
+    if (!cronSuiteTempRootPromise) {
+      return;
+    }
+    await rmTempDir(await cronSuiteTempRootPromise);
+    cronSuiteTempRootPromise = null;
+    cronSuiteCaseId = 0;
+  });
+
   beforeEach(() => {
     // Keep polling helpers deterministic even if other tests left fake timers enabled.
     vi.useRealTimers();
@@ -473,7 +492,7 @@ describe("gateway server cron", () => {
       const autoRes = await rpcReq(ws, "cron.add", {
         name: "auto run test",
         enabled: true,
-        schedule: { kind: "at", at: new Date(Date.now() - 10).toISOString() },
+        schedule: { kind: "at", at: new Date(Date.now() + 50).toISOString() },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "auto" },
