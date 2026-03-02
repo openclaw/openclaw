@@ -78,7 +78,7 @@ if [[ -z "$PKG_TGZ" ]]; then
   exit 1
 fi
 
-if ! tar -tf "$PKG_TGZ" | grep -q '^package/dist/control-ui/index.html$'; then
+if ! tar -tf "$PKG_TGZ" | awk '$0=="package/dist/control-ui/index.html"{found=1} END{exit found?0:1}'; then
   echo "error: tarball is missing Control UI assets (package/dist/control-ui/index.html)" >&2
   exit 1
 fi
