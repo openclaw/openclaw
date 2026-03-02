@@ -587,6 +587,25 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("When asked what model you are");
   });
 
+  it("includes model identity in promptMode=none when runtimeInfo.model is set", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "none",
+      runtimeInfo: {
+        host: "host",
+        os: "Linux",
+        arch: "x64",
+        node: "v22",
+        model: "minimax-portal/MiniMax-M2.5",
+      },
+    });
+
+    expect(prompt).toContain("currently powered by minimax-portal/MiniMax-M2.5");
+    expect(prompt).toContain(
+      "When asked what model you are, always answer: minimax-portal/MiniMax-M2.5",
+    );
+  });
+
   it("includes reasoning visibility hint", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
