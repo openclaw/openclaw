@@ -26,13 +26,16 @@ case "${1:-}" in
   ping-b)
     run "president-b ping" "cd ~/openclaw-workspace/repos/openclaw && timeout 90 ~/bin/openclaw-safe agent --agent president-b --session-id \"presB-ping-$(date +%s)\" --timeout 60 --thinking off --message \"Reply with EXACTLY: PRES_B_OK\" --json | jq -r \".result.payloads[0].text\""
     ;;
+    alpha)
+      run "alpha_smoke" "cd ~/openclaw-workspace/repos/openclaw && KEEP_TMP=${KEEP_TMP:-0} ops/scripts/alpha_smoke.sh"
+      ;;
   health)
     run "pwd" "pwd"
     run "strike_echo" "cd ~/openclaw-workspace/repos/openclaw && ./scripts/strike_echo.sh | tee /tmp/strike_echo_last.txt"
     run "assert pinned codex" "grep -q \"provider/model pinned to openai-codex/gpt-5.3-codex\" /tmp/strike_echo_last.txt && echo PIN_OK || (echo PIN_FAIL; exit 42)"
     ;;
   *)
-    echo "Usage: cyborg-run health | ping-a | ping-b"
+      echo "Usage: cyborg-run health | alpha | ping-a | ping-b"
     exit 2
     ;;
 esac
