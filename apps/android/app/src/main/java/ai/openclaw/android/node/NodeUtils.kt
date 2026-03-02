@@ -1,10 +1,12 @@
 package ai.openclaw.android.node
 
 import ai.openclaw.android.gateway.parseInvokeErrorFromThrowable
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 const val DEFAULT_SEAM_COLOR_ARGB: Long = 0xFF4F7A9A
 
@@ -20,6 +22,35 @@ fun String.toJsonString(): String {
 }
 
 fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+
+fun parseJsonParamsObject(paramsJson: String?): JsonObject? {
+  if (paramsJson.isNullOrBlank()) return null
+  return try {
+    Json.parseToJsonElement(paramsJson).asObjectOrNull()
+  } catch (_: Throwable) {
+    null
+  }
+}
+
+fun readJsonPrimitive(params: JsonObject?, key: String): JsonPrimitive? = params?.get(key) as? JsonPrimitive
+
+fun parseJsonInt(params: JsonObject?, key: String): Int? =
+  readJsonPrimitive(params, key)?.contentOrNull?.toIntOrNull()
+
+fun parseJsonDouble(params: JsonObject?, key: String): Double? =
+  readJsonPrimitive(params, key)?.contentOrNull?.toDoubleOrNull()
+
+fun parseJsonString(params: JsonObject?, key: String): String? =
+  readJsonPrimitive(params, key)?.contentOrNull
+
+fun parseJsonBooleanFlag(params: JsonObject?, key: String): Boolean? {
+  val value = readJsonPrimitive(params, key)?.contentOrNull?.trim()?.lowercase() ?: return null
+  return when (value) {
+    "true" -> true
+    "false" -> false
+    else -> null
+  }
+}
 
 fun JsonElement?.asStringOrNull(): String? =
   when (this) {
