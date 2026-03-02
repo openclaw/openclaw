@@ -16,6 +16,7 @@ import {
   hasRecordedMessagePersistent,
   tryRecordMessage,
   tryRecordMessagePersistent,
+  warmupDedupFromDisk,
 } from "./dedup.js";
 import { isMentionForwardRequest } from "./mention.js";
 import { fetchBotOpenIdForMonitor } from "./monitor.startup.js";
@@ -508,6 +509,11 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   const connectionMode = account.config.connectionMode ?? "websocket";
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {
     throw new Error(`Feishu account "${accountId}" webhook mode requires verificationToken`);
+  }
+
+  const warmupCount = await warmupDedupFromDisk(accountId, log);
+  if (warmupCount > 0) {
+    log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from disk`);
   }
 
   const eventDispatcher = createEventDispatcher(account);
