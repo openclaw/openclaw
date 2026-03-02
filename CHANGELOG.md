@@ -182,6 +182,7 @@ Docs: https://docs.openclaw.ai
 - Security/Feishu webhook ingress: bound unauthenticated webhook rate-limit state with stale-window pruning and a hard key cap to prevent unbounded pre-auth memory growth from rotating source keys. (#26050) Thanks @bmendonca3.
 - Security/Compaction audit: remove the post-compaction audit injection message. (#28507) Thanks @fuller-stack-dev and @vincentkoc.
 - Web tools/RFC2544 fake-IP compatibility: allow RFC2544 benchmark range (`198.18.0.0/15`) for trusted web-tool fetch endpoints so proxy fake-IP networking modes do not trigger false SSRF blocks. Landed from contributor PR #31176 by @sunkinux. Thanks @sunkinux.
+- Feishu/Sessions announce group targets: normalize `group:` and `channel:` Feishu targets to `chat_id` routing so `sessions_send` announce delivery no longer sends group chat IDs via `user_id` API params. Fixes #31426.
 - Windows/Plugin install: avoid `spawn EINVAL` on Windows npm/npx invocations by resolving to `node` + npm CLI scripts instead of spawning `.cmd` directly. Landed from contributor PR #31147 by @codertony. Thanks @codertony.
 - Web UI/Cron: include configured agent model defaults/fallbacks in cron model suggestions so scheduled-job model autocomplete reflects configured models. (#29709) Thanks @Sid-Qin.
 - Cron/Delivery: disable the agent messaging tool when `delivery.mode` is `"none"` so cron output is not sent to Telegram or other channels. (#21808) Thanks @lailoo.
