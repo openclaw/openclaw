@@ -40,4 +40,40 @@ describe("OpenAI HTTP message channel", () => {
       },
     );
   });
+
+  it("defaults messageChannel to webchat when header is absent", async () => {
+    agentCommand.mockReset();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+
+    await withGatewayServer(
+      async ({ port }) => {
+        const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer secret",
+          },
+          body: JSON.stringify({
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          }),
+        });
+
+        expect(res.status).toBe(200);
+        const firstCall = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+          | { messageChannel?: string }
+          | undefined;
+        expect(firstCall?.messageChannel).toBe("webchat");
+        await res.text();
+      },
+      {
+        serverOptions: {
+          host: "127.0.0.1",
+          auth: { mode: "token", token: "secret" },
+          controlUiEnabled: false,
+          openAiChatCompletionsEnabled: true,
+        },
+      },
+    );
+  });
 });

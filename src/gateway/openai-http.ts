@@ -229,7 +229,7 @@ export async function handleOpenAiHttpRequest(
   const agentId = resolveAgentIdForRequest({ req, model });
   const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });
   const messageChannel =
-    normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel") ?? "") ?? "webchat";
+    normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? "webchat";
   const prompt = buildAgentPrompt(payload.messages);
   if (!prompt.message) {
     sendJson(res, 400, {
