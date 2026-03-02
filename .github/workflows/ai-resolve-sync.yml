@@ -37,10 +37,51 @@ jobs:
               Dockerfiles, orchestrator/, .github/workflows/
             - For upstream-only files, take upstream's version
             - If the issue is a PR creation failure, retry creating the PR
-            - Create a PR targeting main when done, marked ready-for-review
-            - Do NOT auto-merge anything
+            - Push your resolved changes to the EXISTING sync/upstream-* branch (do NOT create a new branch)
+            - Do NOT create a new PR — the draft PR already exists on the sync branch
+            - The workflow will handle marking the PR ready-for-review and enabling auto-merge
+            - Do NOT auto-merge anything yourself
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: "--model claude-sonnet-4-5-20250929"
+
+      - name: Enable auto-merge on resolved PR
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.AMERICAN_CLAW_DISPATCH_TOKEN }}
+        run: |
+          # Find the open sync PR
+          SYNC_PR=$(gh pr list --head "sync/upstream-" --state open --json number,isDraft,nodeId --jq '.[0]')
+          if [ -z "$SYNC_PR" ]; then
+            echo "No open sync PR found"
+            exit 0
+          fi
+
+          PR_NUMBER=$(echo "$SYNC_PR" | jq -r '.number')
+          PR_NODE_ID=$(echo "$SYNC_PR" | jq -r '.nodeId')
+          IS_DRAFT=$(echo "$SYNC_PR" | jq -r '.isDraft')
+
+          # Mark ready-for-review if still draft
+          if [ "$IS_DRAFT" = "true" ]; then
+            gh api graphql -f query='
+              mutation($prId: ID!) {
+                markPullRequestReadyForReview(input: {pullRequestId: $prId}) {
+                  clientMutationId
+                }
+              }
+            ' -f prId="$PR_NODE_ID"
+            echo "Marked PR #$PR_NUMBER ready for review"
+          fi
+
+          # Enable auto-merge
+          gh api graphql -f query='
+            mutation($prId: ID!) {
+              enablePullRequestAutoMerge(input: {
+                pullRequestId: $prId,
+                mergeMethod: SQUASH
+              }) { clientMutationId }
+            }
+          ' -f prId="$PR_NODE_ID"
+          echo "Auto-merge enabled on PR #$PR_NUMBER"
 
       - name: Comment on success
         if: success()
