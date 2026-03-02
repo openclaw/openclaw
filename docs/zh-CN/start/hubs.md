@@ -53,7 +53,6 @@ x-i18n:
 - [多智能体路由](/concepts/multi-agent)
 - [压缩](/concepts/compaction)
 - [会话](/concepts/session)
-- [会话（别名）](/concepts/sessions)
 - [会话修剪](/concepts/session-pruning)
 - [会话工具](/concepts/session-tool)
 - [队列](/concepts/queue)
