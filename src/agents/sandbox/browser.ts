@@ -237,10 +237,7 @@ export async function ensureSandboxBrowser(params: {
       includeBinds: false,
       bindSourceRoots: [params.workspaceDir, params.agentWorkspaceDir],
     });
-    const mainMountSuffix =
-      params.cfg.workspaceAccess === "ro" && params.workspaceDir === params.agentWorkspaceDir
-        ? ":ro"
-        : "";
+    const mainMountSuffix = params.cfg.workspaceAccess === "rw" ? "" : ":ro";
     args.push("-v", `${params.workspaceDir}:${params.cfg.docker.workdir}${mainMountSuffix}`);
     if (params.cfg.workspaceAccess !== "none" && params.workspaceDir !== params.agentWorkspaceDir) {
       const agentMountSuffix = params.cfg.workspaceAccess === "ro" ? ":ro" : "";
