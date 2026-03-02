@@ -174,12 +174,14 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
  * message becomes a regular message, then deletes it.
  */
 export async function abandonSlackStream(session: SlackStreamSession): Promise<void> {
-  if (!session.stopped) {
-    try {
-      await stopSlackStream({ session });
-    } catch {
-      // Best-effort; if stop fails we still try to delete.
-    }
+  // Always attempt to stop, even if a prior stop attempt failed after setting
+  // session.stopped = true. Reset the flag so stopSlackStream retries the
+  // Slack API call and can capture messageTs if it was missed.
+  session.stopped = false;
+  try {
+    await stopSlackStream({ session });
+  } catch {
+    // Best-effort; if stop fails we still try to delete.
   }
 
   const ts = session.messageTs;
