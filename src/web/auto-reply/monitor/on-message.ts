@@ -131,6 +131,7 @@ export function createWebOnMessageHandler(params: {
         groupHistoryKey,
         agentId: route.agentId,
         sessionKey: route.sessionKey,
+        accountId: route.accountId,
         baseMentionConfig: params.baseMentionConfig,
         authDir: params.account.authDir,
         groupHistories: params.groupHistories,
