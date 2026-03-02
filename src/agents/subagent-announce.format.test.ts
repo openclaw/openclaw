@@ -849,6 +849,67 @@ describe("subagent announce formatting", () => {
     }
   });
 
+  it("does not force Slack threadId from bound conversation id", async () => {
+    sendSpy.mockClear();
+    agentSpy.mockClear();
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-slack-bound",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-slack-bound",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+    registerSessionBindingAdapter({
+      channel: "slack",
+      accountId: "acct-1",
+      listBySession: (targetSessionKey: string) =>
+        targetSessionKey === "agent:main:subagent:test"
+          ? [
+              {
+                bindingId: "slack:acct-1:C123",
+                targetSessionKey,
+                targetKind: "subagent",
+                conversation: {
+                  channel: "slack",
+                  accountId: "acct-1",
+                  conversationId: "C123",
+                },
+                status: "active",
+                boundAt: Date.now(),
+              },
+            ]
+          : [],
+      resolveByConversation: () => null,
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-slack-bound",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "acct-1",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).not.toHaveBeenCalled();
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("slack");
+    expect(call?.params?.to).toBe("channel:C123");
+    expect(call?.params?.threadId).toBeUndefined();
+  });
+
   it("routes manual completion direct-send for telegram forum topics", async () => {
     sendSpy.mockClear();
     agentSpy.mockClear();

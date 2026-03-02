@@ -90,6 +90,7 @@ Tool params:
   - if `thread: true` and `mode` omitted, default becomes `session`
   - `mode: "session"` requires `thread: true`
 - `cleanup?` (`delete|keep`, default `keep`)
+- `sandbox?` (`inherit|require`, default `inherit`; `require` rejects spawn unless target child runtime is sandboxed)
 
 ## Thread-bound sessions
 
@@ -124,6 +125,7 @@ See [Configuration Reference](/gateway/configuration-reference) and [Slash comma
 Allowlist:
 
 - `agents.list[].subagents.allowAgents`: list of agent ids that can be targeted via `agentId` (`["*"]` to allow any). Default: only the requester agent.
+- Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 
 Discovery:
 
