@@ -294,11 +294,20 @@ export async function monitorMSTeamsProvider(
     });
   };
 
-  // Handle abort signal
+  // Handle abort signal — block until shutdown is requested.
+  // Without this, the promise resolves immediately and the gateway
+  // interprets it as "provider exited", triggering an auto-restart loop.
   if (opts.abortSignal) {
     opts.abortSignal.addEventListener("abort", () => {
       void shutdown();
+    }, { once: true });
+    await new Promise<void>((resolve) => {
+      if (opts.abortSignal!.aborted) { resolve(); return; }
+      opts.abortSignal!.addEventListener("abort", () => resolve(), { once: true });
     });
+  } else {
+    // No abort signal — block forever (matches Slack/Telegram provider behavior)
+    await new Promise<void>(() => {});
   }
 
   return { app: expressApp, shutdown };
