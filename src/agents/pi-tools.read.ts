@@ -762,17 +762,27 @@ function createSandboxEditOperations(params: SandboxToolParams) {
   } as const;
 }
 
-function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostWriteOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; readOnlyPaths?: string[] },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
+  const readOnlyPaths = options?.readOnlyPaths;
 
   if (!workspaceOnly) {
-    // When workspaceOnly is false, allow writes anywhere on the host
+    // When workspaceOnly is false, allow writes anywhere on the host (but check read-only paths)
     return {
       mkdir: async (dir: string) => {
+        if (isPathReadOnly(dir, readOnlyPaths)) {
+          throw new Error(`Path is read-only: ${dir}`);
+        }
         const resolved = path.resolve(dir);
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: async (absolutePath: string, content: string) => {
+        if (isPathReadOnly(absolutePath, readOnlyPaths)) {
+          throw new Error(`Path is read-only: ${absolutePath}`);
+        }
         const resolved = path.resolve(absolutePath);
         const dir = path.dirname(resolved);
         await fs.mkdir(dir, { recursive: true });
@@ -784,12 +794,18 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   // When workspaceOnly is true, enforce workspace boundary
   return {
     mkdir: async (dir: string) => {
+      if (isPathReadOnly(dir, readOnlyPaths)) {
+        throw new Error(`Path is read-only: ${dir}`);
+      }
       const relative = toRelativePathInRoot(root, dir, { allowRoot: true });
       const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
       await assertSandboxPath({ filePath: resolved, cwd: root, root });
       await fs.mkdir(resolved, { recursive: true });
     },
     writeFile: async (absolutePath: string, content: string) => {
+      if (isPathReadOnly(absolutePath, readOnlyPaths)) {
+        throw new Error(`Path is read-only: ${absolutePath}`);
+      }
       const relative = toRelativePathInRoot(root, absolutePath);
       await writeFileWithinRoot({
         rootDir: root,
@@ -801,17 +817,24 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   } as const;
 }
 
-function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostEditOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; readOnlyPaths?: string[] },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
+  const readOnlyPaths = options?.readOnlyPaths;
 
   if (!workspaceOnly) {
-    // When workspaceOnly is false, allow edits anywhere on the host
+    // When workspaceOnly is false, allow edits anywhere on the host (but check read-only paths)
     return {
       readFile: async (absolutePath: string) => {
         const resolved = path.resolve(absolutePath);
         return await fs.readFile(resolved);
       },
       writeFile: async (absolutePath: string, content: string) => {
+        if (isPathReadOnly(absolutePath, readOnlyPaths)) {
+          throw new Error(`Path is read-only: ${absolutePath}`);
+        }
         const resolved = path.resolve(absolutePath);
         const dir = path.dirname(resolved);
         await fs.mkdir(dir, { recursive: true });
@@ -827,6 +850,9 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   // When workspaceOnly is true, enforce workspace boundary
   return {
     readFile: async (absolutePath: string) => {
+      if (isPathReadOnly(absolutePath, readOnlyPaths)) {
+        throw new Error(`Path is read-only: ${absolutePath}`);
+      }
       const relative = toRelativePathInRoot(root, absolutePath);
       const safeRead = await readFileWithinRoot({
         rootDir: root,
@@ -835,6 +861,9 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
+      if (isPathReadOnly(absolutePath, readOnlyPaths)) {
+        throw new Error(`Path is read-only: ${absolutePath}`);
+      }
       const relative = toRelativePathInRoot(root, absolutePath);
       await writeFileWithinRoot({
         rootDir: root,
@@ -874,6 +903,46 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       }
     },
   } as const;
+}
+
+/**
+ * Check if a path matches any of the given patterns.
+ * Supports exact paths and glob patterns with * wildcard.
+ */
+function matchesPathPattern(targetPath: string, patterns: string[]): boolean {
+  const resolved = path.resolve(targetPath);
+  for (const pattern of patterns) {
+    const patternResolved = path.resolve(pattern.replace(/\*/g, ""));
+    // Exact match
+    if (resolved === patternResolved) {
+      return true;
+    }
+    // Glob match (directory prefix)
+    if (pattern.includes("*")) {
+      const prefix = patternResolved;
+      if (resolved.startsWith(prefix + path.sep) || resolved.startsWith(prefix + "/")) {
+        return true;
+      }
+    }
+    // Directory containment (pattern is a directory)
+    if (
+      resolved.startsWith(patternResolved + path.sep) ||
+      resolved.startsWith(patternResolved + "/")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if a path is in a read-only directory.
+ */
+function isPathReadOnly(targetPath: string, readOnlyPaths?: string[]): boolean {
+  if (!readOnlyPaths || readOnlyPaths.length === 0) {
+    return false;
+  }
+  return matchesPathPattern(targetPath, readOnlyPaths);
 }
 
 function toRelativePathInRoot(

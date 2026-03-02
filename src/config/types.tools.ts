@@ -269,6 +269,21 @@ export type FsToolsConfig = {
    * Default: false (unrestricted, matches legacy behavior).
    */
   workspaceOnly?: boolean;
+  /**
+   * Explicit allowlist of directories that can be accessed.
+   * When specified, only these directories (plus workspace if workspaceOnly=false) are accessible.
+   * Paths support glob patterns (e.g., "/home/user/projects/*").
+   * Default: undefined (no restriction, unless workspaceOnly=true).
+   */
+  allowedPaths?: string[];
+  /**
+   * Directories that are read-only (can read but cannot write/edit).
+   * Takes precedence over allowedPaths for write operations.
+   * Useful for exposing reference materials without allowing modifications.
+   * Paths support glob patterns.
+   * Default: undefined.
+   */
+  readOnlyPaths?: string[];
 };
 
 export type AgentToolsConfig = {
