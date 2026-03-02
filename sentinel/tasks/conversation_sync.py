@@ -344,6 +344,44 @@ if __name__ == "__main__":
                 logger.error("Full sync error for %s: %s", group["name"], e)
         conn.close()
 
+        # Recompute group_stats from DB after backfill
+        group_stats = {}
+        try:
+            conn2 = sqlite3.connect(db_path)
+            for row in conn2.execute(
+                "SELECT chat_id, chat_name, COUNT(*), MIN(timestamp), MAX(timestamp), agent_id "
+                "FROM messages GROUP BY chat_id"
+            ):
+                chat_id_val, chat_name, cnt, earliest, latest, agent_id = row
+                fresh_h = None
+                if latest:
+                    try:
+                        lt = datetime.fromisoformat(str(latest).replace("Z", "+00:00").replace("+00:00", ""))
+                        fresh_h = round((datetime.now() - lt).total_seconds() / 3600, 1)
+                    except (ValueError, TypeError):
+                        pass
+                group_stats[chat_id_val] = {
+                    "name": chat_name,
+                    "count": cnt,
+                    "earliest": str(earliest)[:10] if earliest else None,
+                    "latest": str(latest)[:10] if latest else None,
+                    "fresh_h": fresh_h,
+                    "agent_id": agent_id,
+                }
+            conn2.close()
+        except Exception as e:
+            logger.warning("Failed to collect group stats: %s", e)
+
+        sync_state = sentinel_st.setdefault("conversation_sync", {})
+        sync_state["last_run"] = datetime.now().isoformat()
+        sync_state["last_result"] = {
+            "groups_synced": len(groups),
+            "new_messages": total,
+            "errors": [],
+            "db_size_mb": round(os.path.getsize(db_path) / 1048576, 2),
+            "group_stats": group_stats,
+        }
+
         # Save state
         with open(state_path, "w") as f:
             json.dump(st, f, indent=2, ensure_ascii=False)
