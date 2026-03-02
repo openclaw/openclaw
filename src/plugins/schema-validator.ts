@@ -1,10 +1,28 @@
-import AjvPkg, { type ErrorObject, type ValidateFunction } from "ajv";
+import { createRequire } from "node:module";
+import type { ErrorObject, ValidateFunction } from "ajv";
 
-const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").default)({
-  allErrors: true,
-  strict: false,
-  removeAdditional: false,
-});
+const require = createRequire(import.meta.url);
+type AjvLike = {
+  compile: (schema: Record<string, unknown>) => ValidateFunction;
+};
+let ajvSingleton: AjvLike | null = null;
+
+function getAjv(): AjvLike {
+  if (ajvSingleton) {
+    return ajvSingleton;
+  }
+  const ajvModule = require("ajv") as { default?: new (opts?: object) => AjvLike };
+  const AjvCtor =
+    typeof ajvModule.default === "function"
+      ? ajvModule.default
+      : (ajvModule as unknown as new (opts?: object) => AjvLike);
+  ajvSingleton = new AjvCtor({
+    allErrors: true,
+    strict: false,
+    removeAdditional: false,
+  });
+  return ajvSingleton;
+}
 
 type CachedValidator = {
   validate: ValidateFunction;
@@ -31,7 +49,7 @@ export function validateJsonSchemaValue(params: {
 }): { ok: true } | { ok: false; errors: string[] } {
   let cached = schemaCache.get(params.cacheKey);
   if (!cached || cached.schema !== params.schema) {
-    const validate = ajv.compile(params.schema);
+    const validate = getAjv().compile(params.schema);
     cached = { validate, schema: params.schema };
     schemaCache.set(params.cacheKey, cached);
   }
