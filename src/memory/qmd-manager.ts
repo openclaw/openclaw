@@ -741,6 +741,15 @@ export class QmdMemoryManager implements MemorySearchManager {
         source: doc.source,
       });
     }
+
+    if (results.length === 0 && qmdSearchCommand === "search" && trimmed.split(/\s+/).length > 1) {
+      log.warn(
+        `qmd search returned 0 results for "${trimmed}" (searchMode=search). ` +
+          `BM25 keyword matching often fails for multi-word natural-language queries. ` +
+          `Consider setting memory.qmd.searchMode to "query" for hybrid retrieval.`,
+      );
+    }
+
     return this.clampResultsByInjectedChars(this.diversifyResultsBySource(results, limit));
   }
 

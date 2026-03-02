@@ -74,9 +74,10 @@ const DEFAULT_CITATIONS: MemoryCitationsMode = "auto";
 const DEFAULT_QMD_INTERVAL = "5m";
 const DEFAULT_QMD_DEBOUNCE_MS = 15_000;
 const DEFAULT_QMD_TIMEOUT_MS = 4_000;
-// Defaulting to `query` can be extremely slow on CPU-only systems (query expansion + rerank).
-// Prefer a faster mode for interactive use; users can opt into `query` for best recall.
-const DEFAULT_QMD_SEARCH_MODE: MemoryQmdSearchMode = "search";
+// `query` (hybrid: BM25 + embeddings + reranking) handles the natural-language queries that
+// LLMs generate via memory_search far better than BM25-only `search`.  On CPU-only systems
+// the first invocation may be slower while models load, but subsequent calls are comparable.
+const DEFAULT_QMD_SEARCH_MODE: MemoryQmdSearchMode = "query";
 const DEFAULT_QMD_EMBED_INTERVAL = "60m";
 const DEFAULT_QMD_COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_QMD_UPDATE_TIMEOUT_MS = 120_000;
