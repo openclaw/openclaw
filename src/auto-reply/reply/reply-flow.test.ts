@@ -1096,6 +1096,118 @@ describe("followup queue collect routing", () => {
   });
 });
 
+describe("followup queue drain restart after idle window", () => {
+  it("processes a message enqueued after the drain empties and deletes the queue", async () => {
+    const key = `test-idle-window-race-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+
+    const firstProcessed = createDeferred<void>();
+    const secondProcessed = createDeferred<void>();
+    let callCount = 0;
+    const runFollowup = async (run: FollowupRun) => {
+      callCount++;
+      calls.push(run);
+      if (callCount === 1) {
+        firstProcessed.resolve();
+      }
+      if (callCount === 2) {
+        secondProcessed.resolve();
+      }
+    };
+
+    // Enqueue first message and start drain.
+    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+
+    // Wait for the first message to be processed by the drain.
+    await firstProcessed.promise;
+
+    // Yield past the drain's finally block so it can set draining:false and
+    // delete the queue key from FOLLOWUP_QUEUES (the idle-window boundary).
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // Simulate the race: a new message arrives AFTER the drain finished and
+    // deleted the queue, but WITHOUT calling scheduleFollowupDrain again.
+    enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+
+    // kickFollowupDrainIfIdle should have restarted the drain automatically.
+    await secondProcessed.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toBe("before-idle");
+    expect(calls[1]?.prompt).toBe("after-idle");
+  });
+
+  it("does not double-drain when a message arrives while drain is still running", async () => {
+    const key = `test-no-double-drain-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+
+    const allProcessed = createDeferred<void>();
+    // runFollowup resolves only after both items are enqueued so the second
+    // item is already in the queue when the first drain step finishes.
+    let runFollowupResolve!: () => void;
+    const runFollowupGate = new Promise<void>((res) => {
+      runFollowupResolve = res;
+    });
+    const runFollowup = async (run: FollowupRun) => {
+      await runFollowupGate;
+      calls.push(run);
+      if (calls.length >= 2) {
+        allProcessed.resolve();
+      }
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+
+    // Enqueue second message while the drain is mid-flight (draining:true).
+    enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
+
+    // Release the gate so both items can drain.
+    runFollowupResolve();
+
+    await allProcessed.promise;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toBe("first");
+    expect(calls[1]?.prompt).toBe("second");
+  });
+
+  it("does not process messages after clearSessionQueues clears the callback", async () => {
+    const key = `test-clear-callback-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+
+    const firstProcessed = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      firstProcessed.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "before-clear" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+    await firstProcessed.promise;
+
+    // Let drain finish and delete the queue.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // Clear queues (simulates session teardown) — should also clear the callback.
+    const { clearSessionQueues } = await import("./queue.js");
+    clearSessionQueues([key]);
+
+    // Enqueue after clear: should NOT auto-start a drain (callback is gone).
+    enqueueFollowupRun(key, createRun({ prompt: "after-clear" }), settings);
+
+    // Yield a few ticks; no drain should fire.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // Only the first message was processed; the post-clear one is still pending.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toBe("before-clear");
+  });
+});
+
 const emptyCfg = {} as OpenClawConfig;
 
 describe("createReplyDispatcher", () => {
