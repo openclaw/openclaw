@@ -8,15 +8,19 @@ type DirectMessageCheck = {
 
 type DirectRoomTrackerOptions = {
   log?: (message: string) => void;
+  includeMemberCountInLogs?: boolean;
 };
 
 const DM_CACHE_TTL_MS = 30_000;
 
 export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTrackerOptions = {}) {
   const log = opts.log ?? (() => {});
+  const includeMemberCountInLogs = opts.includeMemberCountInLogs === true;
   let lastDmUpdateMs = 0;
   let cachedSelfUserId: string | null = null;
-  const memberCountCache = new Map<string, { count: number; ts: number }>();
+  const memberCountCache = includeMemberCountInLogs
+    ? new Map<string, { count: number; ts: number }>()
+    : undefined;
 
   const ensureSelfUserId = async (): Promise<string | null> => {
     if (cachedSelfUserId) {
@@ -44,6 +48,9 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   };
 
   const resolveMemberCount = async (roomId: string): Promise<number | null> => {
+    if (!memberCountCache) {
+      return null;
+    }
     const cached = memberCountCache.get(roomId);
     const now = Date.now();
     if (cached && now - cached.ts < DM_CACHE_TTL_MS) {
@@ -98,6 +105,10 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       // were being misclassified as DMs, causing messages to be routed through
       // DM policy instead of group policy and silently dropped.
       // See: https://github.com/openclaw/openclaw/issues/20145
+      if (!includeMemberCountInLogs) {
+        log(`matrix: dm check room=${roomId} result=group`);
+        return false;
+      }
       const memberCount = await resolveMemberCount(roomId);
       log(`matrix: dm check room=${roomId} result=group members=${memberCount ?? "unknown"}`);
       return false;
