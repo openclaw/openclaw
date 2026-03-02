@@ -71,6 +71,7 @@ describe("sendPayload", () => {
 
   const baseCtx = {
     to: "~zod",
+    text: "",
     cfg: {} as any,
     payload: {} as any,
   };

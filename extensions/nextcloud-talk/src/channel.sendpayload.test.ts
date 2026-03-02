@@ -51,6 +51,7 @@ describe("sendPayload", () => {
 
   const baseCtx = {
     to: "room-token",
+    text: "",
     cfg: {} as any,
     payload: {} as any,
   };
@@ -121,7 +122,9 @@ describe("sendPayload", () => {
   });
 
   it("returns no-op when chunker produces empty array", async () => {
-    const chunkerSpy = vi.spyOn(nextcloudTalkPlugin.outbound!, "chunker").mockReturnValue([]);
+    const chunkerSpy = vi
+      .spyOn(nextcloudTalkPlugin.outbound! as any, "chunker")
+      .mockReturnValue([]);
     const sendTextSpy = vi.spyOn(nextcloudTalkPlugin.outbound!, "sendText");
     const result = await nextcloudTalkPlugin.outbound!.sendPayload!({
       ...baseCtx,

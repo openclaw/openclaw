@@ -481,7 +481,7 @@ describe("outbound", () => {
     });
 
     it("returns no-op when chunker produces empty array", async () => {
-      const chunkerSpy = vi.spyOn(twitchOutbound, "chunker").mockReturnValue([]);
+      const chunkerSpy = vi.spyOn(twitchOutbound as any, "chunker").mockReturnValue([]);
       const sendTextSpy = vi.spyOn(twitchOutbound, "sendText");
       const result = await twitchOutbound.sendPayload!({
         cfg: mockConfig,

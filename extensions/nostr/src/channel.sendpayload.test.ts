@@ -62,6 +62,7 @@ describe("sendPayload", () => {
 
   const baseCtx = {
     to: "npub1abc",
+    text: "",
     cfg: {} as any,
     payload: {} as any,
   };

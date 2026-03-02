@@ -121,7 +121,7 @@ describe("sendPayload", () => {
   });
 
   it("returns no-op when chunker produces empty array", async () => {
-    const chunkerSpy = vi.spyOn(ircPlugin.outbound!, "chunker").mockReturnValue([]);
+    const chunkerSpy = vi.spyOn(ircPlugin.outbound! as any, "chunker").mockReturnValue([]);
     const sendTextSpy = vi.spyOn(ircPlugin.outbound!, "sendText");
     const result = await ircPlugin.outbound!.sendPayload!({
       ...baseCtx,
