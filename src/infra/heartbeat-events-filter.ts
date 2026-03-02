@@ -45,11 +45,7 @@ export function buildExecEventPrompt(opts?: { deliverToUser?: boolean }): string
       "Handle the result internally. Do not relay it to the user unless explicitly requested."
     );
   }
-  return (
-    "An async command you ran earlier has completed. The result is shown in the system messages above. " +
-    "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
-    "If it failed, explain what went wrong."
-  );
+  return "An async command you ran earlier has completed. Share the result briefly.";
 }
 
 const HEARTBEAT_OK_PREFIX = HEARTBEAT_TOKEN.toLowerCase();

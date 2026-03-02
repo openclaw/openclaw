@@ -637,7 +637,17 @@ export async function runHeartbeatOnce(opts: {
   }
   const { entry, sessionKey, storePath } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
-  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
+  // For exec-completion events targeting a specific session, fall back to the
+  // session's last channel when the heartbeat has no explicit delivery target.
+  // This enables exec results to be relayed back to the originating channel
+  // (e.g. Discord) even when heartbeat.target is "none".
+  const execEventHeartbeat =
+    preflight.isExecEventReason &&
+    opts.sessionKey &&
+    (!heartbeat?.target || heartbeat.target === "none")
+      ? { ...heartbeat, target: "last" as const }
+      : heartbeat;
+  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat: execEventHeartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
