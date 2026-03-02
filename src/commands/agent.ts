@@ -911,9 +911,18 @@ export async function agentCommand(
 
     // Update token+model fields in the session store.
     if (sessionStore && sessionKey) {
+      const cfgWithAgentDefaults: OpenClawConfig = {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents?.defaults,
+            ...agentCfg,
+          },
+        },
+      };
       await updateSessionStoreAfterAgentRun({
-        cfg,
-        contextTokensOverride: agentCfg?.contextTokens,
+        cfg: cfgWithAgentDefaults,
         sessionId,
         sessionKey,
         storePath,

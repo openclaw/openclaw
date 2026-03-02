@@ -17,7 +17,6 @@ type RunResult = Awaited<
 
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
-  contextTokensOverride?: number;
   sessionId: string;
   sessionKey: string;
   storePath: string;
@@ -51,7 +50,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
       cfg,
       provider: providerUsed,
       model: modelUsed,
-      contextTokensOverride: params.contextTokensOverride,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 

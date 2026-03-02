@@ -14,7 +14,7 @@ type ModelRegistryLike = {
 type ConfigModelEntry = { id?: string; contextWindow?: number };
 type ProviderConfigEntry = { models?: ConfigModelEntry[] };
 type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined> };
-type AgentModelEntry = { params?: Record<string, unknown> };
+type AgentModelEntry = { params?: Record<string, unknown>; contextTokens?: number };
 
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
@@ -134,6 +134,29 @@ function resolveConfiguredModelParams(
   return undefined;
 }
 
+function resolveConfiguredModelContextTokens(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  model: string,
+): number | undefined {
+  const models = cfg?.agents?.defaults?.models;
+  if (!models) {
+    return undefined;
+  }
+  const key = `${provider}/${model}`.trim().toLowerCase();
+  for (const [rawKey, entry] of Object.entries(models)) {
+    if (rawKey.trim().toLowerCase() !== key) {
+      continue;
+    }
+    const tokens = (entry as AgentModelEntry | undefined)?.contextTokens;
+    if (typeof tokens === "number" && tokens > 0) {
+      return Math.trunc(tokens);
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
 function resolveProviderModelRef(params: {
   provider?: string;
   model?: string;
@@ -179,16 +202,34 @@ export function resolveContextTokensForModel(params: {
   if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
     return params.contextTokensOverride;
   }
+  const defaultsContextTokens =
+    typeof params.cfg?.agents?.defaults?.contextTokens === "number" &&
+    params.cfg.agents.defaults.contextTokens > 0
+      ? Math.trunc(params.cfg.agents.defaults.contextTokens)
+      : undefined;
 
   const ref = resolveProviderModelRef({
     provider: params.provider,
     model: params.model,
   });
   if (ref) {
+    const perModelTokens = resolveConfiguredModelContextTokens(params.cfg, ref.provider, ref.model);
+    if (typeof perModelTokens === "number" && perModelTokens > 0) {
+      return perModelTokens;
+    }
+
+    if (typeof defaultsContextTokens === "number") {
+      return defaultsContextTokens;
+    }
+
     const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
     if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
     }
+  }
+
+  if (typeof defaultsContextTokens === "number") {
+    return defaultsContextTokens;
   }
 
   return lookupContextTokens(params.model) ?? params.fallbackContextTokens;

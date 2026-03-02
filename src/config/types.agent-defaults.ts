@@ -14,6 +14,8 @@ export type AgentModelEntryConfig = {
   params?: Record<string, unknown>;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
+  /** Optional per-model context window override (tokens). */
+  contextTokens?: number;
 };
 
 export type AgentModelListConfig = {

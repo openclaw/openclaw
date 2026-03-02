@@ -82,6 +82,48 @@ describe("createSessionManagerRuntimeRegistry", () => {
 });
 
 describe("resolveContextTokensForModel", () => {
+  it("prefers per-model contextTokens over defaults.contextTokens", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        agents: {
+          defaults: {
+            contextTokens: 97_000,
+            models: {
+              "openai/gpt-4.1": {
+                contextTokens: 128_000,
+              },
+            },
+          },
+        },
+      },
+      provider: "openai",
+      model: "gpt-4.1",
+      fallbackContextTokens: 201_000,
+    });
+
+    expect(result).toBe(128_000);
+  });
+
+  it("uses defaults.contextTokens when no per-model override exists", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        agents: {
+          defaults: {
+            contextTokens: 96_000,
+            models: {
+              "openai/gpt-4.1": {},
+            },
+          },
+        },
+      },
+      provider: "openai",
+      model: "gpt-4.1",
+      fallbackContextTokens: 202_000,
+    });
+
+    expect(result).toBe(96_000);
+  });
+
   it("returns 1M context when anthropic context1m is enabled for opus/sonnet", () => {
     const result = resolveContextTokensForModel({
       cfg: {

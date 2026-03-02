@@ -69,9 +69,17 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   }),
 }));
 
-vi.mock("../../agents/context.js", () => ({
-  lookupContextTokens: vi.fn().mockReturnValue(128000),
-}));
+vi.mock("../../agents/context.js", () => {
+  const lookupContextTokens = vi.fn().mockReturnValue(128000);
+  const resolveContextTokensForModel = vi.fn(
+    (params: { cfg?: { agents?: { defaults?: { contextTokens?: number } } }; model?: string }) =>
+      params.cfg?.agents?.defaults?.contextTokens ?? lookupContextTokens(params.model) ?? undefined,
+  );
+  return {
+    lookupContextTokens,
+    resolveContextTokensForModel,
+  };
+});
 
 vi.mock("../../agents/date-time.js", () => ({
   formatUserTime: vi.fn().mockReturnValue("2026-02-10 12:00"),

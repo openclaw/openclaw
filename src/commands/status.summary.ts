@@ -109,7 +109,6 @@ export async function getStatusSummary(
       cfg,
       provider: resolved.provider ?? DEFAULT_PROVIDER,
       model: configModel,
-      contextTokensOverride: cfg.agents?.defaults?.contextTokens,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 

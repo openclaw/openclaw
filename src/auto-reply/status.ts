@@ -451,7 +451,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       cfg: contextConfig,
       provider: activeProvider,
       model: activeModel,
-      contextTokensOverride: entry?.contextTokens ?? args.agent?.contextTokens,
+      contextTokensOverride: entry?.contextTokens,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
