@@ -373,6 +373,69 @@ describe("downgradeOpenAIFunctionCallReasoningPairs", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     expect(downgradeOpenAIFunctionCallReasoningPairs(input as any)).toEqual(input);
   });
+
+  it("only rewrites tool results paired to the downgraded assistant turn", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_123|fc_123", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123|fc_123",
+        toolName: "read",
+        content: [{ type: "text", text: "turn1" }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal",
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+          },
+          { type: "toolCall", id: "call_123|fc_123", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123|fc_123",
+        toolName: "read",
+        content: [{ type: "text", text: "turn2" }],
+      },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(downgradeOpenAIFunctionCallReasoningPairs(input as any)).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_123", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123",
+        toolName: "read",
+        content: [{ type: "text", text: "turn1" }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal",
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+          },
+          { type: "toolCall", id: "call_123|fc_123", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_123|fc_123",
+        toolName: "read",
+        content: [{ type: "text", text: "turn2" }],
+      },
+    ]);
+  });
 });
 
 describe("normalizeTextForComparison", () => {

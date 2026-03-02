@@ -92,98 +92,109 @@ function isOpenAIToolCallType(type: unknown): boolean {
 export function downgradeOpenAIFunctionCallReasoningPairs(
   messages: AgentMessage[],
 ): AgentMessage[] {
-  const rewrittenIds = new Map<string, string>();
   let changed = false;
+  const rewrittenMessages: AgentMessage[] = [];
+  let pendingRewrittenIds: Map<string, string> | null = null;
 
-  const rewrittenAssistantMessages = messages.map((msg) => {
-    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "assistant") {
-      return msg;
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      pendingRewrittenIds = null;
+      rewrittenMessages.push(msg);
+      continue;
     }
-    const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-    if (!Array.isArray(assistantMsg.content)) {
-      return msg;
+
+    const role = (msg as { role?: unknown }).role;
+    if (role === "assistant") {
+      const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+      if (!Array.isArray(assistantMsg.content)) {
+        pendingRewrittenIds = null;
+        rewrittenMessages.push(msg);
+        continue;
+      }
+
+      const localRewrittenIds = new Map<string, string>();
+      let seenReplayableReasoning = false;
+      let assistantChanged = false;
+      const nextContent = assistantMsg.content.map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+
+        const thinkingBlock = block as OpenAIThinkingBlock;
+        if (
+          thinkingBlock.type === "thinking" &&
+          parseOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
+        ) {
+          seenReplayableReasoning = true;
+          return block;
+        }
+
+        const toolCallBlock = block as OpenAIToolCallBlock;
+        if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
+          return block;
+        }
+
+        const pairing = splitOpenAIFunctionCallPairing(toolCallBlock.id);
+        if (seenReplayableReasoning || !pairing.itemId || !pairing.itemId.startsWith("fc_")) {
+          return block;
+        }
+
+        assistantChanged = true;
+        localRewrittenIds.set(toolCallBlock.id, pairing.callId);
+        return {
+          ...(block as unknown as Record<string, unknown>),
+          id: pairing.callId,
+        } as typeof block;
+      });
+
+      pendingRewrittenIds = localRewrittenIds.size > 0 ? localRewrittenIds : null;
+      if (!assistantChanged) {
+        rewrittenMessages.push(msg);
+        continue;
+      }
+      changed = true;
+      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+      continue;
     }
 
-    let seenReplayableReasoning = false;
-    let assistantChanged = false;
-    const nextContent = assistantMsg.content.map((block) => {
-      if (!block || typeof block !== "object") {
-        return block;
+    if (role === "toolResult" && pendingRewrittenIds && pendingRewrittenIds.size > 0) {
+      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
+        toolUseId?: unknown;
+      };
+      let toolResultChanged = false;
+      const updates: Record<string, string> = {};
+
+      if (typeof toolResult.toolCallId === "string") {
+        const nextToolCallId = pendingRewrittenIds.get(toolResult.toolCallId);
+        if (nextToolCallId && nextToolCallId !== toolResult.toolCallId) {
+          updates.toolCallId = nextToolCallId;
+          toolResultChanged = true;
+        }
       }
 
-      const thinkingBlock = block as OpenAIThinkingBlock;
-      if (
-        thinkingBlock.type === "thinking" &&
-        parseOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
-      ) {
-        seenReplayableReasoning = true;
-        return block;
+      if (typeof toolResult.toolUseId === "string") {
+        const nextToolUseId = pendingRewrittenIds.get(toolResult.toolUseId);
+        if (nextToolUseId && nextToolUseId !== toolResult.toolUseId) {
+          updates.toolUseId = nextToolUseId;
+          toolResultChanged = true;
+        }
       }
 
-      const toolCallBlock = block as OpenAIToolCallBlock;
-      if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
-        return block;
+      if (!toolResultChanged) {
+        rewrittenMessages.push(msg);
+        continue;
       }
-
-      const pairing = splitOpenAIFunctionCallPairing(toolCallBlock.id);
-      if (seenReplayableReasoning || !pairing.itemId || !pairing.itemId.startsWith("fc_")) {
-        return block;
-      }
-
-      assistantChanged = true;
-      rewrittenIds.set(toolCallBlock.id, pairing.callId);
-      return {
-        ...(block as unknown as Record<string, unknown>),
-        id: pairing.callId,
-      } as typeof block;
-    });
-
-    if (!assistantChanged) {
-      return msg;
+      changed = true;
+      rewrittenMessages.push({
+        ...toolResult,
+        ...updates,
+      } as AgentMessage);
+      continue;
     }
-    changed = true;
-    return { ...assistantMsg, content: nextContent } as AgentMessage;
-  });
 
-  if (rewrittenIds.size === 0) {
-    return messages;
+    pendingRewrittenIds = null;
+    rewrittenMessages.push(msg);
   }
-
-  const rewrittenMessages = rewrittenAssistantMessages.map((msg) => {
-    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "toolResult") {
-      return msg;
-    }
-    const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
-      toolUseId?: unknown;
-    };
-    let toolResultChanged = false;
-    const updates: Record<string, string> = {};
-
-    if (typeof toolResult.toolCallId === "string") {
-      const nextToolCallId = rewrittenIds.get(toolResult.toolCallId);
-      if (nextToolCallId && nextToolCallId !== toolResult.toolCallId) {
-        updates.toolCallId = nextToolCallId;
-        toolResultChanged = true;
-      }
-    }
-
-    if (typeof toolResult.toolUseId === "string") {
-      const nextToolUseId = rewrittenIds.get(toolResult.toolUseId);
-      if (nextToolUseId && nextToolUseId !== toolResult.toolUseId) {
-        updates.toolUseId = nextToolUseId;
-        toolResultChanged = true;
-      }
-    }
-
-    if (!toolResultChanged) {
-      return msg;
-    }
-    changed = true;
-    return {
-      ...toolResult,
-      ...updates,
-    } as AgentMessage;
-  });
 
   return changed ? rewrittenMessages : messages;
 }
