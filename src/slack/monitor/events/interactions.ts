@@ -518,6 +518,27 @@ function summarizeViewState(values: unknown): ModalInputSummary[] {
   return entries;
 }
 
+// Helper to derive channel type deterministically from Slack ID structure
+function deriveChannelTypeFromId(
+  channelId: string,
+  declaredType: string | undefined,
+): string | undefined {
+  if (!channelId) return declaredType;
+  const prefix = channelId.charAt(0);
+  switch (prefix) {
+    case "C":
+      return "channel"; // Public Channel
+    case "G":
+      return "group"; // Private Channel / Group DM
+    case "D":
+      return "im"; // Direct Message (Slack API uses 'im' for D-prefix IDs)
+    case "W":
+      return "workspace"; // Workspace App ID
+    default:
+      return declaredType; // Fallback to metadata if prefix is unknown
+  }
+}
+
 function resolveModalSessionRouting(params: {
   ctx: SlackMonitorContext;
   metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
@@ -531,13 +552,15 @@ function resolveModalSessionRouting(params: {
     };
   }
   if (metadata.channelId) {
+    // Derive type from ID structure to ensure consistency, overriding metadata if necessary
+    const resolvedChannelType = deriveChannelTypeFromId(metadata.channelId, metadata.channelType);
     return {
       sessionKey: params.ctx.resolveSlackSystemEventSessionKey({
         channelId: metadata.channelId,
-        channelType: metadata.channelType,
+        channelType: resolvedChannelType,
       }),
       channelId: metadata.channelId,
-      channelType: metadata.channelType,
+      channelType: resolvedChannelType,
     };
   }
   return {
