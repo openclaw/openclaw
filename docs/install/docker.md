@@ -72,6 +72,18 @@ If your automation exports no Claude session vars, leaving them unset now resolv
 empty values by default in `docker-compose.yml` to avoid repeated "variable is not set"
 warnings.
 
+### Shared-network security note (CLI + gateway)
+
+`openclaw-cli` uses `network_mode: "service:openclaw-gateway"` so CLI commands can
+reliably reach the gateway over `127.0.0.1` in Docker.
+
+Treat this as a shared trust boundary: loopback binding is not isolation between these two
+containers. If you need stronger separation, run commands from a separate container/host
+network path instead of the bundled `openclaw-cli` service.
+
+To reduce impact if the CLI process is compromised, the compose config drops
+`NET_RAW`/`NET_ADMIN` and enables `no-new-privileges` on `openclaw-cli`.
+
 It writes config/workspace on the host:
 
 - `~/.openclaw/`
