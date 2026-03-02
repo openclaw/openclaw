@@ -1,3 +1,4 @@
+import { stripHeartbeatToken } from "../../auto-reply/heartbeat.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
@@ -989,12 +990,17 @@ export async function executeJobCore(
   const deliveryPlan = resolveCronDeliveryPlan(job);
   const suppressMainSummary =
     res.status === "error" && res.errorKind === "delivery-target" && deliveryPlan.requested;
+  const suppressHeartbeatOnlySummary =
+    deliveryPlan.requested &&
+    Boolean(summaryText) &&
+    stripHeartbeatToken(summaryText, { mode: "heartbeat" }).shouldSkip;
   if (
     summaryText &&
     deliveryPlan.requested &&
     !res.delivered &&
     res.deliveryAttempted !== true &&
-    !suppressMainSummary
+    !suppressMainSummary &&
+    !suppressHeartbeatOnlySummary
   ) {
     const prefix = "Cron";
     const label =
