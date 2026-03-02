@@ -1380,8 +1380,10 @@ async function runQwenSearch(params: {
       const data = (await res.json()) as QwenSearchResponse;
       const content = data.choices?.[0]?.message?.content ?? "No response";
       // Qwen's search-enabled completions embed citations as markdown links
-      const urlRegex = /https?:\/\/[^\s)]+/g;
-      const urls = content.match(urlRegex) ?? [];
+      const urlRegex = /https?:\/\/[^\s)[\]{}]+/g;
+      const urls = (content.match(urlRegex) ?? []).map((u) =>
+        u.replace(/[.,;:!?。，；：！？]+$/, ""),
+      );
       const citations = [...new Set(urls)];
 
       return { content, citations };
@@ -1423,7 +1425,7 @@ async function runWebSearch(params: {
           : params.provider === "gemini"
             ? `${params.provider}:${params.query}:${params.geminiModel ?? DEFAULT_GEMINI_MODEL}`
             : params.provider === "metaso"
-              ? `${params.provider}:${params.query}:${params.metasoBaseUrl ?? DEFAULT_METASO_BASE_URL}:${String(params.metasoIncludeSummary ?? true)}`
+              ? `${params.provider}:${params.query}:${params.count}:${params.metasoBaseUrl ?? DEFAULT_METASO_BASE_URL}:${String(params.metasoIncludeSummary ?? true)}`
               : params.provider === "qwen"
                 ? `${params.provider}:${params.query}:${params.qwenBaseUrl ?? DEFAULT_QWEN_BASE_URL}:${params.qwenModel ?? DEFAULT_QWEN_MODEL}:${String(params.qwenEnableThinking ?? false)}`
                 : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
