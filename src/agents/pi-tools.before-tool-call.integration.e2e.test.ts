@@ -122,6 +122,7 @@ describe("before_tool_call hook integration", () => {
     const tool = wrapToolWithBeforeToolCallHook({ name: "ReAd", execute } as any, {
       agentId: "main",
       sessionKey: "main",
+      sessionId: "ephemeral-main",
     });
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
@@ -136,6 +137,7 @@ describe("before_tool_call hook integration", () => {
         toolName: "read",
         agentId: "main",
         sessionKey: "main",
+        sessionId: "ephemeral-main",
       },
     );
   });
