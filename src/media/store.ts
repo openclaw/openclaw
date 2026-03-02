@@ -312,7 +312,10 @@ export async function saveMediaBuffer(
   const uuid = crypto.randomUUID();
   const headerExt = extensionForMime(contentType?.split(";")[0]?.trim() ?? undefined);
   const mime = await detectMime({ buffer, headerMime: contentType });
-  const ext = headerExt ?? extensionForMime(mime) ?? "";
+  const originalExt = originalFilename ? path.extname(originalFilename) : "";
+  // Keep the source filename extension as a final fallback (e.g. Telegram voice .oga)
+  // so attachment kind detection can still classify audio when MIME sniffing fails.
+  const ext = headerExt ?? extensionForMime(mime) ?? originalExt;
 
   let id: string;
   if (originalFilename) {

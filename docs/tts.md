@@ -9,13 +9,14 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, Azure AI Foundry, or Edge TTS.
 It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
+- **Azure AI Foundry** (OpenAI-compatible speech endpoint)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
 
 ### Edge TTS notes
@@ -36,6 +37,11 @@ If you want OpenAI or ElevenLabs:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `OPENAI_API_KEY`
+- `AZURE_FOUNDRY_API_KEY` (aliases: `AZURE_OPENAI_API_KEY`, `AZURE_INFERENCE_CREDENTIAL`)
+
+Optional Azure endpoint env vars:
+
+- `AZURE_FOUNDRY_ENDPOINT` (aliases: `AZURE_OPENAI_ENDPOINT`, `AZURE_INFERENCE_ENDPOINT`)
 
 Edge TTS does **not** require an API key. If no API keys are found, OpenClaw defaults
 to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
@@ -111,6 +117,28 @@ Full schema is in [Gateway configuration](/gateway/configuration).
           useSpeakerBoost: true,
           speed: 1.0,
         },
+      },
+    },
+  },
+}
+```
+
+### Azure AI Foundry primary
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "azure",
+      azure: {
+        // Resource endpoint (without /openai/v1)
+        endpoint: "https://my-resource.openai.azure.com",
+        // Deployment name
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        // Optional; defaults to latest supported preview in OpenClaw
+        apiVersion: "2025-04-01-preview",
       },
     },
   },
@@ -204,7 +232,7 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
+- `provider`: `"elevenlabs"`, `"openai"`, `"azure"`, or `"edge"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
   otherwise `edge`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
@@ -214,7 +242,11 @@ Then run:
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
+- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`, Azure aliases above).
+- `azure.endpoint`: Azure resource endpoint; defaults to Azure endpoint env vars, then `https://models.inference.ai.azure.com`.
+- `azure.model`: Azure deployment/model id for speech.
+- `azure.voice`: Azure/OpenAI voice id (for example `alloy`).
+- `azure.apiVersion`: Azure speech API version (defaults to latest supported preview).
 - `elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `elevenlabs.voiceSettings`:
   - `stability`, `similarityBoost`, `style`: `0..1`

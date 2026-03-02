@@ -647,6 +647,9 @@ async function runAttachmentEntries(params: {
           reason: String(err),
         }),
       );
+      console.warn(
+        `[media-runner] ${capability} understanding failed for entry ${entryType}: ${String(err)}`,
+      );
       if (shouldLogVerbose()) {
         logVerbose(`${capability} understanding failed: ${String(err)}`);
       }
@@ -670,6 +673,7 @@ export async function runCapability(params: {
   const { capability, cfg, ctx } = params;
   const config = params.config ?? cfg.tools?.media?.[capability];
   if (config?.enabled === false) {
+    console.warn(`[media-runner] ${capability} skipped: explicitly disabled in config`);
     return {
       outputs: [],
       decision: { capability, outcome: "disabled", attachments: [] },
@@ -683,6 +687,10 @@ export async function runCapability(params: {
     policy: attachmentPolicy,
   });
   if (selected.length === 0) {
+    if (capability === "audio") {
+      const mimes = params.media.map((m) => m.mime ?? "no-mime").join(", ");
+      console.warn(`[media-runner] audio skipped: no audio attachments found (mimes: ${mimes})`);
+    }
     return {
       outputs: [],
       decision: { capability, outcome: "no-attachment", attachments: [] },
@@ -691,6 +699,7 @@ export async function runCapability(params: {
 
   const scopeDecision = resolveScopeDecision({ scope: config?.scope, ctx });
   if (scopeDecision === "deny") {
+    console.warn(`[media-runner] ${capability} skipped: denied by scope policy`);
     if (shouldLogVerbose()) {
       logVerbose(`${capability} understanding disabled by scope policy.`);
     }
@@ -757,6 +766,9 @@ export async function runCapability(params: {
     });
   }
   if (resolvedEntries.length === 0) {
+    console.warn(
+      `[media-runner] ${capability} skipped: no provider entries resolved (no API key or no config)`,
+    );
     return {
       outputs: [],
       decision: {

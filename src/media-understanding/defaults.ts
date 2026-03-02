@@ -31,6 +31,7 @@ export const DEFAULT_AUDIO_MODELS: Record<string, string> = {
   groq: "whisper-large-v3-turbo",
   openai: "gpt-4o-mini-transcribe",
   deepgram: "nova-3",
+  "azure-foundry": "gpt-4o-mini-transcribe",
   mistral: "voxtral-mini-latest",
 };
 
@@ -39,6 +40,7 @@ export const AUTO_AUDIO_KEY_PROVIDERS = [
   "groq",
   "deepgram",
   "google",
+  "azure-foundry",
   "mistral",
 ] as const;
 export const AUTO_IMAGE_KEY_PROVIDERS = [

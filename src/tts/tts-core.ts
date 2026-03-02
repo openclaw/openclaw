@@ -634,6 +634,51 @@ export async function openaiTTS(params: {
   }
 }
 
+export async function azureTTS(params: {
+  text: string;
+  apiKey: string;
+  endpoint: string;
+  model: string;
+  voice: string;
+  apiVersion: string;
+  responseFormat: "mp3" | "opus" | "pcm";
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, apiKey, endpoint, model, voice, apiVersion, responseFormat, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const baseUrl = endpoint.replace(/\/+$/, "");
+    const encodedVersion = encodeURIComponent(apiVersion);
+    const url = `${baseUrl}/openai/deployments/${encodeURIComponent(model)}/audio/speech?api-version=${encodedVersion}`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "api-key": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: text,
+        voice,
+        response_format: responseFormat,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Azure TTS API error (${response.status})`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function inferEdgeExtension(outputFormat: string): string {
   const normalized = outputFormat.toLowerCase();
   if (normalized.includes("webm")) {

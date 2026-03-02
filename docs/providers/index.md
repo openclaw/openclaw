@@ -47,6 +47,7 @@ See [Venice AI](/providers/venice).
 - [Mistral](/providers/mistral)
 - [OpenCode Zen](/providers/opencode)
 - [Amazon Bedrock](/providers/bedrock)
+- [Azure Foundry (Azure OpenAI)](/providers/azure-foundry)
 - [Z.AI](/providers/zai)
 - [Xiaomi](/providers/xiaomi)
 - [GLM models](/providers/glm)

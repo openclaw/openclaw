@@ -3,6 +3,10 @@ import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  resolveAzureFoundryApiKeyEnv,
+  resolveAzureFoundryEndpointEnv,
+} from "../providers/azure-foundry/env.js";
+import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
@@ -15,6 +19,13 @@ import {
 } from "../providers/kilocode-shared.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import { discoverAzureFoundryModels } from "./azure-foundry-discovery.js";
+import {
+  AZURE_FOUNDRY_ANTHROPIC_MODELS,
+  AZURE_FOUNDRY_MODEL_CATALOG,
+  buildAzureFoundryAnthropicModelDefinition,
+  buildAzureFoundryModelDefinition,
+} from "./azure-foundry-models.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
   buildBytePlusModelDefinition,
@@ -804,6 +815,22 @@ function buildTogetherProvider(): ProviderConfig {
   };
 }
 
+function buildAzureFoundryProvider(endpoint: string): ProviderConfig {
+  const trimmedEndpoint = endpoint.replace(/\/+$/, "");
+  const openaiBaseUrl = `${trimmedEndpoint}/openai/v1`;
+  const anthropicBaseUrl = `${trimmedEndpoint}/anthropic`;
+  return {
+    baseUrl: openaiBaseUrl,
+    api: "openai-completions",
+    models: [
+      ...AZURE_FOUNDRY_MODEL_CATALOG.map(buildAzureFoundryModelDefinition),
+      ...AZURE_FOUNDRY_ANTHROPIC_MODELS.map((m) =>
+        buildAzureFoundryAnthropicModelDefinition(m, anthropicBaseUrl),
+      ),
+    ],
+  };
+}
+
 function buildOpenrouterProvider(): ProviderConfig {
   return {
     baseUrl: OPENROUTER_BASE_URL,
@@ -1097,6 +1124,18 @@ export async function resolveImplicitProviders(params: {
     };
   }
 
+  const azureFoundryKey =
+    resolveEnvApiKeyVarName("azure-foundry") ??
+    resolveApiKeyFromProfiles({ provider: "azure-foundry", store: authStore });
+  if (azureFoundryKey) {
+    const azureEndpoint =
+      resolveAzureFoundryEndpointEnv(process.env)?.value || "https://models.inference.ai.azure.com";
+    providers["azure-foundry"] = {
+      ...buildAzureFoundryProvider(azureEndpoint),
+      apiKey: azureFoundryKey,
+    };
+  }
+
   const huggingfaceKey =
     resolveEnvApiKeyVarName("huggingface") ??
     resolveApiKeyFromProfiles({ provider: "huggingface", store: authStore });
@@ -1226,6 +1265,56 @@ export async function resolveImplicitBedrockProvider(params: {
     baseUrl: `https://bedrock-runtime.${region}.amazonaws.com`,
     api: "bedrock-converse-stream",
     auth: "aws-sdk",
+    models,
+  } satisfies ProviderConfig;
+}
+
+export async function resolveImplicitAzureFoundryProvider(params: {
+  agentDir: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ProviderConfig | null> {
+  const env = params.env ?? process.env;
+  const discoveryConfig = params.config?.models?.azureFoundryDiscovery;
+  const enabled = discoveryConfig?.enabled;
+  const authStore = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const hasApiKey = Boolean(resolveAzureFoundryApiKeyEnv(env)?.value);
+  const hasProfile = listProfilesForProvider(authStore, "azure-foundry").length > 0;
+
+  if (enabled === false) {
+    return null;
+  }
+  if (enabled !== true && !hasApiKey && !hasProfile) {
+    return null;
+  }
+
+  const endpoint =
+    discoveryConfig?.endpoint?.trim() ||
+    resolveAzureFoundryEndpointEnv(env)?.value ||
+    "https://models.inference.ai.azure.com";
+  const apiKey =
+    resolveAzureFoundryApiKeyEnv(env)?.value ??
+    resolveApiKeyFromProfiles({ provider: "azure-foundry", store: authStore }) ??
+    "";
+
+  if (!apiKey && !hasProfile) {
+    return null;
+  }
+
+  const models = await discoverAzureFoundryModels({
+    endpoint,
+    apiKey,
+    config: discoveryConfig,
+  });
+  if (models.length === 0) {
+    return null;
+  }
+
+  const baseUrl = `${endpoint.replace(/\/+$/, "")}/openai/v1`;
+  return {
+    baseUrl,
+    api: "openai-completions",
+    apiKey,
     models,
   } satisfies ProviderConfig;
 }

@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { MediaUnderstandingProvider } from "../types.js";
 import { anthropicProvider } from "./anthropic/index.js";
+import { azureProvider } from "./azure/index.js";
 import { deepgramProvider } from "./deepgram/index.js";
 import { googleProvider } from "./google/index.js";
 import { groqProvider } from "./groq/index.js";
@@ -20,6 +21,7 @@ const PROVIDERS: MediaUnderstandingProvider[] = [
   mistralProvider,
   zaiProvider,
   deepgramProvider,
+  azureProvider,
 ];
 
 export function normalizeMediaProviderId(id: string): string {

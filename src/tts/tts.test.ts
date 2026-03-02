@@ -40,7 +40,7 @@ vi.mock("../agents/model-auth.js", () => ({
   requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
 }));
 
-const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
+const { _test, resolveTtsConfig, resolveTtsApiKey, maybeApplyTtsToPayload, getTtsProvider } = tts;
 
 const {
   isValidVoiceId,
@@ -233,6 +233,48 @@ describe("tts", () => {
         const config = resolveTtsConfig(testCase.cfg);
         expect(resolveEdgeOutputFormat(config), testCase.name).toBe(testCase.expected);
       }
+    });
+  });
+
+  describe("resolveTtsConfig", () => {
+    it("uses Azure endpoint and apiVersion env aliases when config values are absent", () => {
+      withEnv(
+        {
+          AZURE_FOUNDRY_ENDPOINT: undefined,
+          AZURE_OPENAI_ENDPOINT: "https://my-resource.openai.azure.com",
+          AZURE_OPENAI_API_VERSION: "2025-04-01-preview",
+        },
+        () => {
+          const cfg: OpenClawConfig = {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: {} },
+          };
+          const config = resolveTtsConfig(cfg);
+          expect(config.azure.endpoint).toBe("https://my-resource.openai.azure.com");
+          expect(config.azure.apiVersion).toBe("2025-04-01-preview");
+        },
+      );
+    });
+  });
+
+  describe("resolveTtsApiKey", () => {
+    it("accepts AZURE_OPENAI_API_KEY alias for Azure TTS", () => {
+      withEnv(
+        {
+          AZURE_FOUNDRY_API_KEY: undefined,
+          AZURE_OPENAI_API_KEY: "azure-openai-alias",
+          AZURE_INFERENCE_CREDENTIAL: undefined,
+          AZURE_AI_API_KEY: undefined,
+        },
+        () => {
+          const cfg: OpenClawConfig = {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: { provider: "azure" } },
+          };
+          const config = resolveTtsConfig(cfg);
+          expect(resolveTtsApiKey(config, "azure")).toBe("azure-openai-alias");
+        },
+      );
     });
   });
 

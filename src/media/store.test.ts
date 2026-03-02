@@ -300,5 +300,36 @@ describe("media store", () => {
         expect(saved.id).not.toContain("---");
       });
     });
+
+    it("falls back to original filename extension when mime detection is unavailable", async () => {
+      await withTempStore(async (_store, home) => {
+        vi.resetModules();
+        vi.doMock("./mime.js", async () => {
+          const actual = await vi.importActual<typeof import("./mime.js")>("./mime.js");
+          return {
+            ...actual,
+            detectMime: vi.fn(async () => undefined),
+            extensionForMime: vi.fn(() => undefined),
+          };
+        });
+
+        try {
+          const storeWithMock = await import("./store.js");
+          const buf = Buffer.from("fake-audio");
+          const saved = await storeWithMock.saveMediaBuffer(
+            buf,
+            undefined,
+            "inbound",
+            5 * 1024 * 1024,
+            "voice-note.oga",
+          );
+
+          expect(saved.id).toMatch(/^voice-note---[a-f0-9-]{36}\.oga$/);
+          expect(saved.path.startsWith(home)).toBe(true);
+        } finally {
+          vi.doUnmock("./mime.js");
+        }
+      });
+    });
   });
 });
