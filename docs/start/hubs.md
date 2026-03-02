@@ -69,7 +69,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Providers + ingress
 
 - [Chat channels hub](/channels)
-- [Model providers hub](/providers/models)
+- [Model providers hub](/providers)
 - [WhatsApp](/channels/whatsapp)
 - [Telegram](/channels/telegram)
 - [Slack](/channels/slack)
