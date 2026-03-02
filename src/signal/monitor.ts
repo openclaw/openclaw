@@ -130,16 +130,69 @@ function normalizeAllowList(raw?: Array<string | number>): string[] {
   return normalizeStringEntries(raw);
 }
 
+function resolveSignalReactionTimestamp(value: number | string | null | undefined): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
 function resolveSignalReactionTargets(reaction: SignalReactionMessage): SignalReactionTarget[] {
   const targets: SignalReactionTarget[] = [];
-  const uuid = reaction.targetAuthorUuid?.trim();
-  if (uuid) {
-    targets.push({ kind: "uuid", id: uuid, display: `uuid:${uuid}` });
-  }
-  const author = reaction.targetAuthor?.trim();
-  if (author) {
-    const normalized = normalizeE164(author);
+
+  const addUuidTarget = (value?: string | null) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = value.trim();
+    if (
+      !normalized ||
+      targets.some((target) => target.kind === "uuid" && target.id === normalized)
+    ) {
+      return;
+    }
+    targets.push({ kind: "uuid", id: normalized, display: `uuid:${normalized}` });
+  };
+
+  const addPhoneTarget = (value?: string | null) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = normalizeE164(value.trim());
+    if (
+      !normalized ||
+      targets.some((target) => target.kind === "phone" && target.id === normalized)
+    ) {
+      return;
+    }
     targets.push({ kind: "phone", id: normalized, display: normalized });
+  };
+
+  addUuidTarget(reaction.targetAuthorUuid);
+  addUuidTarget(reaction.targetAuthorAci);
+  addUuidTarget(reaction.targetAuthorServiceId);
+  addUuidTarget(reaction.targetAuthorId);
+  addPhoneTarget(reaction.targetAuthorNumber);
+  addPhoneTarget(reaction.targetAuthorE164);
+  addPhoneTarget(reaction.targetAuthorPhone);
+  if (typeof reaction.targetAuthor === "string") {
+    addPhoneTarget(reaction.targetAuthor);
+  } else if (reaction.targetAuthor && typeof reaction.targetAuthor === "object") {
+    addUuidTarget(reaction.targetAuthor.uuid);
+    addUuidTarget(reaction.targetAuthor.aci);
+    addUuidTarget(reaction.targetAuthor.serviceId);
+    addPhoneTarget(reaction.targetAuthor.number);
+    addPhoneTarget(reaction.targetAuthor.e164);
   }
   return targets;
 }
@@ -147,13 +200,17 @@ function resolveSignalReactionTargets(reaction: SignalReactionMessage): SignalRe
 function isSignalReactionMessage(
   reaction: SignalReactionMessage | null | undefined,
 ): reaction is SignalReactionMessage {
-  if (!reaction) {
+  if (!reaction || typeof reaction !== "object") {
     return false;
   }
-  const emoji = reaction.emoji?.trim();
-  const timestamp = reaction.targetSentTimestamp;
-  const hasTarget = Boolean(reaction.targetAuthor?.trim() || reaction.targetAuthorUuid?.trim());
-  return Boolean(emoji && typeof timestamp === "number" && timestamp > 0 && hasTarget);
+  const emoji = typeof reaction.emoji === "string" ? reaction.emoji.trim() : "";
+  const timestamp = resolveSignalReactionTimestamp(reaction.targetSentTimestamp);
+  if (!emoji || !timestamp) {
+    return false;
+  }
+  const hasTarget = resolveSignalReactionTargets(reaction).length > 0;
+  const isRemove = reaction.isRemove === true || reaction.remove === true;
+  return hasTarget || isRemove;
 }
 
 function shouldEmitSignalReactionNotification(params: {
