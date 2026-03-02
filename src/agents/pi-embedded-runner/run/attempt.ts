@@ -859,7 +859,8 @@ export async function runEmbeddedAttempt(
             },
             {
               agentId: sessionAgentId,
-              sessionKey: params.sessionKey,
+              sessionKey: sandboxSessionKey,
+              sessionId: params.sessionId,
               loopDetection: clientToolLoopDetection,
             },
           )
@@ -1187,6 +1188,7 @@ export async function runEmbeddedAttempt(
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
         sessionKey: sandboxSessionKey,
+        sessionId: params.sessionId,
         agentId: sessionAgentId,
       });
 
