@@ -7,6 +7,7 @@
 
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export type InternalHookEventType = "command" | "session" | "agent" | "gateway";
 
@@ -42,8 +43,24 @@ export interface InternalHookEvent {
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
 
-/** Registry of hook handlers by event key */
-const handlers = new Map<string, InternalHookHandler[]>();
+/**
+ * Registry of hook handlers by event key.
+ *
+ * Uses a globalThis singleton so that registerInternalHook and
+ * triggerInternalHook always share the same Map even when the bundler
+ * emits multiple copies of this module into separate chunks (bundle
+ * splitting). Without the singleton, handlers registered in one chunk
+ * are invisible to triggerInternalHook in another chunk, causing hooks
+ * to silently fire with zero handlers.
+ */
+const _g = globalThis as typeof globalThis & {
+  __openclaw_internal_hook_handlers__?: Map<string, InternalHookHandler[]>;
+};
+if (!_g.__openclaw_internal_hook_handlers__) {
+  _g.__openclaw_internal_hook_handlers__ = new Map<string, InternalHookHandler[]>();
+}
+const handlers = _g.__openclaw_internal_hook_handlers__;
+const log = createSubsystemLogger("internal-hooks");
 
 /**
  * Register a hook handler for a specific event type or event:action combination
@@ -134,10 +151,8 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
     try {
       await handler(event);
     } catch (err) {
-      console.error(
-        `Hook error [${event.type}:${event.action}]:`,
-        err instanceof Error ? err.message : String(err),
-      );
+      const message = err instanceof Error ? err.message : String(err);
+      log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
     }
   }
 }
