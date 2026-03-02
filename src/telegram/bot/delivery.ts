@@ -682,15 +682,16 @@ async function sendTelegramVoiceFallbackText(opts: {
   let appliedReplyTo = false;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
+    // Only apply reply reference, quote text, and buttons to the first chunk.
     const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
     await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
       replyToMessageId: replyToForChunk,
-      replyQuoteText: opts.replyQuoteText,
+      replyQuoteText: !appliedReplyTo ? opts.replyQuoteText : undefined,
       thread: opts.thread,
       textMode: "html",
       plainText: chunk.text,
       linkPreview: opts.linkPreview,
-      replyMarkup: i === 0 ? opts.replyMarkup : undefined,
+      replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
     });
     if (replyToForChunk) {
       appliedReplyTo = true;
