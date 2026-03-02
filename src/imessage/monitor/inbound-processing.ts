@@ -477,7 +477,11 @@ export function buildIMessageEchoScope(params: {
   chatId?: number;
   sender: string;
 }): string {
-  return `${params.accountId}:${params.isGroup ? formatIMessageChatTarget(params.chatId) : `imessage:${params.sender}`}`;
+  return `${params.accountId}:${
+    params.isGroup
+      ? formatIMessageChatTarget(params.chatId)
+      : `imessage:${normalizeIMessageHandle(params.sender)}`
+  }`;
 }
 
 export function describeIMessageEchoDropLog(params: {

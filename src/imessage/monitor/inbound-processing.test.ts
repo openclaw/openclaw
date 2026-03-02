@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createSentMessageCache } from "./echo-cache.js";
 import {
   describeIMessageEchoDropLog,
   resolveIMessageInboundDecision,
@@ -45,6 +46,37 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         messageId: "42",
       }),
     );
+  });
+
+  it("drops inbound echoes when sender format differs but normalized handle matches", () => {
+    const cache = createSentMessageCache();
+    cache.remember("default:imessage:+15555550123", { text: "Reasoning:\n_step_" });
+
+    const decision = resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: 99,
+        sender: "+1 (555) 555-0123",
+        text: "Reasoning:\n_step_",
+        is_from_me: false,
+        is_group: false,
+      },
+      opts: undefined,
+      messageText: "Reasoning:\n_step_",
+      bodyText: "Reasoning:\n_step_",
+      allowFrom: [],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: cache,
+      logVerbose: undefined,
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "echo" });
   });
 });
 
