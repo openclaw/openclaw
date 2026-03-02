@@ -6,6 +6,9 @@ import type { MSTeamsPollStore } from "./polls.js";
 
 type FakeServer = EventEmitter & {
   close: (callback?: (err?: Error | null) => void) => void;
+  setTimeout: (msecs: number) => FakeServer;
+  requestTimeout: number;
+  headersTimeout: number;
 };
 
 const expressControl = vi.hoisted(() => ({
@@ -14,6 +17,18 @@ const expressControl = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk", () => ({
   DEFAULT_WEBHOOK_MAX_BODY_BYTES: 1024 * 1024,
+  keepHttpServerTaskAlive: vi.fn(
+    async (params: { abortSignal?: AbortSignal; onAbort?: () => Promise<void> | void }) => {
+      await new Promise<void>((resolve) => {
+        if (params.abortSignal?.aborted) {
+          resolve();
+          return;
+        }
+        params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      await params.onAbort?.();
+    },
+  ),
   mergeAllowlist: (params: { existing?: string[]; additions?: string[] }) =>
     Array.from(new Set([...(params.existing ?? []), ...(params.additions ?? [])])),
   summarizeMapping: vi.fn(),
@@ -31,6 +46,9 @@ vi.mock("express", () => {
     post: vi.fn(),
     listen: vi.fn((_port: number) => {
       const server = new EventEmitter() as FakeServer;
+      server.setTimeout = vi.fn((_msecs: number) => server);
+      server.requestTimeout = 0;
+      server.headersTimeout = 0;
       server.close = (callback?: (err?: Error | null) => void) => {
         queueMicrotask(() => {
           server.emit("close");
