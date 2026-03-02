@@ -333,11 +333,35 @@ function isUnsupportedGuiDomain(detail: string): boolean {
 
 const RESTART_PID_WAIT_TIMEOUT_MS = 10_000;
 const RESTART_PID_WAIT_INTERVAL_MS = 200;
+const RESTART_KICKSTART_RECOVERY_TIMEOUT_MS = 2_500;
+const RESTART_KICKSTART_RECOVERY_INTERVAL_MS = 200;
 
 async function sleepMs(ms: number): Promise<void> {
   await new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function isLaunchctlServiceMissing(detail: string): boolean {
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("could not find service") ||
+    normalized.includes("service not found") ||
+    normalized.includes("no such process")
+  );
+}
+
+async function waitForLaunchctlService(domain: string, label: string): Promise<boolean> {
+  const target = `${domain}/${label}`;
+  const deadline = Date.now() + RESTART_KICKSTART_RECOVERY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const print = await execLaunchctl(["print", target]);
+    if (print.code === 0) {
+      return true;
+    }
+    await sleepMs(RESTART_KICKSTART_RECOVERY_INTERVAL_MS);
+  }
+  return false;
 }
 
 async function waitForPidExit(pid: number): Promise<void> {
@@ -484,7 +508,15 @@ export async function restartLaunchAgent({
 
   const start = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (start.code !== 0) {
-    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+    const detail = (start.stderr || start.stdout).trim();
+    if (isLaunchctlServiceMissing(detail)) {
+      const recovered = await waitForLaunchctlService(domain, label);
+      if (!recovered) {
+        throw new Error(`launchctl kickstart failed: ${detail}`.trim());
+      }
+    } else {
+      throw new Error(`launchctl kickstart failed: ${detail}`.trim());
+    }
   }
   try {
     stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
