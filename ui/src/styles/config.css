@@ -8,7 +8,7 @@
   grid-template-columns: 260px minmax(0, 1fr);
   gap: 0;
   height: calc(100vh - 160px);
-  margin: -12px -16px -32px;
+  margin: 0 -16px -32px; /* preserve margin-top: 0 for onboarding mode */
   border-radius: var(--radius-xl);
   border: 1px solid var(--border);
   background: var(--panel);
