@@ -492,6 +492,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         listeners: [new DiscordStatusReadyListener()],
         components,
         modals,
+        eventQueue: {
+          listenerTimeout: 300_000, // 5 minutes (was 30s default)
+          slowListenerThreshold: 5_000, // warn at 5s
+        },
       },
       clientPlugins,
     );
