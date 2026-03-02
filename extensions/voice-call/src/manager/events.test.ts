@@ -235,6 +235,50 @@ describe("processEvent (functional)", () => {
     expect(ctx.activeCalls.size).toBe(0);
   });
 
+  it("auto-registers externally-initiated outbound-api calls", () => {
+    const ctx = createContext();
+    const event: NormalizedEvent = {
+      id: "evt-external-1",
+      type: "call.initiated",
+      callId: "CA-external-123",
+      providerCallId: "CA-external-123",
+      timestamp: Date.now(),
+      direction: "outbound",
+      from: "+15550000000",
+      to: "+15559876543",
+    };
+
+    processEvent(ctx, event);
+
+    // Call should be registered in activeCalls and providerCallIdMap
+    expect(ctx.activeCalls.size).toBe(1);
+    expect(ctx.providerCallIdMap.get("CA-external-123")).toBeDefined();
+    const call = [...ctx.activeCalls.values()][0];
+    expect(call?.providerCallId).toBe("CA-external-123");
+    expect(call?.from).toBe("+15550000000");
+    expect(call?.to).toBe("+15559876543");
+  });
+
+  it("does not reject externally-initiated outbound calls even with disabled inbound policy", () => {
+    const { ctx, hangupCalls } = createRejectingInboundContext();
+    const event: NormalizedEvent = {
+      id: "evt-external-2",
+      type: "call.initiated",
+      callId: "CA-external-456",
+      providerCallId: "CA-external-456",
+      timestamp: Date.now(),
+      direction: "outbound",
+      from: "+15550000000",
+      to: "+15559876543",
+    };
+
+    processEvent(ctx, event);
+
+    // External outbound calls bypass inbound policy — they should be accepted
+    expect(ctx.activeCalls.size).toBe(1);
+    expect(hangupCalls).toHaveLength(0);
+  });
+
   it("deduplicates by dedupeKey even when event IDs differ", () => {
     const now = Date.now();
     const ctx = createContext();
