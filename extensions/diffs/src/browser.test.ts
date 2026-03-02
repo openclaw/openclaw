@@ -144,6 +144,45 @@ describe("PlaywrightDiffScreenshotter", () => {
     await expect(fs.readFile(pdfPath, "utf8")).resolves.toContain("%PDF-1.7");
   });
 
+  it("fails fast when PDF render exceeds size limits", async () => {
+    const pages: Array<{
+      close: ReturnType<typeof vi.fn>;
+      screenshot: ReturnType<typeof vi.fn>;
+      pdf: ReturnType<typeof vi.fn>;
+    }> = [];
+    const browser = createMockBrowser(pages, {
+      boundingBox: { x: 40, y: 40, width: 960, height: 60_000 },
+    });
+    launchMock.mockResolvedValue(browser);
+    const { PlaywrightDiffScreenshotter } = await import("./browser.js");
+
+    const screenshotter = new PlaywrightDiffScreenshotter({
+      config: createConfig(),
+      browserIdleMs: 1_000,
+    });
+    const pdfPath = path.join(rootDir, "oversized.pdf");
+
+    await expect(
+      screenshotter.screenshotHtml({
+        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
+        outputPath: pdfPath,
+        theme: "light",
+        image: {
+          format: "pdf",
+          qualityPreset: "standard",
+          scale: 2,
+          maxWidth: 960,
+          maxPixels: 8_000_000,
+        },
+      }),
+    ).rejects.toThrow("Diff frame did not render within image size limits.");
+
+    expect(launchMock).toHaveBeenCalledTimes(1);
+    expect(pages).toHaveLength(1);
+    expect(pages[0]?.pdf).toHaveBeenCalledTimes(0);
+    expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
+  });
+
   it("fails fast when maxPixels is still exceeded at scale 1", async () => {
     const pages: Array<{
       close: ReturnType<typeof vi.fn>;
@@ -192,10 +231,11 @@ function createMockBrowser(
     screenshot: ReturnType<typeof vi.fn>;
     pdf: ReturnType<typeof vi.fn>;
   }>,
+  options?: { boundingBox?: { x: number; y: number; width: number; height: number } },
 ) {
   const browser = {
     newPage: vi.fn(async () => {
-      const page = createMockPage();
+      const page = createMockPage(options);
       pages.push(page);
       return page;
     }),
@@ -205,7 +245,10 @@ function createMockBrowser(
   return browser;
 }
 
-function createMockPage() {
+function createMockPage(options?: {
+  boundingBox?: { x: number; y: number; width: number; height: number };
+}) {
+  const box = options?.boundingBox ?? { x: 40, y: 40, width: 640, height: 240 };
   const screenshot = vi.fn(async ({ path: screenshotPath }: { path: string }) => {
     await fs.writeFile(screenshotPath, Buffer.from("png"));
   });
@@ -221,7 +264,7 @@ function createMockPage() {
     emulateMedia: vi.fn(async () => {}),
     locator: vi.fn(() => ({
       waitFor: vi.fn(async () => {}),
-      boundingBox: vi.fn(async () => ({ x: 40, y: 40, width: 640, height: 240 })),
+      boundingBox: vi.fn(async () => box),
     })),
     setViewportSize: vi.fn(async () => {}),
     screenshot,

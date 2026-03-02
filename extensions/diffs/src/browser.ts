@@ -9,6 +9,8 @@ import { VIEWER_ASSET_PREFIX, getServedViewerAsset } from "./viewer-assets.js";
 const DEFAULT_BROWSER_IDLE_MS = 30_000;
 const SHARED_BROWSER_KEY = "__default__";
 const IMAGE_SIZE_LIMIT_ERROR = "Diff frame did not render within image size limits.";
+const PDF_REFERENCE_PAGE_HEIGHT_PX = 1_056;
+const MAX_PDF_PAGES = 50;
 
 export type DiffScreenshotter = {
   screenshotHtml(params: {
@@ -177,11 +179,18 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
           if (!pdfBox) {
             throw new Error("Diff frame was lost before PDF render.");
           }
+          const pdfWidth = Math.max(Math.ceil(pdfBox.width), 1);
+          const pdfHeight = Math.max(Math.ceil(pdfBox.height), 1);
+          const estimatedPixels = pdfWidth * pdfHeight;
+          const estimatedPages = Math.ceil(pdfHeight / PDF_REFERENCE_PAGE_HEIGHT_PX);
+          if (estimatedPixels > params.image.maxPixels || estimatedPages > MAX_PDF_PAGES) {
+            throw new Error(IMAGE_SIZE_LIMIT_ERROR);
+          }
 
           await page.pdf({
             path: params.outputPath,
-            width: `${Math.max(Math.ceil(pdfBox.width), 1)}px`,
-            height: `${Math.max(Math.ceil(pdfBox.height), 1)}px`,
+            width: `${pdfWidth}px`,
+            height: `${pdfHeight}px`,
             printBackground: true,
             margin: {
               top: "0",
