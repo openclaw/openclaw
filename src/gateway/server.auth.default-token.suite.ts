@@ -37,6 +37,36 @@ export function registerDefaultAuthTokenSuite(): void {
       await server.close();
     });
 
+    async function expectNonceValidationError(params: {
+      connectId: string;
+      mutateNonce: (nonce: string) => string;
+      expectedMessage: string;
+      expectedCode: string;
+      expectedReason: string;
+    }) {
+      const ws = await openWs(port);
+      const token = resolveGatewayTokenOrEnv();
+      const nonce = await readConnectChallengeNonce(ws);
+      const { device } = await createSignedDevice({
+        token,
+        scopes: ["operator.admin"],
+        clientId: TEST_OPERATOR_CLIENT.id,
+        clientMode: TEST_OPERATOR_CLIENT.mode,
+        nonce,
+      });
+
+      const connectRes = await sendRawConnectReq(ws, {
+        id: params.connectId,
+        token,
+        device: { ...device, nonce: params.mutateNonce(nonce) },
+      });
+      expect(connectRes.ok).toBe(false);
+      expect(connectRes.error?.message ?? "").toContain(params.expectedMessage);
+      expect(connectRes.error?.details?.code).toBe(params.expectedCode);
+      expect(connectRes.error?.details?.reason).toBe(params.expectedReason);
+      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    }
+
     test("closes silent handshakes after timeout", async () => {
       vi.useRealTimers();
       const prevHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
@@ -316,55 +346,23 @@ export function registerDefaultAuthTokenSuite(): void {
     });
 
     test("returns nonce-required detail code when nonce is blank", async () => {
-      const ws = await openWs(port);
-      const token = resolveGatewayTokenOrEnv();
-      const nonce = await readConnectChallengeNonce(ws);
-      const { device } = await createSignedDevice({
-        token,
-        scopes: ["operator.admin"],
-        clientId: TEST_OPERATOR_CLIENT.id,
-        clientMode: TEST_OPERATOR_CLIENT.mode,
-        nonce,
+      await expectNonceValidationError({
+        connectId: "c-blank-nonce",
+        mutateNonce: () => "   ",
+        expectedMessage: "device nonce required",
+        expectedCode: ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED,
+        expectedReason: "device-nonce-missing",
       });
-
-      const connectRes = await sendRawConnectReq(ws, {
-        id: "c-blank-nonce",
-        token,
-        device: { ...device, nonce: "   " },
-      });
-      expect(connectRes.ok).toBe(false);
-      expect(connectRes.error?.message ?? "").toContain("device nonce required");
-      expect(connectRes.error?.details?.code).toBe(
-        ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED,
-      );
-      expect(connectRes.error?.details?.reason).toBe("device-nonce-missing");
-      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     });
 
     test("returns nonce-mismatch detail code when nonce does not match challenge", async () => {
-      const ws = await openWs(port);
-      const token = resolveGatewayTokenOrEnv();
-      const nonce = await readConnectChallengeNonce(ws);
-      const { device } = await createSignedDevice({
-        token,
-        scopes: ["operator.admin"],
-        clientId: TEST_OPERATOR_CLIENT.id,
-        clientMode: TEST_OPERATOR_CLIENT.mode,
-        nonce,
+      await expectNonceValidationError({
+        connectId: "c-wrong-nonce",
+        mutateNonce: (nonce) => `${nonce}-stale`,
+        expectedMessage: "device nonce mismatch",
+        expectedCode: ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH,
+        expectedReason: "device-nonce-mismatch",
       });
-
-      const connectRes = await sendRawConnectReq(ws, {
-        id: "c-wrong-nonce",
-        token,
-        device: { ...device, nonce: `${nonce}-stale` },
-      });
-      expect(connectRes.ok).toBe(false);
-      expect(connectRes.error?.message ?? "").toContain("device nonce mismatch");
-      expect(connectRes.error?.details?.code).toBe(
-        ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_MISMATCH,
-      );
-      expect(connectRes.error?.details?.reason).toBe("device-nonce-mismatch");
-      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     });
 
     test("invalid connect params surface in response and close reason", async () => {
