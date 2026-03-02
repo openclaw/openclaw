@@ -108,6 +108,7 @@ export async function prepareSlackMessage(params: {
         channelId: message.channel,
         channelName,
         channels: ctx.channelsConfig,
+        channelKeys: ctx.channelsConfigKeys,
         defaultRequireMention: ctx.defaultRequireMention,
       })
     : null;
@@ -251,15 +252,29 @@ export async function prepareSlackMessage(params: {
       hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts)),
   );
 
-  const sender = message.user ? await ctx.resolveUserName(message.user) : null;
-  const senderName =
-    sender?.name ?? message.username?.trim() ?? message.user ?? message.bot_id ?? "unknown";
+  let resolvedSenderName = message.username?.trim() || undefined;
+  const resolveSenderName = async (): Promise<string> => {
+    if (resolvedSenderName) {
+      return resolvedSenderName;
+    }
+    if (message.user) {
+      const sender = await ctx.resolveUserName(message.user);
+      const normalized = sender?.name?.trim();
+      if (normalized) {
+        resolvedSenderName = normalized;
+        return resolvedSenderName;
+      }
+    }
+    resolvedSenderName = message.user ?? message.bot_id ?? "unknown";
+    return resolvedSenderName;
+  };
+  const senderNameForAuth = ctx.allowNameMatching ? await resolveSenderName() : undefined;
 
   const channelUserAuthorized = isRoom
     ? resolveSlackUserAllowed({
         allowList: channelConfig?.users,
         userId: senderId,
-        userName: senderName,
+        userName: senderNameForAuth,
         allowNameMatching: ctx.allowNameMatching,
       })
     : true;
@@ -279,7 +294,7 @@ export async function prepareSlackMessage(params: {
   const ownerAuthorized = resolveSlackAllowListMatch({
     allowList: allowFromLower,
     id: senderId,
-    name: senderName,
+    name: senderNameForAuth,
     allowNameMatching: ctx.allowNameMatching,
   }).allowed;
   const channelUsersAllowlistConfigured =
@@ -289,7 +304,7 @@ export async function prepareSlackMessage(params: {
       ? resolveSlackUserAllowed({
           allowList: channelConfig?.users,
           userId: senderId,
-          userName: senderName,
+          userName: senderNameForAuth,
           allowNameMatching: ctx.allowNameMatching,
         })
       : false;
@@ -350,7 +365,7 @@ export async function prepareSlackMessage(params: {
       limit: ctx.historyLimit,
       entry: pendingBody
         ? {
-            sender: senderName,
+            sender: await resolveSenderName(),
             body: pendingBody,
             timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
             messageId: message.ts,
@@ -455,6 +470,7 @@ export async function prepareSlackMessage(params: {
       : null;
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
+  const senderName = await resolveSenderName();
   const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
   const inboundLabel = isDirectMessage
     ? `Slack DM from ${senderName}`
