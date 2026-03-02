@@ -24,8 +24,9 @@ openclaw onboard --install-daemon
 ```
 
 向导会引导你完成：
+
 1. Gateway 设置
-2. Workspace 配置  
+2. Workspace 配置
 3. Channels 连接
 4. Skills 安装
 
