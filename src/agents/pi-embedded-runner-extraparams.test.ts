@@ -970,6 +970,42 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.tool_choice).toBe("auto");
   });
 
+  it("runtime toolChoice overrides configured toolChoice for Codex payload", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { tool_choice: "auto" };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.3-codex": {
+              params: { toolChoice: "required" },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.3-codex");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+    } as Model<"openai-codex-responses">;
+    void agent.streamFn?.(model, { messages: [] }, {
+      toolChoice: "none",
+    } as unknown as SimpleStreamOptions);
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.tool_choice).toBe("none");
+  });
+
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
