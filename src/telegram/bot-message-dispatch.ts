@@ -18,6 +18,7 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -41,6 +42,7 @@ import {
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
+const streamingLog = createSubsystemLogger("gateway/channels/telegram/streaming");
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
@@ -183,6 +185,13 @@ export const dispatchTelegramMessage = async ({
   const canStreamAnswerDraft =
     previewStreamingEnabled && !accountBlockStreamingEnabled && !forceBlockStreamingForReasoning;
   const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
+  streamingLog.info(
+    `streaming decision: streamMode=${streamMode} previewEnabled=${previewStreamingEnabled} ` +
+      `blockStreaming=${accountBlockStreamingEnabled} reasoningLevel=${resolvedReasoningLevel} ` +
+      `forceBlockForReasoning=${forceBlockStreamingForReasoning} ` +
+      `canStreamAnswer=${canStreamAnswerDraft} canStreamReasoning=${canStreamReasoningDraft} ` +
+      `chat=${chatId} isGroup=${isGroup}`,
+  );
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
@@ -217,8 +226,8 @@ export const dispatchTelegramMessage = async ({
                   });
                 }
               : undefined,
-          log: logVerbose,
-          warn: logVerbose,
+          log: (msg) => streamingLog.debug(msg),
+          warn: (msg) => streamingLog.warn(msg),
         })
       : undefined;
     return {

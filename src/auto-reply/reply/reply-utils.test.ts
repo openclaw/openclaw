@@ -501,7 +501,7 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
-  it("starts typing and refreshes ttl on text for thinking mode", async () => {
+  it("starts typing immediately on reasoning delta for thinking mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -509,9 +509,9 @@ describe("createTypingSignaler", () => {
       isHeartbeat: false,
     });
 
+    // With extended thinking, reasoning deltas arrive before text deltas.
+    // Typing should start immediately on reasoning content.
     await signaler.signalReasoningDelta();
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
-    await signaler.signalTextDelta("hi");
     expect(typing.startTypingLoop).toHaveBeenCalled();
     expect(typing.refreshTypingTtl).toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();

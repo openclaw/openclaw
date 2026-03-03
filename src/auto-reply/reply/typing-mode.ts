@@ -117,9 +117,10 @@ export function createTypingSignaler(params: {
     if (disabled || !shouldStartOnReasoning) {
       return;
     }
-    if (!hasRenderableText) {
-      return;
-    }
+    // With extended thinking (`thinking: high`), reasoning deltas arrive BEFORE
+    // any text deltas. Start typing immediately when reasoning content appears —
+    // the previous `hasRenderableText` guard blocked typing during the entire
+    // thinking phase because no text had been emitted yet.
     await typing.startTypingLoop();
     typing.refreshTypingTtl();
   };
