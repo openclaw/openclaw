@@ -107,4 +107,23 @@ describe("telegram proxy client", () => {
 
     expectProxyClient(fetchImpl);
   });
+
+  it("uses resilient fetch resolution for non-proxy outbound send", async () => {
+    const fetchImpl = vi.fn();
+    loadConfig.mockReturnValue({
+      channels: { telegram: { accounts: { foo: {} } } },
+    });
+    resolveTelegramFetch.mockReturnValue(fetchImpl as unknown as typeof fetch);
+
+    await sendMessageTelegram("123", "hi", { token: "tok", accountId: "foo" });
+
+    expect(makeProxyFetch).not.toHaveBeenCalled();
+    expect(resolveTelegramFetch).toHaveBeenCalledWith(undefined, { network: undefined });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ fetch: fetchImpl }),
+      }),
+    );
+  });
 });

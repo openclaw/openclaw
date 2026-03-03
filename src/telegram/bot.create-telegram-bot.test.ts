@@ -75,6 +75,25 @@ describe("createTelegramBot", () => {
       globalThis.fetch = originalFetch;
     }
   });
+  it("wires resolveTelegramFetch output into bot client polling options", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true } as Response);
+    const fetchModule = await import("./fetch.js");
+    const resolveFetchSpy = vi
+      .spyOn(fetchModule, "resolveTelegramFetch")
+      .mockReturnValue(fetchImpl as unknown as typeof fetch);
+    try {
+      createTelegramBot({ token: "tok" });
+      expect(resolveFetchSpy).toHaveBeenCalledWith(undefined, { network: undefined });
+      const clientFetch = (
+        botCtorSpy.mock.calls.at(-1)?.[1] as { client?: { fetch?: typeof fetch } }
+      )?.client?.fetch;
+      expect(clientFetch).toBe(fetchImpl);
+      await clientFetch?.("https://api.telegram.org");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    } finally {
+      resolveFetchSpy.mockRestore();
+    }
+  });
   it("applies global and per-account timeoutSeconds", () => {
     loadConfig.mockReturnValue({
       channels: {
