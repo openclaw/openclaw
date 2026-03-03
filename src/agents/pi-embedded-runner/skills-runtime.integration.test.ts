@@ -45,7 +45,11 @@ async function setupBundledDiffsPlugin() {
 }
 
 afterEach(async () => {
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledDir;
+  if (originalBundledDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledDir;
+  }
   clearPluginManifestRegistryCache();
   await Promise.all(
     tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
