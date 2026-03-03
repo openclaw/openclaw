@@ -100,6 +100,21 @@ describe("registerMaintenanceCommands doctor action", () => {
     );
   });
 
+  it("passes dashboard mode argument to dashboard command", async () => {
+    dashboardCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["dashboard", "dev", "--no-open", "--ui-port", "18800"]);
+
+    expect(dashboardCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        mode: "dev",
+        noOpen: true,
+        uiPort: "18800",
+      }),
+    );
+  });
+
   it("passes reset options to reset command", async () => {
     resetCommand.mockResolvedValue(undefined);
 

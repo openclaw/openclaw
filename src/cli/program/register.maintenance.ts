@@ -41,7 +41,7 @@ export function registerMaintenanceCommands(program: Command) {
     });
 
   program
-    .command("dashboard")
+    .command("dashboard [mode]")
     .description("Open the Control UI with your current token")
     .addHelpText(
       "after",
@@ -49,10 +49,13 @@ export function registerMaintenanceCommands(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/dashboard", "docs.openclaw.ai/cli/dashboard")}\n`,
     )
     .option("--no-open", "Print URL but do not launch a browser")
-    .action(async (opts) => {
+    .option("--ui-port <port>", "Control UI dev server port (dashboard dev only)")
+    .action(async (mode, opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await dashboardCommand(defaultRuntime, {
+          mode: typeof mode === "string" ? mode : undefined,
           noOpen: opts.open === false,
+          uiPort: opts.uiPort as string | undefined,
         });
       });
     });
