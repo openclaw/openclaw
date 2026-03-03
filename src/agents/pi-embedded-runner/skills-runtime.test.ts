@@ -10,7 +10,8 @@ vi.mock("../skills.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../skills.js")>();
   return {
     ...actual,
-    loadWorkspaceSkillEntries: (...args: unknown[]) => hoisted.loadWorkspaceSkillEntries(...args),
+    loadWorkspaceSkillEntries:
+      hoisted.loadWorkspaceSkillEntries as unknown as typeof actual.loadWorkspaceSkillEntries,
   };
 });
 
