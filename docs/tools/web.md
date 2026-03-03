@@ -32,7 +32,7 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 | Provider                  | Result shape                       | Provider-specific filters                    | Notes                                                                          | API key                                     |
 | ------------------------- | ---------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------- |
 | **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time       | Supports Brave `llm-context` mode                                              | `BRAVE_API_KEY`                             |
-| **Exa**                   | Structured results with snippets   | —                                            | Neural search; understands meaning, not just keywords                          | `EXA_API_KEY`                               |
+| **Exa**                   | Structured results with snippets   | —                                            | Neural search; contents cost extra per page                                    | `EXA_API_KEY`                               |
 | **Gemini**                | AI-synthesized answers + citations | —                                            | Uses Google Search grounding                                                   | `GEMINI_API_KEY`                            |
 | **Grok**                  | AI-synthesized answers + citations | —                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
 | **Kimi**                  | AI-synthesized answers + citations | —                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
@@ -262,8 +262,8 @@ Exa provides neural search that understands meaning, not just keywords. It retur
           apiKey: "your-exa-key",
           // Search type: "auto" (default), "neural", or "keyword"
           type: "auto",
-          // Include page content snippets (default: true)
-          contents: true,
+          // Include page text snippets (default: false; costs extra)
+          contents: false,
         },
       },
     },
@@ -277,8 +277,9 @@ For a gateway install, put it in `~/.openclaw/.env`.
 ### Notes
 
 - Exa's neural search mode understands query intent and finds semantically relevant results even without exact keyword matches.
-- When `contents` is enabled (default), results include text snippets and highlights for richer context.
 - The `type` option controls the search strategy: `"auto"` lets Exa choose, `"neural"` forces semantic search, `"keyword"` forces traditional matching.
+- **Cost:** Exa charges per search request ($7/1k requests for 1-10 results). Setting `contents: true` adds an extra per-page charge ($1/1k pages) for text snippets. Contents are off by default to keep costs predictable.
+- See [Exa pricing](https://exa.ai/pricing) for current rates and free tier details (1,000 free requests/month).
 
 ## web_search
 
