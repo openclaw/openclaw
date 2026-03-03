@@ -13,20 +13,20 @@ The CI runs on every push to `main` and every pull request. It uses smart scopin
 
 ## Job Overview
 
-| Job               | Purpose                                         | When it runs                                      |
-| ----------------- | ----------------------------------------------- | ------------------------------------------------- |
-| `docs-scope`      | Detect docs-only changes                        | Always                                            |
-| `changed-scope`   | Detect which areas changed (node/macos/android) | Non-docs PRs                                      |
-| `check`           | TypeScript types, lint, format                  | Push to `main`, or PRs with Node-relevant changes |
-| `check-docs`      | Markdown lint + broken link check               | Docs changed                                      |
-| `code-analysis`   | LOC threshold check (1000 lines)                | PRs only                                          |
-| `secrets`         | Detect leaked secrets                           | Always                                            |
-| `build-artifacts` | Build dist once, share with other jobs          | Non-docs, node changes                            |
-| `release-check`   | Validate npm pack contents                      | After build                                       |
-| `checks`          | Node/Bun tests + protocol check                 | Non-docs, node changes                            |
-| `checks-windows`  | Windows-specific tests                          | Non-docs, node changes                            |
-| `macos`           | Swift lint/build/test + TS tests                | PRs with macos changes                            |
-| `android`         | Gradle build + tests                            | Non-docs, android changes                         |
+| Job               | Purpose                                                 | When it runs                                      |
+| ----------------- | ------------------------------------------------------- | ------------------------------------------------- |
+| `docs-scope`      | Detect docs-only changes                                | Always                                            |
+| `changed-scope`   | Detect which areas changed (node/macos/android/windows) | Non-docs PRs                                      |
+| `check`           | TypeScript types, lint, format                          | Push to `main`, or PRs with Node-relevant changes |
+| `check-docs`      | Markdown lint + broken link check                       | Docs changed                                      |
+| `code-analysis`   | LOC threshold check (1000 lines)                        | PRs only                                          |
+| `secrets`         | Detect leaked secrets                                   | Always                                            |
+| `build-artifacts` | Build dist once, share with other jobs                  | Non-docs, node changes                            |
+| `release-check`   | Validate npm pack contents                              | After build                                       |
+| `checks`          | Node/Bun tests + protocol check                         | Non-docs, node changes                            |
+| `checks-windows`  | Windows-specific tests                                  | Non-docs, windows-relevant changes                |
+| `macos`           | Swift lint/build/test + TS tests                        | PRs with macos changes                            |
+| `android`         | Gradle build + tests                                    | Non-docs, android changes                         |
 
 ## Fail-Fast Order
 
@@ -43,7 +43,7 @@ Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests
 | Runner                           | Jobs                                       |
 | -------------------------------- | ------------------------------------------ |
 | `blacksmith-16vcpu-ubuntu-2404`  | Most Linux jobs, including scope detection |
-| `blacksmith-16vcpu-windows-2025` | `checks-windows`                           |
+| `blacksmith-32vcpu-windows-2025` | `checks-windows`                           |
 | `macos-latest`                   | `macos`, `ios`                             |
 
 ## Local Equivalents
