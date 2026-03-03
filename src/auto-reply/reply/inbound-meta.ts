@@ -86,6 +86,8 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
   const directChannelValue = resolveInboundChannel(ctx);
+  const isThreadConversation =
+    ctx.MessageThreadId != null || Boolean(safeTrim(ctx.ThreadLabel));
   const includeDirectConversationInfo = Boolean(
     directChannelValue && directChannelValue !== "webchat",
   );
@@ -124,12 +126,35 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
         ? ctx.InboundHistory.length
         : undefined,
   };
-  if (Object.values(conversationInfo).some((v) => v !== undefined)) {
+
+  // For threaded conversations (Slack/Discord/Telegram topics, etc.), avoid repeating large
+  // static metadata blocks on every turn. Most of the high-cardinality fields
+  // (conversation_label, group_subject, thread_label, topic_id, etc.) stay constant across
+  // all messages in the thread. Keep only the per-message identifiers and dynamic flags
+  // in the untrusted metadata block to reduce token bloat.
+  const effectiveConversationInfo = isThreadConversation
+    ? {
+        message_id: conversationInfo.message_id,
+        reply_to_id: conversationInfo.reply_to_id,
+        sender_id: conversationInfo.sender_id,
+        sender: conversationInfo.sender,
+        timestamp: conversationInfo.timestamp,
+        is_forum: conversationInfo.is_forum,
+        is_group_chat: conversationInfo.is_group_chat,
+        was_mentioned: conversationInfo.was_mentioned,
+        has_reply_context: conversationInfo.has_reply_context,
+        has_forwarded_context: conversationInfo.has_forwarded_context,
+        has_thread_starter: conversationInfo.has_thread_starter,
+        history_count: conversationInfo.history_count,
+      }
+    : conversationInfo;
+
+  if (Object.values(effectiveConversationInfo).some((v) => v !== undefined)) {
     blocks.push(
       [
         "Conversation info (untrusted metadata):",
         "```json",
-        JSON.stringify(conversationInfo, null, 2),
+        JSON.stringify(effectiveConversationInfo, null, 2),
         "```",
       ].join("\n"),
     );
