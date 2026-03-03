@@ -1,14 +1,18 @@
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
 
 export const DIFF_LAYOUTS = ["unified", "split"] as const;
-export const DIFF_MODES = ["view", "image", "both"] as const;
+export const DIFF_MODES = ["view", "image", "file", "both"] as const;
 export const DIFF_THEMES = ["light", "dark"] as const;
 export const DIFF_INDICATORS = ["bars", "classic", "none"] as const;
+export const DIFF_IMAGE_QUALITY_PRESETS = ["standard", "hq", "print"] as const;
+export const DIFF_OUTPUT_FORMATS = ["png", "pdf"] as const;
 
 export type DiffLayout = (typeof DIFF_LAYOUTS)[number];
 export type DiffMode = (typeof DIFF_MODES)[number];
 export type DiffTheme = (typeof DIFF_THEMES)[number];
 export type DiffIndicators = (typeof DIFF_INDICATORS)[number];
+export type DiffImageQualityPreset = (typeof DIFF_IMAGE_QUALITY_PRESETS)[number];
+export type DiffOutputFormat = (typeof DIFF_OUTPUT_FORMATS)[number];
 
 export type DiffPresentationDefaults = {
   fontFamily: string;
@@ -22,9 +26,17 @@ export type DiffPresentationDefaults = {
   theme: DiffTheme;
 };
 
-export type DiffToolDefaults = DiffPresentationDefaults & {
-  mode: DiffMode;
+export type DiffFileDefaults = {
+  fileFormat: DiffOutputFormat;
+  fileQuality: DiffImageQualityPreset;
+  fileScale: number;
+  fileMaxWidth: number;
 };
+
+export type DiffToolDefaults = DiffPresentationDefaults &
+  DiffFileDefaults & {
+    mode: DiffMode;
+  };
 
 export type BeforeAfterDiffInput = {
   kind: "before_after";
@@ -45,6 +57,13 @@ export type DiffInput = BeforeAfterDiffInput | PatchDiffInput;
 
 export type DiffRenderOptions = {
   presentation: DiffPresentationDefaults;
+  image: {
+    format: DiffOutputFormat;
+    qualityPreset: DiffImageQualityPreset;
+    scale: number;
+    maxWidth: number;
+    maxPixels: number;
+  };
   expandUnchanged: boolean;
 };
 
@@ -90,6 +109,7 @@ export type DiffArtifactMeta = {
   fileCount: number;
   viewerPath: string;
   htmlPath: string;
+  filePath?: string;
   imagePath?: string;
 };
 
