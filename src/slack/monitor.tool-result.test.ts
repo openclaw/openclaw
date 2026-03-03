@@ -37,16 +37,17 @@ describe("monitorSlackProvider tool results", () => {
     parent_user_id?: string;
   };
 
+  const baseSlackMessageEvent = Object.freeze({
+    type: "message",
+    user: "U1",
+    text: "hello",
+    ts: "123",
+    channel: "C1",
+    channel_type: "im",
+  }) as SlackMessageEvent;
+
   function makeSlackMessageEvent(overrides: Partial<SlackMessageEvent> = {}): SlackMessageEvent {
-    return {
-      type: "message",
-      user: "U1",
-      text: "hello",
-      ts: "123",
-      channel: "C1",
-      channel_type: "im",
-      ...overrides,
-    };
+    return { ...baseSlackMessageEvent, ...overrides };
   }
 
   function setDirectMessageReplyMode(replyToMode: "off" | "all" | "first") {

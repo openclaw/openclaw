@@ -70,6 +70,14 @@ describe("config plugin validation", () => {
     process.env.OPENCLAW_STATE_DIR = path.join(suiteHome, ".openclaw");
     process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = "10000";
     clearPluginManifestRegistryCache();
+    // Warm the plugin manifest cache once so path-based validations can reuse
+    // parsed manifests across test cases.
+    validateInSuite({
+      plugins: {
+        enabled: false,
+        load: { paths: [badPluginDir, bluebubblesPluginDir] },
+      },
+    });
   });
 
   afterAll(async () => {
