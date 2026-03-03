@@ -11,6 +11,7 @@ import {
   normalizeMediaAttachments,
   runCapability,
 } from "./runner.js";
+import type { AudioTranscriptionRequest } from "./types.js";
 
 async function withAudioFixture(params: {
   filePrefix: string;
@@ -47,6 +48,41 @@ async function withAudioFixture(params: {
   }
 }
 
+const AUDIO_CAPABILITY_CFG = {
+  models: {
+    providers: {
+      openai: {
+        apiKey: "test-key",
+        models: [],
+      },
+    },
+  },
+} as unknown as OpenClawConfig;
+
+async function runAudioCapabilityWithTranscriber(params: {
+  ctx: MsgContext;
+  media: ReturnType<typeof normalizeMediaAttachments>;
+  cache: ReturnType<typeof createMediaAttachmentCache>;
+  transcribeAudio: (req: AudioTranscriptionRequest) => Promise<{ text: string; model: string }>;
+}) {
+  const providerRegistry = buildProviderRegistry({
+    openai: {
+      id: "openai",
+      capabilities: ["audio"],
+      transcribeAudio: params.transcribeAudio,
+    },
+  });
+
+  return await runCapability({
+    capability: "audio",
+    cfg: AUDIO_CAPABILITY_CFG,
+    ctx: params.ctx,
+    attachments: params.cache,
+    media: params.media,
+    providerRegistry,
+  });
+}
+
 describe("runCapability skips tiny audio files", () => {
   it("skips audio transcription when file is smaller than MIN_AUDIO_FILE_BYTES", async () => {
     await withAudioFixture({
@@ -56,35 +92,14 @@ describe("runCapability skips tiny audio files", () => {
       fileContents: Buffer.alloc(100), // 100 bytes, way below 1024
       run: async ({ ctx, media, cache }) => {
         let transcribeCalled = false;
-        const providerRegistry = buildProviderRegistry({
-          openai: {
-            id: "openai",
-            capabilities: ["audio"],
-            transcribeAudio: async (req) => {
-              transcribeCalled = true;
-              return { text: "should not happen", model: req.model };
-            },
-          },
-        });
-
-        const cfg = {
-          models: {
-            providers: {
-              openai: {
-                apiKey: "test-key",
-                models: [],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig;
-
-        const result = await runCapability({
-          capability: "audio",
-          cfg,
+        const result = await runAudioCapabilityWithTranscriber({
           ctx,
-          attachments: cache,
           media,
-          providerRegistry,
+          cache,
+          transcribeAudio: async (req) => {
+            transcribeCalled = true;
+            return { text: "should not happen", model: req.model };
+          },
         });
 
         // The provider should never be called
@@ -109,35 +124,14 @@ describe("runCapability skips tiny audio files", () => {
       fileContents: Buffer.alloc(0),
       run: async ({ ctx, media, cache }) => {
         let transcribeCalled = false;
-        const providerRegistry = buildProviderRegistry({
-          openai: {
-            id: "openai",
-            capabilities: ["audio"],
-            transcribeAudio: async () => {
-              transcribeCalled = true;
-              return { text: "nope", model: "whisper-1" };
-            },
-          },
-        });
-
-        const cfg = {
-          models: {
-            providers: {
-              openai: {
-                apiKey: "test-key",
-                models: [],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig;
-
-        const result = await runCapability({
-          capability: "audio",
-          cfg,
+        const result = await runAudioCapabilityWithTranscriber({
           ctx,
-          attachments: cache,
           media,
-          providerRegistry,
+          cache,
+          transcribeAudio: async () => {
+            transcribeCalled = true;
+            return { text: "nope", model: "whisper-1" };
+          },
         });
 
         expect(transcribeCalled).toBe(false);
@@ -154,35 +148,14 @@ describe("runCapability skips tiny audio files", () => {
       fileContents: Buffer.alloc(MIN_AUDIO_FILE_BYTES + 100),
       run: async ({ ctx, media, cache }) => {
         let transcribeCalled = false;
-        const providerRegistry = buildProviderRegistry({
-          openai: {
-            id: "openai",
-            capabilities: ["audio"],
-            transcribeAudio: async (req) => {
-              transcribeCalled = true;
-              return { text: "hello world", model: req.model };
-            },
-          },
-        });
-
-        const cfg = {
-          models: {
-            providers: {
-              openai: {
-                apiKey: "test-key",
-                models: [],
-              },
-            },
-          },
-        } as unknown as OpenClawConfig;
-
-        const result = await runCapability({
-          capability: "audio",
-          cfg,
+        const result = await runAudioCapabilityWithTranscriber({
           ctx,
-          attachments: cache,
           media,
-          providerRegistry,
+          cache,
+          transcribeAudio: async (req) => {
+            transcribeCalled = true;
+            return { text: "hello world", model: req.model };
+          },
         });
 
         expect(transcribeCalled).toBe(true);

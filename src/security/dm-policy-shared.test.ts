@@ -17,6 +17,43 @@ describe("security/dm-policy-shared", () => {
     hasControlCommand: true,
   } as const;
 
+  async function expectStoreReadSkipped(params: {
+    provider: string;
+    accountId: string;
+    dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
+    shouldRead?: boolean;
+  }) {
+    let called = false;
+    const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+      provider: params.provider,
+      accountId: params.accountId,
+      ...(params.dmPolicy ? { dmPolicy: params.dmPolicy } : {}),
+      ...(params.shouldRead !== undefined ? { shouldRead: params.shouldRead } : {}),
+      readStore: async (_provider, _accountId) => {
+        called = true;
+        return ["should-not-be-read"];
+      },
+    });
+    expect(called).toBe(false);
+    expect(storeAllowFrom).toEqual([]);
+  }
+
+  function resolveCommandGate(overrides: {
+    isGroup: boolean;
+    isSenderAllowed: (allowFrom: string[]) => boolean;
+    groupPolicy?: "open" | "allowlist" | "disabled";
+  }) {
+    return resolveDmGroupAccessWithCommandGate({
+      dmPolicy: "pairing",
+      groupPolicy: overrides.groupPolicy ?? "allowlist",
+      allowFrom: ["owner"],
+      groupAllowFrom: ["group-owner"],
+      storeAllowFrom: ["paired-user"],
+      command: controlCommand,
+      ...overrides,
+    });
+  }
+
   it("normalizes config + store allow entries and counts distinct senders", async () => {
     const state = await resolveDmAllowState({
       provider: "telegram",
@@ -47,33 +84,19 @@ describe("security/dm-policy-shared", () => {
   });
 
   it("skips pairing-store reads when dmPolicy is allowlist", async () => {
-    let called = false;
-    const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    await expectStoreReadSkipped({
       provider: "telegram",
       accountId: "default",
       dmPolicy: "allowlist",
-      readStore: async (_provider, _accountId) => {
-        called = true;
-        return ["should-not-be-read"];
-      },
     });
-    expect(called).toBe(false);
-    expect(storeAllowFrom).toEqual([]);
   });
 
   it("skips pairing-store reads when shouldRead=false", async () => {
-    let called = false;
-    const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    await expectStoreReadSkipped({
       provider: "slack",
       accountId: "default",
       shouldRead: false,
-      readStore: async (_provider, _accountId) => {
-        called = true;
-        return ["should-not-be-read"];
-      },
     });
-    expect(called).toBe(false);
-    expect(storeAllowFrom).toEqual([]);
   });
 
   it("builds effective DM/group allowlists from config + pairing store", () => {
@@ -184,15 +207,9 @@ describe("security/dm-policy-shared", () => {
   });
 
   it("resolves command gate with dm/group parity for groups", () => {
-    const resolved = resolveDmGroupAccessWithCommandGate({
+    const resolved = resolveCommandGate({
       isGroup: true,
-      dmPolicy: "pairing",
-      groupPolicy: "allowlist",
-      allowFrom: ["owner"],
-      groupAllowFrom: ["group-owner"],
-      storeAllowFrom: ["paired-user"],
       isSenderAllowed: (allowFrom) => allowFrom.includes("paired-user"),
-      command: controlCommand,
     });
     expect(resolved.decision).toBe("block");
     expect(resolved.reason).toBe("groupPolicy=allowlist (not allowlisted)");
@@ -216,15 +233,9 @@ describe("security/dm-policy-shared", () => {
   });
 
   it("treats dm command authorization as dm access result", () => {
-    const resolved = resolveDmGroupAccessWithCommandGate({
+    const resolved = resolveCommandGate({
       isGroup: false,
-      dmPolicy: "pairing",
-      groupPolicy: "allowlist",
-      allowFrom: ["owner"],
-      groupAllowFrom: ["group-owner"],
-      storeAllowFrom: ["paired-user"],
       isSenderAllowed: (allowFrom) => allowFrom.includes("paired-user"),
-      command: controlCommand,
     });
     expect(resolved.decision).toBe("allow");
     expect(resolved.commandAuthorized).toBe(true);
@@ -274,80 +285,83 @@ describe("security/dm-policy-shared", () => {
     "zalo",
   ] as const;
 
+  type ParityCase = {
+    name: string;
+    isGroup: boolean;
+    dmPolicy: "open" | "allowlist" | "pairing" | "disabled";
+    groupPolicy: "open" | "allowlist" | "disabled";
+    allowFrom: string[];
+    groupAllowFrom: string[];
+    storeAllowFrom: string[];
+    isSenderAllowed: (allowFrom: string[]) => boolean;
+    expectedDecision: "allow" | "block" | "pairing";
+    expectedReactionAllowed: boolean;
+  };
+
+  function createParityCase(overrides: Partial<ParityCase> & Pick<ParityCase, "name">): ParityCase {
+    return {
+      name: overrides.name,
+      isGroup: false,
+      dmPolicy: "open",
+      groupPolicy: "allowlist",
+      allowFrom: [],
+      groupAllowFrom: [],
+      storeAllowFrom: [],
+      isSenderAllowed: () => false,
+      expectedDecision: "allow",
+      expectedReactionAllowed: true,
+      ...overrides,
+    };
+  }
+
   it("keeps message/reaction policy parity table across channels", () => {
     const cases = [
-      {
+      createParityCase({
         name: "dmPolicy=open",
-        isGroup: false,
-        dmPolicy: "open" as const,
-        groupPolicy: "allowlist" as const,
-        allowFrom: [] as string[],
-        groupAllowFrom: [] as string[],
-        storeAllowFrom: [] as string[],
-        isSenderAllowed: () => false,
-        expectedDecision: "allow" as const,
+        dmPolicy: "open",
+        expectedDecision: "allow",
         expectedReactionAllowed: true,
-      },
-      {
+      }),
+      createParityCase({
         name: "dmPolicy=disabled",
-        isGroup: false,
-        dmPolicy: "disabled" as const,
-        groupPolicy: "allowlist" as const,
-        allowFrom: [] as string[],
-        groupAllowFrom: [] as string[],
-        storeAllowFrom: [] as string[],
-        isSenderAllowed: () => false,
-        expectedDecision: "block" as const,
+        dmPolicy: "disabled",
+        expectedDecision: "block",
         expectedReactionAllowed: false,
-      },
-      {
+      }),
+      createParityCase({
         name: "dmPolicy=allowlist unauthorized",
-        isGroup: false,
-        dmPolicy: "allowlist" as const,
-        groupPolicy: "allowlist" as const,
+        dmPolicy: "allowlist",
         allowFrom: ["owner"],
-        groupAllowFrom: [] as string[],
-        storeAllowFrom: [] as string[],
         isSenderAllowed: () => false,
-        expectedDecision: "block" as const,
+        expectedDecision: "block",
         expectedReactionAllowed: false,
-      },
-      {
+      }),
+      createParityCase({
         name: "dmPolicy=allowlist authorized",
-        isGroup: false,
-        dmPolicy: "allowlist" as const,
-        groupPolicy: "allowlist" as const,
+        dmPolicy: "allowlist",
         allowFrom: ["owner"],
-        groupAllowFrom: [] as string[],
-        storeAllowFrom: [] as string[],
         isSenderAllowed: () => true,
-        expectedDecision: "allow" as const,
+        expectedDecision: "allow",
         expectedReactionAllowed: true,
-      },
-      {
+      }),
+      createParityCase({
         name: "dmPolicy=pairing unauthorized",
-        isGroup: false,
-        dmPolicy: "pairing" as const,
-        groupPolicy: "allowlist" as const,
-        allowFrom: [] as string[],
-        groupAllowFrom: [] as string[],
-        storeAllowFrom: [] as string[],
+        dmPolicy: "pairing",
         isSenderAllowed: () => false,
-        expectedDecision: "pairing" as const,
+        expectedDecision: "pairing",
         expectedReactionAllowed: false,
-      },
-      {
+      }),
+      createParityCase({
         name: "groupPolicy=allowlist rejects DM-paired sender not in explicit group list",
         isGroup: true,
-        dmPolicy: "pairing" as const,
-        groupPolicy: "allowlist" as const,
-        allowFrom: ["owner"] as string[],
-        groupAllowFrom: ["group-owner"] as string[],
-        storeAllowFrom: ["paired-user"] as string[],
+        dmPolicy: "pairing",
+        allowFrom: ["owner"],
+        groupAllowFrom: ["group-owner"],
+        storeAllowFrom: ["paired-user"],
         isSenderAllowed: (allowFrom: string[]) => allowFrom.includes("paired-user"),
-        expectedDecision: "block" as const,
+        expectedDecision: "block",
         expectedReactionAllowed: false,
-      },
+      }),
     ];
 
     for (const channel of channels) {

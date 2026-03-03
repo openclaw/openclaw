@@ -46,6 +46,19 @@ function clearSupervisorHints() {
   }
 }
 
+function expectLaunchdKickstartSupervised(params?: { launchJobLabel?: string }) {
+  setPlatform("darwin");
+  if (params?.launchJobLabel) {
+    process.env.LAUNCH_JOB_LABEL = params.launchJobLabel;
+  }
+  process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+  triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
+  const result = restartGatewayProcessWithFreshPid();
+  expect(result.mode).toBe("supervised");
+  expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
+  expect(spawnMock).not.toHaveBeenCalled();
+}
+
 describe("restartGatewayProcessWithFreshPid", () => {
   it("returns disabled when OPENCLAW_NO_RESPAWN is set", () => {
     process.env.OPENCLAW_NO_RESPAWN = "1";
@@ -62,16 +75,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
   });
 
   it("runs launchd kickstart helper on macOS when launchd label is set", () => {
-    setPlatform("darwin");
-    process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
-    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
-
-    const result = restartGatewayProcessWithFreshPid();
-
-    expect(result.mode).toBe("supervised");
-    expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
-    expect(spawnMock).not.toHaveBeenCalled();
+    expectLaunchdKickstartSupervised({ launchJobLabel: "ai.openclaw.gateway" });
   });
 
   it("returns failed when launchd kickstart helper fails", () => {
@@ -124,13 +128,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
   it("returns supervised when OPENCLAW_LAUNCHD_LABEL is set (stock launchd plist)", () => {
     clearSupervisorHints();
-    setPlatform("darwin");
-    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
-    const result = restartGatewayProcessWithFreshPid();
-    expect(result.mode).toBe("supervised");
-    expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
-    expect(spawnMock).not.toHaveBeenCalled();
+    expectLaunchdKickstartSupervised();
   });
 
   it("returns supervised when OPENCLAW_SYSTEMD_UNIT is set", () => {

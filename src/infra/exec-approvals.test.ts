@@ -47,6 +47,22 @@ function analyzeEnvWrapperAllowlist(params: { argv: string[]; envPath: string; c
   return { analysis, allowlistEval };
 }
 
+function createPathExecutableFixture(params?: { executable?: string }): {
+  exeName: string;
+  exePath: string;
+  binDir: string;
+} {
+  const dir = makeTempDir();
+  const binDir = path.join(dir, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const baseName = params?.executable ?? "rg";
+  const exeName = process.platform === "win32" ? `${baseName}.exe` : baseName;
+  const exePath = path.join(binDir, exeName);
+  fs.writeFileSync(exePath, "");
+  fs.chmodSync(exePath, 0o755);
+  return { exeName, exePath, binDir };
+}
+
 describe("exec approvals allowlist matching", () => {
   const baseResolution = {
     rawExecutable: "rg",
@@ -221,19 +237,13 @@ describe("exec approvals command resolution", () => {
       {
         name: "PATH executable",
         setup: () => {
-          const dir = makeTempDir();
-          const binDir = path.join(dir, "bin");
-          fs.mkdirSync(binDir, { recursive: true });
-          const exeName = process.platform === "win32" ? "rg.exe" : "rg";
-          const exe = path.join(binDir, exeName);
-          fs.writeFileSync(exe, "");
-          fs.chmodSync(exe, 0o755);
+          const fixture = createPathExecutableFixture();
           return {
             command: "rg -n foo",
             cwd: undefined as string | undefined,
-            envPath: makePathEnv(binDir),
-            expectedPath: exe,
-            expectedExecutableName: exeName,
+            envPath: makePathEnv(fixture.binDir),
+            expectedPath: fixture.exePath,
+            expectedExecutableName: fixture.exeName,
           };
         },
       },
@@ -286,21 +296,15 @@ describe("exec approvals command resolution", () => {
   });
 
   it("unwraps transparent env wrapper argv to resolve the effective executable", () => {
-    const dir = makeTempDir();
-    const binDir = path.join(dir, "bin");
-    fs.mkdirSync(binDir, { recursive: true });
-    const exeName = process.platform === "win32" ? "rg.exe" : "rg";
-    const exe = path.join(binDir, exeName);
-    fs.writeFileSync(exe, "");
-    fs.chmodSync(exe, 0o755);
+    const fixture = createPathExecutableFixture();
 
     const resolution = resolveCommandResolutionFromArgv(
       ["/usr/bin/env", "rg", "-n", "needle"],
       undefined,
-      makePathEnv(binDir),
+      makePathEnv(fixture.binDir),
     );
-    expect(resolution?.resolvedPath).toBe(exe);
-    expect(resolution?.executableName).toBe(exeName);
+    expect(resolution?.resolvedPath).toBe(fixture.exePath);
+    expect(resolution?.executableName).toBe(fixture.exeName);
   });
 
   it("blocks semantic env wrappers from allowlist/safeBins auto-resolution", () => {

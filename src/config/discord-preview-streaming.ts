@@ -142,3 +142,17 @@ export function resolveSlackNativeStreaming(
   }
   return true;
 }
+
+export function formatSlackStreamModeMigrationMessage(
+  pathPrefix: string,
+  resolvedStreaming: string,
+): string {
+  return `Moved ${pathPrefix}.streamMode → ${pathPrefix}.streaming (${resolvedStreaming}).`;
+}
+
+export function formatSlackStreamingBooleanMigrationMessage(
+  pathPrefix: string,
+  resolvedNativeStreaming: boolean,
+): string {
+  return `Moved ${pathPrefix}.streaming (boolean) → ${pathPrefix}.nativeStreaming (${resolvedNativeStreaming}).`;
+}

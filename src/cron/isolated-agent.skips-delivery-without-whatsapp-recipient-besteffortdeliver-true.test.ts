@@ -6,6 +6,7 @@ import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
 import {
   createCliDeps,
+  expectDirectTelegramDelivery,
   mockAgentPayloads,
   runTelegramAnnounceTurn,
 } from "./isolated-agent.delivery.test-helpers.js";
@@ -262,14 +263,11 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.status).toBe("ok");
       expect(res.delivered).toBe(true);
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
-      expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
-        "123",
-        "Final weather summary",
-        expect.objectContaining({
-          messageThreadId: 42,
-        }),
-      );
+      expectDirectTelegramDelivery(deps, {
+        chatId: "123",
+        text: "Final weather summary",
+        messageThreadId: 42,
+      });
     });
   });
 

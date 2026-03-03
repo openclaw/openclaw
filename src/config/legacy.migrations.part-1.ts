@@ -1,4 +1,6 @@
 import {
+  formatSlackStreamingBooleanMigrationMessage,
+  formatSlackStreamModeMigrationMessage,
   resolveDiscordPreviewStreamMode,
   resolveSlackNativeStreaming,
   resolveSlackStreamingMode,
@@ -357,13 +359,11 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
         params.entry.nativeStreaming = resolvedNativeStreaming;
         if (hasLegacyStreamMode) {
           delete params.entry.streamMode;
-          changes.push(
-            `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolvedStreaming}).`,
-          );
+          changes.push(formatSlackStreamModeMigrationMessage(params.pathPrefix, resolvedStreaming));
         }
         if (typeof legacyStreaming === "boolean") {
           changes.push(
-            `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.nativeStreaming (${resolvedNativeStreaming}).`,
+            formatSlackStreamingBooleanMigrationMessage(params.pathPrefix, resolvedNativeStreaming),
           );
         } else if (typeof legacyNativeStreaming !== "boolean" && hasLegacyStreamMode) {
           changes.push(`Set ${params.pathPrefix}.nativeStreaming → ${resolvedNativeStreaming}.`);

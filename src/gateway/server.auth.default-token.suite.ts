@@ -67,6 +67,14 @@ export function registerDefaultAuthTokenSuite(): void {
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     }
 
+    async function expectStatusMissingScopeButHealthAvailable(ws: WebSocket): Promise<void> {
+      const status = await rpcReq(ws, "status");
+      expect(status.ok).toBe(false);
+      expect(status.error?.message).toContain("missing scope");
+      const health = await rpcReq(ws, "health");
+      expect(health.ok).toBe(true);
+    }
+
     test("closes silent handshakes after timeout", async () => {
       vi.useRealTimers();
       const prevHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
@@ -198,11 +206,7 @@ export function registerDefaultAuthTokenSuite(): void {
       try {
         const res = await connectReq(ws, { scopes: [] });
         expect(res.ok).toBe(true);
-        const status = await rpcReq(ws, "status");
-        expect(status.ok).toBe(false);
-        expect(status.error?.message).toContain("missing scope");
-        const health = await rpcReq(ws, "health");
-        expect(health.ok).toBe(true);
+        await expectStatusMissingScopeButHealthAvailable(ws);
       } finally {
         ws.close();
       }
@@ -247,11 +251,7 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(presenceScopes).toEqual([]);
       expect(presenceScopes).not.toContain("operator.admin");
 
-      const status = await rpcReq(ws, "status");
-      expect(status.ok).toBe(false);
-      expect(status.error?.message).toContain("missing scope");
-      const health = await rpcReq(ws, "health");
-      expect(health.ok).toBe(true);
+      await expectStatusMissingScopeButHealthAvailable(ws);
 
       ws.close();
     });

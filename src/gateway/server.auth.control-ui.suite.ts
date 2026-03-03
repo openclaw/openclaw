@@ -91,6 +91,38 @@ export function registerControlUiAndPairingSuite(): void {
     expect(health.ok).toBe(true);
   };
 
+  const seedApprovedOperatorReadPairing = async (params: {
+    identityPrefix: string;
+    clientId: string;
+    clientMode: string;
+    displayName: string;
+    platform: string;
+  }): Promise<{ identityPath: string; identity: { deviceId: string } }> => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
+      await import("../infra/device-identity.js");
+    const { approveDevicePairing, requestDevicePairing } =
+      await import("../infra/device-pairing.js");
+    const identityDir = await mkdtemp(join(tmpdir(), params.identityPrefix));
+    const identityPath = join(identityDir, "device.json");
+    const identity = loadOrCreateDeviceIdentity(identityPath);
+    const devicePublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+    const seeded = await requestDevicePairing({
+      deviceId: identity.deviceId,
+      publicKey: devicePublicKey,
+      role: "operator",
+      scopes: ["operator.read"],
+      clientId: params.clientId,
+      clientMode: params.clientMode,
+      displayName: params.displayName,
+      platform: params.platform,
+    });
+    await approveDevicePairing(seeded.request.requestId);
+    return { identityPath, identity: { deviceId: identity.deviceId } };
+  };
+
   for (const tc of trustedProxyControlUiCases) {
     test(tc.name, async () => {
       await configureTrustedProxyControlUiAuth();
@@ -485,29 +517,15 @@ export function registerControlUiAndPairingSuite(): void {
   });
 
   test("auto-approves loopback scope upgrades for control ui clients", async () => {
-    const { mkdtemp } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
-      await import("../infra/device-identity.js");
-    const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
-      await import("../infra/device-pairing.js");
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
-    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-token-scope-"));
-    const identityPath = join(identityDir, "device.json");
-    const identity = loadOrCreateDeviceIdentity(identityPath);
-    const devicePublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
-    const seeded = await requestDevicePairing({
-      deviceId: identity.deviceId,
-      publicKey: devicePublicKey,
-      role: "operator",
-      scopes: ["operator.read"],
+    const { identity, identityPath } = await seedApprovedOperatorReadPairing({
+      identityPrefix: "openclaw-device-token-scope-",
       clientId: CONTROL_UI_CLIENT.id,
       clientMode: CONTROL_UI_CLIENT.mode,
       displayName: "loopback-control-ui-upgrade",
       platform: CONTROL_UI_CLIENT.platform,
     });
-    await approveDevicePairing(seeded.request.requestId);
 
     ws.close();
 
@@ -740,30 +758,16 @@ export function registerControlUiAndPairingSuite(): void {
   });
 
   test("auto-approves local scope upgrades even when paired metadata is legacy-shaped", async () => {
-    const { mkdtemp } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const { readJsonFile, resolvePairingPaths } = await import("../infra/pairing-files.js");
     const { writeJsonAtomic } = await import("../infra/json-files.js");
-    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
-      await import("../infra/device-identity.js");
-    const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
-      await import("../infra/device-pairing.js");
-    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-legacy-"));
-    const identityPath = join(identityDir, "device.json");
-    const identity = loadOrCreateDeviceIdentity(identityPath);
-    const devicePublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
-    const seeded = await requestDevicePairing({
-      deviceId: identity.deviceId,
-      publicKey: devicePublicKey,
-      role: "operator",
-      scopes: ["operator.read"],
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { identity, identityPath } = await seedApprovedOperatorReadPairing({
+      identityPrefix: "openclaw-device-legacy-",
       clientId: TEST_OPERATOR_CLIENT.id,
       clientMode: TEST_OPERATOR_CLIENT.mode,
       displayName: "legacy-upgrade-test",
       platform: "test",
     });
-    await approveDevicePairing(seeded.request.requestId);
 
     const { pairedPath } = resolvePairingPaths(undefined, "devices");
     const paired = (await readJsonFile<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};

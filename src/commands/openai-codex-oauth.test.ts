@@ -43,6 +43,18 @@ function createRuntime(): RuntimeEnv {
   };
 }
 
+async function runCodexOAuth(params: { isRemote: boolean }) {
+  const { prompter, spin } = createPrompter();
+  const runtime = createRuntime();
+  const result = await loginOpenAICodexOAuth({
+    prompter,
+    runtime,
+    isRemote: params.isRemote,
+    openUrl: async () => {},
+  });
+  return { result, prompter, spin, runtime };
+}
+
 describe("loginOpenAICodexOAuth", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -64,14 +76,7 @@ describe("loginOpenAICodexOAuth", () => {
     });
     mocks.loginOpenAICodex.mockResolvedValue(creds);
 
-    const { prompter, spin } = createPrompter();
-    const runtime = createRuntime();
-    const result = await loginOpenAICodexOAuth({
-      prompter,
-      runtime,
-      isRemote: false,
-      openUrl: async () => {},
-    });
+    const { result, spin, runtime } = await runCodexOAuth({ isRemote: false });
 
     expect(result).toEqual(creds);
     expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
@@ -124,14 +129,7 @@ describe("loginOpenAICodexOAuth", () => {
     });
     mocks.loginOpenAICodex.mockResolvedValue(creds);
 
-    const { prompter } = createPrompter();
-    const runtime = createRuntime();
-    const result = await loginOpenAICodexOAuth({
-      prompter,
-      runtime,
-      isRemote: false,
-      openUrl: async () => {},
-    });
+    const { result, prompter, runtime } = await runCodexOAuth({ isRemote: false });
 
     expect(result).toEqual(creds);
     expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();

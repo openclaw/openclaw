@@ -191,6 +191,19 @@ function extractUsageFromResult(result: unknown): Usage {
   );
 }
 
+type PendingToolCall = { id: string; name: string; arguments: string };
+
+function resolveStopReasonAndPendingToolCalls(meta: unknown): {
+  stopReason: string | undefined;
+  pendingToolCalls: PendingToolCall[] | undefined;
+} {
+  if (!meta || typeof meta !== "object") {
+    return { stopReason: undefined, pendingToolCalls: undefined };
+  }
+  const record = meta as { stopReason?: string; pendingToolCalls?: PendingToolCall[] };
+  return { stopReason: record.stopReason, pendingToolCalls: record.pendingToolCalls };
+}
+
 function createResponseResource(params: {
   id: string;
   model: string;
@@ -467,13 +480,7 @@ export async function handleOpenResponsesHttpRequest(
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const usage = extractUsageFromResult(result);
       const meta = (result as { meta?: unknown } | null)?.meta;
-      const stopReason =
-        meta && typeof meta === "object" ? (meta as { stopReason?: string }).stopReason : undefined;
-      const pendingToolCalls =
-        meta && typeof meta === "object"
-          ? (meta as { pendingToolCalls?: Array<{ id: string; name: string; arguments: string }> })
-              .pendingToolCalls
-          : undefined;
+      const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // If agent called a client tool, return function_call instead of text
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
@@ -709,18 +716,7 @@ export async function handleOpenResponsesHttpRequest(
         const resultAny = result as { payloads?: Array<{ text?: string }>; meta?: unknown };
         const payloads = resultAny.payloads;
         const meta = resultAny.meta;
-        const stopReason =
-          meta && typeof meta === "object"
-            ? (meta as { stopReason?: string }).stopReason
-            : undefined;
-        const pendingToolCalls =
-          meta && typeof meta === "object"
-            ? (
-                meta as {
-                  pendingToolCalls?: Array<{ id: string; name: string; arguments: string }>;
-                }
-              ).pendingToolCalls
-            : undefined;
+        const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
         // If agent called a client tool, emit function_call instead of text
         if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
