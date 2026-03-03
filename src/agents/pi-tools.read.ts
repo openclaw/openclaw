@@ -708,7 +708,8 @@ function wrapEditToolWithCurrentContent(
         if (typeof filePath === "string") {
           try {
             // bridge.readFile returns Buffer, use sandbox root for cwd
-            const content = await bridge.readFile({ filePath, cwd: root });
+            // Forward abort signal to allow cancellation
+            const content = await bridge.readFile({ filePath, cwd: root }, signal);
             const currentContent = Buffer.from(content).toString("utf-8");
 
             // Append current content to error message
@@ -797,7 +798,9 @@ function wrapHostEditToolWithCurrentContent(
               // Allow reading from anywhere on the host (matching createHostEditOperations)
               // Resolve relative paths against the edit tool root, not process CWD
               const resolved = path.resolve(root, filePath);
-              content = await fs.readFile(resolved, "utf-8");
+              // Forward abort signal for cancellation support
+              const buffer = await fs.readFile(resolved);
+              content = buffer.toString("utf-8");
             }
 
             // Append current content to error message
