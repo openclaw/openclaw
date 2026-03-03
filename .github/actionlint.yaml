@@ -10,6 +10,7 @@ self-hosted-runner:
     - blacksmith-16vcpu-windows-2025
     - blacksmith-32vcpu-windows-2025
     - blacksmith-16vcpu-ubuntu-2404-arm
+    - blacksmith-32vcpu-windows-2025
 
 # Ignore patterns for known issues
 paths:

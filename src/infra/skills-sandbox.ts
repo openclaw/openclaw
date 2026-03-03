@@ -1,11 +1,11 @@
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { DEFAULT_SANDBOX_IMAGE } from "../agents/sandbox/constants.js";
+import { execDockerRaw } from "../agents/sandbox/docker.js";
 import type { SkillEligibilityContext, SkillEntry } from "../agents/skills.js";
 import { loadWorkspaceSkillEntries } from "../agents/skills.js";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import { execDockerRaw } from "../agents/sandbox/docker.js";
-import { DEFAULT_SANDBOX_IMAGE } from "../agents/sandbox/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("gateway/skills-sandbox");
@@ -20,10 +20,14 @@ function collectRequiredBins(entries: SkillEntry[]): string[] {
   const bins = new Set<string>();
   for (const entry of entries) {
     for (const bin of entry.metadata?.requires?.bins ?? []) {
-      if (bin.trim()) bins.add(bin.trim());
+      if (bin.trim()) {
+        bins.add(bin.trim());
+      }
     }
     for (const bin of entry.metadata?.requires?.anyBins ?? []) {
-      if (bin.trim()) bins.add(bin.trim());
+      if (bin.trim()) {
+        bins.add(bin.trim());
+      }
     }
   }
   return [...bins];
@@ -43,17 +47,18 @@ async function probeSandboxBins(
   bins: string[],
   containerName?: string,
 ): Promise<string[]> {
-  if (bins.length === 0) return [];
+  if (bins.length === 0) {
+    return [];
+  }
 
   const script = buildBinProbeScript(bins);
 
   // Try running container first (no startup cost)
   if (containerName) {
     try {
-      const result = await execDockerRaw(
-        ["exec", "-i", containerName, "sh", "-c", script],
-        { allowFailure: true },
-      );
+      const result = await execDockerRaw(["exec", "-i", containerName, "sh", "-c", script], {
+        allowFailure: true,
+      });
       if (result.code === 0) {
         return result.stdout
           .toString()
@@ -68,10 +73,9 @@ async function probeSandboxBins(
 
   // Fall back to image probe
   try {
-    const result = await execDockerRaw(
-      ["run", "--rm", "--entrypoint", "sh", image, "-c", script],
-      { allowFailure: true },
-    );
+    const result = await execDockerRaw(["run", "--rm", "--entrypoint", "sh", image, "-c", script], {
+      allowFailure: true,
+    });
     if (result.code === 0) {
       return result.stdout
         .toString()
@@ -91,7 +95,9 @@ async function probeSandboxBins(
  */
 function resolveSandboxImage(cfg: OpenClawConfig, agentId?: string): string | undefined {
   const sandboxCfg = resolveSandboxConfigForAgent(cfg, agentId);
-  if (sandboxCfg.mode === "off") return undefined;
+  if (sandboxCfg.mode === "off") {
+    return undefined;
+  }
   return sandboxCfg.docker?.image ?? DEFAULT_SANDBOX_IMAGE;
 }
 
@@ -132,14 +138,24 @@ export async function refreshSandboxBinsCache(cfg: OpenClawConfig, agentId?: str
 }
 
 function areSetsEqual(a: Set<string> | null, b: Set<string>): boolean {
-  if (!a) return false;
-  if (a.size !== b.size) return false;
-  for (const v of b) { if (!a.has(v)) return false; }
+  if (!a) {
+    return false;
+  }
+  if (a.size !== b.size) {
+    return false;
+  }
+  for (const v of b) {
+    if (!a.has(v)) {
+      return false;
+    }
+  }
   return true;
 }
 
 export function getSandboxSkillEligibility(): SkillEligibilityContext["sandbox"] | undefined {
-  if (!cachedBins || cachedBins.size === 0) return undefined;
+  if (!cachedBins || cachedBins.size === 0) {
+    return undefined;
+  }
   return {
     hasBin: (bin) => cachedBins!.has(bin),
     hasAnyBin: (bins) => bins.some((b) => cachedBins!.has(b)),
