@@ -1,7 +1,6 @@
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
-import { runEmbeddedPiAgentWithAdaptiveRouting } from "../agents/adaptive-routing.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("commands/agent");
@@ -33,7 +32,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { createAdaptiveEmbeddedRunner, runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
@@ -176,9 +175,8 @@ function runAgentAttempt(params: {
   storePath?: string;
   /** True when the user has an explicit per-session or API model override (not just config default). */
   hasExplicitModelOverride: boolean;
-  /** True when adaptive routing already escalated earlier in this fallback chain. */
-  adaptiveEscalationDone?: boolean;
-  onAdaptiveEscalation?: () => void;
+  /** Stateful runner from createAdaptiveEmbeddedRunner() for this fallback chain. */
+  runAgent: ReturnType<typeof createAdaptiveEmbeddedRunner>;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
@@ -283,58 +281,51 @@ function runAgentAttempt(params: {
     params.providerOverride === params.primaryProvider
       ? params.sessionEntry?.authProfileOverride
       : undefined;
-  return runEmbeddedPiAgentWithAdaptiveRouting(
-    {
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      agentId: params.sessionAgentId,
-      trigger: "user",
-      messageChannel: params.messageChannel,
-      agentAccountId: params.runContext.accountId,
-      messageTo: params.opts.replyTo ?? params.opts.to,
-      messageThreadId: params.opts.threadId,
-      groupId: params.runContext.groupId,
-      groupChannel: params.runContext.groupChannel,
-      groupSpace: params.runContext.groupSpace,
-      spawnedBy: params.spawnedBy,
-      currentChannelId: params.runContext.currentChannelId,
-      currentThreadTs: params.runContext.currentThreadTs,
-      replyToMode: params.runContext.replyToMode,
-      hasRepliedRef: params.runContext.hasRepliedRef,
-      senderIsOwner: params.opts.senderIsOwner ?? true,
-      sessionFile: params.sessionFile,
-      workspaceDir: params.workspaceDir,
-      config: params.cfg,
-      skillsSnapshot: params.skillsSnapshot,
-      prompt: effectivePrompt,
-      images: params.isFallbackRetry ? undefined : params.opts.images,
-      clientTools: params.opts.clientTools,
-      provider: params.providerOverride,
-      model: params.modelOverride,
-      authProfileId,
-      authProfileIdSource: authProfileId
-        ? params.sessionEntry?.authProfileOverrideSource
-        : undefined,
-      thinkLevel: params.resolvedThinkLevel,
-      verboseLevel: params.resolvedVerboseLevel,
-      timeoutMs: params.timeoutMs,
-      runId: params.runId,
-      lane: params.opts.lane,
-      abortSignal: params.opts.abortSignal,
-      extraSystemPrompt: params.opts.extraSystemPrompt,
-      inputProvenance: params.opts.inputProvenance,
-      streamParams: params.opts.streamParams,
-      agentDir: params.agentDir,
-      onAgentEvent: params.onAgentEvent,
-      // True only when user set a per-session model override (e.g. /model gpt-4o).
-      // providerOverride/modelOverride are always set (they're the resolved default), so
-      // we use the dedicated flag from the caller instead.
-      _hasExplicitModelOverride: params.hasExplicitModelOverride,
-      _adaptiveEscalationDone: params.adaptiveEscalationDone,
-      _onAdaptiveEscalation: params.onAdaptiveEscalation,
-    },
-    runEmbeddedPiAgent,
-  );
+  return params.runAgent({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.sessionAgentId,
+    trigger: "user",
+    messageChannel: params.messageChannel,
+    agentAccountId: params.runContext.accountId,
+    messageTo: params.opts.replyTo ?? params.opts.to,
+    messageThreadId: params.opts.threadId,
+    groupId: params.runContext.groupId,
+    groupChannel: params.runContext.groupChannel,
+    groupSpace: params.runContext.groupSpace,
+    spawnedBy: params.spawnedBy,
+    currentChannelId: params.runContext.currentChannelId,
+    currentThreadTs: params.runContext.currentThreadTs,
+    replyToMode: params.runContext.replyToMode,
+    hasRepliedRef: params.runContext.hasRepliedRef,
+    senderIsOwner: params.opts.senderIsOwner ?? true,
+    sessionFile: params.sessionFile,
+    workspaceDir: params.workspaceDir,
+    config: params.cfg,
+    skillsSnapshot: params.skillsSnapshot,
+    prompt: effectivePrompt,
+    images: params.isFallbackRetry ? undefined : params.opts.images,
+    clientTools: params.opts.clientTools,
+    provider: params.providerOverride,
+    model: params.modelOverride,
+    authProfileId,
+    authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
+    thinkLevel: params.resolvedThinkLevel,
+    verboseLevel: params.resolvedVerboseLevel,
+    timeoutMs: params.timeoutMs,
+    runId: params.runId,
+    lane: params.opts.lane,
+    abortSignal: params.opts.abortSignal,
+    extraSystemPrompt: params.opts.extraSystemPrompt,
+    inputProvenance: params.opts.inputProvenance,
+    streamParams: params.opts.streamParams,
+    agentDir: params.agentDir,
+    onAgentEvent: params.onAgentEvent,
+    // True only when user set a per-session model override (e.g. /model gpt-4o).
+    // providerOverride/modelOverride are always set (they're the resolved default), so
+    // we use the dedicated flag from the caller instead.
+    _hasExplicitModelOverride: params.hasExplicitModelOverride,
+  });
 }
 
 async function agentCommandInternal(
@@ -839,9 +830,10 @@ async function agentCommandInternal(
       // Track model fallback attempts so retries on an existing session don't
       // re-inject the original prompt as a duplicate user message.
       let fallbackAttemptIndex = 0;
-      // Track whether adaptive routing escalated so subsequent fallback retries skip
-      // re-running the local model (see adaptive-routing.ts for the other side).
-      const adaptiveState = { escalated: false };
+      // One stateful runner per turn: createAdaptiveEmbeddedRunner captures escalation
+      // state so retries within this runWithModelFallback chain skip re-running the
+      // local model if cloud escalation already occurred.
+      const runAgent = createAdaptiveEmbeddedRunner();
       const fallbackResult = await runWithModelFallback({
         cfg,
         provider,
@@ -878,10 +870,7 @@ async function agentCommandInternal(
             storePath,
             // hasStoredOverride = user previously ran /model to set an explicit model
             hasExplicitModelOverride: hasStoredOverride,
-            adaptiveEscalationDone: adaptiveState.escalated,
-            onAdaptiveEscalation: () => {
-              adaptiveState.escalated = true;
-            },
+            runAgent,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (
