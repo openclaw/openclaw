@@ -20,13 +20,6 @@ describe("Issue #33218: groupPolicy='open' should not require mention", () => {
       groupId: "-123456789",
     });
 
-    console.log("✅ FIX VERIFIED:");
-    console.log(`  groupPolicy: "open"`);
-    console.log(`  requireMention config: undefined`);
-    console.log(`  resolveChannelGroupRequireMention returns: ${requireMention}`);
-    console.log(`  Expected: false (open policy should not require mention)`);
-    console.log(`  Result: ${requireMention ? "❌ FAIL" : "✅ PASS"}`);
-
     // After fix: should return false
     expect(requireMention).toBe(false);
   });
