@@ -346,6 +346,8 @@ export function createOpenClawCodingTools(options?: {
     throw new Error("Sandbox filesystem bridge is unavailable.");
   }
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
+  const mutationLockingEnabled =
+    options?.config?.agents?.defaults?.sharedWorkspaceLocking?.enabled === true;
 
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
     if (tool.name === readTool.name) {
@@ -378,14 +380,20 @@ export function createOpenClawCodingTools(options?: {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
+      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, {
+        workspaceOnly,
+        mutationLockingEnabled,
+      });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
+      const wrapped = createHostWorkspaceEditTool(workspaceRoot, {
+        workspaceOnly,
+        mutationLockingEnabled,
+      });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     return [tool];
@@ -441,9 +449,6 @@ export function createOpenClawCodingTools(options?: {
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
         });
-  const mutationLockingEnabled =
-    options?.config?.agents?.defaults?.sharedWorkspaceLocking?.enabled === true;
-
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
@@ -455,6 +460,7 @@ export function createOpenClawCodingTools(options?: {
                     root: sandboxRoot,
                     bridge: sandboxFsBridge!,
                     mutationLockingEnabled,
+                    containerWorkdir: sandbox.containerWorkdir,
                   }),
                   sandboxRoot,
                   {
@@ -465,6 +471,7 @@ export function createOpenClawCodingTools(options?: {
                   root: sandboxRoot,
                   bridge: sandboxFsBridge!,
                   mutationLockingEnabled,
+                  containerWorkdir: sandbox.containerWorkdir,
                 }),
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(
@@ -472,6 +479,7 @@ export function createOpenClawCodingTools(options?: {
                     root: sandboxRoot,
                     bridge: sandboxFsBridge!,
                     mutationLockingEnabled,
+                    containerWorkdir: sandbox.containerWorkdir,
                   }),
                   sandboxRoot,
                   {
@@ -482,6 +490,7 @@ export function createOpenClawCodingTools(options?: {
                   root: sandboxRoot,
                   bridge: sandboxFsBridge!,
                   mutationLockingEnabled,
+                  containerWorkdir: sandbox.containerWorkdir,
                 }),
           ]
         : []
