@@ -109,3 +109,8 @@ Use this format when adding entries:
   npm: `@nutrient-sdk/nutrient-openclaw`
   repo: `https://github.com/PSPDFKit-labs/nutrient-openclaw`
   install: `openclaw plugins install @nutrient-sdk/nutrient-openclaw`
+
+- **Secret Wallet** — Secure wallet management plugin for OpenClaw.
+  npm: `@baekho-lim/openclaw-secret-wallet`
+  repo: `https://github.com/baekho-lim/openclaw-secret-wallet`
+  install: `openclaw plugins install @baekho-lim/openclaw-secret-wallet`
