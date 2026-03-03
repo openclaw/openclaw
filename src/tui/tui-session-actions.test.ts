@@ -98,7 +98,7 @@ describe("tui session actions", () => {
       sessions: [
         {
           key: "agent:main:main",
-          model: "Minimax-M2.1",
+          model: "Minimax-M2.5",
           modelProvider: "minimax",
         },
       ],
@@ -106,7 +106,7 @@ describe("tui session actions", () => {
 
     await second;
 
-    expect(state.sessionInfo.model).toBe("Minimax-M2.1");
+    expect(state.sessionInfo.model).toBe("Minimax-M2.5");
     expect(updateAutocompleteProvider).toHaveBeenCalledTimes(2);
     expect(updateFooter).toHaveBeenCalledTimes(2);
     expect(requestRender).toHaveBeenCalledTimes(2);

@@ -276,7 +276,7 @@ export const VENICE_MODEL_CATALOG = [
   },
   {
     id: "minimax-m21",
-    name: "MiniMax M2.1 (via Venice)",
+    name: "MiniMax M2.5 (via Venice)",
     reasoning: true,
     input: ["text"],
     contextWindow: 202752,

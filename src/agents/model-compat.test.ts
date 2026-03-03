@@ -185,7 +185,7 @@ describe("normalizeModelCompat", () => {
 
 describe("isModernModelRef", () => {
   it("excludes opencode minimax variants from modern selection", () => {
-    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.1" })).toBe(false);
+    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
     expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
   });
 
