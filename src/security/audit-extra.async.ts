@@ -25,6 +25,7 @@ import { createConfigIO } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import { detectJsonFileEncryption } from "../infra/crypto-store.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -891,6 +892,18 @@ export async function collectStateDeepFilesystemFindings(params: {
           }),
         });
       }
+    }
+
+    const encryptionStatus = detectJsonFileEncryption(authPath);
+    if (encryptionStatus === "plaintext") {
+      findings.push({
+        checkId: "fs.auth_profiles.not_encrypted",
+        severity: "warn",
+        title: "auth-profiles.json is not encrypted at rest",
+        detail: `${authPath} contains plaintext credentials. Run any auth command to trigger automatic encryption migration.`,
+        remediation:
+          "Re-authenticate or restart the gateway to trigger automatic encryption of stored credentials.",
+      });
     }
 
     const storePath = path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json");
