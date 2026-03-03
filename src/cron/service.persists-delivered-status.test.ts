@@ -83,7 +83,15 @@ async function runSingleJobAndReadState(params: {
 }
 
 function expectSuccessfulCronRun(
-  updated: { state: { lastStatus?: string; lastRunStatus?: string } } | undefined,
+  updated:
+    | {
+        state: {
+          lastStatus?: string;
+          lastRunStatus?: string;
+          [key: string]: unknown;
+        };
+      }
+    | undefined,
 ) {
   expect(updated?.state.lastStatus).toBe("ok");
   expect(updated?.state.lastRunStatus).toBe("ok");
