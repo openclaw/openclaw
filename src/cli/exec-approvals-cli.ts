@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import JSON5 from "json5";
+import { readConfigFileSnapshot } from "../config/config.js";
 import {
   readExecApprovalsSnapshot,
   saveExecApprovals,
@@ -279,6 +280,8 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
   agentKey: string;
   agent: ExecApprovalsAgent;
   allowlistEntries: NonNullable<ExecApprovalsAgent["allowlist"]>;
+  isWildcard: boolean;
+  targetAgentIds: string[];
 }> {
   const { snapshot, nodeId, source, targetLabel, baseHash } =
     await loadWritableSnapshotTarget(opts);
@@ -286,10 +289,45 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
   file.version = 1;
 
   const agentKey = resolveAgentKey(opts.agent);
-  const agent = ensureAgent(file, agentKey);
-  const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
+  const isWildcard = agentKey === "*";
 
-  return { nodeId, source, targetLabel, baseHash, file, agentKey, agent, allowlistEntries };
+  // When agent is "*", expand to all concrete agent IDs from config
+  let targetAgentIds: string[];
+  if (isWildcard) {
+    const configSnapshot = await readConfigFileSnapshot();
+    const agentsConfig = configSnapshot.config?.agents;
+    if (agentsConfig?.list && Array.isArray(agentsConfig.list)) {
+      targetAgentIds = agentsConfig.list
+        .map((a) => a.id)
+        .filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+    } else {
+      // Fallback: check existing agents in approvals file
+      targetAgentIds = Object.keys(file.agents ?? {}).filter((id) => id !== "*");
+    }
+    // Always include "main" as default
+    if (!targetAgentIds.includes("main")) {
+      targetAgentIds.push("main");
+    }
+  } else {
+    targetAgentIds = [agentKey];
+  }
+
+  // For wildcard, we don't return a single agent - mutation will handle each target
+  const agent = isWildcard ? {} : ensureAgent(file, agentKey);
+  const allowlistEntries = isWildcard ? [] : Array.isArray(agent.allowlist) ? agent.allowlist : [];
+
+  return {
+    nodeId,
+    source,
+    targetLabel,
+    baseHash,
+    file,
+    agentKey,
+    agent,
+    allowlistEntries,
+    isWildcard,
+    targetAgentIds,
+  };
 }
 
 type WritableAllowlistAgentContext = Awaited<ReturnType<typeof loadWritableAllowlistAgent>> & {
@@ -305,10 +343,43 @@ async function runAllowlistMutation(
   try {
     const trimmedPattern = requireTrimmedNonEmpty(pattern, "Pattern required.");
     const context = await loadWritableAllowlistAgent(opts);
-    const shouldSave = await mutate({ ...context, trimmedPattern });
-    if (!shouldSave) {
-      return;
+
+    // Handle wildcard expansion: apply mutation to each target agent
+    if (context.isWildcard && context.targetAgentIds.length > 0) {
+      let anyChanged = false;
+      for (const targetAgentId of context.targetAgentIds) {
+        const targetAgent = ensureAgent(context.file, targetAgentId);
+        const targetAllowlistEntries = Array.isArray(targetAgent.allowlist)
+          ? targetAgent.allowlist
+          : [];
+
+        const targetContext = {
+          ...context,
+          agentKey: targetAgentId,
+          agent: targetAgent,
+          allowlistEntries: targetAllowlistEntries,
+          isWildcard: false,
+          targetAgentIds: [targetAgentId],
+        };
+
+        const changed = await mutate({ ...targetContext, trimmedPattern });
+        if (changed) {
+          targetAgent.allowlist = targetContext.allowlistEntries;
+          context.file.agents = { ...context.file.agents, [targetAgentId]: targetAgent };
+          anyChanged = true;
+        }
+      }
+
+      if (!anyChanged) {
+        return;
+      }
+    } else {
+      const shouldSave = await mutate({ ...context, trimmedPattern });
+      if (!shouldSave) {
+        return;
+      }
     }
+
     await saveSnapshotTargeted({
       opts,
       source: context.source,

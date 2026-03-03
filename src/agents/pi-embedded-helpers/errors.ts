@@ -7,6 +7,7 @@ import {
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
+  isJsonParseErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
@@ -18,6 +19,7 @@ export {
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
+  isJsonParseErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
@@ -799,6 +801,11 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";
+  }
+  // Check for JSON parse errors before overloaded - these can be misclassified
+  // as "overloaded" if the error message contains "overloaded" somewhere
+  if (isJsonParseErrorMessage(raw)) {
+    return "json_parse_error";
   }
   if (isOverloadedErrorMessage(raw)) {
     return "rate_limit";

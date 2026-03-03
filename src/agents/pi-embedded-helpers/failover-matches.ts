@@ -83,6 +83,14 @@ const ERROR_PATTERNS = {
     "invalid request format",
     /tool call id was.*must be/i,
   ],
+  jsonParse: [
+    "bad escaped character",
+    "bad control character",
+    "unexpected token",
+    "json parse error",
+    "unexpected end of json input",
+    /json\.parse/i,
+  ],
 } as const;
 
 const BILLING_ERROR_HEAD_RE =
@@ -146,4 +154,8 @@ export function isAuthErrorMessage(raw: string): boolean {
 
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
+}
+
+export function isJsonParseErrorMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.jsonParse);
 }
