@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveCronStyleNow } from "../../agents/current-time.js";
+import { appendCronStyleCurrentTimeLine } from "../../agents/current-time.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
@@ -64,7 +64,6 @@ export async function readPostCompactionContext(
     const resolvedNowMs = nowMs ?? Date.now();
     const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
     const dateStamp = formatDateStamp(resolvedNowMs, timezone);
-    const { timeLine } = resolveCronStyleNow(cfg ?? {}, resolvedNowMs);
 
     const combined = sections.join("\n\n").replaceAll("YYYY-MM-DD", dateStamp);
     const safeContent =
@@ -72,12 +71,13 @@ export async function readPostCompactionContext(
         ? combined.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]..."
         : combined;
 
-    return (
+    const baseOutput =
       "[Post-compaction context refresh]\n\n" +
       "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
       "Execute your Session Startup sequence now — read the required files before responding to the user.\n\n" +
-      `Critical rules from AGENTS.md:\n\n${safeContent}\n\n${timeLine}`
-    );
+      `Critical rules from AGENTS.md:\n\n${safeContent}`;
+    // Use appendCronStyleCurrentTimeLine for dedup protection (same as session-reset path)
+    return appendCronStyleCurrentTimeLine(baseOutput, cfg ?? {}, resolvedNowMs);
   } catch {
     return null;
   }
