@@ -1,14 +1,14 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
-import type { SessionEntry } from "./types.js";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveDefaultSessionStorePath } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore } from "./store.js";
+import type { SessionEntry } from "./types.js";
 
 function stripQuery(value: string): string {
   const noHash = value.split("#")[0] ?? value;
