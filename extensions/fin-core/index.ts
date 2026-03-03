@@ -17,8 +17,10 @@ export type { AdapterOrderParams, UnifiedExchangeAdapter } from "./src/adapters/
 export { AlpacaAdapter } from "./src/adapters/alpaca-adapter.js";
 export { CcxtAdapter } from "./src/adapters/ccxt-adapter.js";
 export { FutuAdapter } from "./src/adapters/futu-adapter.js";
+export { OpenCtpAdapter } from "./src/adapters/openctp-adapter.js";
 export { createAdapter } from "./src/adapters/adapter-factory.js";
-export { isMarketOpen, resolveMarket, validateLotSize, getMarketTimezone } from "./src/market-rules.js";
+export { isMarketOpen, resolveMarket, validateLotSize, getMarketTimezone, getEarlyCloseTime } from "./src/market-rules.js";
+export { isHoliday, isHalfDay, getHolidays } from "./src/holiday-calendar.js";
 export { AgentEventSqliteStore } from "./src/agent-event-sqlite-store.js";
 export { AgentEventStore } from "./src/agent-event-store.js";
 export { ExchangeHealthStore } from "./src/exchange-health-store.js";

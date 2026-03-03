@@ -35,7 +35,7 @@ import {
 
 describe("enum schemas", () => {
   it("MarketTypeSchema accepts valid values", () => {
-    for (const v of ["crypto", "us-equity", "hk-equity"]) {
+    for (const v of ["crypto", "us-equity", "hk-equity", "cn-a-share"]) {
       expect(MarketTypeSchema.safeParse(v).success).toBe(true);
     }
     expect(MarketTypeSchema.safeParse("forex").success).toBe(false);
@@ -265,6 +265,21 @@ describe("ExchangeConfigSchema", () => {
       host: "localhost",
       port: 11111,
       accountId: "acc-1",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("parses OpenCTP config with CTP-specific fields", () => {
+    const result = ExchangeConfigSchema.safeParse({
+      exchange: "openctp",
+      apiKey: "investor-id",
+      secret: "password",
+      market: "cn-a-share",
+      testnet: true,
+      ctpBrokerId: "9999",
+      ctpFrontAddr: "tcp://180.168.146.187:10130",
+      ctpAppId: "simnow_client_test",
+      ctpAuthCode: "0000000000000000",
     });
     expect(result.success).toBe(true);
   });

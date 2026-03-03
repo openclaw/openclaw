@@ -1,9 +1,10 @@
 /**
  * Market rules for fin-core — trading hours, lot sizes, symbol resolution.
- * Simplified version of fin-paper-trading's market-rules module.
- * Covers the 3 markets fin-core supports: crypto, US equity, HK equity.
+ * Covers 4 markets: crypto, US equity, HK equity, CN A-share.
+ * Includes holiday calendar integration for accurate open/close detection.
  */
 import type { MarketType } from "./types.js";
+import { isHalfDay, isHoliday } from "./holiday-calendar.js";
 
 // ── Types ──
 
@@ -50,10 +51,21 @@ const HK_EQUITY: MarketDefinition = {
   lotSize: { minLot: 100, buyMustBeMultiple: true },
 };
 
+const CN_A_SHARE: MarketDefinition = {
+  type: "cn-a-share",
+  timezone: "Asia/Shanghai",
+  sessions: [
+    { open: { hour: 9, minute: 30 }, close: { hour: 11, minute: 30 } },
+    { open: { hour: 13, minute: 0 }, close: { hour: 15, minute: 0 } },
+  ],
+  lotSize: { minLot: 100, buyMustBeMultiple: true },
+};
+
 const MARKET_REGISTRY: Record<MarketType, MarketDefinition> = {
   crypto: CRYPTO,
   "us-equity": US_EQUITY,
   "hk-equity": HK_EQUITY,
+  "cn-a-share": CN_A_SHARE,
 };
 
 // ── Public API ──
@@ -62,10 +74,11 @@ const MARKET_REGISTRY: Record<MarketType, MarketDefinition> = {
 export function resolveMarket(symbol: string): MarketType {
   if (symbol.includes("/")) return "crypto";
   if (symbol.endsWith(".HK")) return "hk-equity";
+  if (symbol.endsWith(".SS") || symbol.endsWith(".SZ") || symbol.endsWith(".SH")) return "cn-a-share";
   return "us-equity"; // default for plain tickers like AAPL, TSLA
 }
 
-/** Check if a market is currently open. Timezone-aware session checking. */
+/** Check if a market is currently open. Timezone-aware with holiday + half-day support. */
 export function isMarketOpen(market: MarketType, timestamp?: number): boolean {
   const def = MARKET_REGISTRY[market];
   if (!def) return false;
@@ -77,14 +90,40 @@ export function isMarketOpen(market: MarketType, timestamp?: number): boolean {
   const dayInTz = getLocalDayOfWeek(date, def.timezone);
   if (dayInTz === 0 || dayInTz === 6) return false;
 
+  // Holiday check
+  if (isHoliday(market, date)) return false;
+
   const { hour, minute } = getLocalTime(date, def.timezone);
   const currentMinutes = hour * 60 + minute;
 
-  return def.sessions.some((session) => {
+  // Half-day check: override close time for the last session
+  const earlyClose = getEarlyCloseTime(market, date);
+
+  return def.sessions.some((session, idx) => {
     const openMinutes = session.open.hour * 60 + session.open.minute;
-    const closeMinutes = session.close.hour * 60 + session.close.minute;
+    let closeMinutes = session.close.hour * 60 + session.close.minute;
+
+    // Apply early close to the first session only (US half-day closes at 13:00)
+    if (earlyClose && idx === 0) {
+      const earlyCloseMinutes = earlyClose.hour * 60 + earlyClose.minute;
+      closeMinutes = Math.min(closeMinutes, earlyCloseMinutes);
+    }
+    // On half days, afternoon sessions don't exist
+    if (earlyClose && idx > 0) return false;
+
     return currentMinutes >= openMinutes && currentMinutes < closeMinutes;
   });
+}
+
+/** Get early close time for half-day sessions. Returns null for regular days. */
+export function getEarlyCloseTime(
+  market: MarketType,
+  date: Date,
+): { hour: number; minute: number } | null {
+  if (!isHalfDay(market, date)) return null;
+  // US half-day closes at 13:00 ET
+  if (market === "us-equity") return { hour: 13, minute: 0 };
+  return null;
 }
 
 /** Get the IANA timezone for a market. */

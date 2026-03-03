@@ -12,6 +12,7 @@ import type { UnifiedExchangeAdapter } from "./adapter-interface.js";
 import { AlpacaAdapter } from "./alpaca-adapter.js";
 import { CcxtAdapter } from "./ccxt-adapter.js";
 import { FutuAdapter } from "./futu-adapter.js";
+import { OpenCtpAdapter } from "./openctp-adapter.js";
 
 /**
  * Create an adapter for the given exchange configuration.
@@ -49,8 +50,29 @@ export function createAdapter(
     );
   }
 
+  if (config.exchange === "openctp") {
+    if (!config.ctpFrontAddr || !config.ctpBrokerId) {
+      throw new Error(
+        `OpenCTP adapter requires ctpFrontAddr and ctpBrokerId. ` +
+          `Configure them in financial.exchanges.${exchangeId}.`,
+      );
+    }
+    const bridgeUrl = config.host && config.port
+      ? `http://${config.host}:${config.port}`
+      : undefined;
+    return new OpenCtpAdapter(
+      exchangeId,
+      config.testnet ?? true, // default to paper (SimNow)
+      config.ctpFrontAddr,
+      config.ctpBrokerId,
+      config.ctpAppId,
+      config.ctpAuthCode,
+      bridgeUrl,
+    );
+  }
+
   throw new Error(
     `Unsupported exchange type: "${config.exchange}". ` +
-      `Supported: binance, okx, bybit, hyperliquid (crypto), alpaca (US equity), futu (HK equity).`,
+      `Supported: binance, okx, bybit, hyperliquid (crypto), alpaca (US equity), futu (HK equity), openctp (CN A-share).`,
   );
 }

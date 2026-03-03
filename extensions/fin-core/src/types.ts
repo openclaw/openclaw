@@ -2,13 +2,13 @@
 export type CryptoExchangeId = "hyperliquid" | "binance" | "okx" | "bybit";
 
 /** Supported broker types for traditional markets. */
-export type BrokerId = "alpaca" | "futu";
+export type BrokerId = "alpaca" | "futu" | "openctp";
 
 /** Union of all supported exchange/broker identifiers. */
 export type ExchangeId = CryptoExchangeId | BrokerId;
 
 /** Market classification. */
-export type MarketType = "crypto" | "us-equity" | "hk-equity";
+export type MarketType = "crypto" | "us-equity" | "hk-equity" | "cn-a-share";
 
 /** Credentials and connection config for a single exchange. */
 export type ExchangeConfig = {
@@ -30,6 +30,14 @@ export type ExchangeConfig = {
   port?: number;
   /** Futu: trading account ID. */
   accountId?: string;
+  /** OpenCTP: broker ID (e.g. "9999" for SimNow). */
+  ctpBrokerId?: string;
+  /** OpenCTP: CTP gateway address (e.g. "tcp://180.168.146.187:10130"). */
+  ctpFrontAddr?: string;
+  /** OpenCTP: app ID for authentication. */
+  ctpAppId?: string;
+  /** OpenCTP: auth code for authentication. */
+  ctpAuthCode?: string;
 };
 
 /** Risk limits for automated trading. */
@@ -145,6 +153,7 @@ export function inferMarketType(exchangeOrConfig: ExchangeId | ExchangeConfig): 
     if (CRYPTO_EXCHANGES.has(exchangeOrConfig)) return "crypto";
     if (exchangeOrConfig === "alpaca") return "us-equity";
     if (exchangeOrConfig === "futu") return "hk-equity";
+    if (exchangeOrConfig === "openctp") return "cn-a-share";
     return "crypto"; // default fallback
   }
   return exchangeOrConfig.market ?? inferMarketType(exchangeOrConfig.exchange);

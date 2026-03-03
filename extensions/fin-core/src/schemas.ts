@@ -7,7 +7,7 @@ import { z } from "zod";
 
 // ── Enums ──
 
-export const MarketTypeSchema = z.enum(["crypto", "us-equity", "hk-equity"]);
+export const MarketTypeSchema = z.enum(["crypto", "us-equity", "hk-equity", "cn-a-share"]);
 
 export const OrderSideSchema = z.enum(["buy", "sell"]);
 
@@ -110,6 +110,10 @@ export const ExchangeConfigSchema = z.object({
   host: z.string().optional(),
   port: z.number().optional(),
   accountId: z.string().optional(),
+  ctpBrokerId: z.string().optional(),
+  ctpFrontAddr: z.string().optional(),
+  ctpAppId: z.string().optional(),
+  ctpAuthCode: z.string().optional(),
 });
 
 export const ExchangeListItemSchema = z.object({

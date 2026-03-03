@@ -4,6 +4,7 @@ import { createAdapter } from "./adapter-factory.js";
 import { AlpacaAdapter } from "./alpaca-adapter.js";
 import { CcxtAdapter } from "./ccxt-adapter.js";
 import { FutuAdapter } from "./futu-adapter.js";
+import { OpenCtpAdapter } from "./openctp-adapter.js";
 
 /** Minimal mock registry — just needs to exist for construction. */
 function mockRegistry() {
@@ -92,6 +93,65 @@ describe("createAdapter", () => {
     const config: ExchangeConfig = { exchange: "futu", apiKey: "k", secret: "s" };
     const adapter = createAdapter("futu", config, mockRegistry());
     expect(adapter.isTestnet).toBe(false);
+  });
+
+  // ── OpenCTP (CN A-share) ──
+
+  it("returns OpenCtpAdapter for openctp", () => {
+    const config: ExchangeConfig = {
+      exchange: "openctp",
+      apiKey: "investor-id",
+      secret: "password",
+      ctpFrontAddr: "tcp://180.168.146.187:10130",
+      ctpBrokerId: "9999",
+      ctpAppId: "simnow_client_test",
+      ctpAuthCode: "0000000000000000",
+    };
+    const adapter = createAdapter("openctp-sim", config, mockRegistry());
+    expect(adapter).toBeInstanceOf(OpenCtpAdapter);
+    expect(adapter.exchangeId).toBe("openctp-sim");
+    expect(adapter.marketType).toBe("cn-a-share");
+  });
+
+  it("openctp defaults to testnet (SimNow)", () => {
+    const config: ExchangeConfig = {
+      exchange: "openctp",
+      apiKey: "inv",
+      secret: "pwd",
+      ctpFrontAddr: "tcp://180.168.146.187:10130",
+      ctpBrokerId: "9999",
+    };
+    const adapter = createAdapter("ctp", config, mockRegistry());
+    expect(adapter.isTestnet).toBe(true);
+  });
+
+  it("openctp uses custom bridge url from host:port", () => {
+    const config: ExchangeConfig = {
+      exchange: "openctp",
+      apiKey: "inv",
+      secret: "pwd",
+      ctpFrontAddr: "tcp://180.168.146.187:10130",
+      ctpBrokerId: "9999",
+      host: "192.168.1.100",
+      port: 8080,
+    };
+    const adapter = createAdapter("ctp-custom", config, mockRegistry());
+    expect(adapter).toBeInstanceOf(OpenCtpAdapter);
+  });
+
+  it("openctp throws when ctpFrontAddr missing", () => {
+    const config: ExchangeConfig = { exchange: "openctp", apiKey: "k", secret: "s" };
+    expect(() => createAdapter("ctp", config, mockRegistry())).toThrow(/ctpFrontAddr and ctpBrokerId/);
+  });
+
+  it("openctp throws when ctpBrokerId missing", () => {
+    const config: ExchangeConfig = {
+      exchange: "openctp",
+      apiKey: "k",
+      secret: "s",
+      ctpFrontAddr: "tcp://180.168.146.187:10130",
+    };
+    expect(() => createAdapter("ctp", config, mockRegistry())).toThrow(/ctpFrontAddr and ctpBrokerId/);
   });
 
   // ── Unsupported ──

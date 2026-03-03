@@ -1,0 +1,1436 @@
+/* ════════════════════════════════════════════════════════════════
+   OpenFinClaw — Agent Flow Page CSS
+   6-stage agent execution pipeline visualization
+   Requires: unified-dashboard.css (shared foundation)
+   ════════════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════════
+   1. STAGE COLOR TOKENS
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  --stage-signal: #8b5cf6;        /* purple  — Signal Detection */
+  --stage-signal-dim: rgba(139, 92, 246, 0.1);
+  --stage-risk: #f59e0b;          /* orange  — Risk Assessment */
+  --stage-risk-dim: rgba(245, 158, 11, 0.1);
+  --stage-strategy: #3b82f6;      /* blue    — Strategy Selection */
+  --stage-strategy-dim: rgba(59, 130, 246, 0.1);
+  --stage-order: #06b6d4;         /* cyan    — Order Generation */
+  --stage-order-dim: rgba(6, 182, 212, 0.1);
+  --stage-approval: #f59e0b;      /* yellow  — Approval Gate */
+  --stage-approval-dim: rgba(245, 158, 11, 0.1);
+  --stage-execution: #22c55e;     /* green   — Execution */
+  --stage-execution-dim: rgba(34, 197, 94, 0.1);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   2. 2-COLUMN LAYOUT OVERRIDE
+   ═══════════════════════════════════════════════════════════════ */
+
+.layout {
+  display: flex;
+}
+.col-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 10px 14px;
+  gap: 10px;
+}
+.col-side {
+  width: 360px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-raised);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   3. SECTION TITLES
+   ═══════════════════════════════════════════════════════════════ */
+
+.section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-hi);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.section-title__icon {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   4. PENDING COUNT BADGE (pulsing amber)
+   ═══════════════════════════════════════════════════════════════ */
+
+.pending-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--warn-dim);
+  color: var(--warn);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  animation: pendingPulse 2s ease-in-out infinite;
+}
+.pending-badge__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  animation: alertPip 2s ease-in-out infinite;
+}
+
+@keyframes pendingPulse {
+  0%, 100% { box-shadow: none; opacity: 0.85; }
+  50% { box-shadow: 0 0 12px rgba(245, 158, 11, 0.25); opacity: 1; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   5. APPROVAL CARDS
+   ═══════════════════════════════════════════════════════════════ */
+
+.approval-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r);
+  padding: 12px 14px;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.2s;
+}
+.approval-card:hover {
+  border-color: var(--border-hi);
+  background: var(--bg-card-alt);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+}
+.approval-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.approval-card__type {
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  padding: 2px 6px;
+  border-radius: 2px;
+  text-transform: uppercase;
+}
+.approval-card__type--promotion {
+  background: var(--gain-dim);
+  color: var(--gain);
+}
+.approval-card__type--trade {
+  background: var(--info-dim);
+  color: var(--info);
+}
+.approval-card__type--rebalance {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.approval-card__time {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+}
+.approval-card__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-hi);
+  margin-bottom: 6px;
+}
+.approval-card__detail {
+  font-size: 10px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  margin-bottom: 6px;
+}
+.approval-card__gates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.approval-card__risk {
+  display: flex;
+  gap: 12px;
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  padding: 5px 8px;
+  background: var(--bg);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+}
+.approval-card__risk-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.approval-card__risk-val {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text);
+}
+.approval-card__actions {
+  display: flex;
+  gap: 5px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   6. 6-STAGE PIPELINE VISUALIZATION (Horizontal)
+   ═══════════════════════════════════════════════════════════════ */
+
+.stage-pipeline {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 20px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow-x: auto;
+}
+
+/* Individual stage node */
+.stage-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 90px;
+  position: relative;
+  z-index: 1;
+}
+
+/* Circular icon container */
+.stage-node__circle {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  border: 2px solid var(--border);
+  background: var(--bg);
+  position: relative;
+  transition: all 0.3s;
+  z-index: 2;
+}
+
+/* Stage name */
+.stage-node__name {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-hi);
+  text-align: center;
+  letter-spacing: 0.3px;
+}
+
+/* Stage status badge */
+.stage-node__status {
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  padding: 1px 6px;
+  border-radius: 2px;
+  text-transform: uppercase;
+}
+
+/* Stage timestamp */
+.stage-node__time {
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--text-dim);
+}
+
+/* Connecting lines between stages */
+.stage-connector {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 2px;
+  background: var(--border);
+  position: relative;
+  z-index: 0;
+}
+.stage-connector::after {
+  content: '';
+  position: absolute;
+  right: -3px;
+  top: -3px;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--border);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   7. STAGE STATE VARIANTS — color coding per stage
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Signal Detection (purple) */
+.stage-node--signal .stage-node__circle {
+  border-color: var(--stage-signal);
+  background: var(--stage-signal-dim);
+}
+.stage-node--signal .stage-node__name {
+  color: var(--stage-signal);
+}
+
+/* Risk Assessment (orange) */
+.stage-node--risk .stage-node__circle {
+  border-color: var(--stage-risk);
+  background: var(--stage-risk-dim);
+}
+.stage-node--risk .stage-node__name {
+  color: var(--stage-risk);
+}
+
+/* Strategy Selection (blue) */
+.stage-node--strategy .stage-node__circle {
+  border-color: var(--stage-strategy);
+  background: var(--stage-strategy-dim);
+}
+.stage-node--strategy .stage-node__name {
+  color: var(--stage-strategy);
+}
+
+/* Order Generation (cyan) */
+.stage-node--order .stage-node__circle {
+  border-color: var(--stage-order);
+  background: var(--stage-order-dim);
+}
+.stage-node--order .stage-node__name {
+  color: var(--stage-order);
+}
+
+/* Approval Gate (yellow) */
+.stage-node--approval .stage-node__circle {
+  border-color: var(--stage-approval);
+  background: var(--stage-approval-dim);
+}
+.stage-node--approval .stage-node__name {
+  color: var(--stage-approval);
+}
+
+/* Execution (green) */
+.stage-node--execution .stage-node__circle {
+  border-color: var(--stage-execution);
+  background: var(--stage-execution-dim);
+}
+.stage-node--execution .stage-node__name {
+  color: var(--stage-execution);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   8. STAGE LIFECYCLE STATES
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Active stage: glowing pulse */
+.stage-node--active .stage-node__circle {
+  animation: stageGlow 2s ease-in-out infinite;
+  box-shadow: 0 0 16px rgba(59, 130, 246, 0.2);
+}
+.stage-node--active .stage-node__status {
+  background: var(--gain-dim);
+  color: var(--gain);
+}
+.stage-node--active.stage-node--signal .stage-node__circle {
+  animation: stageGlowPurple 2s ease-in-out infinite;
+}
+.stage-node--active.stage-node--risk .stage-node__circle {
+  animation: stageGlowOrange 2s ease-in-out infinite;
+}
+.stage-node--active.stage-node--strategy .stage-node__circle {
+  animation: stageGlowBlue 2s ease-in-out infinite;
+}
+.stage-node--active.stage-node--order .stage-node__circle {
+  animation: stageGlowCyan 2s ease-in-out infinite;
+}
+.stage-node--active.stage-node--approval .stage-node__circle {
+  animation: stageGlowYellow 2s ease-in-out infinite;
+}
+.stage-node--active.stage-node--execution .stage-node__circle {
+  animation: stageGlowGreen 2s ease-in-out infinite;
+}
+
+@keyframes stageGlow {
+  0%, 100% { box-shadow: 0 0 8px rgba(59, 130, 246, 0.15); }
+  50% { box-shadow: 0 0 24px rgba(59, 130, 246, 0.35); }
+}
+@keyframes stageGlowPurple {
+  0%, 100% { box-shadow: 0 0 8px rgba(139, 92, 246, 0.15); }
+  50% { box-shadow: 0 0 24px rgba(139, 92, 246, 0.35); }
+}
+@keyframes stageGlowOrange {
+  0%, 100% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.15); }
+  50% { box-shadow: 0 0 24px rgba(245, 158, 11, 0.35); }
+}
+@keyframes stageGlowBlue {
+  0%, 100% { box-shadow: 0 0 8px rgba(59, 130, 246, 0.15); }
+  50% { box-shadow: 0 0 24px rgba(59, 130, 246, 0.35); }
+}
+@keyframes stageGlowCyan {
+  0%, 100% { box-shadow: 0 0 8px rgba(6, 182, 212, 0.15); }
+  50% { box-shadow: 0 0 24px rgba(6, 182, 212, 0.35); }
+}
+@keyframes stageGlowYellow {
+  0%, 100% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.15); }
+  50% { box-shadow: 0 0 24px rgba(245, 158, 11, 0.35); }
+}
+@keyframes stageGlowGreen {
+  0%, 100% { box-shadow: 0 0 8px rgba(34, 197, 94, 0.15); }
+  50% { box-shadow: 0 0 24px rgba(34, 197, 94, 0.35); }
+}
+
+/* Completed stage: checkmark overlay, muted color */
+.stage-node--completed .stage-node__circle {
+  opacity: 0.7;
+  border-style: solid;
+}
+.stage-node--completed .stage-node__circle::after {
+  content: '\2713';
+  position: absolute;
+  bottom: -3px;
+  right: -3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--gain);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--bg);
+}
+.stage-node--completed .stage-node__status {
+  background: rgba(107, 114, 128, 0.1);
+  color: var(--text-dim);
+}
+.stage-node--completed .stage-node__name {
+  color: var(--text-dim);
+}
+
+/* Completed connector turns green */
+.stage-connector--completed {
+  background: var(--gain);
+}
+.stage-connector--completed::after {
+  border-left-color: var(--gain);
+}
+
+/* Active connector pulses */
+.stage-connector--active {
+  background: var(--info);
+  animation: connectorPulse 1.5s ease-in-out infinite;
+}
+.stage-connector--active::after {
+  border-left-color: var(--info);
+}
+
+@keyframes connectorPulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+/* Pending stage: dashed border, gray */
+.stage-node--pending .stage-node__circle {
+  border-style: dashed;
+  border-color: var(--text-dim);
+  opacity: 0.5;
+}
+.stage-node--pending .stage-node__status {
+  background: rgba(107, 114, 128, 0.1);
+  color: var(--text-dim);
+}
+.stage-node--pending .stage-node__name {
+  color: var(--text-dim);
+}
+
+/* Failed stage: red with error icon */
+.stage-node--failed .stage-node__circle {
+  border-color: var(--loss);
+  background: var(--loss-dim);
+  animation: stageFailed 1.5s ease-in-out infinite;
+}
+.stage-node--failed .stage-node__circle::after {
+  content: '\2717';
+  position: absolute;
+  bottom: -3px;
+  right: -3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--loss);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--bg);
+}
+.stage-node--failed .stage-node__status {
+  background: var(--loss-dim);
+  color: var(--loss);
+}
+.stage-node--failed .stage-node__name {
+  color: var(--loss);
+}
+
+/* Failed connector */
+.stage-connector--failed {
+  background: var(--loss);
+}
+.stage-connector--failed::after {
+  border-left-color: var(--loss);
+}
+
+@keyframes stageFailed {
+  0%, 100% { box-shadow: 0 0 6px rgba(239, 68, 68, 0.2); }
+  50% { box-shadow: 0 0 16px rgba(239, 68, 68, 0.4); }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   9. WORKFLOW PIPELINE (existing 5-step from HTML)
+   ═══════════════════════════════════════════════════════════════ */
+
+.workflow-pipeline {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 14px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+.workflow-step {
+  flex: 1;
+  text-align: center;
+  padding: 10px 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  position: relative;
+  transition: all 0.3s;
+}
+.workflow-step + .workflow-step {
+  margin-left: 20px;
+}
+.workflow-step + .workflow-step::before {
+  content: '';
+  position: absolute;
+  left: -16px;
+  top: 50%;
+  width: 12px;
+  height: 2px;
+  background: var(--border-hi);
+}
+.workflow-step + .workflow-step::after {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--border-hi);
+}
+.workflow-step--active {
+  border-color: var(--gain);
+  background: rgba(34, 197, 94, 0.05);
+  box-shadow: 0 0 16px rgba(34, 197, 94, 0.1);
+}
+.workflow-step--active + .workflow-step::before {
+  background: var(--gain);
+}
+.workflow-step--active + .workflow-step::after {
+  border-left-color: var(--gain);
+}
+.workflow-step--waiting {
+  border-color: var(--warn);
+  background: rgba(245, 158, 11, 0.03);
+}
+.workflow-step__icon {
+  font-size: 18px;
+  margin-bottom: 4px;
+}
+.workflow-step__name {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-hi);
+  margin-bottom: 2px;
+}
+.workflow-step__status {
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  display: inline-block;
+  margin-bottom: 3px;
+}
+.workflow-step__status--active {
+  background: var(--gain-dim);
+  color: var(--gain);
+}
+.workflow-step__status--idle {
+  background: rgba(107, 114, 128, 0.1);
+  color: var(--text-dim);
+}
+.workflow-step__status--waiting {
+  background: var(--warn-dim);
+  color: var(--warn);
+}
+.workflow-step__time {
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--text-dim);
+  display: block;
+  margin-top: 2px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   10. EVENT TIMELINE (vertical list under stages)
+   ═══════════════════════════════════════════════════════════════ */
+
+.stage-events {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.stage-event {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--r-sm);
+  font-size: 10px;
+  transition: background 0.12s;
+}
+.stage-event:hover {
+  background: var(--bg-card-alt);
+}
+.stage-event__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+.stage-event__dot--signal { background: var(--stage-signal); }
+.stage-event__dot--risk { background: var(--stage-risk); }
+.stage-event__dot--strategy { background: var(--stage-strategy); }
+.stage-event__dot--order { background: var(--stage-order); }
+.stage-event__dot--approval { background: var(--stage-approval); }
+.stage-event__dot--execution { background: var(--stage-execution); }
+.stage-event__text {
+  flex: 1;
+  color: var(--text);
+  line-height: 1.35;
+}
+.stage-event__time {
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   11. AI DAILY BRIEF
+   ═══════════════════════════════════════════════════════════════ */
+
+.daily-brief {
+  background: var(--bg-card);
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  padding: 14px 16px;
+  position: relative;
+  overflow: hidden;
+}
+.daily-brief::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r);
+  padding: 1px;
+  background: linear-gradient(135deg, var(--accent), var(--info), var(--gain));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+.daily-brief__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.daily-brief__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-hi);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.daily-brief__date {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.daily-brief__body {
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.65;
+}
+.daily-brief__body p {
+  margin-bottom: 8px;
+}
+.daily-brief__body p:last-child {
+  margin-bottom: 0;
+}
+.daily-brief__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.daily-brief__gen {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   12. AGENT STATUS PANEL (sidebar)
+   ═══════════════════════════════════════════════════════════════ */
+
+.agent-status {
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.agent-status__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.agent-status__avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--info));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.agent-status__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-hi);
+}
+.agent-status__online {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--gain);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.agent-status__online-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gain);
+  animation: pip1 2.5s ease-in-out infinite;
+}
+.agent-status__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.agent-stat {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 10px;
+  border-bottom: 1px solid rgba(35, 41, 58, 0.4);
+}
+.agent-stat__label {
+  color: var(--text-dim);
+}
+.agent-stat__val {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text-hi);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   13. ACTIVITY TIMELINE FEED (sidebar)
+   ═══════════════════════════════════════════════════════════════ */
+
+.timeline-head {
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.timeline-head__title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-hi);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.timeline-head__title::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gain);
+  animation: feedPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes feedPulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+/* Feed filter chips */
+.feed-filter {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+.feed-filter__chip {
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  transition: all 0.12s;
+}
+.feed-filter__chip:hover {
+  color: var(--text);
+  background: var(--bg-card);
+}
+.feed-filter__chip.active {
+  color: var(--text-hi);
+  background: var(--bg-card);
+  border-color: var(--border-hi);
+}
+
+.timeline-feed {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.timeline-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(35, 41, 58, 0.3);
+  opacity: 0;
+  transform: translateY(6px);
+  animation: tlIn 0.3s ease-out forwards;
+}
+.timeline-item:nth-child(1) { animation-delay: 0.05s; }
+.timeline-item:nth-child(2) { animation-delay: 0.1s; }
+.timeline-item:nth-child(3) { animation-delay: 0.15s; }
+.timeline-item:nth-child(4) { animation-delay: 0.2s; }
+.timeline-item:nth-child(5) { animation-delay: 0.25s; }
+.timeline-item:nth-child(6) { animation-delay: 0.3s; }
+.timeline-item:nth-child(7) { animation-delay: 0.35s; }
+.timeline-item:nth-child(8) { animation-delay: 0.4s; }
+
+@keyframes tlIn {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.timeline-item__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.timeline-item__dot--strategy { background: var(--gain); }
+.timeline-item__dot--trade { background: var(--info); }
+.timeline-item__dot--approval { background: var(--warn); }
+.timeline-item__dot--evolution { background: var(--purple); }
+.timeline-item__dot--system { background: var(--text-dim); }
+.timeline-item__body {
+  flex: 1;
+  min-width: 0;
+}
+.timeline-item__text {
+  font-size: 10px;
+  color: var(--text);
+  line-height: 1.4;
+}
+.timeline-item__time {
+  font-family: var(--mono);
+  font-size: 8px;
+  color: var(--text-dim);
+  margin-top: 1px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   14. SSE LIVE UPDATE FLASH EFFECT
+   ═══════════════════════════════════════════════════════════════ */
+
+.sse-update-flash {
+  animation: sseUpdateFlash 0.6s ease-out;
+}
+
+@keyframes sseUpdateFlash {
+  0% {
+    background: rgba(59, 130, 246, 0.12);
+    box-shadow: inset 0 0 12px rgba(59, 130, 246, 0.08);
+  }
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+/* New timeline item flash */
+.timeline-item--new {
+  animation: newItemFlash 0.5s ease-out, tlIn 0.3s ease-out forwards;
+}
+
+@keyframes newItemFlash {
+  0% {
+    background: rgba(34, 197, 94, 0.1);
+    border-left: 2px solid var(--gain);
+  }
+  100% {
+    background: transparent;
+    border-left: 2px solid transparent;
+  }
+}
+
+/* Data refresh pulse on cards */
+.data-refresh {
+  animation: dataRefresh 0.4s ease-out;
+}
+
+@keyframes dataRefresh {
+  0% {
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.3);
+  }
+  100% {
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   15. APPROVAL DIALOG OVERLAY
+   ═══════════════════════════════════════════════════════════════ */
+
+.approval-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s;
+}
+.approval-dialog.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.approval-dialog__box {
+  background: var(--bg-card);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r);
+  padding: 24px;
+  width: 400px;
+  max-width: calc(100vw - 32px);
+  transform: scale(0.95) translateY(10px);
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.approval-dialog.open .approval-dialog__box {
+  transform: scale(1) translateY(0);
+}
+.approval-dialog__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-hi);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.approval-dialog__title-icon {
+  font-size: 18px;
+}
+.approval-dialog__desc {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+.approval-dialog__detail {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  font-size: 10px;
+}
+.approval-dialog__detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+}
+.approval-dialog__detail-label {
+  color: var(--text-dim);
+}
+.approval-dialog__detail-val {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text-hi);
+}
+.approval-dialog__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.approval-dialog__btn {
+  padding: 8px 20px;
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+.approval-dialog__btn--approve {
+  background: var(--gain-dim);
+  color: var(--gain);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+.approval-dialog__btn--approve:hover {
+  background: rgba(34, 197, 94, 0.2);
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.15);
+}
+.approval-dialog__btn--reject {
+  background: var(--loss-dim);
+  color: var(--loss);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+.approval-dialog__btn--reject:hover {
+  background: rgba(239, 68, 68, 0.2);
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.15);
+}
+.approval-dialog__btn--cancel {
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  background: transparent;
+}
+.approval-dialog__btn--cancel:hover {
+  color: var(--text);
+  border-color: var(--border-hi);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   16. EMERGENCY STOP ZONE
+   ═══════════════════════════════════════════════════════════════ */
+
+.estop-zone {
+  padding: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.estop-zone__text {
+  flex: 1;
+}
+.estop-zone__title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--loss);
+  margin-bottom: 2px;
+}
+.estop-zone__desc {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.estop-zone__btn {
+  padding: 10px 24px;
+  border-radius: var(--r-sm);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--loss);
+  border: 2px solid rgba(239, 68, 68, 0.4);
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+.estop-zone__btn:hover {
+  background: rgba(239, 68, 68, 0.22);
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   17. TOPBAR AGENT STATUS (custom override)
+   ═══════════════════════════════════════════════════════════════ */
+
+.topbar__agent-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.topbar__agent-pip {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--gain);
+  animation: pip1 2.5s ease-in-out infinite;
+}
+.topbar__agent-label {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--gain);
+}
+.topbar__agent-uptime {
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
+.topbar__hb {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   18. EVENT CARD BUTTONS (used in approval cards)
+   ═══════════════════════════════════════════════════════════════ */
+
+.event-card__btn {
+  padding: 4px 12px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  transition: all 0.12s;
+}
+.event-card__btn--approve {
+  background: var(--gain-dim);
+  color: var(--gain);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+}
+.event-card__btn--approve:hover {
+  background: rgba(34, 197, 94, 0.2);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.1);
+}
+.event-card__btn--reject {
+  color: var(--loss);
+  border: 1px solid rgba(239, 68, 68, 0.15);
+  background: transparent;
+}
+.event-card__btn--reject:hover {
+  background: rgba(239, 68, 68, 0.08);
+}
+.event-card__btn--ghost {
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  background: transparent;
+}
+.event-card__btn--ghost:hover {
+  color: var(--text);
+  border-color: var(--border-hi);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   19. TOAST CONTAINER
+   ═══════════════════════════════════════════════════════════════ */
+
+.toast-container {
+  position: fixed;
+  top: calc(var(--top-h) + 16px);
+  right: 16px;
+  z-index: 5000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.toast {
+  padding: 8px 14px;
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-hi);
+  background: var(--bg-card);
+  border: 1px solid var(--border-hi);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  transform: translateX(100%);
+  opacity: 0;
+  transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.toast.show {
+  transform: translateX(0);
+  opacity: 1;
+}
+.toast--success {
+  border-left: 3px solid var(--gain);
+}
+.toast--error {
+  border-left: 3px solid var(--loss);
+}
+.toast--warning {
+  border-left: 3px solid var(--warn);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   20. FADE-UP ENTRANCE ANIMATION
+   ═══════════════════════════════════════════════════════════════ */
+
+.fade-up {
+  opacity: 0;
+  transform: translateY(10px);
+  animation: fadeUp 0.4s ease-out forwards;
+}
+
+@keyframes fadeUp {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.d1 { animation-delay: 0.05s; }
+.d2 { animation-delay: 0.1s; }
+.d3 { animation-delay: 0.18s; }
+.d4 { animation-delay: 0.26s; }
+.d5 { animation-delay: 0.34s; }
+.d6 { animation-delay: 0.42s; }
+
+/* ═══════════════════════════════════════════════════════════════
+   21. RESPONSIVE — MOBILE / TABLET BREAKPOINTS
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Tablet: narrow sidebar */
+@media (max-width: 1200px) {
+  .col-side {
+    width: 300px;
+  }
+  .stage-pipeline {
+    padding: 14px 6px;
+  }
+  .stage-node__circle {
+    width: 40px;
+    height: 40px;
+    font-size: 16px;
+  }
+  .stage-connector {
+    width: 20px;
+  }
+}
+
+/* Small tablet: hide sidebar */
+@media (max-width: 1024px) {
+  .col-side {
+    display: none;
+  }
+  .col-main {
+    padding: 8px 12px;
+  }
+}
+
+/* Mobile: stages stack vertically */
+@media (max-width: 768px) {
+  .layout {
+    flex-direction: column;
+    position: static;
+    min-height: calc(100vh - var(--top-h) - var(--bot-h));
+    overflow-y: auto;
+  }
+  html, body {
+    overflow: auto;
+  }
+  .col-main {
+    padding: 8px;
+    gap: 8px;
+  }
+  .col-side {
+    display: none;
+  }
+
+  /* Pipeline: vertical stacking */
+  .stage-pipeline {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px;
+    gap: 4px;
+  }
+  .stage-node {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    text-align: left;
+  }
+  .stage-node__circle {
+    width: 36px;
+    height: 36px;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  .stage-node__name {
+    font-size: 10px;
+    text-align: left;
+  }
+  .stage-connector {
+    width: 2px;
+    height: 16px;
+    margin-left: 17px;
+  }
+  .stage-connector::after {
+    right: auto;
+    left: -3px;
+    top: auto;
+    bottom: -3px;
+    border-top: 5px solid var(--border);
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: none;
+  }
+  .stage-connector--completed::after {
+    border-top-color: var(--gain);
+  }
+  .stage-connector--active::after {
+    border-top-color: var(--info);
+  }
+  .stage-connector--failed::after {
+    border-top-color: var(--loss);
+  }
+
+  /* Workflow pipeline vertical on mobile */
+  .workflow-pipeline {
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px;
+  }
+  .workflow-step {
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+  }
+  .workflow-step + .workflow-step {
+    margin-left: 0;
+    margin-top: 4px;
+  }
+  .workflow-step + .workflow-step::before {
+    display: none;
+  }
+  .workflow-step + .workflow-step::after {
+    display: none;
+  }
+  .workflow-step__icon {
+    font-size: 14px;
+    margin-bottom: 0;
+  }
+  .workflow-step__name {
+    flex: 1;
+  }
+
+  /* Approval dialog full width */
+  .approval-dialog__box {
+    width: calc(100vw - 32px);
+  }
+
+  /* Topbar adjustments */
+  .topbar {
+    flex-wrap: wrap;
+    height: auto;
+    padding: 6px 10px;
+    gap: 6px;
+  }
+  .topbar__nav {
+    order: 10;
+    width: 100%;
+    justify-content: center;
+    padding-top: 4px;
+  }
+  .topbar__hb {
+    display: none;
+  }
+}
+
+/* Small mobile */
+@media (max-width: 480px) {
+  .topbar__agent-uptime {
+    display: none;
+  }
+  .topbar__nav-item {
+    font-size: 9px;
+    padding: 3px 6px;
+  }
+  .approval-card {
+    padding: 10px;
+  }
+  .approval-card__title {
+    font-size: 11px;
+  }
+  .daily-brief {
+    padding: 10px 12px;
+  }
+  .stage-node__circle {
+    width: 32px;
+    height: 32px;
+    font-size: 12px;
+  }
+}
