@@ -104,11 +104,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     discordRestFetch,
   } = ctx;
 
-  const mediaList = await resolveMediaList(message, mediaMaxBytes, discordRestFetch);
+  const ssrfPolicy = cfg.browser?.ssrfPolicy;
+  const mediaList = await resolveMediaList(message, mediaMaxBytes, discordRestFetch, ssrfPolicy);
   const forwardedMediaList = await resolveForwardedMediaList(
     message,
     mediaMaxBytes,
     discordRestFetch,
+    ssrfPolicy,
   );
   mediaList.push(...forwardedMediaList);
   const text = messageText;
