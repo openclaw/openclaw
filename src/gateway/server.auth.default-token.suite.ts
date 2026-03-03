@@ -112,7 +112,8 @@ export function registerDefaultAuthTokenSuite(): void {
       ws.close();
     });
 
-    test("connect (req) handshake resolves server version from env precedence", async () => {
+    test("connect (req) handshake resolves server version from runtime precedence", async () => {
+      const { VERSION } = await import("../version.js");
       for (const testCase of [
         {
           env: {
@@ -120,7 +121,7 @@ export function registerDefaultAuthTokenSuite(): void {
             OPENCLAW_SERVICE_VERSION: "2.4.6-service",
             npm_package_version: "1.0.0-package",
           },
-          expectedVersion: "2.4.6-service",
+          expectedVersion: VERSION,
         },
         {
           env: {
@@ -136,7 +137,7 @@ export function registerDefaultAuthTokenSuite(): void {
             OPENCLAW_SERVICE_VERSION: "\t",
             npm_package_version: "1.0.0-package",
           },
-          expectedVersion: "1.0.0-package",
+          expectedVersion: VERSION,
         },
       ]) {
         await withRuntimeVersionEnv(testCase.env, async () =>
