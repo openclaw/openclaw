@@ -132,6 +132,10 @@ export type ResolvedProviderAuth = {
   mode: "api-key" | "oauth" | "token" | "aws-sdk";
 };
 
+export function canRunWithoutApiKey(provider: string, mode: ResolvedProviderAuth["mode"]): boolean {
+  return mode === "aws-sdk" || normalizeProviderId(provider) === "ollama";
+}
+
 export async function resolveApiKeyForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -221,15 +225,22 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
-  const resolvedAgentDir = path.dirname(authStorePath);
-  throw new Error(
-    [
-      `No API key found for provider "${provider}".`,
-      `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
-      `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
-    ].join(" "),
-  );
+  if (!canRunWithoutApiKey(provider, "api-key")) {
+    const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
+    const resolvedAgentDir = path.dirname(authStorePath);
+    throw new Error(
+      [
+        `No API key found for provider "${provider}".`,
+        `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
+        `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
+      ].join(" "),
+    );
+  }
+
+  return {
+    source: `${normalizeProviderId(provider)} local runtime`,
+    mode: "api-key",
+  };
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
