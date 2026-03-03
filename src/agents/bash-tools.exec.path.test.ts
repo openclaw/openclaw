@@ -71,6 +71,9 @@ describe("exec PATH login shell merge", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["PATH", "SHELL"]);
+    if (!isWin && !process.env.SHELL) {
+      process.env.SHELL = "/bin/sh";
+    }
   });
 
   afterEach(() => {
