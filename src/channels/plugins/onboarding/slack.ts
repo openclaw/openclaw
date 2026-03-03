@@ -111,10 +111,11 @@ async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Pr
     ].join("\n"),
     "Slack socket mode tokens",
   );
-  // Print the manifest JSON directly (without box framing) so it can be copied cleanly.
-  console.log("\nManifest (JSON):\n");
-  console.log(manifest);
-  console.log();
+  // Print the manifest JSON via prompter.log (not console.log) so the output stays
+  // within the WizardPrompter abstraction and can be captured in tests or non-TTY contexts.
+  await prompter.log("\nManifest (JSON):\n");
+  await prompter.log(manifest);
+  await prompter.log("");
 }
 
 function setSlackChannelAllowlist(
