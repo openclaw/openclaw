@@ -468,6 +468,13 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
   return isSubagentSessionKey(sessionKey) ? "minimal" : "full";
 }
 
+export function resolveRouteMessageProvider(params: {
+  messageProvider?: string;
+  messageChannel?: string;
+}): string | undefined {
+  return params.messageProvider ?? params.messageChannel;
+}
+
 export function resolveAttemptFsWorkspaceOnly(params: {
   config?: OpenClawConfig;
   sessionAgentId: string;
@@ -739,6 +746,10 @@ export async function runEmbeddedAttempt(
     });
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
+    const routeMessageProvider = resolveRouteMessageProvider({
+      messageProvider: params.messageProvider,
+      messageChannel: params.messageChannel,
+    });
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
@@ -748,7 +759,7 @@ export async function runEmbeddedAttempt(
             elevated: params.bashElevated,
           },
           sandbox,
-          messageProvider: params.messageChannel ?? params.messageProvider,
+          messageProvider: routeMessageProvider,
           agentAccountId: params.agentAccountId,
           messageTo: params.messageTo,
           messageThreadId: params.messageThreadId,
@@ -1348,7 +1359,7 @@ export async function runEmbeddedAttempt(
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
-        messageProvider: params.messageChannel ?? params.messageProvider,
+        messageProvider: routeMessageProvider,
         originatingTo: params.messageTo ?? undefined,
         accountId: params.agentAccountId ?? undefined,
         hookRunner: getGlobalHookRunner() ?? undefined,

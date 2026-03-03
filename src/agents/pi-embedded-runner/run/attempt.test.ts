@@ -9,6 +9,7 @@ import {
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  resolveRouteMessageProvider,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
   wrapStreamFnTrimToolCallNames,
@@ -82,6 +83,25 @@ describe("resolvePromptModeForSession", () => {
   it("uses full mode for cron sessions", () => {
     expect(resolvePromptModeForSession("agent:main:cron:job-1")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:cron:job-1:run:run-abc")).toBe("full");
+  });
+});
+
+describe("resolveRouteMessageProvider", () => {
+  it("prefers canonical messageProvider when both provider and channel are present", () => {
+    expect(
+      resolveRouteMessageProvider({
+        messageProvider: "bluebubbles",
+        messageChannel: "imessage",
+      }),
+    ).toBe("bluebubbles");
+  });
+
+  it("falls back to messageChannel when canonical provider is absent", () => {
+    expect(
+      resolveRouteMessageProvider({
+        messageChannel: "telegram",
+      }),
+    ).toBe("telegram");
   });
 });
 

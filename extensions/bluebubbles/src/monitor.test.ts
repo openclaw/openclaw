@@ -812,6 +812,45 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
 
+    it("drops direct payload with nested chat group metadata and no chat context", async () => {
+      const account = createMockAccount({
+        dmPolicy: "open",
+        groupPolicy: "open",
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "aiden",
+          handle: { address: "+15551234567" },
+          isFromMe: false,
+          guid: "msg-nested-group-true",
+          date: Date.now(),
+          conversationLabel: "Group id:Unknown",
+          chat: { isGroupChat: true },
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
     it("keeps direct payload with legacy group=false metadata and no chat context", async () => {
       const account = createMockAccount({
         dmPolicy: "open",

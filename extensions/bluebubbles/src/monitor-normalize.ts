@@ -860,6 +860,8 @@ export function normalizeWebhookMessage(
     readNumberLike(message, "dateEdited") ?? readNumberLike(message, "date_edited") ?? undefined;
   const explicitWasMentioned =
     readBoolean(message, "wasMentioned") ?? readBoolean(message, "was_mentioned");
+  const chatRecord = asRecord(message.chat) ?? asRecord(message.conversation) ?? null;
+  const chatRecordFromList = readFirstChatRecord(message);
   const hasConversationLabel =
     hasDefinedProperty(message, "conversationLabel") ||
     hasDefinedProperty(message, "conversation_label");
@@ -868,7 +870,17 @@ export function normalizeWebhookMessage(
     hasDefinedProperty(message, "is_group_chat") ||
     hasDefinedProperty(message, "isGroup") ||
     hasDefinedProperty(message, "is_group") ||
-    hasDefinedProperty(message, "group");
+    hasDefinedProperty(message, "group") ||
+    hasDefinedProperty(chatRecord, "isGroupChat") ||
+    hasDefinedProperty(chatRecord, "is_group_chat") ||
+    hasDefinedProperty(chatRecord, "isGroup") ||
+    hasDefinedProperty(chatRecord, "is_group") ||
+    hasDefinedProperty(chatRecord, "group") ||
+    hasDefinedProperty(chatRecordFromList, "isGroupChat") ||
+    hasDefinedProperty(chatRecordFromList, "is_group_chat") ||
+    hasDefinedProperty(chatRecordFromList, "isGroup") ||
+    hasDefinedProperty(chatRecordFromList, "is_group") ||
+    hasDefinedProperty(chatRecordFromList, "group");
   const hasMessageIdFull =
     hasDefinedProperty(message, "messageIdFull") || hasDefinedProperty(message, "message_id_full");
   const timestamp =
