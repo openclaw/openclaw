@@ -226,7 +226,8 @@ if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
     _DOTENV_PATH="$ROOT_DIR/.env"
     _EXISTING_DOTENV_TOKEN=""
     if [[ -f "$_DOTENV_PATH" ]]; then
-      _EXISTING_DOTENV_TOKEN="$(grep -E '^OPENCLAW_GATEWAY_TOKEN=' "$_DOTENV_PATH" | tail -1 | cut -d= -f2- | tr -d '\r')"
+      # grep exits 1 when no match; || true prevents set -euo pipefail from aborting
+      _EXISTING_DOTENV_TOKEN="$(grep -E '^OPENCLAW_GATEWAY_TOKEN=' "$_DOTENV_PATH" | tail -1 | cut -d= -f2- | tr -d '\r')" || true
     fi
     if [[ -n "$_EXISTING_DOTENV_TOKEN" ]]; then
       OPENCLAW_GATEWAY_TOKEN="$_EXISTING_DOTENV_TOKEN"
