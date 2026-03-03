@@ -114,6 +114,33 @@ describe("slackPlugin outbound", () => {
     expect(result).toEqual({ channel: "slack", messageId: "m-text-identity" });
   });
 
+  it("normalizes partially wrapped emoji shortcodes", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-text-emoji-normalized" });
+    const sendText = slackPlugin.outbound?.sendText;
+    expect(sendText).toBeDefined();
+
+    await sendText!({
+      cfg,
+      to: "C123",
+      text: "hello",
+      accountId: "default",
+      identity: {
+        emoji: ":zap",
+      },
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        identity: {
+          iconEmoji: ":zap:",
+        },
+      }),
+    );
+  });
+
   it("prefers replyToId over threadId for sendMedia", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-media" });
     const sendMedia = slackPlugin.outbound?.sendMedia;
@@ -200,6 +227,36 @@ describe("slackPlugin outbound", () => {
       }),
     );
     expect(result).toEqual({ channel: "slack", messageId: "m-media-identity" });
+  });
+
+  it("does not fabricate iconEmoji from non-shortcode emoji values", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-text-unicode-emoji" });
+    const sendText = slackPlugin.outbound?.sendText;
+    expect(sendText).toBeDefined();
+
+    await sendText!({
+      cfg,
+      to: "C123",
+      text: "hello",
+      accountId: "default",
+      identity: {
+        name: "OpenClaw Agent",
+        emoji: "🦞",
+      },
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        identity: {
+          username: "OpenClaw Agent",
+          iconUrl: undefined,
+          iconEmoji: undefined,
+        },
+      }),
+    );
   });
 });
 

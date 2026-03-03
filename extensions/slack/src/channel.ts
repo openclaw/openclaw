@@ -71,6 +71,20 @@ type SlackOutboundIdentity = {
   iconEmoji?: string;
 };
 
+function normalizeSlackIconEmoji(rawEmoji?: string): string | undefined {
+  const trimmed = rawEmoji?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (/^:[a-z0-9_+-]+:$/i.test(trimmed)) {
+    return trimmed;
+  }
+  if (/^:?[a-z0-9_+-]+:?$/i.test(trimmed)) {
+    return `:${trimmed.replace(/^:|:$/g, "")}:`;
+  }
+  return undefined;
+}
+
 function resolveSlackSendIdentity(identity?: {
   name?: string | null;
   avatarUrl?: string | null;
@@ -81,8 +95,7 @@ function resolveSlackSendIdentity(identity?: {
   }
   const username = identity.name?.trim() || undefined;
   const iconUrl = identity.avatarUrl?.trim() || undefined;
-  const rawEmoji = identity.emoji?.trim();
-  const iconEmoji = rawEmoji ? (rawEmoji.startsWith(":") ? rawEmoji : `:${rawEmoji}:`) : undefined;
+  const iconEmoji = normalizeSlackIconEmoji(identity.emoji ?? undefined);
   if (!username && !iconUrl && !iconEmoji) {
     return undefined;
   }
