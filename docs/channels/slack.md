@@ -295,12 +295,6 @@ and still route command execution against the target conversation session (`Comm
         "description": "Send guidance to a running subagent.",
         "should_escape": false
       },
-      { "command": "/config", "description": "Show or set config values.", "should_escape": false },
-      {
-        "command": "/debug",
-        "description": "Set runtime debug overrides.",
-        "should_escape": false
-      },
       {
         "command": "/usage",
         "description": "Show usage footer or cost summary.",
@@ -362,6 +356,24 @@ and still route command execution against the target conversation session (`Comm
 ```
 
 Notes: This snippet is a baseline for core built-in native commands. If
+`commands.config` or `commands.debug` is enabled, also register these optional
+entries:
+
+```json
+{
+  "features": {
+    "slash_commands": [
+      { "command": "/config", "description": "Show or set config values.", "should_escape": false },
+      { "command": "/debug", "description": "Set runtime debug overrides.", "should_escape": false }
+    ]
+  }
+}
+```
+
+If these command flags are disabled (default), do not register `/config` or
+`/debug` in your Slack manifest.
+
+If
 `commands.nativeSkills` (or `channels.slack.commands.nativeSkills`) is enabled,
 also register generated skill slash commands. Native-capable dock/plugin
 commands can add additional slash commands, so keep your Slack app manifest
