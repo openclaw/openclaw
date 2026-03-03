@@ -33,7 +33,7 @@ const LAUNCHCTL_ACTIONS = new Map<string, GatewayManagementAction>([
   ["stop", "stop"],
 ]);
 const SCHTASKS_ACTIONS = new Map<string, GatewayManagementAction>([
-  ["/run", "start"],
+  ["/run", "restart"],
   ["/end", "stop"],
 ]);
 const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
@@ -119,13 +119,7 @@ function isGatewaySystemdUnitToken(token: string, env: NodeJS.ProcessEnv): boole
   }
 
   const knownBases = collectGatewaySystemdUnitBases(env);
-  for (const base of knownBases) {
-    if (normalized === base || normalized.startsWith(`${base}-`)) {
-      return true;
-    }
-  }
-
-  return false;
+  return knownBases.has(normalized);
 }
 
 function collectGatewayLaunchdLabels(env: NodeJS.ProcessEnv): Set<string> {

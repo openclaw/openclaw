@@ -164,7 +164,7 @@ describe("detectGatewayManagementExecCommand", () => {
     });
 
     expect(detected).toEqual({
-      action: "start",
+      action: "restart",
       source: "schtasks",
       hard: false,
       complex: false,
@@ -179,6 +179,34 @@ describe("detectGatewayManagementExecCommand", () => {
     });
 
     expect(detected).toBeNull();
+  });
+
+  it("does not match prefixed systemctl units unless explicitly configured", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --user restart openclaw-gateway-prod.service",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("matches configured OPENCLAW_SYSTEMD_UNIT exactly", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --user restart openclaw-gateway-prod.service",
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-prod.service",
+      },
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "systemctl",
+      hard: false,
+      complex: false,
+    });
   });
 });
 
@@ -231,6 +259,22 @@ describe("exec gateway management interception", () => {
 
     const result = await tool.execute("call3-systemctl", {
       command: "systemctl --user restart openclaw-gateway.service",
+    });
+
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+    });
+    expect(text).toContain("Gateway restart scheduled safely");
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("intercepts schtasks run commands as restart", async () => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    const result = await tool.execute("call3-schtasks", {
+      command: 'schtasks /Run /TN "OpenClaw Gateway"',
     });
 
     const text = result.content.find((part) => part.type === "text")?.text ?? "";
