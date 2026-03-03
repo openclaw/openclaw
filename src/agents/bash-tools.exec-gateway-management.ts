@@ -44,6 +44,22 @@ const CLI_HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-v", "--version"]);
 const GATEWAY_SERVICE_BOOLEAN_FLAGS = new Set(["--json"]);
 const GATEWAY_RESTART_EXTRA_FLAGS = new Set(["--hard"]);
 const SYSTEMCTL_HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
+const SYSTEMCTL_BOOLEAN_OPTIONS = new Set([
+  "--all",
+  "--global",
+  "--legend",
+  "--no-ask-password",
+  "--no-legend",
+  "--no-pager",
+  "--no-reload",
+  "--no-wall",
+  "--quiet",
+  "--runtime",
+  "--system",
+  "--user",
+  "--wait",
+  "-q",
+]);
 const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
   "-H",
   "--host",
@@ -403,9 +419,10 @@ function parseGatewayActionFromCliArgv(cliArgv: string[]): {
 
     if (token.startsWith("-")) {
       const consumedRootOption = consumeRootOptionToken(cliArgv, idx);
-      if (consumedRootOption > 0) {
-        idx += consumedRootOption - 1;
+      if (consumedRootOption === 0) {
+        return null;
       }
+      idx += consumedRootOption - 1;
       continue;
     }
 
@@ -454,7 +471,35 @@ function parseGatewayActionFromCliArgv(cliArgv: string[]): {
   return { action: actionRaw, hard };
 }
 
-function collectSystemctlPositionals(argv: string[]): string[] {
+function consumeSystemctlOption(argv: string[], idx: number): number | null {
+  const token = normalizeLower(argv[idx]);
+  if (!token.startsWith("-")) {
+    return 0;
+  }
+
+  const equalsIdx = token.indexOf("=");
+  const flag = equalsIdx === -1 ? token : token.slice(0, equalsIdx);
+  const hasInlineValue = equalsIdx !== -1;
+  const inlineValue = hasInlineValue ? token.slice(equalsIdx + 1).trim() : "";
+
+  if (SYSTEMCTL_BOOLEAN_OPTIONS.has(flag)) {
+    return hasInlineValue ? null : 1;
+  }
+
+  if (!SYSTEMCTL_OPTIONS_WITH_VALUE.has(flag)) {
+    return null;
+  }
+
+  if (hasInlineValue) {
+    return inlineValue ? 1 : null;
+  }
+  if (idx + 1 >= argv.length) {
+    return null;
+  }
+  return 2;
+}
+
+function collectSystemctlPositionals(argv: string[]): string[] | null {
   const positionals: string[] = [];
   for (let idx = 1; idx < argv.length; idx += 1) {
     const token = argv[idx]?.trim() ?? "";
@@ -474,10 +519,12 @@ function collectSystemctlPositionals(argv: string[]): string[] {
       positionals.push(token);
       continue;
     }
-    const lower = token.toLowerCase();
-    const [flag] = lower.split("=", 2);
-    if (!lower.includes("=") && SYSTEMCTL_OPTIONS_WITH_VALUE.has(flag) && idx + 1 < argv.length) {
-      idx += 1;
+    const consumed = consumeSystemctlOption(argv, idx);
+    if (consumed === null) {
+      return null;
+    }
+    if (consumed > 0) {
+      idx += consumed - 1;
     }
   }
   return positionals;
@@ -498,7 +545,7 @@ function parseGatewayActionFromSystemctlArgv(
   }
 
   const positionals = collectSystemctlPositionals(argv);
-  if (positionals.length < 2) {
+  if (!positionals || positionals.length < 2) {
     return null;
   }
 

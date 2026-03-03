@@ -111,6 +111,21 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
+  it("detects gateway restart commands with supported root flags", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "openclaw --profile dev gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
   it("detects package-manager wrapped restart commands", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "pnpm openclaw gateway restart",
@@ -194,6 +209,16 @@ describe("detectGatewayManagementExecCommand", () => {
   it("does not detect root help flag invocations that contain gateway restart tokens", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "openclaw --help gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect root invocations with unknown flags", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "openclaw --bogus gateway restart",
       cwd: process.cwd(),
       env: process.env,
     });
@@ -330,6 +355,16 @@ describe("detectGatewayManagementExecCommand", () => {
 
     expect(withHelp).toBeNull();
     expect(withVersion).toBeNull();
+  });
+
+  it("does not detect systemctl commands with unknown flags", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --bogus restart openclaw-gateway.service",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
   });
 
   it("does not match prefixed systemctl units unless explicitly configured", () => {
