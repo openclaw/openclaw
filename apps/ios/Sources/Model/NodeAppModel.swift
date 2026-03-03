@@ -115,6 +115,8 @@ final class NodeAppModel {
     private let motionService: any MotionServicing
     private let watchMessagingService: any WatchMessagingServicing
     var lastAutoA2uiURL: String?
+    var pendingChatInput: String?
+    var pendingChatSessionKey: String?
     private var pttVoiceWakeSuspended = false
     private var talkVoiceWakeSuspended = false
     private var backgroundVoiceWakeSuspended = false
@@ -1621,6 +1623,26 @@ extension NodeAppModel {
         return SessionKey.makeAgentSessionKey(agentId: agentId, baseKey: base)
     }
 
+    /// Find the most recent session matching a prefix (e.g., for cron sessions)
+    func findLatestSession(matchingPrefix prefix: String) async -> String? {
+        // Wait for gateway connection first (up to 5 seconds)
+        guard await self.waitForGatewayConnection(timeoutSeconds: 5.0) else {
+            return nil
+        }
+        let transport = IOSGatewayChatTransport(gateway: self.operatorGateway)
+        do {
+            // Include cron run sessions since those are normally filtered out
+            let response = try await transport.listSessions(limit: 50, includeCronRuns: true)
+            // Find sessions that start with the prefix, sorted by updatedAt descending
+            let matching = response.sessions
+                .filter { $0.key.hasPrefix(prefix) }
+                .sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
+            return matching.first?.key
+        } catch {
+            return nil
+        }
+    }
+
     var activeAgentName: String {
         let agentId = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2630,6 +2652,18 @@ extension NodeAppModel {
 
     private func isGatewayConnected() async -> Bool {
         self.gatewayConnected
+    }
+
+    /// Wait for gateway connection with a timeout
+    func waitForGatewayConnection(timeoutSeconds: Double = 5.0) async -> Bool {
+        if self.gatewayConnected { return true }
+        let checkInterval: UInt64 = 100_000_000 // 100ms in nanoseconds
+        let maxChecks = Int(timeoutSeconds * 10) // 10 checks per second
+        for _ in 0..<maxChecks {
+            try? await Task.sleep(nanoseconds: checkInterval)
+            if self.gatewayConnected { return true }
+        }
+        return self.gatewayConnected
     }
 
     private func applyMainSessionKey(_ key: String?) {

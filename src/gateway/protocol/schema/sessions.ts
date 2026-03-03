@@ -21,6 +21,11 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
+    /**
+     * Include cron run sessions (agent:...:cron:...:run:...) which are normally filtered out.
+     * Useful when searching for specific cron output sessions.
+     */
+    includeCronRuns: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

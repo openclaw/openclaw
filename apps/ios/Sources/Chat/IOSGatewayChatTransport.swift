@@ -22,13 +22,18 @@ struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
         _ = try await self.gateway.request(method: "chat.abort", paramsJSON: json, timeoutSeconds: 10)
     }
 
-    func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse {
+    func listSessions(limit: Int?, includeCronRuns: Bool = false) async throws -> OpenClawChatSessionsListResponse {
         struct Params: Codable {
             var includeGlobal: Bool
             var includeUnknown: Bool
+            var includeCronRuns: Bool
             var limit: Int?
         }
-        let data = try JSONEncoder().encode(Params(includeGlobal: true, includeUnknown: false, limit: limit))
+        let data = try JSONEncoder().encode(Params(
+            includeGlobal: true,
+            includeUnknown: false,
+            includeCronRuns: includeCronRuns,
+            limit: limit))
         let json = String(data: data, encoding: .utf8)
         let res = try await self.gateway.request(method: "sessions.list", paramsJSON: json, timeoutSeconds: 15)
         return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: res)

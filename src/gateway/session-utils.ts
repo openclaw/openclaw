@@ -736,6 +736,7 @@ export function listSessionsFromStore(params: {
 
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
+  const includeCronRuns = opts.includeCronRuns === true;
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
@@ -749,7 +750,7 @@ export function listSessionsFromStore(params: {
 
   let sessions = Object.entries(store)
     .filter(([key]) => {
-      if (isCronRunSessionKey(key)) {
+      if (!includeCronRuns && isCronRunSessionKey(key)) {
         return false;
       }
       if (!includeGlobal && key === "global") {
