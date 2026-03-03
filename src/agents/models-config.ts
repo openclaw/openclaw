@@ -162,7 +162,9 @@ function mergeWithExistingProviderSecrets(params: {
         }
       | undefined;
     const hasExplicitBaseUrl =
-      typeof explicit?.baseUrl === "string" && explicit.baseUrl.trim().length > 0;
+      key === "moonshot" &&
+      typeof explicit?.baseUrl === "string" &&
+      explicit.baseUrl.trim().length > 0;
     if (!existing) {
       mergedProviders[key] = newEntry;
       continue;
