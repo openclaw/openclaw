@@ -1,5 +1,5 @@
 ---
-summary: "Web search + fetch tools (Perplexity Search API, Brave, Gemini, Grok, and Kimi providers)"
+summary: "Web search + fetch tools (Brave, Perplexity, Gemini, Grok, Kimi, and Exa providers)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need Perplexity or Brave Search API key setup
@@ -11,7 +11,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Perplexity Search API, Brave Search API, Gemini with Google Search grounding, Grok, or Kimi.
+- `web_search` — Search the web via Brave Search API (default), Perplexity Sonar, Gemini with Google Search grounding, Grok, Kimi, or Exa.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -29,13 +29,16 @@ See [Perplexity Search setup](/perplexity) and [Brave Search setup](/brave-searc
 
 ## Choosing a search provider
 
-| Provider                  | Pros                                                                                          | Cons                                        | API Key                             |
-| ------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------- |
-| **Perplexity Search API** | Fast, structured results; domain, language, region, and freshness filters; content extraction | —                                           | `PERPLEXITY_API_KEY`                |
-| **Brave Search API**      | Fast, structured results                                                                      | Fewer filtering options; AI-use terms apply | `BRAVE_API_KEY`                     |
-| **Gemini**                | Google Search grounding, AI-synthesized                                                       | Requires Gemini API key                     | `GEMINI_API_KEY`                    |
-| **Grok**                  | xAI web-grounded responses                                                                    | Requires xAI API key                        | `XAI_API_KEY`                       |
-| **Kimi**                  | Moonshot web search capability                                                                | Requires Moonshot API key                   | `KIMI_API_KEY` / `MOONSHOT_API_KEY` |
+| Provider            | Pros                                         | Cons                                           | API Key                                      |
+| ------------------- | -------------------------------------------- | ---------------------------------------------- | -------------------------------------------- |
+| **Brave** (default) | Fast, structured results                     | Traditional search results; AI-use terms apply | `BRAVE_API_KEY`                              |
+| **Perplexity**      | AI-synthesized answers, citations, real-time | Requires Perplexity or OpenRouter access       | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
+| **Gemini**          | Google Search grounding, AI-synthesized      | Requires Gemini API key                        | `GEMINI_API_KEY`                             |
+| **Grok**            | xAI web-grounded responses                   | Requires xAI API key                           | `XAI_API_KEY`                                |
+| **Kimi**            | Moonshot web search capability               | Requires Moonshot API key                      | `KIMI_API_KEY` / `MOONSHOT_API_KEY`          |
+| **Exa**             | Neural search, content snippets              | Requires Exa API key                           | `EXA_API_KEY`                                |
+
+See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
 
 ### Auto-detection
 
@@ -44,14 +47,27 @@ If no `provider` is explicitly set, OpenClaw auto-detects which provider to use 
 1. **Brave** — `BRAVE_API_KEY` env var or `tools.web.search.apiKey` config
 2. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
 3. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
-4. **Perplexity** — `PERPLEXITY_API_KEY` env var or `tools.web.search.perplexity.apiKey` config
-5. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
+4. **Exa** — `EXA_API_KEY` env var or `tools.web.search.exa.apiKey` config
+5. **Perplexity** — `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` env var or `tools.web.search.perplexity.apiKey` config
+6. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
 ## Setting up web search
 
 Use `openclaw configure --section web` to set up your API key and choose a provider.
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "brave", // or "perplexity" or "gemini" or "grok" or "kimi" or "exa"
+      },
+    },
+  },
+}
+```
 
 ### Perplexity Search
 
@@ -154,6 +170,47 @@ For a gateway install, put it in `~/.openclaw/.env`.
 - The default model (`gemini-2.5-flash`) is fast and cost-effective.
   Any Gemini model that supports grounding can be used.
 
+## Using Exa (neural search)
+
+Exa provides neural search that understands meaning, not just keywords. It returns structured results with titles, URLs, and optional content snippets.
+
+### Getting an Exa API key
+
+1. Create an account at [https://exa.ai/](https://exa.ai/)
+2. Generate an API key in your dashboard
+3. Set `EXA_API_KEY` in the Gateway environment, or configure `tools.web.search.exa.apiKey`
+
+### Setting up Exa search
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "exa",
+        exa: {
+          // API key (optional if EXA_API_KEY is set)
+          apiKey: "your-exa-key",
+          // Search type: "auto" (default), "neural", or "keyword"
+          type: "auto",
+          // Include page content snippets (default: true)
+          contents: true,
+        },
+      },
+    },
+  },
+}
+```
+
+**Environment alternative:** set `EXA_API_KEY` in the Gateway environment.
+For a gateway install, put it in `~/.openclaw/.env`.
+
+### Notes
+
+- Exa's neural search mode understands query intent and finds semantically relevant results even without exact keyword matches.
+- When `contents` is enabled (default), results include text snippets and highlights for richer context.
+- The `type` option controls the search strategy: `"auto"` lets Exa choose, `"neural"` forces semantic search, `"keyword"` forces traditional matching.
+
 ## web_search
 
 Search the web using your configured provider.
@@ -167,6 +224,7 @@ Search the web using your configured provider.
   - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
+  - **Exa**: `EXA_API_KEY` or `tools.web.search.exa.apiKey`
 
 ### Config
 
