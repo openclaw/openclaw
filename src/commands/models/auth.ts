@@ -16,7 +16,7 @@ import type { ProviderAuthResult, ProviderPlugin } from "../../plugins/types.js"
 import type { RuntimeEnv } from "../../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
-import { validateAnthropicSetupToken } from "../auth-token.js";
+import { normalizeAnthropicSetupTokenInput, validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";
@@ -93,7 +93,7 @@ export async function modelsAuthSetupTokenCommand(
     message: "Paste Anthropic setup-token",
     validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
   });
-  const token = String(tokenInput ?? "").trim();
+  const token = normalizeAnthropicSetupTokenInput(String(tokenInput ?? ""));
   const profileId = resolveDefaultTokenProfileId(provider);
 
   upsertAuthProfile({

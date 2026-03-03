@@ -110,6 +110,9 @@ openclaw models auth setup-token --provider anthropic
 openclaw models auth paste-token --provider anthropic
 ```
 
+警告：某些终端会把 setup-token 自动换行。请完整复制/粘贴整个令牌。
+OpenClaw 会自动移除空白和换行，并拒绝短于 90 个字符的 setup-token（通常是换行或截断导致）。
+
 ### CLI 设置
 
 ```bash

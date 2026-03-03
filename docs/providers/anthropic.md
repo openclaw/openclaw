@@ -182,6 +182,10 @@ If you generated the token on a different machine, paste it:
 openclaw models auth paste-token --provider anthropic
 ```
 
+Warning: setup-tokens can wrap across lines in some terminals. Copy/paste the
+entire token. OpenClaw strips whitespace/newlines automatically and rejects
+setup-tokens shorter than 90 characters as likely wrapped or truncated.
+
 ### CLI setup (setup-token)
 
 ```bash

@@ -7,7 +7,11 @@ import {
   resolveSecretInputModeForEnvSelection,
 } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
-import { buildTokenProfileId, validateAnthropicSetupToken } from "./auth-token.js";
+import {
+  buildTokenProfileId,
+  normalizeAnthropicSetupTokenInput,
+  validateAnthropicSetupToken,
+} from "./auth-token.js";
 import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
 import { applyAuthProfileConfig, setAnthropicApiKey } from "./onboard-auth.js";
 
@@ -52,14 +56,14 @@ export async function applyAuthChoiceAnthropic(
           envVarPlaceholder: "ANTHROPIC_SETUP_TOKEN",
         },
       });
-      token = resolved.resolvedValue.trim();
+      token = normalizeAnthropicSetupTokenInput(resolved.resolvedValue);
       tokenRef = resolved.ref;
     } else {
       const tokenRaw = await params.prompter.text({
         message: "Paste Anthropic setup-token",
         validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
       });
-      token = String(tokenRaw ?? "").trim();
+      token = normalizeAnthropicSetupTokenInput(String(tokenRaw ?? ""));
     }
     const tokenValidationError = validateAnthropicSetupToken(token);
     if (tokenValidationError) {

@@ -1,7 +1,7 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 
 export const ANTHROPIC_SETUP_TOKEN_PREFIX = "sk-ant-oat01-";
-export const ANTHROPIC_SETUP_TOKEN_MIN_LENGTH = 80;
+export const ANTHROPIC_SETUP_TOKEN_MIN_LENGTH = 90;
 export const DEFAULT_TOKEN_PROFILE_NAME = "default";
 
 export function normalizeTokenProfileName(raw: string): string {
@@ -23,16 +23,20 @@ export function buildTokenProfileId(params: { provider: string; name: string }):
   return `${provider}:${name}`;
 }
 
+export function normalizeAnthropicSetupTokenInput(raw: string): string {
+  return raw.replace(/\s+/g, "");
+}
+
 export function validateAnthropicSetupToken(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) {
+  const normalized = normalizeAnthropicSetupTokenInput(raw);
+  if (!normalized) {
     return "Required";
   }
-  if (!trimmed.startsWith(ANTHROPIC_SETUP_TOKEN_PREFIX)) {
+  if (!normalized.startsWith(ANTHROPIC_SETUP_TOKEN_PREFIX)) {
     return `Expected token starting with ${ANTHROPIC_SETUP_TOKEN_PREFIX}`;
   }
-  if (trimmed.length < ANTHROPIC_SETUP_TOKEN_MIN_LENGTH) {
-    return "Token looks too short; paste the full setup-token";
+  if (normalized.length < ANTHROPIC_SETUP_TOKEN_MIN_LENGTH) {
+    return "Token looks too short; paste the full setup-token (line wrapping can truncate it)";
   }
   return undefined;
 }

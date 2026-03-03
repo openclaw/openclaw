@@ -321,7 +321,7 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("stores token auth profile", async () => {
     await withOnboardEnv("openclaw-onboard-token-", async ({ configPath, runtime }) => {
-      const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
+      const cleanToken = `sk-ant-oat01-${"a".repeat(120)}`;
       const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
       await runNonInteractiveOnboardingWithDefaults(runtime, {
