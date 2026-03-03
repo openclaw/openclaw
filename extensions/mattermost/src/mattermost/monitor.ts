@@ -7,6 +7,8 @@ import type {
 } from "openclaw/plugin-sdk";
 import {
   buildAgentMediaPayload,
+  DM_GROUP_ACCESS_REASON,
+  createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
   logInboundDrop,
@@ -17,10 +19,13 @@ import {
   recordPendingHistoryEntryIfEnabled,
   isDangerousNameMatchingEnabled,
   resolveControlCommandGate,
+  readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithLists,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveChannelMediaMaxBytes,
   warnMissingProviderGroupPolicyFallbackOnce,
+  listSkillCommandsForAgents,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import { getMattermostRuntime } from "../runtime.js";
@@ -30,12 +35,14 @@ import {
   fetchMattermostChannel,
   fetchMattermostMe,
   fetchMattermostUser,
+  fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
   sendMattermostTyping,
   type MattermostChannel,
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
+import { isMattermostSenderAllowed, normalizeMattermostAllowList } from "./monitor-auth.js";
 import {
   createDedupeCache,
   formatInboundFromLabel,
@@ -49,6 +56,19 @@ import {
 } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
 import { sendMessageMattermost } from "./send.js";
+import {
+  DEFAULT_COMMAND_SPECS,
+  cleanupSlashCommands,
+  isSlashCommandsEnabled,
+  registerSlashCommands,
+  resolveCallbackUrl,
+  resolveSlashCommandConfig,
+} from "./slash-commands.js";
+import {
+  activateSlashCommands,
+  deactivateSlashCommands,
+  getSlashCommandState,
+} from "./slash-state.js";
 
 export type MonitorMattermostOpts = {
   botToken?: string;
@@ -61,7 +81,6 @@ export type MonitorMattermostOpts = {
   webSocketFactory?: MattermostWebSocketFactory;
 };
 
-type FetchLike = (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>;
 type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 type MattermostReaction = {
@@ -106,15 +125,22 @@ function isSystemPost(post: MattermostPost): boolean {
   return Boolean(type);
 }
 
-function channelKind(channelType?: string | null): ChatType {
+export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
   if (!channelType) {
     return "channel";
   }
+  // Mattermost channel types: D=direct, G=group DM, O=public channel, P=private channel.
   const normalized = channelType.trim().toUpperCase();
   if (normalized === "D") {
     return "direct";
   }
   if (normalized === "G") {
+    return "group";
+  }
+  if (normalized === "P") {
+    // Private channels are invitation-restricted spaces; route as "group" so
+    // groupPolicy / groupAllowFrom can gate access separately from open public
+    // channels (type "O"), and the From prefix becomes mattermost:group:<id>.
     return "group";
   }
   return "channel";
@@ -128,51 +154,6 @@ function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
     return "group";
   }
   return "channel";
-}
-
-function normalizeAllowEntry(entry: string): string {
-  const trimmed = entry.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed === "*") {
-    return "*";
-  }
-  return trimmed
-    .replace(/^(mattermost|user):/i, "")
-    .replace(/^@/, "")
-    .toLowerCase();
-}
-
-function normalizeAllowList(entries: Array<string | number>): string[] {
-  const normalized = entries.map((entry) => normalizeAllowEntry(String(entry))).filter(Boolean);
-  return Array.from(new Set(normalized));
-}
-
-function isSenderAllowed(params: {
-  senderId: string;
-  senderName?: string;
-  allowFrom: string[];
-  allowNameMatching?: boolean;
-}): boolean {
-  const allowFrom = params.allowFrom;
-  if (allowFrom.length === 0) {
-    return false;
-  }
-  if (allowFrom.includes("*")) {
-    return true;
-  }
-  const normalizedSenderId = normalizeAllowEntry(params.senderId);
-  const normalizedSenderName = params.senderName ? normalizeAllowEntry(params.senderName) : "";
-  return allowFrom.some((entry) => {
-    if (entry === normalizedSenderId) {
-      return true;
-    }
-    if (params.allowNameMatching !== true) {
-      return false;
-    }
-    return normalizedSenderName ? entry === normalizedSenderName : false;
-  });
 }
 
 type MattermostMediaInfo = {
@@ -213,6 +194,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg,
     accountId: opts.accountId,
   });
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "mattermost",
+    accountId: account.accountId,
+  });
   const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
   const botToken = opts.botToken?.trim() || account.botToken?.trim();
   if (!botToken) {
@@ -232,6 +218,144 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const botUserId = botUser.id;
   const botUsername = botUser.username?.trim() || undefined;
   runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
+
+  // ─── Slash command registration ──────────────────────────────────────────
+  const commandsRaw = account.config.commands as
+    | Partial<import("./slash-commands.js").MattermostSlashCommandConfig>
+    | undefined;
+  const slashConfig = resolveSlashCommandConfig(commandsRaw);
+  const slashEnabled = isSlashCommandsEnabled(slashConfig);
+
+  if (slashEnabled) {
+    try {
+      const teams = await fetchMattermostUserTeams(client, botUserId);
+
+      // Use the *runtime* listener port when available (e.g. `openclaw gateway run --port <port>`).
+      // The gateway sets OPENCLAW_GATEWAY_PORT when it boots, but the config file may still contain
+      // a different port.
+      const envPortRaw = process.env.OPENCLAW_GATEWAY_PORT?.trim();
+      const envPort = envPortRaw ? Number.parseInt(envPortRaw, 10) : NaN;
+      const gatewayPort =
+        Number.isFinite(envPort) && envPort > 0 ? envPort : (cfg.gateway?.port ?? 18789);
+
+      const callbackUrl = resolveCallbackUrl({
+        config: slashConfig,
+        gatewayPort,
+        gatewayHost: cfg.gateway?.customBindHost ?? undefined,
+      });
+
+      const isLoopbackHost = (hostname: string) =>
+        hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+
+      try {
+        const mmHost = new URL(baseUrl).hostname;
+        const callbackHost = new URL(callbackUrl).hostname;
+
+        // NOTE: We cannot infer network reachability from hostnames alone.
+        // Mattermost might be accessed via a public domain while still running on the same
+        // machine as the gateway (where http://localhost:<port> is valid).
+        // So treat loopback callback URLs as an advisory warning only.
+        if (isLoopbackHost(callbackHost) && !isLoopbackHost(mmHost)) {
+          runtime.error?.(
+            `mattermost: slash commands callbackUrl resolved to ${callbackUrl} (loopback) while baseUrl is ${baseUrl}. This MAY be unreachable depending on your deployment. If native slash commands don't work, set channels.mattermost.commands.callbackUrl to a URL reachable from the Mattermost server (e.g. your public reverse proxy URL).`,
+          );
+        }
+      } catch {
+        // URL parse failed; ignore and continue (we'll fail naturally if registration requests break).
+      }
+
+      const commandsToRegister: import("./slash-commands.js").MattermostCommandSpec[] = [
+        ...DEFAULT_COMMAND_SPECS,
+      ];
+
+      if (slashConfig.nativeSkills === true) {
+        try {
+          const skillCommands = listSkillCommandsForAgents({ cfg: cfg as any });
+          for (const spec of skillCommands) {
+            const name = typeof spec.name === "string" ? spec.name.trim() : "";
+            if (!name) continue;
+            const trigger = name.startsWith("oc_") ? name : `oc_${name}`;
+            commandsToRegister.push({
+              trigger,
+              description: spec.description || `Run skill ${name}`,
+              autoComplete: true,
+              autoCompleteHint: "[args]",
+              originalName: name,
+            });
+          }
+        } catch (err) {
+          runtime.error?.(`mattermost: failed to list skill commands: ${String(err)}`);
+        }
+      }
+
+      // Deduplicate by trigger
+      const seen = new Set<string>();
+      const dedupedCommands = commandsToRegister.filter((cmd) => {
+        const key = cmd.trigger.trim();
+        if (!key) return false;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      const allRegistered: import("./slash-commands.js").MattermostRegisteredCommand[] = [];
+      let teamRegistrationFailures = 0;
+
+      for (const team of teams) {
+        try {
+          const registered = await registerSlashCommands({
+            client,
+            teamId: team.id,
+            creatorUserId: botUserId,
+            callbackUrl,
+            commands: dedupedCommands,
+            log: (msg) => runtime.log?.(msg),
+          });
+          allRegistered.push(...registered);
+        } catch (err) {
+          teamRegistrationFailures += 1;
+          runtime.error?.(
+            `mattermost: failed to register slash commands for team ${team.id}: ${String(err)}`,
+          );
+        }
+      }
+
+      if (allRegistered.length === 0) {
+        runtime.error?.(
+          "mattermost: native slash commands enabled but no commands could be registered; keeping slash callbacks inactive",
+        );
+      } else {
+        if (teamRegistrationFailures > 0) {
+          runtime.error?.(
+            `mattermost: slash command registration completed with ${teamRegistrationFailures} team error(s)`,
+          );
+        }
+
+        // Build trigger→originalName map for accurate command name resolution
+        const triggerMap = new Map<string, string>();
+        for (const cmd of dedupedCommands) {
+          if (cmd.originalName) {
+            triggerMap.set(cmd.trigger, cmd.originalName);
+          }
+        }
+
+        activateSlashCommands({
+          account,
+          commandTokens: allRegistered.map((cmd) => cmd.token).filter(Boolean),
+          registeredCommands: allRegistered,
+          triggerMap,
+          api: { cfg, runtime },
+          log: (msg) => runtime.log?.(msg),
+        });
+
+        runtime.log?.(
+          `mattermost: slash commands registered (${allRegistered.length} commands across ${teams.length} teams, callback=${callbackUrl})`,
+        );
+      }
+    } catch (err) {
+      runtime.error?.(`mattermost: failed to register slash commands: ${String(err)}`);
+    }
+  }
 
   const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();
   const userCache = new Map<string, { value: MattermostUser | null; expiresAt: number }>();
@@ -267,12 +391,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     log: (message) => logVerboseMessage(message),
   });
 
-  const fetchWithAuth: FetchLike = (input, init) => {
-    const headers = new Headers(init?.headers);
-    headers.set("Authorization", `Bearer ${client.token}`);
-    return fetch(input, { ...init, headers });
-  };
-
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
   ): Promise<MattermostMediaInfo[]> => {
@@ -285,7 +403,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       try {
         const fetched = await core.channel.media.fetchRemoteMedia({
           url: `${client.apiBaseUrl}/files/${fileId}`,
-          fetchImpl: fetchWithAuth,
+          requestInit: {
+            headers: {
+              Authorization: `Bearer ${client.token}`,
+            },
+          },
           filePathHint: fileId,
           maxBytes: mediaMaxBytes,
         });
@@ -390,7 +512,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const channelInfo = await resolveChannelInfo(channelId);
     const channelType = payload.data?.channel_type ?? channelInfo?.type ?? undefined;
-    const kind = channelKind(channelType);
+    const kind = mapMattermostChannelTypeToChatType(channelType);
     const chatType = channelChatType(kind);
 
     const senderName =
@@ -399,20 +521,35 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       senderId;
     const rawText = post.message?.trim() || "";
     const dmPolicy = account.config.dmPolicy ?? "pairing";
-    const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
-    const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
-    const storeAllowFrom = normalizeAllowList(
-      dmPolicy === "allowlist"
-        ? []
-        : await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
+    const normalizedAllowFrom = normalizeMattermostAllowList(account.config.allowFrom ?? []);
+    const normalizedGroupAllowFrom = normalizeMattermostAllowList(
+      account.config.groupAllowFrom ?? [],
     );
-    const effectiveAllowFrom = Array.from(new Set([...configAllowFrom, ...storeAllowFrom]));
-    const effectiveGroupAllowFrom = Array.from(
-      new Set([
-        ...(configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom),
-        ...storeAllowFrom,
-      ]),
+    const storeAllowFrom = normalizeMattermostAllowList(
+      await readStoreAllowFromForDmPolicy({
+        provider: "mattermost",
+        accountId: account.accountId,
+        dmPolicy,
+        readStore: pairing.readStoreForDmPolicy,
+      }),
     );
+    const accessDecision = resolveDmGroupAccessWithLists({
+      isGroup: kind !== "direct",
+      dmPolicy,
+      groupPolicy,
+      allowFrom: normalizedAllowFrom,
+      groupAllowFrom: normalizedGroupAllowFrom,
+      storeAllowFrom,
+      isSenderAllowed: (allowFrom) =>
+        isMattermostSenderAllowed({
+          senderId,
+          senderName,
+          allowFrom,
+          allowNameMatching,
+        }),
+    });
+    const effectiveAllowFrom = accessDecision.effectiveAllowFrom;
+    const effectiveGroupAllowFrom = accessDecision.effectiveGroupAllowFrom;
     const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
       cfg,
       surface: "mattermost",
@@ -420,13 +557,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const hasControlCommand = core.channel.text.hasControlCommand(rawText, cfg);
     const isControlCommand = allowTextCommands && hasControlCommand;
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-    const senderAllowedForCommands = isSenderAllowed({
+    const commandDmAllowFrom = kind === "direct" ? effectiveAllowFrom : normalizedAllowFrom;
+    const senderAllowedForCommands = isMattermostSenderAllowed({
       senderId,
       senderName,
-      allowFrom: effectiveAllowFrom,
+      allowFrom: commandDmAllowFrom,
       allowNameMatching,
     });
-    const groupAllowedForCommands = isSenderAllowed({
+    const groupAllowedForCommands = isMattermostSenderAllowed({
       senderId,
       senderName,
       allowFrom: effectiveGroupAllowFrom,
@@ -435,7 +573,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
-        { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
+        { configured: commandDmAllowFrom.length > 0, allowed: senderAllowedForCommands },
         {
           configured: effectiveGroupAllowFrom.length > 0,
           allowed: groupAllowedForCommands,
@@ -444,20 +582,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       allowTextCommands,
       hasControlCommand,
     });
-    const commandAuthorized =
-      kind === "direct"
-        ? dmPolicy === "open" || senderAllowedForCommands
-        : commandGate.commandAuthorized;
+    const commandAuthorized = commandGate.commandAuthorized;
 
-    if (kind === "direct") {
-      if (dmPolicy === "disabled") {
-        logVerboseMessage(`mattermost: drop dm (dmPolicy=disabled sender=${senderId})`);
-        return;
-      }
-      if (dmPolicy !== "open" && !senderAllowedForCommands) {
-        if (dmPolicy === "pairing") {
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: "mattermost",
+    if (accessDecision.decision !== "allow") {
+      if (kind === "direct") {
+        if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED) {
+          logVerboseMessage(`mattermost: drop dm (dmPolicy=disabled sender=${senderId})`);
+          return;
+        }
+        if (accessDecision.decision === "pairing") {
+          const { code, created } = await pairing.upsertPairingRequest({
             id: senderId,
             meta: { name: senderName },
           });
@@ -478,26 +612,27 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               logVerboseMessage(`mattermost: pairing reply failed for ${senderId}: ${String(err)}`);
             }
           }
-        } else {
-          logVerboseMessage(`mattermost: drop dm sender=${senderId} (dmPolicy=${dmPolicy})`);
+          return;
         }
+        logVerboseMessage(`mattermost: drop dm sender=${senderId} (dmPolicy=${dmPolicy})`);
         return;
       }
-    } else {
-      if (groupPolicy === "disabled") {
+      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
         logVerboseMessage("mattermost: drop group message (groupPolicy=disabled)");
         return;
       }
-      if (groupPolicy === "allowlist") {
-        if (effectiveGroupAllowFrom.length === 0) {
-          logVerboseMessage("mattermost: drop group message (no group allowlist)");
-          return;
-        }
-        if (!groupAllowedForCommands) {
-          logVerboseMessage(`mattermost: drop group sender=${senderId} (not in groupAllowFrom)`);
-          return;
-        }
+      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST) {
+        logVerboseMessage("mattermost: drop group message (no group allowlist)");
+        return;
       }
+      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED) {
+        logVerboseMessage(`mattermost: drop group sender=${senderId} (not in groupAllowFrom)`);
+        return;
+      }
+      logVerboseMessage(
+        `mattermost: drop group message (groupPolicy=${groupPolicy} reason=${accessDecision.reason})`,
+      );
+      return;
     }
 
     if (kind !== "direct" && commandGate.shouldBlock) {
@@ -663,6 +798,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
     const mediaPayload = buildAgentMediaPayload(mediaList);
+    const commandBody = rawText.trim();
     const inboundHistory =
       historyKey && historyLimit > 0
         ? (channelHistories.get(historyKey) ?? []).map((entry) => ({
@@ -676,7 +812,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       BodyForAgent: bodyText,
       InboundHistory: inboundHistory,
       RawBody: bodyText,
-      CommandBody: bodyText,
+      CommandBody: commandBody,
+      BodyForCommands: commandBody,
       From:
         kind === "direct"
           ? `mattermost:${senderId}`
@@ -807,18 +944,24 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         },
       });
 
-    await core.channel.reply.dispatchReplyFromConfig({
-      ctx: ctxPayload,
-      cfg,
+    await core.channel.reply.withReplyDispatcher({
       dispatcher,
-      replyOptions: {
-        ...replyOptions,
-        disableBlockStreaming:
-          typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-        onModelSelected,
+      onSettled: () => {
+        markDispatchIdle();
       },
+      run: () =>
+        core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            ...replyOptions,
+            disableBlockStreaming:
+              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+            onModelSelected,
+          },
+        }),
     });
-    markDispatchIdle();
     if (historyKey) {
       clearHistoryEntriesIfEnabled({
         historyMap: channelHistories,
@@ -880,71 +1023,44 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       logVerboseMessage(`mattermost: drop reaction (cannot resolve channel type for ${channelId})`);
       return;
     }
-    const kind = channelKind(channelInfo.type);
+    const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
 
     // Enforce DM/group policy and allowlist checks (same as normal messages)
-    if (kind === "direct") {
-      const dmPolicy = account.config.dmPolicy ?? "pairing";
-      if (dmPolicy === "disabled") {
-        logVerboseMessage(`mattermost: drop reaction (dmPolicy=disabled sender=${userId})`);
-        return;
-      }
-      // For pairing/allowlist modes, only allow reactions from approved senders
-      if (dmPolicy !== "open") {
-        const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
-        const storeAllowFrom = normalizeAllowList(
-          dmPolicy === "allowlist"
-            ? []
-            : await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
-        );
-        const effectiveAllowFrom = Array.from(new Set([...configAllowFrom, ...storeAllowFrom]));
-        const allowed = isSenderAllowed({
+    const dmPolicy = account.config.dmPolicy ?? "pairing";
+    const storeAllowFrom = normalizeMattermostAllowList(
+      await readStoreAllowFromForDmPolicy({
+        provider: "mattermost",
+        accountId: account.accountId,
+        dmPolicy,
+        readStore: pairing.readStoreForDmPolicy,
+      }),
+    );
+    const reactionAccess = resolveDmGroupAccessWithLists({
+      isGroup: kind !== "direct",
+      dmPolicy,
+      groupPolicy,
+      allowFrom: normalizeMattermostAllowList(account.config.allowFrom ?? []),
+      groupAllowFrom: normalizeMattermostAllowList(account.config.groupAllowFrom ?? []),
+      storeAllowFrom,
+      isSenderAllowed: (allowFrom) =>
+        isMattermostSenderAllowed({
           senderId: userId,
           senderName,
-          allowFrom: effectiveAllowFrom,
+          allowFrom,
           allowNameMatching,
-        });
-        if (!allowed) {
-          logVerboseMessage(
-            `mattermost: drop reaction (dmPolicy=${dmPolicy} sender=${userId} not allowed)`,
-          );
-          return;
-        }
-      }
-    } else if (kind) {
-      if (groupPolicy === "disabled") {
-        logVerboseMessage(`mattermost: drop reaction (groupPolicy=disabled channel=${channelId})`);
-        return;
-      }
-      if (groupPolicy === "allowlist") {
-        const dmPolicyForStore = account.config.dmPolicy ?? "pairing";
-        const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
-        const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
-        const storeAllowFrom = normalizeAllowList(
-          dmPolicyForStore === "allowlist"
-            ? []
-            : await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
+        }),
+    });
+    if (reactionAccess.decision !== "allow") {
+      if (kind === "direct") {
+        logVerboseMessage(
+          `mattermost: drop reaction (dmPolicy=${dmPolicy} sender=${userId} reason=${reactionAccess.reason})`,
         );
-        const effectiveGroupAllowFrom = Array.from(
-          new Set([
-            ...(configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom),
-            ...storeAllowFrom,
-          ]),
+      } else {
+        logVerboseMessage(
+          `mattermost: drop reaction (groupPolicy=${groupPolicy} sender=${userId} reason=${reactionAccess.reason} channel=${channelId})`,
         );
-        // Drop when allowlist is empty (same as normal message handler)
-        const allowed =
-          effectiveGroupAllowFrom.length > 0 &&
-          isSenderAllowed({
-            senderId: userId,
-            senderName,
-            allowFrom: effectiveGroupAllowFrom,
-            allowNameMatching,
-          });
-        if (!allowed) {
-          logVerboseMessage(`mattermost: drop reaction (groupPolicy=allowlist sender=${userId})`);
-          return;
-        }
       }
+      return;
     }
 
     const teamId = channelInfo?.team_id ?? undefined;
@@ -1047,6 +1163,37 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     },
   });
 
+  let slashShutdownCleanup: Promise<void> | null = null;
+
+  // Clean up slash commands on shutdown
+  if (slashEnabled) {
+    const runAbortCleanup = () => {
+      if (slashShutdownCleanup) {
+        return;
+      }
+      // Snapshot registered commands before deactivating state.
+      // This listener may run concurrently with startup in a new process, so we keep
+      // monitor shutdown alive until the remote cleanup completes.
+      const commands = getSlashCommandState(account.accountId)?.registeredCommands ?? [];
+      // Deactivate state immediately to prevent new local dispatches during teardown.
+      deactivateSlashCommands(account.accountId);
+
+      slashShutdownCleanup = cleanupSlashCommands({
+        client,
+        commands,
+        log: (msg) => runtime.log?.(msg),
+      }).catch((err) => {
+        runtime.error?.(`mattermost: slash cleanup failed: ${String(err)}`);
+      });
+    };
+
+    if (opts.abortSignal?.aborted) {
+      runAbortCleanup();
+    } else {
+      opts.abortSignal?.addEventListener("abort", runAbortCleanup, { once: true });
+    }
+  }
+
   await runWithReconnect(connectOnce, {
     abortSignal: opts.abortSignal,
     jitterRatio: 0.2,
@@ -1058,4 +1205,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       runtime.log?.(`mattermost reconnecting in ${Math.round(delayMs / 1000)}s`);
     },
   });
+
+  if (slashShutdownCleanup) {
+    await slashShutdownCleanup;
+  }
 }

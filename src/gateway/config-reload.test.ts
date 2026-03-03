@@ -147,15 +147,93 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(expected);
   });
 
+  it("restarts heartbeat when model-related config changes", () => {
+    const plan = buildGatewayReloadPlan([
+      "models.providers.openai.models",
+      "agents.defaults.model",
+    ]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.hotReasons).toEqual(
+      expect.arrayContaining(["models.providers.openai.models", "agents.defaults.model"]),
+    );
+  });
+
+  it("hot-reloads health monitor when channelHealthCheckMinutes changes", () => {
+    const plan = buildGatewayReloadPlan(["gateway.channelHealthCheckMinutes"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHealthMonitor).toBe(true);
+    expect(plan.hotReasons).toContain("gateway.channelHealthCheckMinutes");
+  });
+
   it("treats gateway.remote as no-op", () => {
     const plan = buildGatewayReloadPlan(["gateway.remote.url"]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.noopPaths).toContain("gateway.remote.url");
   });
 
+  it("treats secrets config changes as no-op for gateway restart planning", () => {
+    const plan = buildGatewayReloadPlan(["secrets.providers.default.path"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("secrets.providers.default.path");
+  });
+
+  it("treats diagnostics.stuckSessionWarnMs as no-op for gateway restart planning", () => {
+    const plan = buildGatewayReloadPlan(["diagnostics.stuckSessionWarnMs"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("diagnostics.stuckSessionWarnMs");
+  });
+
   it("defaults unknown paths to restart", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);
+  });
+
+  it.each([
+    {
+      path: "gateway.channelHealthCheckMinutes",
+      expectRestartGateway: false,
+      expectHotPath: "gateway.channelHealthCheckMinutes",
+      expectRestartHealthMonitor: true,
+    },
+    {
+      path: "hooks.gmail.account",
+      expectRestartGateway: false,
+      expectHotPath: "hooks.gmail.account",
+      expectRestartGmailWatcher: true,
+      expectReloadHooks: true,
+    },
+    {
+      path: "gateway.remote.url",
+      expectRestartGateway: false,
+      expectNoopPath: "gateway.remote.url",
+    },
+    {
+      path: "unknownField",
+      expectRestartGateway: true,
+      expectRestartReason: "unknownField",
+    },
+  ])("classifies reload path: $path", (testCase) => {
+    const plan = buildGatewayReloadPlan([testCase.path]);
+    expect(plan.restartGateway).toBe(testCase.expectRestartGateway);
+    if (testCase.expectHotPath) {
+      expect(plan.hotReasons).toContain(testCase.expectHotPath);
+    }
+    if (testCase.expectNoopPath) {
+      expect(plan.noopPaths).toContain(testCase.expectNoopPath);
+    }
+    if (testCase.expectRestartReason) {
+      expect(plan.restartReasons).toContain(testCase.expectRestartReason);
+    }
+    if (testCase.expectRestartHealthMonitor) {
+      expect(plan.restartHealthMonitor).toBe(true);
+    }
+    if (testCase.expectRestartGmailWatcher) {
+      expect(plan.restartGmailWatcher).toBe(true);
+    }
+    if (testCase.expectReloadHooks) {
+      expect(plan.reloadHooks).toBe(true);
+    }
   });
 });
 
@@ -278,5 +356,55 @@ describe("startGatewayConfigReloader", () => {
     expect(log.warn).toHaveBeenCalledWith("config reload skipped (config file not found)");
 
     await reloader.stop();
+  });
+
+  it("contains restart callback failures and retries on subsequent changes", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: {
+            gateway: { reload: { debounceMs: 0 }, port: 18790 },
+          },
+          hash: "restart-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: {
+            gateway: { reload: { debounceMs: 0 }, port: 18791 },
+          },
+          hash: "restart-2",
+        }),
+      );
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+    onRestart.mockRejectedValueOnce(new Error("restart-check failed"));
+    onRestart.mockResolvedValueOnce(undefined);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      expect(onHotReload).not.toHaveBeenCalled();
+      expect(onRestart).toHaveBeenCalledTimes(1);
+      expect(log.error).toHaveBeenCalledWith("config restart failed: Error: restart-check failed");
+      expect(unhandled).toEqual([]);
+
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      expect(onRestart).toHaveBeenCalledTimes(2);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await reloader.stop();
+    }
   });
 });

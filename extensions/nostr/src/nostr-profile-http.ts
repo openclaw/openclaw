@@ -9,6 +9,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  createFixedWindowRateLimiter,
   isBlockedHostnameOrIp,
   readJsonBodyWithLimit,
   requestBodyErrorToText,
@@ -41,30 +42,29 @@ export interface NostrProfileHttpContext {
 // Rate Limiting
 // ============================================================================
 
-interface RateLimitEntry {
-  count: number;
-  windowStart: number;
-}
-
-const rateLimitMap = new Map<string, RateLimitEntry>();
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 5; // 5 requests per minute
+const RATE_LIMIT_MAX_TRACKED_KEYS = 2_048;
+const profileRateLimiter = createFixedWindowRateLimiter({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  maxRequests: RATE_LIMIT_MAX_REQUESTS,
+  maxTrackedKeys: RATE_LIMIT_MAX_TRACKED_KEYS,
+});
+
+export function clearNostrProfileRateLimitStateForTest(): void {
+  profileRateLimiter.clear();
+}
+
+export function getNostrProfileRateLimitStateSizeForTest(): number {
+  return profileRateLimiter.size();
+}
+
+export function isNostrProfileRateLimitedForTest(accountId: string, nowMs: number): boolean {
+  return profileRateLimiter.isRateLimited(accountId, nowMs);
+}
 
 function checkRateLimit(accountId: string): boolean {
-  const now = Date.now();
-  const entry = rateLimitMap.get(accountId);
-
-  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
-    rateLimitMap.set(accountId, { count: 1, windowStart: now });
-    return true;
-  }
-
-  if (entry.count >= RATE_LIMIT_MAX_REQUESTS) {
-    return false;
-  }
-
-  entry.count++;
-  return true;
+  return !profileRateLimiter.isRateLimited(accountId);
 }
 
 // ============================================================================

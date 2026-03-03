@@ -1,12 +1,7 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
+import { writeJsonAtomic } from "../../infra/json-files.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
-import {
-  SANDBOX_BROWSER_REGISTRY_PATH,
-  SANDBOX_REGISTRY_PATH,
-  SANDBOX_STATE_DIR,
-} from "./constants.js";
+import { SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_REGISTRY_PATH } from "./constants.js";
 
 export type SandboxRegistryEntry = {
   containerName: string;
@@ -111,20 +106,7 @@ async function writeRegistryFile<T extends RegistryEntry>(
   registryPath: string,
   registry: RegistryFile<T>,
 ): Promise<void> {
-  await fs.mkdir(SANDBOX_STATE_DIR, { recursive: true });
-  const payload = `${JSON.stringify(registry, null, 2)}\n`;
-  const registryDir = path.dirname(registryPath);
-  const tempPath = path.join(
-    registryDir,
-    `${path.basename(registryPath)}.${crypto.randomUUID()}.tmp`,
-  );
-  await fs.writeFile(tempPath, payload, "utf-8");
-  try {
-    await fs.rename(tempPath, registryPath);
-  } catch (error) {
-    await fs.rm(tempPath, { force: true });
-    throw error;
-  }
+  await writeJsonAtomic(registryPath, registry, { trailingNewline: true });
 }
 
 export async function readRegistry(): Promise<SandboxRegistry> {

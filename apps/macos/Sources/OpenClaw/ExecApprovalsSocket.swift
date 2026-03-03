@@ -73,6 +73,22 @@ private struct ExecHostResponse: Codable {
     var error: ExecHostError?
 }
 
+private func readLineFromHandle(_ handle: FileHandle, maxBytes: Int) throws -> String? {
+    var buffer = Data()
+    while buffer.count < maxBytes {
+        let chunk = try handle.read(upToCount: 4096) ?? Data()
+        if chunk.isEmpty { break }
+        buffer.append(chunk)
+        if buffer.contains(0x0A) { break }
+    }
+    guard let newlineIndex = buffer.firstIndex(of: 0x0A) else {
+        guard !buffer.isEmpty else { return nil }
+        return String(data: buffer, encoding: .utf8)
+    }
+    let lineData = buffer.subdata(in: 0..<newlineIndex)
+    return String(data: lineData, encoding: .utf8)
+}
+
 enum ExecApprovalsSocketClient {
     private struct TimeoutError: LocalizedError {
         var message: String
@@ -159,27 +175,11 @@ enum ExecApprovalsSocketClient {
         payload.append(0x0A)
         try handle.write(contentsOf: payload)
 
-        guard let line = try self.readLine(from: handle, maxBytes: 256_000),
+        guard let line = try readLineFromHandle(handle, maxBytes: 256_000),
               let lineData = line.data(using: .utf8)
         else { return nil }
         let response = try JSONDecoder().decode(ExecApprovalSocketDecision.self, from: lineData)
         return response.decision
-    }
-
-    private static func readLine(from handle: FileHandle, maxBytes: Int) throws -> String? {
-        var buffer = Data()
-        while buffer.count < maxBytes {
-            let chunk = try handle.read(upToCount: 4096) ?? Data()
-            if chunk.isEmpty { break }
-            buffer.append(chunk)
-            if buffer.contains(0x0A) { break }
-        }
-        guard let newlineIndex = buffer.firstIndex(of: 0x0A) else {
-            guard !buffer.isEmpty else { return nil }
-            return String(data: buffer, encoding: .utf8)
-        }
-        let lineData = buffer.subdata(in: 0..<newlineIndex)
-        return String(data: lineData, encoding: .utf8)
     }
 }
 
@@ -355,9 +355,9 @@ private enum ExecHostExecutor {
     static func handle(_ request: ExecHostRequest) async -> ExecHostResponse {
         let validatedRequest: ExecHostValidatedRequest
         switch ExecHostRequestEvaluator.validateRequest(request) {
-        case .success(let request):
+        case let .success(request):
             validatedRequest = request
-        case .failure(let error):
+        case let .failure(error):
             return self.errorResponse(error)
         }
 
@@ -370,7 +370,7 @@ private enum ExecHostExecutor {
             context: context,
             approvalDecision: request.approvalDecision)
         {
-        case .deny(let error):
+        case let .deny(error):
             return self.errorResponse(error)
         case .allow:
             break
@@ -401,7 +401,7 @@ private enum ExecHostExecutor {
                 context: context,
                 approvalDecision: followupDecision)
             {
-            case .deny(let error):
+            case let .deny(error):
                 return self.errorResponse(error)
             case .allow:
                 break
@@ -544,6 +544,106 @@ private enum ExecHostExecutor {
     }
 }
 
+enum ExecApprovalsSocketPathKind: Equatable {
+    case missing
+    case directory
+    case socket
+    case symlink
+    case other
+}
+
+enum ExecApprovalsSocketPathGuardError: LocalizedError {
+    case lstatFailed(path: String, code: Int32)
+    case parentPathInvalid(path: String, kind: ExecApprovalsSocketPathKind)
+    case socketPathInvalid(path: String, kind: ExecApprovalsSocketPathKind)
+    case unlinkFailed(path: String, code: Int32)
+    case createParentDirectoryFailed(path: String, message: String)
+    case setParentDirectoryPermissionsFailed(path: String, message: String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .lstatFailed(path, code):
+            "lstat failed for \(path) (errno \(code))"
+        case let .parentPathInvalid(path, kind):
+            "socket parent path invalid (\(kind)) at \(path)"
+        case let .socketPathInvalid(path, kind):
+            "socket path invalid (\(kind)) at \(path)"
+        case let .unlinkFailed(path, code):
+            "unlink failed for \(path) (errno \(code))"
+        case let .createParentDirectoryFailed(path, message):
+            "socket parent directory create failed at \(path): \(message)"
+        case let .setParentDirectoryPermissionsFailed(path, message):
+            "socket parent directory chmod failed at \(path): \(message)"
+        }
+    }
+}
+
+enum ExecApprovalsSocketPathGuard {
+    static let parentDirectoryPermissions = 0o700
+
+    static func pathKind(at path: String) throws -> ExecApprovalsSocketPathKind {
+        var status = stat()
+        let result = lstat(path, &status)
+        if result != 0 {
+            if errno == ENOENT {
+                return .missing
+            }
+            throw ExecApprovalsSocketPathGuardError.lstatFailed(path: path, code: errno)
+        }
+
+        let fileType = status.st_mode & mode_t(S_IFMT)
+        if fileType == mode_t(S_IFDIR) { return .directory }
+        if fileType == mode_t(S_IFSOCK) { return .socket }
+        if fileType == mode_t(S_IFLNK) { return .symlink }
+        return .other
+    }
+
+    static func hardenParentDirectory(for socketPath: String) throws {
+        let parentURL = URL(fileURLWithPath: socketPath).deletingLastPathComponent()
+        let parentPath = parentURL.path
+
+        switch try self.pathKind(at: parentPath) {
+        case .missing, .directory:
+            break
+        case let kind:
+            throw ExecApprovalsSocketPathGuardError.parentPathInvalid(path: parentPath, kind: kind)
+        }
+
+        do {
+            try FileManager().createDirectory(at: parentURL, withIntermediateDirectories: true)
+        } catch {
+            throw ExecApprovalsSocketPathGuardError.createParentDirectoryFailed(
+                path: parentPath,
+                message: error.localizedDescription)
+        }
+
+        do {
+            try FileManager().setAttributes(
+                [.posixPermissions: self.parentDirectoryPermissions],
+                ofItemAtPath: parentPath)
+        } catch {
+            throw ExecApprovalsSocketPathGuardError.setParentDirectoryPermissionsFailed(
+                path: parentPath,
+                message: error.localizedDescription)
+        }
+    }
+
+    static func removeExistingSocket(at socketPath: String) throws {
+        let kind = try self.pathKind(at: socketPath)
+        switch kind {
+        case .missing:
+            return
+        case .socket:
+            break
+        case .directory, .symlink, .other:
+            throw ExecApprovalsSocketPathGuardError.socketPathInvalid(path: socketPath, kind: kind)
+        }
+        if unlink(socketPath) != 0, errno != ENOENT {
+            throw ExecApprovalsSocketPathGuardError.unlinkFailed(path: socketPath, code: errno)
+        }
+    }
+}
+
 private final class ExecApprovalsSocketServer: @unchecked Sendable {
     private let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals.socket")
     private let socketPath: String
@@ -583,7 +683,12 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             self.socketFD = -1
         }
         if !self.socketPath.isEmpty {
-            unlink(self.socketPath)
+            do {
+                try ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
+            } catch {
+                self.logger
+                    .warning("exec approvals socket cleanup failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
@@ -618,7 +723,15 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             self.logger.error("exec approvals socket create failed")
             return -1
         }
-        unlink(self.socketPath)
+        do {
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: self.socketPath)
+            try ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
+        } catch {
+            self.logger
+                .error("exec approvals socket path hardening failed: \(error.localizedDescription, privacy: .public)")
+            close(fd)
+            return -1
+        }
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let maxLen = MemoryLayout.size(ofValue: addr.sun_path)
@@ -645,12 +758,18 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             close(fd)
             return -1
         }
+        if chmod(self.socketPath, 0o600) != 0 {
+            self.logger.error("exec approvals socket chmod failed")
+            close(fd)
+            try? ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
+            return -1
+        }
         if listen(fd, 16) != 0 {
             self.logger.error("exec approvals socket listen failed")
             close(fd)
+            try? ExecApprovalsSocketPathGuard.removeExistingSocket(at: self.socketPath)
             return -1
         }
-        chmod(self.socketPath, 0o600)
         self.logger.info("exec approvals socket listening at \(self.socketPath, privacy: .public)")
         return fd
     }
@@ -662,7 +781,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                 try self.sendApprovalResponse(handle: handle, id: UUID().uuidString, decision: .deny)
                 return
             }
-            guard let line = try self.readLine(from: handle, maxBytes: 256_000),
+            guard let line = try readLineFromHandle(handle, maxBytes: 256_000),
                   let data = line.data(using: .utf8)
             else {
                 return
@@ -694,22 +813,6 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
         } catch {
             self.logger.error("exec approvals socket handling failed: \(error.localizedDescription, privacy: .public)")
         }
-    }
-
-    private func readLine(from handle: FileHandle, maxBytes: Int) throws -> String? {
-        var buffer = Data()
-        while buffer.count < maxBytes {
-            let chunk = try handle.read(upToCount: 4096) ?? Data()
-            if chunk.isEmpty { break }
-            buffer.append(chunk)
-            if buffer.contains(0x0A) { break }
-        }
-        guard let newlineIndex = buffer.firstIndex(of: 0x0A) else {
-            guard !buffer.isEmpty else { return nil }
-            return String(data: buffer, encoding: .utf8)
-        }
-        let lineData = buffer.subdata(in: 0..<newlineIndex)
-        return String(data: lineData, encoding: .utf8)
     }
 
     private func sendApprovalResponse(
