@@ -457,7 +457,7 @@ export function resolveDiscordMessageText(
     (message.embeds?.[0] as { title?: string | null; description?: string | null } | undefined) ??
       null,
   );
-  const baseText =
+  const rawText =
     message.content?.trim() ||
     buildDiscordMediaPlaceholder({
       attachments: message.attachments ?? undefined,
@@ -466,6 +466,7 @@ export function resolveDiscordMessageText(
     embedText ||
     options?.fallbackText?.trim() ||
     "";
+  const baseText = resolveDiscordMentions(rawText, message);
   if (!options?.includeForwarded) {
     return baseText;
   }
@@ -477,6 +478,22 @@ export function resolveDiscordMessageText(
     return forwardedText;
   }
   return `${baseText}\n${forwardedText}`;
+}
+
+function resolveDiscordMentions(text: string, message: Message): string {
+  if (!text.includes("<")) {
+    return text;
+  }
+  const mentions = message.mentionedUsers ?? [];
+  if (!Array.isArray(mentions) || mentions.length === 0) {
+    return text;
+  }
+  let out = text;
+  for (const user of mentions) {
+    const label = user.globalName || user.username;
+    out = out.replace(new RegExp(`<@!?${user.id}>`, "g"), `@${label}`);
+  }
+  return out;
 }
 
 function resolveDiscordForwardedMessagesText(message: Message): string {
