@@ -477,7 +477,8 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
   const withRecovery = wrapHostEditToolWithPostWriteRecovery(base, root);
-  return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
+  const withMismatchContent = wrapHostEditToolWithMismatchContent(withRecovery, root);
+  return wrapToolParamNormalization(withMismatchContent, CLAUDE_PARAM_GROUPS.edit);
 }
 
 export function createOpenClawReadTool(

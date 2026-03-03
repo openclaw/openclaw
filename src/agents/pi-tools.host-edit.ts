@@ -85,31 +85,44 @@ export function wrapHostEditToolWithPostWriteRecovery(
  * Wraps the edit tool to return current file content on oldText mismatch.
  * Implements Option 1 from https://github.com/openclaw/openclaw/issues/18132
  */
-export function wrapEditToolWithMismatchContent(
+export function wrapHostEditToolWithMismatchContent(
   base: AnyAgentTool,
   root: string,
-  readFile: (path: string) => Promise<string>,
 ): AnyAgentTool {
   return {
     ...base,
-    execute: async (toolCallId, params, signal, onUpdate) => {
+    execute: async (
+      toolCallId: string,
+      params: unknown,
+      signal: AbortSignal | undefined,
+      onUpdate?: AgentToolUpdateCallback<unknown>,
+    ) => {
       const result = await base.execute(toolCallId, params, signal, onUpdate);
 
+      // Check if edit failed due to oldText mismatch
       if (
         result.isError &&
-        result.content.some(
-          (b: unknown) =>
-            b.type === "text" &&
-            b.text.toLowerCase().includes("oldtext") &&
-            b.text.toLowerCase().includes("not found"),
-        )
+        result.content.some((b: unknown) => {
+          if (typeof b === "object" && b !== null && "type" in b && "text" in b) {
+            const block = b as { type: string; text: string };
+            return (
+              block.type === "text" &&
+              block.text.toLowerCase().includes("oldtext") &&
+              block.text.toLowerCase().includes("not found")
+            );
+          }
+          return false;
+        })
       ) {
-        const record = params as Record<string, unknown>;
-        const filePath = record?.file_path || record?.path;
+        const record =
+          params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
+        const pathParam = record?.file_path || record?.path;
 
-        if (typeof filePath === "string") {
+        if (typeof pathParam === "string") {
           try {
-            const content = await readFile(filePath);
+            const absolutePath = resolveHostEditPath(root, pathParam);
+            const content = await fs.readFile(absolutePath, "utf-8");
+
             return {
               ...result,
               content: [
@@ -120,9 +133,12 @@ export function wrapEditToolWithMismatchContent(
                 },
               ],
             };
-          } catch {}
+          } catch {
+            // File read failed; return original error
+          }
         }
       }
+
       return result;
     },
   };
