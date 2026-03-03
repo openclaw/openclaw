@@ -113,6 +113,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   });
 
   return async (roomId: string, event: MatrixRawEvent) => {
+    let draftStream: ReturnType<typeof createMatrixDraftStream> | null = null;
+    let draftFinalized = false;
     try {
       const eventType = event.type;
       if (eventType === EventType.RoomMessageEncrypted) {
@@ -640,7 +642,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const matrixCfg = cfg.channels?.matrix;
       const streamingEnabled = matrixCfg?.streaming === "partial";
       const streamThrottleMs = matrixCfg?.streamThrottleMs ?? 800;
-      const draftStream = streamingEnabled
+      draftStream = streamingEnabled
         ? createMatrixDraftStream({
             roomId,
             accountId: route.accountId ?? undefined,
@@ -651,7 +653,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             warn: logVerboseMessage,
           })
         : null;
-      let draftFinalized = false;
+      draftFinalized = false;
 
       const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
@@ -740,13 +742,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             },
           }),
       });
-      // Only finalize if a draft message was actually created (getEventId !== null).
-      // If the reply finished before the first throttled send, deliver() already
-      // fell through to deliverMatrixReplies(); finalizing here would flush pending
-      // text as a duplicate second message.
-      if (draftStream && !draftFinalized && draftStream.getEventId()) {
-        await draftStream.finalize();
-      }
       if (!queuedFinal) {
         return;
       }
@@ -764,6 +759,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
     } catch (err) {
       runtime.error?.(`matrix handler failed: ${String(err)}`);
+    } finally {
+      // Always clean up the draft stream cursor, even if the agent errored or
+      // timed out mid-response. Without this, a thrown exception in
+      // withReplyDispatcher/dispatchReplyFromConfig skips the finalize and
+      // leaves the cursor character visible in the message.
+      if (draftStream && !draftFinalized && draftStream.getEventId()) {
+        try {
+          await draftStream.finalize();
+        } catch (err) {
+          logVerboseMessage(
+            `matrix: draft stream finalize cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
     }
   };
 }
