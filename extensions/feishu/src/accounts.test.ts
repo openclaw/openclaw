@@ -121,16 +121,39 @@ describe("resolveFeishuCredentials", () => {
     expect(creds).toBeNull();
   });
 
-  it("resolves env SecretRef objects", () => {
+  it("throws unresolved SecretRef error when env SecretRef points to missing env var", () => {
+    const key = "FEISHU_APP_SECRET_MISSING_TEST";
+    const prev = process.env[key];
+    delete process.env[key];
+    try {
+      expect(() =>
+        resolveFeishuCredentials({
+          appId: "cli_123",
+          appSecret: { source: "env", provider: "default", id: key } as never,
+        }),
+      ).toThrow(/unresolved SecretRef/i);
+    } finally {
+      if (prev === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = prev;
+      }
+    }
+  });
+
+  it("resolves env SecretRef objects when unresolved refs are allowed", () => {
     const key = "FEISHU_APP_SECRET_TEST";
     const prev = process.env[key];
     process.env[key] = " secret_from_env ";
 
     try {
-      const creds = resolveFeishuCredentials({
-        appId: "cli_123",
-        appSecret: { source: "env", provider: "default", id: key } as never,
-      });
+      const creds = resolveFeishuCredentials(
+        {
+          appId: "cli_123",
+          appSecret: { source: "env", provider: "default", id: key } as never,
+        },
+        { allowUnresolvedSecretRef: true },
+      );
 
       expect(creds).toEqual({
         appId: "cli_123",
@@ -139,6 +162,50 @@ describe("resolveFeishuCredentials", () => {
         verificationToken: undefined,
         domain: "feishu",
       });
+    } finally {
+      if (prev === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = prev;
+      }
+    }
+  });
+
+  it("resolves env SecretRef with custom provider alias when unresolved refs are allowed", () => {
+    const key = "FEISHU_APP_SECRET_CUSTOM_PROVIDER_TEST";
+    const prev = process.env[key];
+    process.env[key] = " secret_from_env_alias ";
+
+    try {
+      const creds = resolveFeishuCredentials(
+        {
+          appId: "cli_123",
+          appSecret: { source: "env", provider: "corp-env", id: key } as never,
+        },
+        { allowUnresolvedSecretRef: true },
+      );
+
+      expect(creds?.appSecret).toBe("secret_from_env_alias");
+    } finally {
+      if (prev === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = prev;
+      }
+    }
+  });
+
+  it("preserves unresolved SecretRef diagnostics for env refs in default mode", () => {
+    const key = "FEISHU_APP_SECRET_POLICY_TEST";
+    const prev = process.env[key];
+    process.env[key] = "secret_from_env";
+    try {
+      expect(() =>
+        resolveFeishuCredentials({
+          appId: "cli_123",
+          appSecret: { source: "env", provider: "default", id: key } as never,
+        }),
+      ).toThrow(/unresolved SecretRef/i);
     } finally {
       if (prev === undefined) {
         delete process.env[key];

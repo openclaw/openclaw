@@ -143,13 +143,17 @@ export function resolveFeishuCredentials(
       return asString;
     }
 
-    // SecretRef support (env only in this sync path)
-    if (typeof value === "object" && value !== null) {
+    // In relaxed/onboarding paths only: allow direct env SecretRef reads for UX.
+    // Default resolution path must preserve unresolved-ref diagnostics/policy semantics.
+    if (options?.allowUnresolvedSecretRef && typeof value === "object" && value !== null) {
       const rec = value as Record<string, unknown>;
       const source = normalizeString(rec.source)?.toLowerCase();
       const id = normalizeString(rec.id);
       if (source === "env" && id) {
-        return normalizeString(process.env[id]);
+        const envValue = normalizeString(process.env[id]);
+        if (envValue) {
+          return envValue;
+        }
       }
     }
 

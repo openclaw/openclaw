@@ -178,27 +178,32 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
   getStatus: async ({ cfg }) => {
     const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
 
-    const topLevelResolved = resolveFeishuCredentials(feishuCfg, {
-      allowUnresolvedSecretRef: true,
-    });
+    const isAppIdConfigured = (value: unknown): boolean =>
+      Boolean(normalizeString(value) || hasConfiguredSecretInput(value));
 
-    const accountResolved = Object.values(feishuCfg?.accounts ?? {}).some((account) => {
+    const topLevelConfigured = Boolean(
+      isAppIdConfigured(feishuCfg?.appId) && hasConfiguredSecretInput(feishuCfg?.appSecret),
+    );
+
+    const accountConfigured = Object.values(feishuCfg?.accounts ?? {}).some((account) => {
       if (!account || typeof account !== "object") {
         return false;
       }
-      const merged = {
-        ...(feishuCfg ?? {}),
-        ...(account as Record<string, unknown>),
-      } as FeishuConfig;
-      return Boolean(
-        resolveFeishuCredentials(merged, {
-          allowUnresolvedSecretRef: true,
-        }),
-      );
+      const hasOwnAppId = Object.prototype.hasOwnProperty.call(account, "appId");
+      const hasOwnAppSecret = Object.prototype.hasOwnProperty.call(account, "appSecret");
+      const accountAppIdConfigured = hasOwnAppId
+        ? isAppIdConfigured((account as Record<string, unknown>).appId)
+        : isAppIdConfigured(feishuCfg?.appId);
+      const accountSecretConfigured = hasOwnAppSecret
+        ? hasConfiguredSecretInput((account as Record<string, unknown>).appSecret)
+        : hasConfiguredSecretInput(feishuCfg?.appSecret);
+      return Boolean(accountAppIdConfigured && accountSecretConfigured);
     });
 
-    const configured = Boolean(topLevelResolved) || accountResolved;
-    const resolvedCredentials = topLevelResolved;
+    const configured = topLevelConfigured || accountConfigured;
+    const resolvedCredentials = resolveFeishuCredentials(feishuCfg, {
+      allowUnresolvedSecretRef: true,
+    });
 
     // Try to probe if configured
     let probeResult = null;
