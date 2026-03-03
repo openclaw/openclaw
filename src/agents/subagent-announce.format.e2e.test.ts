@@ -118,14 +118,18 @@ vi.mock("./tools/agent-step.js", () => ({
   readLatestAssistantReply: readLatestAssistantReplyMock,
 }));
 
-vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: vi.fn(() => loadSessionStoreFixture()),
-  resolveAgentIdFromSessionKey: () => "main",
-  resolveStorePath: () => "/tmp/sessions.json",
-  resolveMainSessionKey: () => "agent:main:main",
-  readSessionUpdatedAt: vi.fn(() => undefined),
-  recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    loadSessionStore: vi.fn(() => loadSessionStoreFixture()),
+    resolveAgentIdFromSessionKey: () => "main",
+    resolveStorePath: () => "/tmp/sessions.json",
+    resolveMainSessionKey: () => "agent:main:main",
+    readSessionUpdatedAt: vi.fn(() => undefined),
+    recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 vi.mock("./pi-embedded.js", () => embeddedRunMock);
 
