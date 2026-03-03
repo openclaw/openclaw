@@ -574,7 +574,7 @@ describe("loadChatHistory", () => {
 });
 
 describe("sendChatMessage", () => {
-  it("sends file attachments with type=file and preserves fileName", async () => {
+  it("includes non-image file metadata in message text and skips dropped attachment payload", async () => {
     const request = vi.fn().mockResolvedValue({ ok: true });
     const state = createState({
       connected: true,
@@ -594,15 +594,8 @@ describe("sendChatMessage", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
-        message: "please review",
-        attachments: [
-          expect.objectContaining({
-            type: "file",
-            mimeType: "application/pdf",
-            fileName: "offer-audit.pdf",
-            content: "QUJD",
-          }),
-        ],
+        message: expect.stringContaining("Attached files:\n- offer-audit.pdf (application/pdf"),
+        attachments: [],
       }),
     );
   });

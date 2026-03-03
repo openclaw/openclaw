@@ -86,6 +86,23 @@ function isImageMimeType(mimeType: string): boolean {
   return mimeType.toLowerCase().startsWith("image/");
 }
 
+function summarizeNonImageAttachments(attachments: ChatAttachment[]): string {
+  const lines = attachments
+    .filter((att) => !isImageMimeType(att.mimeType))
+    .map((att) => {
+      const name = att.fileName?.trim() || "file";
+      const size = typeof att.sizeBytes === "number" && Number.isFinite(att.sizeBytes)
+        ? `, ${Math.max(1, Math.round(att.sizeBytes / 1024))} KB`
+        : "";
+      return `- ${name} (${att.mimeType}${size})`;
+    });
+
+  if (lines.length === 0) {
+    return "";
+  }
+  return `Attached files:\n${lines.join("\n")}`;
+}
+
 type AssistantMessageNormalizationOptions = {
   roleRequirement: "required" | "optional";
   roleCaseSensitive?: boolean;
@@ -148,6 +165,8 @@ export async function sendChatMessage(
   if (!msg && !hasAttachments) {
     return null;
   }
+  const nonImageAttachmentSummary = hasAttachments ? summarizeNonImageAttachments(attachments) : "";
+  const outboundMessage = [msg, nonImageAttachmentSummary].filter(Boolean).join("\n\n");
 
   const now = Date.now();
 
@@ -155,6 +174,9 @@ export async function sendChatMessage(
   const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
+  }
+  if (nonImageAttachmentSummary) {
+    contentBlocks.push({ type: "text", text: nonImageAttachmentSummary });
   }
   // Add attachment previews to the message for display
   if (hasAttachments) {
@@ -195,11 +217,11 @@ export async function sendChatMessage(
     ? attachments
         .map((att) => {
           const parsed = dataUrlToBase64(att.dataUrl);
-          if (!parsed) {
+          if (!parsed || !isImageMimeType(parsed.mimeType)) {
             return null;
           }
           return {
-            type: isImageMimeType(parsed.mimeType) ? "image" : "file",
+            type: "image",
             mimeType: parsed.mimeType,
             fileName: att.fileName,
             content: parsed.content,
@@ -211,7 +233,7 @@ export async function sendChatMessage(
   try {
     await state.client.request("chat.send", {
       sessionKey: state.sessionKey,
-      message: msg,
+      message: outboundMessage,
       deliver: false,
       idempotencyKey: runId,
       attachments: apiAttachments,

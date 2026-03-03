@@ -498,11 +498,17 @@ export function renderChat(props: ChatProps) {
               }}
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
               @dragover=${(e: DragEvent) => {
-                e.preventDefault();
+                const files = Array.from(e.dataTransfer?.files ?? []);
+                if (files.length > 0) {
+                  e.preventDefault();
+                }
               }}
               @drop=${(e: DragEvent) => {
-                e.preventDefault();
                 const files = Array.from(e.dataTransfer?.files ?? []);
+                if (files.length === 0) {
+                  return;
+                }
+                e.preventDefault();
                 void appendFiles(props, files);
               }}
               placeholder=${composePlaceholder}
