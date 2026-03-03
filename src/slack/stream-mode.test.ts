@@ -129,7 +129,7 @@ describe("applyAppendOnlyStreamUpdate", () => {
     const next = applyAppendOnlyStreamUpdate({
       incoming: "hello world!!!",
       rendered: "hello world",
-      source: "hello",
+      source: "not-a-prefix",
     });
     expect(next).toEqual({
       rendered: "hello world!!!",
