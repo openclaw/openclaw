@@ -173,4 +173,21 @@ describe("config secret refs schema", () => {
       ).toBe(true);
     }
   });
+
+  it("accepts custom API keys stored directly under secrets (doctor --fix must not delete them)", () => {
+    // Regression test for: openclaw doctor --fix deletes custom keys from secrets
+    // Users may store arbitrary key-value pairs directly under `secrets` for use
+    // with { from: "secrets", key: "<name>" } resolution. SecretsConfigSchema
+    // must use .passthrough() so these keys are not treated as "unrecognized"
+    // and stripped by stripUnknownConfigKeys during doctor repair.
+    const result = validateConfigObjectRaw({
+      secrets: {
+        brave_news_api_key: "BSACsc-example",
+        football_data_api_key: "ac6b2a-example",
+        alpha_vantage_api_key: "J22HYYG-example",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
 });
