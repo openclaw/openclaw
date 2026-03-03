@@ -522,7 +522,10 @@ channels:
 - `channels.slack.streamMode`（`replace | status_final | append`）会自动迁移为 `channels.slack.streaming`。
 - 布尔型 `channels.slack.streaming` 会规范化为标准的 `channels.slack.streaming` 枚举值和 `channels.slack.nativeStreaming`。
 
-旧布尔值说明：`streaming: false` 会规范化为 `streaming: "off"` 加 `nativeStreaming: false`，因此当前版本会完全禁用预览流式传输。新配置中更推荐直接写 `streaming: "off"`，以明确表达意图。
+旧布尔值说明：当布尔型 `streaming` 单独使用时，`streaming: false` 会规范化为
+`streaming: "off"` 加 `nativeStreaming: false`。如果同时还存在旧版
+`streamMode`，预览行为仍由 `streamMode` 决定，而布尔值只会影响
+`nativeStreaming`。新配置中更推荐直接使用标准的 `streaming` 枚举值。
 
 ### 要求
 
