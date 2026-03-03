@@ -173,7 +173,7 @@ const MAX_ATTACHMENT_SIZE_BYTES = 50 * 1024 * 1024;
 function readFileAsAttachment(file: File): Promise<ChatAttachment> {
   return new Promise((resolve, reject) => {
     if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
-      reject(new Error(`File \"${file.name || "unnamed"}\" exceeds 50 MB.`));
+      reject(new Error(`File "${file.name || "unnamed"}" exceeds 50 MB.`));
       return;
     }
 
