@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
-import { requireApiKey, resolveAwsSdkEnvVarName, resolveModelAuthMode } from "./model-auth.js";
+import {
+  requireApiKey,
+  resolveApiKeyForProvider,
+  resolveAwsSdkEnvVarName,
+  resolveModelAuthMode,
+} from "./model-auth.js";
 
 describe("resolveAwsSdkEnvVarName", () => {
   it("prefers bearer token over access keys and profile", () => {
@@ -115,5 +120,74 @@ describe("requireApiKey", () => {
         "openai",
       ),
     ).toThrow('No API key resolved for provider "openai"');
+  });
+});
+
+describe("resolveApiKeyForProvider ollama keyless fallback", () => {
+  const emptyStore: AuthProfileStore = { version: 1, profiles: {} };
+
+  it("returns dummy key for ollama provider when no auth is configured", async () => {
+    const result = await resolveApiKeyForProvider({
+      provider: "ollama",
+      store: emptyStore,
+    });
+
+    expect(result.apiKey).toBe("ollama");
+    expect(result.source).toBe("ollama-local-default");
+    expect(result.mode).toBe("api-key");
+  });
+
+  it("returns dummy key for vllm provider when no auth is configured", async () => {
+    const result = await resolveApiKeyForProvider({
+      provider: "vllm",
+      store: emptyStore,
+    });
+
+    expect(result.apiKey).toBe("ollama");
+    expect(result.source).toBe("ollama-local-default");
+    expect(result.mode).toBe("api-key");
+  });
+
+  it("returns dummy key when provider config has api: ollama", async () => {
+    const result = await resolveApiKeyForProvider({
+      provider: "my-local-llm",
+      cfg: {
+        models: {
+          providers: {
+            "my-local-llm": {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              models: [],
+            },
+          },
+        },
+      },
+      store: emptyStore,
+    });
+
+    expect(result.apiKey).toBe("ollama");
+    expect(result.source).toBe("ollama-local-default");
+  });
+
+  it("prefers explicit config apiKey over ollama fallback", async () => {
+    const result = await resolveApiKeyForProvider({
+      provider: "ollama",
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              apiKey: "my-custom-key",
+              models: [],
+            },
+          },
+        },
+      },
+      store: emptyStore,
+    });
+
+    expect(result.apiKey).toBe("my-custom-key");
+    expect(result.source).toBe("models.json");
   });
 });

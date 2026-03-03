@@ -212,6 +212,13 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
+  // Ollama and vllm typically run locally without authentication.
+  // Fall back to a dummy key so downstream callers (streamFn, etc.) proceed.
+  const providerConfig = resolveProviderConfig(cfg, provider);
+  if (normalized === "ollama" || normalized === "vllm" || providerConfig?.api === "ollama") {
+    return { apiKey: "ollama", source: "ollama-local-default", mode: "api-key" };
+  }
+
   if (provider === "openai") {
     const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
     if (hasCodex) {
