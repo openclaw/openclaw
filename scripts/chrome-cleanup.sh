@@ -11,7 +11,7 @@
 #   status   — Show current Chrome process state
 #   kill-all — Kill all openclaw Chrome processes immediately
 #
-# Platform support: Linux (systemd), macOS (launchd - TODO)
+# Platform support: Linux (systemd), macOS (launchd)
 
 set -uo pipefail
 
@@ -43,8 +43,11 @@ LOG_FILE="${LOG_FILE:-$HOME/.openclaw/logs/chrome-cleanup.log}"
 LOG_MAX_BYTES="${LOG_MAX_BYTES:-1048576}"
 DRY_RUN="${DRY_RUN:-false}"
 
-# OpenClaw-specific filtering - only target OpenClaw browser processes
-OPENCLAW_USERDATA_DIR="${OPENCLAW_USERDATA_DIR:-$HOME/.openclaw/browser}"
+# OpenClaw-specific filtering - only target OpenClaw browser processes.
+# Matches any profile under ~/.openclaw/browser/*/user-data (prefix match via grep -F).
+# Default targets the "openclaw" profile; override to match a different profile or
+# set to ~/.openclaw/browser to match all profiles.
+OPENCLAW_USERDATA_DIR="${OPENCLAW_USERDATA_DIR:-$HOME/.openclaw/browser/openclaw/user-data}"
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 # Create log directory on first run
@@ -117,7 +120,7 @@ find_main_chrome_pids() {
         [[ -n "$pid" ]] && pids+=("$pid")
     done < <(
         echo "$ps_output" \
-        | grep -E '/chrome|/Chromium|/Google Chrome' \
+        | grep -E '/chrome$|/chrome |/chromium|/Chromium|/Google Chrome|google-chrome|chromium-browser' \
         | grep -v 'crashpad_handler' \
         | grep -v '\-\-type=' \
         | grep -v 'grep' \
