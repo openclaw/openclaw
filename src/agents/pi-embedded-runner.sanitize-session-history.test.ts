@@ -15,6 +15,7 @@ import {
   sanitizeWithOpenAIResponses,
   TEST_SESSION_ID,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
+import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 vi.mock("./pi-embedded-helpers.js", async () => ({
@@ -136,12 +137,12 @@ describe("sanitizeSessionHistory", () => {
   });
 
   const makeCompactionSummaryMessage = (tokensBefore: number, timestamp: string) =>
-    ({
+    castAgentMessage({
       role: "compactionSummary",
       summary: "compressed",
       tokensBefore,
       timestamp,
-    }) as unknown as AgentMessage;
+    });
 
   const sanitizeOpenAIHistory = async (
     messages: AgentMessage[],
@@ -258,7 +259,7 @@ describe("sanitizeSessionHistory", () => {
     setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
-      {
+      castAgentMessage({
         role: "user",
         content: "forwarded instruction",
         provenance: {
@@ -266,7 +267,7 @@ describe("sanitizeSessionHistory", () => {
           sourceSessionKey: "agent:main:req",
           sourceTool: "sessions_send",
         },
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const result = await sanitizeSessionHistory({
@@ -287,14 +288,14 @@ describe("sanitizeSessionHistory", () => {
   it("drops stale assistant usage snapshots kept before latest compaction summary", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
-    const messages = [
+    const messages = castAgentMessages([
       { role: "user", content: "old context" },
       makeAssistantUsageMessage({
         text: "old answer",
         usage: makeUsage(191_919, 2_000, 193_919),
       }),
       makeCompactionSummaryMessage(191_919, new Date().toISOString()),
-    ] as unknown as AgentMessage[];
+    ]);
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -308,7 +309,7 @@ describe("sanitizeSessionHistory", () => {
   it("preserves fresh assistant usage snapshots created after latest compaction summary", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
-    const messages = [
+    const messages = castAgentMessages([
       makeAssistantUsageMessage({
         text: "pre-compaction answer",
         usage: makeUsage(120_000, 3_000, 123_000),
@@ -319,7 +320,7 @@ describe("sanitizeSessionHistory", () => {
         text: "fresh answer",
         usage: makeUsage(1_000, 250, 1_250),
       }),
-    ] as unknown as AgentMessage[];
+    ]);
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -333,14 +334,14 @@ describe("sanitizeSessionHistory", () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     const compactionTs = Date.parse("2026-02-26T12:00:00.000Z");
-    const messages = [
+    const messages = castAgentMessages([
       makeCompactionSummaryMessage(191_919, new Date(compactionTs).toISOString()),
       makeAssistantUsageMessage({
         text: "kept pre-compaction answer",
         timestamp: compactionTs - 1_000,
         usage: makeUsage(191_919, 2_000, 193_919),
       }),
-    ] as unknown as AgentMessage[];
+    ]);
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -354,7 +355,7 @@ describe("sanitizeSessionHistory", () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     const compactionTs = Date.parse("2026-02-26T12:00:00.000Z");
-    const messages = [
+    const messages = castAgentMessages([
       makeCompactionSummaryMessage(123_000, new Date(compactionTs).toISOString()),
       makeAssistantUsageMessage({
         text: "kept pre-compaction answer",
@@ -367,7 +368,7 @@ describe("sanitizeSessionHistory", () => {
         timestamp: compactionTs + 2_000,
         usage: makeUsage(1_000, 250, 1_250),
       }),
-    ] as unknown as AgentMessage[];
+    ]);
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -431,13 +432,13 @@ describe("sanitizeSessionHistory", () => {
     {
       name: "missing input or arguments",
       makeMessages: () =>
-        [
-          {
+        castAgentMessages([
+          castAgentMessage({
             role: "assistant",
             content: [{ type: "toolCall", id: "call_1", name: "read" }],
-          } as unknown as AgentMessage,
+          }),
           makeUserMessage("hello"),
-        ] as AgentMessage[],
+        ]),
       overrides: { sessionId: "test-session" } as Partial<
         Parameters<typeof sanitizeOpenAIHistory>[1]
       >,
@@ -445,7 +446,7 @@ describe("sanitizeSessionHistory", () => {
     {
       name: "invalid or overlong names",
       makeMessages: () =>
-        [
+        castAgentMessages([
           makeAssistantMessage(
             [
               {
@@ -464,7 +465,7 @@ describe("sanitizeSessionHistory", () => {
             { stopReason: "toolUse" },
           ),
           makeUserMessage("hello"),
-        ] as AgentMessage[],
+        ]),
       overrides: {} as Partial<Parameters<typeof sanitizeOpenAIHistory>[1]>,
     },
   ])("drops malformed tool calls: $name", async ({ makeMessages, overrides }) => {
