@@ -43,6 +43,52 @@ const PHOTOS_COMMANDS = ["photos.latest"];
 
 const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 
+// Extended iOS node commands. The OpenClaw iOS app (openclaw-app) registers
+// additional read-only commands beyond the base set shared with other platforms.
+// These are safe by default — all read-only, consent-gated on the device side.
+const IOS_LOCATION_COMMANDS = [
+  ...LOCATION_COMMANDS,
+  "location.geocode",
+  "location.search",
+  "location.distance",
+  "location.monitor.start",
+  "location.monitor.stop",
+  "location.status",
+];
+const IOS_DEVICE_COMMANDS = [
+  ...DEVICE_COMMANDS,
+  "device.battery",
+  "device.network",
+  "device.storage",
+  "device.screen",
+  "device.display",
+  "device.locale",
+];
+const IOS_CONTACTS_COMMANDS = [
+  ...CONTACTS_COMMANDS,
+  "contacts.get",
+  "contacts.count",
+  "contacts.status",
+];
+const IOS_CALENDAR_COMMANDS = [
+  ...CALENDAR_COMMANDS,
+  "calendar.today",
+  "calendar.upcoming",
+  "calendar.search",
+  "calendar.calendars",
+  "calendar.status",
+];
+const IOS_HEALTH_COMMANDS = [
+  "health.steps",
+  "health.heartRate",
+  "health.sleep",
+  "health.workouts",
+  "health.energy",
+  "health.summary",
+  "health.status",
+];
+const IOS_MOTION_COMMANDS = [...MOTION_COMMANDS, "motion.altitude", "motion.status"];
+
 const SMS_DANGEROUS_COMMANDS = ["sms.send"];
 
 // iOS nodes don't implement system.run/which, but they do support notifications.
@@ -75,13 +121,14 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ios: [
     ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...DEVICE_COMMANDS,
-    ...CONTACTS_COMMANDS,
-    ...CALENDAR_COMMANDS,
+    ...IOS_LOCATION_COMMANDS,
+    ...IOS_DEVICE_COMMANDS,
+    ...IOS_CONTACTS_COMMANDS,
+    ...IOS_CALENDAR_COMMANDS,
+    ...IOS_HEALTH_COMMANDS,
     ...REMINDERS_COMMANDS,
     ...PHOTOS_COMMANDS,
-    ...MOTION_COMMANDS,
+    ...IOS_MOTION_COMMANDS,
     ...IOS_SYSTEM_COMMANDS,
   ],
   android: [
