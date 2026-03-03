@@ -92,6 +92,29 @@ describe("memory cli", () => {
     await program.parseAsync(["memory", ...args], { from: "user" });
   }
 
+  async function renderMemoryHelp() {
+    const out: string[] = [];
+    const err: string[] = [];
+    const program = new Command();
+    program.name("openclaw");
+    program.exitOverride();
+    program.configureOutput({
+      writeOut: (value: string) => out.push(value),
+      writeErr: (value: string) => err.push(value),
+    });
+    registerMemoryCli(program);
+    try {
+      await program.parseAsync(["memory", "--help"], { from: "user" });
+    } catch (error) {
+      const code =
+        typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+      if (code !== "commander.helpDisplayed") {
+        throw error;
+      }
+    }
+    return `${out.join("")}${err.join("")}`;
+  }
+
   async function withQmdIndexDb(content: string, run: (dbPath: string) => Promise<void>) {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-qmd-index-"));
     const dbPath = path.join(tmpDir, "index.sqlite");
@@ -456,6 +479,12 @@ describe("memory cli", () => {
 
     expect(log).toHaveBeenCalledWith("Memory backend does not support manual reindex.");
     expect(close).toHaveBeenCalled();
+  });
+
+  it("shows positional query syntax in memory help examples", async () => {
+    const helpText = await renderMemoryHelp();
+    expect(helpText).toContain('openclaw memory search "deployment notes"');
+    expect(helpText).not.toContain('openclaw memory search --query "deployment notes"');
   });
 
   it("prints no matches for empty search results", async () => {
