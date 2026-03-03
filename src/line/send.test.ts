@@ -159,6 +159,24 @@ describe("LINE send helpers", () => {
     expect(result).toEqual({ messageId: "reply", chatId: "C1" });
   });
 
+  it("prefers caller cfg over loadConfig when provided", async () => {
+    const cfg = {
+      channels: {
+        line: {
+          enabled: true,
+        },
+      },
+    };
+
+    await sendModule.pushMessageLine("line:user:U-cfg", "Hello", { cfg } as never);
+
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(resolveLineAccountMock).toHaveBeenCalledWith({
+      cfg,
+      accountId: undefined,
+    });
+  });
+
   it("throws when push messages are empty", async () => {
     await expect(sendModule.pushMessagesLine("U123", [])).rejects.toThrow(
       "Message must be non-empty for LINE sends",

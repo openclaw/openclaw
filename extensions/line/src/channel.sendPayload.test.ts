@@ -88,6 +88,26 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
 }
 
 describe("linePlugin outbound.sendPayload", () => {
+  it("forwards cfg into line send helper options", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await linePlugin.outbound!.sendPayload!({
+      to: "line:user:cfg",
+      text: "hello",
+      payload: { text: "hello" },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:cfg", "hello", {
+      verbose: false,
+      cfg,
+      accountId: "default",
+    });
+  });
+
   it("sends flex message without dropping text", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
@@ -116,6 +136,7 @@ describe("linePlugin outbound.sendPayload", () => {
     expect(mocks.pushFlexMessage).toHaveBeenCalledTimes(1);
     expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:group:1", "Now playing:", {
       verbose: false,
+      cfg,
       accountId: "default",
     });
   });
@@ -153,6 +174,7 @@ describe("linePlugin outbound.sendPayload", () => {
     expect(mocks.pushTemplateMessage).toHaveBeenCalledTimes(1);
     expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:1", "Choose one:", {
       verbose: false,
+      cfg,
       accountId: "default",
     });
   });
@@ -193,7 +215,7 @@ describe("linePlugin outbound.sendPayload", () => {
           quickReply: { items: ["One", "Two"] },
         },
       ],
-      { verbose: false, accountId: "default" },
+      { verbose: false, cfg, accountId: "default" },
     );
     expect(mocks.createQuickReplyItems).toHaveBeenCalledWith(["One", "Two"]);
   });
@@ -224,13 +246,14 @@ describe("linePlugin outbound.sendPayload", () => {
     expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:3", "", {
       verbose: false,
       mediaUrl: "https://example.com/img.jpg",
+      cfg,
       accountId: "default",
     });
     expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
       "line:user:3",
       "Hello",
       ["One", "Two"],
-      { verbose: false, accountId: "default" },
+      { verbose: false, cfg, accountId: "default" },
     );
     const mediaOrder = mocks.sendMessageLine.mock.invocationCallOrder[0];
     const quickReplyOrder = mocks.pushTextMessageWithQuickReplies.mock.invocationCallOrder[0];
