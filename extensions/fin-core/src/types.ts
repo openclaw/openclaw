@@ -167,7 +167,7 @@ export function isCryptoExchange(id: string): id is CryptoExchangeId {
 /** Result of processing an approval action. */
 export type ApprovalResult = {
   eventId: string;
-  action: "approved" | "rejected" | "expired";
+  action: "approved" | "rejected" | "expired" | "error";
   order?: OrderResult;
   error?: string;
 };

@@ -99,12 +99,12 @@ describe("ApprovalExecutor", () => {
     expect(result.error).toBeUndefined();
   });
 
-  it("approve() — handles exchange error gracefully", async () => {
+  it("approve() — handles exchange error gracefully (returns action: error)", async () => {
     adapter.placeOrder.mockRejectedValue(new Error("Insufficient balance"));
 
     const result = await executor.approve("evt-1-abc");
 
-    expect(result.action).toBe("approved");
+    expect(result.action).toBe("error");
     expect(result.eventId).toBe("evt-1-abc");
     expect(result.error).toBe("Insufficient balance");
     expect(result.order).toBeUndefined();

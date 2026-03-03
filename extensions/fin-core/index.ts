@@ -7,6 +7,8 @@ import type { BriefDataSource } from "./src/daily-brief.js";
 import type { DataGatheringDeps } from "./src/data-gathering.js";
 import { ExchangeHealthStore } from "./src/exchange-health-store.js";
 import { ExchangeRegistry } from "./src/exchange-registry.js";
+import { ApprovalExecutor } from "./src/approval-executor.js";
+import { createAdapter as buildAdapter } from "./src/adapters/adapter-factory.js";
 import { NotificationRouter, WebhookChannel } from "./src/notification-router.js";
 import { RiskController } from "./src/risk-controller.js";
 import { registerHttpRoutes } from "./src/route-handlers.js";
@@ -204,7 +206,22 @@ const finCorePlugin = {
     eventStore.subscribe((event) => {
       notificationRouter
         .notify({ id: event.id, type: event.type, title: event.title, detail: event.detail, timestamp: event.timestamp })
-        .catch(() => {});
+        .catch((err) => {
+          console.warn("[fin-core] notification delivery failed:", (err as Error).message ?? err);
+        });
+    });
+
+    // ── Approval Executor ──
+    // Bridges pending events → exchange adapter execution on user approve.
+
+    const approvalExecutor = new ApprovalExecutor(eventStore, (exchangeId: string) => {
+      const config = registry.getExchange(exchangeId);
+      if (!config) return undefined;
+      try {
+        return buildAdapter(exchangeId, config, registry);
+      } catch {
+        return undefined;
+      }
     });
 
     // ── Register all HTTP routes (API + dashboards) ──
@@ -218,6 +235,7 @@ const finCorePlugin = {
       runtime,
       templates,
       briefGenerator,
+      approvalExecutor,
     });
 
     // ── Register SSE streams ──

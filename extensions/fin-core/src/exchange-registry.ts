@@ -19,6 +19,10 @@ export class ExchangeRegistry {
     return this.configs.delete(id);
   }
 
+  getExchange(id: string): ExchangeConfig | undefined {
+    return this.configs.get(id);
+  }
+
   listExchanges(): Array<{ id: string; exchange: ExchangeId; testnet: boolean }> {
     return Array.from(this.configs.entries()).map(([id, cfg]) => ({
       id,

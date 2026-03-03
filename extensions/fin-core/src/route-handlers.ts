@@ -23,6 +23,7 @@ import { registerAlertRoutes } from "./routes-alerts.js";
 import { registerBriefRoutes } from "./routes-brief.js";
 import { registerStrategyRoutes } from "./routes-strategies.js";
 import type { DailyBriefGenerator } from "./daily-brief.js";
+import type { ApprovalExecutor } from "./approval-executor.js";
 import type { DashboardTemplates } from "./template-renderer.js";
 import { renderDashboard, renderUnifiedDashboard } from "./template-renderer.js";
 import type {
@@ -43,6 +44,7 @@ export type RouteHandlerDeps = {
   runtime: RuntimeServices;
   templates: DashboardTemplates;
   briefGenerator?: DailyBriefGenerator;
+  approvalExecutor?: ApprovalExecutor;
 };
 
 export function registerHttpRoutes(deps: RouteHandlerDeps): void {
@@ -508,7 +510,7 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     handler: async (req: HttpReq, res: HttpRes) => {
       try {
         const body = await parseJsonBody(req);
-        const { id, action } = body as {
+        const { id, action: reqAction } = body as {
           id?: string;
           action?: "approve" | "reject";
           reason?: string;
@@ -519,22 +521,56 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
           return;
         }
 
-        if (action === "reject") {
-          const event = eventStore.reject(id, (body as { reason?: string }).reason);
-          if (!event) {
-            errorResponse(res, 404, `Event ${id} not found or not pending`);
-            return;
+        if (reqAction === "reject") {
+          if (deps.approvalExecutor) {
+            const result = await deps.approvalExecutor.reject(id, (body as { reason?: string }).reason);
+            if (result.error) {
+              errorResponse(res, 404, result.error);
+              return;
+            }
+            jsonResponse(res, 200, { status: "rejected", eventId: id });
+          } else {
+            const event = eventStore.reject(id, (body as { reason?: string }).reason);
+            if (!event) {
+              errorResponse(res, 404, `Event ${id} not found or not pending`);
+              return;
+            }
+            jsonResponse(res, 200, { status: "rejected", event });
           }
-          jsonResponse(res, 200, { status: "rejected", event });
           return;
         }
 
+        // Approve: try ApprovalExecutor first (for exchange-backed events),
+        // then fall back to direct approve (for paper engine events without exchange adapter).
+        if (deps.approvalExecutor) {
+          const result = await deps.approvalExecutor.approve(id);
+          if (result.action === "approved") {
+            jsonResponse(res, 200, {
+              status: "approved",
+              eventId: id,
+              order: result.order,
+            });
+            return;
+          }
+          if (result.action === "error") {
+            // Exchange execution failed — return error, don't fall through
+            jsonResponse(res, 502, {
+              status: "error",
+              eventId: id,
+              error: result.error ?? "Trade execution failed",
+            });
+            return;
+          }
+          // "rejected" from executor (e.g. no adapter/exchange in params) →
+          // fall through to direct approve for paper engine events
+        }
+
+        // Direct approve without trade execution (paper engine events)
         const event = eventStore.approve(id);
         if (!event) {
           errorResponse(res, 404, `Event ${id} not found or not pending`);
           return;
         }
-
         jsonResponse(res, 200, { status: "approved", event });
       } catch (err) {
         errorResponse(res, 500, (err as Error).message);

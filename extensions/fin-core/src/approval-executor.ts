@@ -58,7 +58,7 @@ export class ApprovalExecutor {
       return { eventId, action: "approved", order };
     } catch (err) {
       // Exchange error — do not approve the event; let the user retry.
-      return { eventId, action: "approved", error: (err as Error).message };
+      return { eventId, action: "error", error: (err as Error).message };
     }
   }
 
