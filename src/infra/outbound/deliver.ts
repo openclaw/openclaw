@@ -143,7 +143,7 @@ function createPluginHandler(
   params: ChannelHandlerParams & { outbound?: ChannelOutboundAdapter },
 ): ChannelHandler | null {
   const outbound = params.outbound;
-  if (!outbound?.sendText || !outbound?.sendMedia) {
+  if (!outbound?.sendText) {
     return null;
   }
   const baseCtx = createChannelOutboundContextBase(params);
@@ -177,12 +177,20 @@ function createPluginHandler(
         ...resolveCtx(overrides),
         text,
       }),
-    sendMedia: async (caption, mediaUrl, overrides) =>
-      sendMedia({
+    sendMedia: async (caption, mediaUrl, overrides) => {
+      if (sendMedia) {
+        return sendMedia({
+          ...resolveCtx(overrides),
+          text: caption,
+          mediaUrl,
+        });
+      }
+      // Text-only channels may omit sendMedia. Fall back to caption delivery.
+      return sendText({
         ...resolveCtx(overrides),
         text: caption,
-        mediaUrl,
-      }),
+      });
+    },
   };
 }
 
