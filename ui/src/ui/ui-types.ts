@@ -10,6 +10,7 @@ export type ChatQueueItem = {
   createdAt: number;
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
+  mode?: "steered" | "queued";
 };
 
 export const CRON_CHANNEL_LAST = "last";

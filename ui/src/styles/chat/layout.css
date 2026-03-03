@@ -479,3 +479,99 @@
     min-width: 120px;
   }
 }
+
+/* =============================================
+   ACTIVE RUN INDICATORS
+   ============================================= */
+
+/* Pulsing border for active chat thread */
+@keyframes chat-thread-pulse {
+  0%, 100% {
+    border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  50% {
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+    box-shadow: 0 0 8px 1px color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+}
+
+.chat-thread--active {
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  animation: chat-thread-pulse 2s ease-in-out infinite;
+}
+
+:root[data-theme="light"] .chat-thread--active {
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+@keyframes chat-thread-pulse-light {
+  0%, 100% {
+    border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+  50% {
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    box-shadow: 0 0 6px 1px color-mix(in srgb, var(--accent) 15%, transparent);
+  }
+}
+
+:root[data-theme="light"] .chat-thread--active {
+  animation: chat-thread-pulse-light 2s ease-in-out infinite;
+}
+
+/* Active run status indicator pill */
+@keyframes spinner-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.chat-active-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  margin: 8px auto;
+  font-size: 13px;
+  font-family: var(--font-body);
+  color: var(--accent);
+  background: var(--accent-subtle);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 999px;
+  animation: fade-in 200ms ease-out;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.chat-active-status__spinner {
+  width: 14px;
+  height: 14px;
+  animation: spinner-rotate 1s linear infinite;
+}
+
+.chat-active-status__spinner svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+}
+
+/* Steered message count badge */
+.chat-active-status__steered {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  margin-left: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--bg);
+  background: var(--accent);
+  border-radius: 999px;
+}

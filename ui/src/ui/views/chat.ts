@@ -87,6 +87,41 @@ export type ChatProps = {
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
 
+function formatElapsed(startedAt: number | null): string {
+  if (!startedAt) {
+    return "";
+  }
+  const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+  if (elapsed < 60) {
+    return `${elapsed}s`;
+  }
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  return `${mins}m${secs}s`;
+}
+
+function renderActiveRunStatus(streamStartedAt: number | null, steeredCount: number) {
+  const elapsed = formatElapsed(streamStartedAt);
+  return html`
+    <div class="chat-active-status" role="status" aria-live="polite">
+      <span class="chat-active-status__spinner">
+        ${icons.loader}
+      </span>
+      <span>Task running</span>
+      ${elapsed ? html`<span>${elapsed}</span>` : nothing}
+      ${
+        steeredCount > 0
+          ? html`
+          <span class="chat-active-status__steered">
+            ${steeredCount} steered
+          </span>
+        `
+          : nothing
+      }
+    </div>
+  `;
+}
+
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
@@ -260,9 +295,11 @@ export function renderChat(props: ChatProps) {
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const isStreamActive = props.stream !== null;
+  const steeredCount = props.queue.filter((item) => item.mode === "steered").length;
   const thread = html`
     <div
-      class="chat-thread"
+      class="chat-thread ${isStreamActive ? "chat-thread--active" : ""}"
       role="log"
       aria-live="polite"
       @scroll=${props.onChatScroll}
@@ -274,6 +311,7 @@ export function renderChat(props: ChatProps) {
             `
           : nothing
       }
+      ${isStreamActive ? renderActiveRunStatus(props.streamStartedAt, steeredCount) : nothing}
       ${repeat(
         buildChatItems(props),
         (item) => item.key,
