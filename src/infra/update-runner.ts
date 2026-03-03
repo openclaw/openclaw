@@ -862,6 +862,31 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const beforeVersion = await readPackageVersion(pkgRoot);
   const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
+    // npm/pnpm/bun need write access on the global root (parent of pkgRoot) to
+    // rename/remove/create the package directory itself — check it first.
+    const globalRoot = path.dirname(pkgRoot);
+    try {
+      await fs.access(globalRoot, fs.constants.W_OK | fs.constants.X_OK);
+    } catch {
+      return {
+        status: "error",
+        mode: globalManager,
+        root: pkgRoot,
+        reason: "unwritable-files",
+        before: { version: beforeVersion },
+        steps: [
+          {
+            name: "write-access preflight",
+            command: `access check ${globalRoot}`,
+            cwd: pkgRoot,
+            durationMs: 0,
+            exitCode: 1,
+            stderrTail: `Global package root is not writable by the current user: ${globalRoot}\n\nIf caused by ownership: sudo chown $(whoami) ${globalRoot}\nIf caused by permissions: sudo chmod u+w ${globalRoot}`,
+          },
+        ],
+        durationMs: Date.now() - startedAt,
+      };
+    }
     const ownershipCheck = await checkDirectoryOwnership(pkgRoot);
     if (!ownershipCheck.ok) {
       const fileList = ownershipCheck.unwritableFiles.join("\n  ");
@@ -878,7 +903,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             cwd: pkgRoot,
             durationMs: 0,
             exitCode: 1,
-            stderrTail: `Found files or directories not writable by the current user in ${pkgRoot}:\n  ${fileList}\n\nIf caused by ownership: sudo chown -R $(whoami) ${pkgRoot}\nIf caused by permissions: sudo chmod -R u+w ${pkgRoot}`,
+            stderrTail: `Found directories not writable by the current user in ${pkgRoot}:\n  ${fileList}\n\nIf caused by ownership: sudo chown -R $(whoami) ${pkgRoot}\nIf caused by permissions: sudo chmod -R u+w ${pkgRoot}`,
           },
         ],
         durationMs: Date.now() - startedAt,
@@ -886,7 +911,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     }
     const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
     await cleanupGlobalRenameDirs({
-      globalRoot: path.dirname(pkgRoot),
+      globalRoot,
       packageName,
     });
     const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
