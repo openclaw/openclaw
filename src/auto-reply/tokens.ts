@@ -26,12 +26,22 @@ export const THINK_CLOSE = "[/THINK]";
 const THINK_OPEN_RE = /^\[THINK(?:ING)?\]/i;
 
 /**
+ * Regex for finding a closing `[/THINK]` or `[/THINKING]` tag (case-insensitive).
+ * Built dynamically from the matched open tag to ensure the variants pair correctly.
+ */
+function buildCloseTagRegex(openTag: string): RegExp {
+  // openTag is e.g. "[THINK]" or "[THINKING]" — derive "[/THINK]" or "[/THINKING]"
+  const closeTag = `[/${openTag.slice(1)}`;
+  return new RegExp(closeTag.replace(/[[\]]/g, "\\$&"), "i");
+}
+
+/**
  * Strips `[THINK]...[/THINK]` or `[THINKING]...[/THINKING]` blocks from the
- * beginning of text.
+ * beginning of text. Handles multiple consecutive think blocks.
  *
  * - If the text starts with `[THINK]` or `[THINKING]` and contains a matching
  *   closing tag, everything between (inclusive) is removed and the remainder
- *   is returned.
+ *   is processed for additional think blocks.
  * - If the text starts with a think tag but has no closing tag, the entire
  *   text is considered internal reasoning and is stripped completely.
  * - The check is case-insensitive and ignores leading whitespace.
@@ -40,28 +50,37 @@ const THINK_OPEN_RE = /^\[THINK(?:ING)?\]/i;
  * @returns An object with the cleaned text and whether a think prefix was found.
  */
 export function stripThinkPrefix(text: string): { text: string; hadThinkPrefix: boolean } {
-  const trimmed = text.trimStart();
-  const match = THINK_OPEN_RE.exec(trimmed);
+  let current = text.trimStart();
+  let hadThinkPrefix = false;
 
-  if (!match) {
+  // Loop to strip consecutive think blocks (e.g. [THINK]...[/THINK] [THINK]...[/THINK] reply)
+  let match = THINK_OPEN_RE.exec(current);
+  while (match) {
+    hadThinkPrefix = true;
+    const openTag = match[0];
+    const closeRe = buildCloseTagRegex(openTag);
+
+    // Search for closing tag after the open tag — using regex avoids
+    // the Unicode toUpperCase length-mismatch problem (e.g. ß → SS).
+    const searchFrom = current.slice(openTag.length);
+    const closeMatch = closeRe.exec(searchFrom);
+
+    if (!closeMatch) {
+      // No closing tag — the entire remaining text is think content
+      return { text: "", hadThinkPrefix: true };
+    }
+
+    // Strip everything from start through the closing tag
+    const afterClose = searchFrom.slice(closeMatch.index + closeMatch[0].length).trimStart();
+    current = afterClose;
+    match = THINK_OPEN_RE.exec(current);
+  }
+
+  if (!hadThinkPrefix) {
     return { text, hadThinkPrefix: false };
   }
 
-  // Derive the closing tag from what we matched (e.g. [THINK] → [/THINK], [THINKING] → [/THINKING])
-  const openTag = match[0]; // e.g. "[THINK]" or "[THINKING]"
-  const closeTag = `[/${openTag.slice(1)}`; // e.g. "[/THINK]" or "[/THINKING]"
-
-  // Look for the closing tag (case-insensitive)
-  const upper = trimmed.toUpperCase();
-  const closeIdx = upper.indexOf(closeTag.toUpperCase(), openTag.length);
-  if (closeIdx === -1) {
-    // No closing tag — the entire text is think content
-    return { text: "", hadThinkPrefix: true };
-  }
-
-  // Strip everything from start through the closing tag
-  const afterClose = trimmed.slice(closeIdx + closeTag.length).trimStart();
-  return { text: afterClose, hadThinkPrefix: true };
+  return { text: current, hadThinkPrefix: true };
 }
 
 export function isSilentReplyText(
