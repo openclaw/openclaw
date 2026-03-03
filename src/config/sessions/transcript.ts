@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
@@ -123,13 +124,15 @@ export async function appendUserMessageToSessionTranscript(params: {
 
   await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
 
-  // SessionManager only flushes user messages when paired with an assistant reply.
-  // For ingest-only persistence (sendPolicy deny), write the entry directly.
+  // SessionManager._persist() skips writing until an assistant message exists,
+  // so for ingest-only persistence (sendPolicy deny) we write directly to disk.
+  // SessionManager.open() has no global instance cache — each call re-reads
+  // from disk — so subsequent opens will see entries appended here.
   const sm = SessionManager.open(sessionFile);
   const leafId = sm.getLeafId();
   const messageEntry = {
     type: "message" as const,
-    id: Math.random().toString(36).slice(2, 10),
+    id: randomUUID().slice(0, 8),
     parentId: leafId,
     timestamp: new Date().toISOString(),
     message: {

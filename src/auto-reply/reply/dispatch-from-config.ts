@@ -368,7 +368,7 @@ export async function dispatchReplyFromConfig(params: {
               ? ctx.RawBody
               : "";
         if (inboundText.trim()) {
-          appendUserMessageToSessionTranscript({
+          const result = await appendUserMessageToSessionTranscript({
             agentId,
             sessionKey: persistSessionKey,
             text: inboundText,
@@ -376,7 +376,13 @@ export async function dispatchReplyFromConfig(params: {
             logVerbose(
               `dispatch-from-config: failed persisting inbound message on send_policy_deny: ${String(err)}`,
             );
+            return { ok: false as const, reason: String(err) };
           });
+          if (result && !result.ok) {
+            logVerbose(
+              `dispatch-from-config: could not persist inbound message on send_policy_deny: ${result.reason}`,
+            );
+          }
         }
       }
 

@@ -347,6 +347,7 @@ describe("appendUserMessageToSessionTranscript", () => {
       expect(messageLine.message.role).toBe("user");
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from the group chat");
+      expect(messageLine.id).toMatch(/^[0-9a-f]{8}$/);
     }
   });
 

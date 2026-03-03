@@ -42,10 +42,12 @@ const sessionBindingMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(targetSessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
 const transcriptMocks = vi.hoisted(() => ({
-  appendUserMessageToSessionTranscript: vi.fn(async () => ({
-    ok: true,
-    sessionFile: "/tmp/mock.jsonl",
-  })),
+  appendUserMessageToSessionTranscript: vi.fn(
+    async () =>
+      ({ ok: true, sessionFile: "/tmp/mock.jsonl" }) as
+        | { ok: true; sessionFile: string }
+        | { ok: false; reason: string },
+  ),
 }));
 const ttsMocks = vi.hoisted(() => {
   const state = {
@@ -1667,10 +1669,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(result.queuedFinal).toBe(false);
-    // Wait for the fire-and-forget persistence to settle
-    await vi.waitFor(() => {
-      expect(transcriptMocks.appendUserMessageToSessionTranscript).toHaveBeenCalledTimes(1);
-    });
+    expect(transcriptMocks.appendUserMessageToSessionTranscript).toHaveBeenCalledTimes(1);
     expect(transcriptMocks.appendUserMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:whatsapp:group:120363001234567890",
@@ -1700,6 +1699,35 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
 
     expect(transcriptMocks.appendUserMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("logs warning when transcript persistence returns ok:false on sendPolicy deny", async () => {
+    setNoAbort();
+    transcriptMocks.appendUserMessageToSessionTranscript.mockResolvedValueOnce({
+      ok: false,
+      reason: "unknown sessionKey: agent:main:whatsapp:group:missing",
+    });
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "deny",
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      ChatType: "group",
+      Body: "Hello from group",
+      SessionKey: "agent:main:whatsapp:group:missing",
+    });
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(transcriptMocks.appendUserMessageToSessionTranscript).toHaveBeenCalledTimes(1);
   });
 
   it("does not persist inbound message when sendPolicy is allow", async () => {
