@@ -3,6 +3,7 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -16,6 +17,9 @@ import {
   extractThinkingFromTaggedText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
+  stripDowngradedToolCallText,
+  stripMinimaxToolCallXml,
+  stripThinkingTagsFromText,
 } from "./pi-embedded-utils.js";
 
 const stripTrailingDirective = (text: string): string => {
@@ -98,6 +102,18 @@ function syncSnapshotIntoTextBuffers(ctx: EmbeddedPiSubscribeContext, snapshot: 
   }
 }
 
+function extractAssistantRawSnapshotText(msg: AgentMessage): string {
+  const content = (msg as { content?: unknown }).content;
+  return (
+    extractTextFromChatContent(content, {
+      sanitizeText: (text) =>
+        stripThinkingTagsFromText(stripDowngradedToolCallText(stripMinimaxToolCallXml(text))),
+      joinWith: "\n",
+      normalizeText: (text) => text,
+    }) ?? ""
+  );
+}
+
 export function handleMessageStart(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -171,13 +187,13 @@ export function handleMessageUpdate(
     // Fall back to diffing the current assistant snapshot so channel preview
     // streaming continues to receive incremental updates.
     if (evtType) {
-      const snapshot = ctx
-        .stripBlockTags(extractAssistantText(msg), {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        })
-        .trim();
+      const rawAssistantText = extractAssistantRawSnapshotText(msg);
+      const snapshotRaw = ctx.stripBlockTags(rawAssistantText, {
+        thinking: false,
+        final: false,
+        inlineCode: createInlineCodeState(),
+      });
+      const snapshot = snapshotRaw.trim();
       if (!snapshot) {
         return;
       }
@@ -202,9 +218,9 @@ export function handleMessageUpdate(
 
       if (shouldEmit) {
         if (cleanedText) {
-          syncSnapshotIntoTextBuffers(ctx, snapshot);
+          syncSnapshotIntoTextBuffers(ctx, snapshotRaw);
         }
-        ctx.state.lastStreamedAssistant = snapshot;
+        ctx.state.lastStreamedAssistant = snapshotRaw;
         ctx.state.lastStreamedAssistantCleaned = cleanedText;
         emitAgentEvent({
           runId: ctx.params.runId,
