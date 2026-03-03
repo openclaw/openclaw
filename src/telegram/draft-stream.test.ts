@@ -384,7 +384,6 @@ describe("createTelegramDraftStream", () => {
       api: api as unknown as Bot["api"],
       chatId: 123,
       previewTransport: "message",
-      previewTransport: "message",
       onSupersededPreview,
     });
 
@@ -413,7 +412,6 @@ describe("createTelegramDraftStream", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
-      previewTransport: "message",
       previewTransport: "message",
       renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
     });
