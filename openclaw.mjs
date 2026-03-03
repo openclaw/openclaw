@@ -7,23 +7,18 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Fast path for --version and --help: exit before loading heavy modules
+// Fast path for --version: exit before loading heavy modules (~100x faster)
 const argv = new Set(process.argv.slice(2));
-if (argv.has("--version") || argv.has("-v") || argv.has("--help") || argv.has("-h")) {
-  if (argv.has("--version") || argv.has("-v")) {
-    try {
-      const pkgPath = path.join(__dirname, "package.json");
-      const pkg = JSON.parse(await fs.readFile(pkgPath, "utf-8"));
-      console.log(pkg.version);
-      process.exit(0);
-    } catch {
-      // Fallback if package.json not found
-      console.log("unknown");
-      process.exit(0);
-    }
+if (argv.has("--version") || argv.has("-v")) {
+  try {
+    const pkg = JSON.parse(await fs.readFile(path.join(__dirname, "package.json"), "utf-8"));
+    console.log(pkg.version);
+  } catch {
+    console.log("unknown");
   }
-  // For --help, fall through to normal handling (needs Commander)
+  process.exit(0);
 }
+// For --help, fall through to Commander (needs full initialization)
 
 // https://nodejs.org/api/module.html#module-compile-cache
 if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
