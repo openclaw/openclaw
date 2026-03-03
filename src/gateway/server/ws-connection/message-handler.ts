@@ -1058,6 +1058,7 @@ export function attachGatewayWsMessageHandler(params: {
           socket,
           connect: connectParams,
           connId,
+          chatSessionKeys: new Set<string>(),
           presenceKey,
           clientIp: reportedClientIp,
           canvasHostUrl,

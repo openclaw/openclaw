@@ -48,7 +48,7 @@ import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -90,6 +90,32 @@ export function sanitizeChatSendMessageInput(
     return { ok: false, error: "message must not contain null bytes" };
   }
   return { ok: true, message: stripDisallowedChatControlChars(normalized) };
+}
+
+function normalizeChatSessionInterestKey(sessionKey: unknown): string | null {
+  if (typeof sessionKey !== "string") {
+    return null;
+  }
+  const normalized = sessionKey.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function rememberChatSessionInterest(
+  client: GatewayClient | null | undefined,
+  ...sessionKeys: Array<string | undefined>
+) {
+  if (!client) {
+    return;
+  }
+  if (!(client.chatSessionKeys instanceof Set)) {
+    client.chatSessionKeys = new Set<string>();
+  }
+  for (const key of sessionKeys) {
+    const normalized = normalizeChatSessionInterestKey(key);
+    if (normalized) {
+      client.chatSessionKeys.add(normalized);
+    }
+  }
 }
 
 function truncateChatHistoryText(text: string): { text: string; truncated: boolean } {
@@ -569,7 +595,7 @@ function broadcastChatError(params: {
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
-  "chat.history": async ({ params, respond, context }) => {
+  "chat.history": async ({ params, respond, context, client }) => {
     if (!validateChatHistoryParams(params)) {
       respond(
         false,
@@ -585,7 +611,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       limit?: number;
     };
-    const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
+    const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+    rememberChatSessionInterest(client, sessionKey, canonicalKey);
     const sessionId = entry?.sessionId;
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
@@ -767,6 +794,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    rememberChatSessionInterest(client, rawSessionKey, sessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,

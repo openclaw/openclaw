@@ -10,6 +10,7 @@ import type { GatewayRequestContext } from "./types.js";
 const mockState = vi.hoisted(() => ({
   transcriptPath: "",
   sessionId: "sess-1",
+  canonicalKey: "main",
   finalText: "[[reply_to_current]]",
   triggerAgentRunStart: false,
   agentRunId: "run-agent-1",
@@ -38,7 +39,7 @@ vi.mock("../session-utils.js", async (importOriginal) => {
         sessionFile: mockState.transcriptPath,
         ...mockState.sessionEntry,
       },
-      canonicalKey: "main",
+      canonicalKey: mockState.canonicalKey,
     }),
   };
 });
@@ -147,12 +148,13 @@ async function runNonStreamingChatSend(params: {
   respond: ReturnType<typeof vi.fn>;
   idempotencyKey: string;
   message?: string;
+  sessionKey?: string;
   client?: unknown;
   expectBroadcast?: boolean;
 }) {
   await chatHandlers["chat.send"]({
     params: {
-      sessionKey: "main",
+      sessionKey: params.sessionKey ?? "main",
       message: params.message ?? "hello",
       idempotencyKey: params.idempotencyKey,
     },
@@ -188,6 +190,7 @@ async function runNonStreamingChatSend(params: {
 
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   afterEach(() => {
+    mockState.canonicalKey = "main";
     mockState.finalText = "[[reply_to_current]]";
     mockState.triggerAgentRunStart = false;
     mockState.agentRunId = "run-agent-1";
@@ -255,6 +258,55 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
     expect(register).not.toHaveBeenCalled();
+  });
+
+  it("records session interest for chat.send clients using raw and canonical session keys", async () => {
+    createTranscriptFixture("openclaw-chat-send-session-interest-");
+    mockState.finalText = "ok";
+    mockState.canonicalKey = "agent:main:main";
+    const respond = vi.fn();
+    const context = createChatContext();
+    const client = {
+      connId: "conn-session-interest-send",
+      connect: { caps: [] },
+      chatSessionKeys: new Set<string>(),
+    };
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-session-interest-send",
+      sessionKey: "main",
+      client,
+      expectBroadcast: false,
+    });
+
+    expect([...client.chatSessionKeys].toSorted()).toEqual(["agent:main:main", "main"]);
+  });
+
+  it("records session interest for chat.history clients using raw and canonical session keys", async () => {
+    createTranscriptFixture("openclaw-chat-history-session-interest-");
+    mockState.canonicalKey = "agent:main:main";
+    mockState.sessionEntry = { thinkingLevel: "off" };
+    const respond = vi.fn();
+    const context = createChatContext();
+    const client = {
+      connId: "conn-session-interest-history",
+      connect: { caps: [] },
+      chatSessionKeys: new Set<string>(),
+    };
+
+    await chatHandlers["chat.history"]({
+      params: { sessionKey: "main" },
+      respond,
+      req: {} as never,
+      client: client as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(respond).toHaveBeenCalled();
+    expect([...client.chatSessionKeys].toSorted()).toEqual(["agent:main:main", "main"]);
   });
 
   it("chat.inject keeps message defined when directive tag is the only content", async () => {

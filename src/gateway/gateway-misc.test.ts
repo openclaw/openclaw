@@ -209,6 +209,72 @@ describe("gateway broadcaster", () => {
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
     expect(pairingSocket.send).toHaveBeenCalledTimes(1);
   });
+
+  it("routes chat events only to interested session clients while preserving admin and legacy behavior", () => {
+    const sessionASocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const sessionBSocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const legacySocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const adminSocket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+
+    const clients = new Set<GatewayWsClient>([
+      {
+        socket: sessionASocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: [] } as GatewayWsClient["connect"],
+        connId: "c-session-a",
+        chatSessionKeys: new Set(["agent:main:session-a"]),
+      },
+      {
+        socket: sessionBSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: [] } as GatewayWsClient["connect"],
+        connId: "c-session-b",
+        chatSessionKeys: new Set(["agent:main:session-b"]),
+      },
+      {
+        socket: legacySocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: [] } as GatewayWsClient["connect"],
+        connId: "c-legacy",
+        chatSessionKeys: new Set(),
+      },
+      {
+        socket: adminSocket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.admin"] } as GatewayWsClient["connect"],
+        connId: "c-admin",
+        chatSessionKeys: new Set(["agent:main:session-b"]),
+      },
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("chat", { sessionKey: "AGENT:MAIN:SESSION-A", state: "delta" });
+
+    expect(sessionASocket.send).toHaveBeenCalledTimes(1);
+    expect(sessionBSocket.send).toHaveBeenCalledTimes(0);
+    expect(legacySocket.send).toHaveBeenCalledTimes(1);
+    expect(adminSocket.send).toHaveBeenCalledTimes(1);
+
+    broadcast("chat", { state: "delta" });
+
+    expect(sessionASocket.send).toHaveBeenCalledTimes(2);
+    expect(sessionBSocket.send).toHaveBeenCalledTimes(1);
+    expect(legacySocket.send).toHaveBeenCalledTimes(2);
+    expect(adminSocket.send).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("chat run registry", () => {

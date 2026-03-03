@@ -17,6 +17,7 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
+  chatSessionKeys?: Set<string>;
   clientIp?: string;
   canvasHostUrl?: string;
   canvasCapability?: string;

@@ -54,6 +54,41 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
   return required.some((scope) => scopes.includes(scope));
 }
 
+function hasAdminScope(client: GatewayWsClient): boolean {
+  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
+  return scopes.includes(ADMIN_SCOPE);
+}
+
+function normalizeChatSessionKey(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function hasChatSessionInterest(client: GatewayWsClient, event: string, payload: unknown): boolean {
+  if (event !== "chat") {
+    return true;
+  }
+  if (hasAdminScope(client)) {
+    return true;
+  }
+  const sessionKey = normalizeChatSessionKey(
+    payload && typeof payload === "object"
+      ? (payload as { sessionKey?: unknown }).sessionKey
+      : null,
+  );
+  if (!sessionKey) {
+    return true;
+  }
+  const interests = client.chatSessionKeys;
+  if (!(interests instanceof Set) || interests.size === 0) {
+    return true;
+  }
+  return interests.has(sessionKey);
+}
+
 export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
   let seq = 0;
 
@@ -95,6 +130,9 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         continue;
       }
       if (!hasEventScope(c, event)) {
+        continue;
+      }
+      if (!hasChatSessionInterest(c, event, payload)) {
         continue;
       }
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
