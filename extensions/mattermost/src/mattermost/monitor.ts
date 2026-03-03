@@ -392,7 +392,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   });
 
   const baseHostname = new URL(client.baseUrl).hostname;
-  const mediaSsrfPolicy = { hostnameAllowlist: [baseHostname] };
+  const mediaSsrfPolicy = {
+    hostnameAllowlist: [baseHostname],
+    allowedHostnames: [baseHostname],
+  };
 
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
