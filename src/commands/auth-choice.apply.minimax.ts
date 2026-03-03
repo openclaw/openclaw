@@ -132,7 +132,7 @@ export async function applyAuthChoiceMiniMax(
 
   if (params.authChoice === "minimax") {
     await applyProviderDefaultModel({
-      defaultModel: "lmstudio/minimax-m2.1-gs32",
+      defaultModel: "lmstudio/minimax-m2.5-gs32",
       applyDefaultConfig: applyMinimaxConfig,
       applyProviderConfig: applyMinimaxProviderConfig,
     });
