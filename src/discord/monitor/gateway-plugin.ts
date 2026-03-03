@@ -36,7 +36,11 @@ export function createDiscordGatewayPlugin(params: {
   const options = {
     reconnect: { maxAttempts: 50 },
     intents,
-    autoInteractions: true,
+    // Disable Carbon's default InteractionEventListener so we can replace it
+    // with DiscordInteractionListener (fire-and-forget) in provider.ts.
+    // The default listener blocks the gateway event queue with `await`,
+    // causing Discord "Unknown interaction" (10062) errors.
+    autoInteractions: false,
   };
 
   if (!proxy) {

@@ -18,7 +18,11 @@ import {
   sanitizeDiscordThreadName,
   shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
-import { DiscordMessageListener, DiscordReactionListener } from "./monitor/listeners.js";
+import {
+  DiscordInteractionListener,
+  DiscordMessageListener,
+  DiscordReactionListener,
+} from "./monitor/listeners.js";
 
 const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
 
@@ -207,6 +211,72 @@ describe("DiscordMessageListener", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("DiscordInteractionListener", () => {
+  function createDeferred() {
+    let resolve: (() => void) | null = null;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    return {
+      promise,
+      resolve: () => {
+        if (typeof resolve === "function") {
+          (resolve as () => void)();
+        }
+      },
+    };
+  }
+
+  it("fires interaction handler without blocking (fire-and-forget)", async () => {
+    let handlerCalled = false;
+    const deferred = createDeferred();
+    const mockClient = {
+      handleInteraction: vi.fn(async () => {
+        await deferred.promise;
+        handlerCalled = true;
+      }),
+    } as unknown as import("@buape/carbon").Client;
+
+    const listener = new DiscordInteractionListener();
+
+    // handle() should return immediately
+    await listener.handle({} as never, mockClient);
+
+    // handleInteraction should be invoked but not yet resolved
+    // oxlint-disable-next-line typescript-eslint/unbound-method
+    expect(mockClient.handleInteraction).toHaveBeenCalledOnce();
+    expect(handlerCalled).toBe(false);
+
+    // Release
+    deferred.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handlerCalled).toBe(true);
+  });
+
+  it("logs interaction handler failures", async () => {
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+    } as unknown as ReturnType<typeof import("../logging/subsystem.js").createSubsystemLogger>;
+
+    const mockClient = {
+      handleInteraction: vi.fn(async () => {
+        throw new Error("interaction boom");
+      }),
+    } as unknown as import("@buape/carbon").Client;
+
+    const listener = new DiscordInteractionListener(logger);
+    await listener.handle({} as never, mockClient);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("discord interaction handler failed"),
+    );
   });
 });
 

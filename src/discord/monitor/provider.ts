@@ -59,6 +59,7 @@ import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-app
 import { attachEarlyGatewayErrorGuard } from "./gateway-error-guard.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import {
+  DiscordInteractionListener,
   DiscordMessageListener,
   DiscordPresenceListener,
   DiscordReactionListener,
@@ -565,6 +566,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       client.listeners,
       new DiscordMessageListener(messageHandler, logger, trackInboundEvent),
     );
+
+    // Replace Carbon's default InteractionEventListener with our non-blocking
+    // version. The default listener awaits the full interaction handling chain,
+    // which blocks the gateway event queue and causes Discord "Unknown
+    // interaction" (10062) errors when processing exceeds 3 seconds.
+    registerDiscordListener(client.listeners, new DiscordInteractionListener(logger));
+
     const reactionListenerOptions = {
       cfg,
       accountId: account.accountId,

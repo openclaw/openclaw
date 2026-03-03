@@ -1,6 +1,8 @@
 import {
   ChannelType,
   type Client,
+  InteractionCreateListener,
+  ListenerEvent,
   MessageCreateListener,
   MessageReactionAddListener,
   MessageReactionRemoveListener,
@@ -151,6 +153,43 @@ export class DiscordMessageListener extends MessageCreateListener {
         },
       }),
     );
+  }
+}
+
+/**
+ * Non-blocking wrapper around Carbon's InteractionEventListener.
+ *
+ * The upstream InteractionEventListener awaits `client.handleInteraction()`,
+ * which blocks the gateway event queue for the entire duration of the
+ * interaction handling (slash commands, button clicks, modals, etc.).
+ * Discord requires an initial response within 3 seconds; any processing
+ * that exceeds that window causes an "Unknown interaction" (10062) error,
+ * shown to the user as "This application did not respond".
+ *
+ * By using fire-and-forget (`void`) the interaction is dispatched without
+ * blocking subsequent gateway events, matching the fix applied to
+ * DiscordMessageListener above.
+ */
+export class DiscordInteractionListener extends InteractionCreateListener {
+  type = ListenerEvent.InteractionCreate;
+  private logger?: Logger;
+
+  constructor(logger?: Logger) {
+    super();
+    this.logger = logger;
+  }
+
+  async handle(data: Parameters<InteractionCreateListener["handle"]>[0], client: Client) {
+    void runDiscordListenerWithSlowLog({
+      logger: this.logger,
+      listener: this.constructor.name,
+      event: this.type,
+      run: () => client.handleInteraction(data, {}),
+      onError: (err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord interaction handler failed: ${String(err)}`));
+      },
+    });
   }
 }
 
