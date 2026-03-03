@@ -46,7 +46,7 @@
         "Check for secrets/PII and policy violations",
         "Verify spec adherence"
       ],
-      "expected_smoke_token": "ALPHA_REVIEWER_OK_v1"
+      "expected_smoke_token": "ALPHA_CAPTAIN_OK_v1"
     },
     {
       "id": "sre",
