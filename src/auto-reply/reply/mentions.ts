@@ -117,6 +117,10 @@ export function matchesMentionWithExplicit(params: {
   const transcriptCleaned = params.transcript ? normalizeMentionText(params.transcript) : "";
   const textToCheck = cleaned || transcriptCleaned;
 
+  if (hasAnyMention && !explicitAvailable) {
+    return true;
+  }
+
   if (hasAnyMention && explicitAvailable) {
     return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
   }
