@@ -5,6 +5,7 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  mergeSessionEntry,
   setSessionRuntimeModel,
   type SessionEntry,
   updateSessionStore,
@@ -78,24 +79,30 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (hasNonzeroUsage(usage)) {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
-    const totalTokens =
-      deriveSessionTotalTokens({
-        usage,
-        contextTokens,
-        promptTokens,
-      }) ?? input;
+    const totalTokens = deriveSessionTotalTokens({
+      usage,
+      contextTokens,
+      promptTokens,
+    });
     next.inputTokens = input;
     next.outputTokens = output;
-    next.totalTokens = totalTokens;
-    next.totalTokensFresh = true;
+    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+      next.totalTokens = totalTokens;
+      next.totalTokensFresh = true;
+    } else {
+      next.totalTokens = undefined;
+      next.totalTokensFresh = false;
+    }
     next.cacheRead = usage.cacheRead ?? 0;
     next.cacheWrite = usage.cacheWrite ?? 0;
   }
   if (compactionsThisRun > 0) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
-  sessionStore[sessionKey] = next;
-  await updateSessionStore(storePath, (store) => {
-    store[sessionKey] = next;
+  const persisted = await updateSessionStore(storePath, (store) => {
+    const merged = mergeSessionEntry(store[sessionKey], next);
+    store[sessionKey] = merged;
+    return merged;
   });
+  sessionStore[sessionKey] = persisted;
 }

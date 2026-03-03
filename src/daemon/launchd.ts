@@ -331,6 +331,34 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   );
 }
 
+const RESTART_PID_WAIT_TIMEOUT_MS = 10_000;
+const RESTART_PID_WAIT_INTERVAL_MS = 200;
+
+async function sleepMs(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForPidExit(pid: number): Promise<void> {
+  if (!Number.isFinite(pid) || pid <= 1) {
+    return;
+  }
+  const deadline = Date.now() + RESTART_PID_WAIT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ESRCH" || code === "EPERM") {
+        return;
+      }
+      return;
+    }
+    await sleepMs(RESTART_PID_WAIT_INTERVAL_MS);
+  }
+}
+
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
@@ -418,11 +446,45 @@ export async function restartLaunchAgent({
   stdout,
   env,
 }: GatewayServiceControlArgs): Promise<void> {
+  const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
-  const label = resolveLaunchAgentLabel({ env });
-  const res = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
-  if (res.code !== 0) {
-    throw new Error(`launchctl kickstart failed: ${res.stderr || res.stdout}`.trim());
+  const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
+
+  const runtime = await execLaunchctl(["print", `${domain}/${label}`]);
+  const previousPid =
+    runtime.code === 0
+      ? parseLaunchctlPrint(runtime.stdout || runtime.stderr || "").pid
+      : undefined;
+
+  const stop = await execLaunchctl(["bootout", `${domain}/${label}`]);
+  if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
+    throw new Error(`launchctl bootout failed: ${stop.stderr || stop.stdout}`.trim());
+  }
+  if (typeof previousPid === "number") {
+    await waitForPidExit(previousPid);
+  }
+
+  const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
+  if (boot.code !== 0) {
+    const detail = (boot.stderr || boot.stdout).trim();
+    if (isUnsupportedGuiDomain(detail)) {
+      throw new Error(
+        [
+          `launchctl bootstrap failed: ${detail}`,
+          `LaunchAgent restart requires a logged-in macOS GUI session for this user (${domain}).`,
+          "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
+          "Fix: sign in to the macOS desktop as the target user and rerun `openclaw gateway restart`.",
+          "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
+        ].join("\n"),
+      );
+    }
+    throw new Error(`launchctl bootstrap failed: ${detail}`);
+  }
+
+  const start = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+  if (start.code !== 0) {
+    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
   try {
     stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);

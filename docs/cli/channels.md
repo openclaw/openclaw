@@ -35,6 +35,26 @@ openclaw channels remove --channel telegram --delete
 
 Tip: `openclaw channels add --help` shows per-channel flags (token, app token, signal-cli paths, etc).
 
+When you run `openclaw channels add` without flags, the interactive wizard can prompt:
+
+- account ids per selected channel
+- optional display names for those accounts
+- `Bind configured channel accounts to agents now?`
+
+If you confirm bind now, the wizard asks which agent should own each configured channel account and writes account-scoped routing bindings.
+
+You can also manage the same routing rules later with `openclaw agents bindings`, `openclaw agents bind`, and `openclaw agents unbind` (see [agents](/cli/agents)).
+
+When you add a non-default account to a channel that is still using single-account top-level settings (no `channels.<channel>.accounts` entries yet), OpenClaw moves account-scoped single-account top-level values into `channels.<channel>.accounts.default`, then writes the new account. This preserves the original account behavior while moving to the multi-account shape.
+
+Routing behavior stays consistent:
+
+- Existing channel-only bindings (no `accountId`) continue to match the default account.
+- `channels add` does not auto-create or rewrite bindings in non-interactive mode.
+- Interactive setup can optionally add account-scoped bindings.
+
+If your config was already in a mixed state (named accounts present, missing `default`, and top-level single-account values still set), run `openclaw doctor --fix` to move account-scoped values into `accounts.default`.
+
 ## Login / logout (interactive)
 
 ```bash

@@ -35,7 +35,7 @@ final class ScreenController {
         if let url = URL(string: trimmed),
            !url.isFileURL,
            let host = url.host,
-           Self.isLoopbackHost(host)
+           LoopbackHost.isLoopback(host)
         {
             // Never try to load loopback URLs from a remote gateway.
             self.showDefaultCanvas()
@@ -87,25 +87,11 @@ final class ScreenController {
 
     func applyDebugStatusIfNeeded() {
         guard let webView = self.activeWebView else { return }
-        let enabled = self.debugStatusEnabled
-        let title = self.debugStatusTitle
-        let subtitle = self.debugStatusSubtitle
-        let js = """
-        (() => {
-          try {
-            const api = globalThis.__openclaw;
-            if (!api) return;
-            if (typeof api.setDebugStatusEnabled === 'function') {
-              api.setDebugStatusEnabled(\(enabled ? "true" : "false"));
-            }
-            if (!\(enabled ? "true" : "false")) return;
-            if (typeof api.setStatus === 'function') {
-              api.setStatus(\(Self.jsValue(title)), \(Self.jsValue(subtitle)));
-            }
-          } catch (_) {}
-        })()
-        """
-        webView.evaluateJavaScript(js) { _, _ in }
+        WebViewJavaScriptSupport.applyDebugStatus(
+            webView: webView,
+            enabled: self.debugStatusEnabled,
+            title: self.debugStatusTitle,
+            subtitle: self.debugStatusSubtitle)
     }
 
     func waitForA2UIReady(timeoutMs: Int) async -> Bool {
@@ -137,46 +123,11 @@ final class ScreenController {
                 NSLocalizedDescriptionKey: "web view unavailable",
             ])
         }
-        return try await withCheckedThrowingContinuation { cont in
-            webView.evaluateJavaScript(javaScript) { result, error in
-                if let error {
-                    cont.resume(throwing: error)
-                    return
-                }
-                if let result {
-                    cont.resume(returning: String(describing: result))
-                } else {
-                    cont.resume(returning: "")
-                }
-            }
-        }
+        return try await WebViewJavaScriptSupport.evaluateToString(webView: webView, javaScript: javaScript)
     }
 
     func snapshotPNGBase64(maxWidth: CGFloat? = nil) async throws -> String {
-        let config = WKSnapshotConfiguration()
-        if let maxWidth {
-            config.snapshotWidth = NSNumber(value: Double(maxWidth))
-        }
-        guard let webView = self.activeWebView else {
-            throw NSError(domain: "Screen", code: 3, userInfo: [
-                NSLocalizedDescriptionKey: "web view unavailable",
-            ])
-        }
-        let image: UIImage = try await withCheckedThrowingContinuation { cont in
-            webView.takeSnapshot(with: config) { image, error in
-                if let error {
-                    cont.resume(throwing: error)
-                    return
-                }
-                guard let image else {
-                    cont.resume(throwing: NSError(domain: "Screen", code: 2, userInfo: [
-                        NSLocalizedDescriptionKey: "snapshot failed",
-                    ]))
-                    return
-                }
-                cont.resume(returning: image)
-            }
-        }
+        let image = try await self.snapshotImage(maxWidth: maxWidth)
         guard let data = image.pngData() else {
             throw NSError(domain: "Screen", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "snapshot encode failed",
@@ -190,30 +141,7 @@ final class ScreenController {
         format: OpenClawCanvasSnapshotFormat,
         quality: Double? = nil) async throws -> String
     {
-        let config = WKSnapshotConfiguration()
-        if let maxWidth {
-            config.snapshotWidth = NSNumber(value: Double(maxWidth))
-        }
-        guard let webView = self.activeWebView else {
-            throw NSError(domain: "Screen", code: 3, userInfo: [
-                NSLocalizedDescriptionKey: "web view unavailable",
-            ])
-        }
-        let image: UIImage = try await withCheckedThrowingContinuation { cont in
-            webView.takeSnapshot(with: config) { image, error in
-                if let error {
-                    cont.resume(throwing: error)
-                    return
-                }
-                guard let image else {
-                    cont.resume(throwing: NSError(domain: "Screen", code: 2, userInfo: [
-                        NSLocalizedDescriptionKey: "snapshot failed",
-                    ]))
-                    return
-                }
-                cont.resume(returning: image)
-            }
-        }
+        let image = try await self.snapshotImage(maxWidth: maxWidth)
 
         let data: Data?
         switch format {
@@ -229,6 +157,34 @@ final class ScreenController {
             ])
         }
         return data.base64EncodedString()
+    }
+
+    private func snapshotImage(maxWidth: CGFloat?) async throws -> UIImage {
+        let config = WKSnapshotConfiguration()
+        if let maxWidth {
+            config.snapshotWidth = NSNumber(value: Double(maxWidth))
+        }
+        guard let webView = self.activeWebView else {
+            throw NSError(domain: "Screen", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "web view unavailable",
+            ])
+        }
+        let image: UIImage = try await withCheckedThrowingContinuation { cont in
+            webView.takeSnapshot(with: config) { image, error in
+                if let error {
+                    cont.resume(throwing: error)
+                    return
+                }
+                guard let image else {
+                    cont.resume(throwing: NSError(domain: "Screen", code: 2, userInfo: [
+                        NSLocalizedDescriptionKey: "snapshot failed",
+                    ]))
+                    return
+                }
+                cont.resume(returning: image)
+            }
+        }
+        return image
     }
 
     func attachWebView(_ webView: WKWebView) {
@@ -258,17 +214,6 @@ final class ScreenController {
         ext: "html",
         subdirectory: "CanvasScaffold")
 
-    private static func isLoopbackHost(_ host: String) -> Bool {
-        let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalized.isEmpty { return true }
-        if normalized == "localhost" || normalized == "::1" || normalized == "0.0.0.0" {
-            return true
-        }
-        if normalized == "127.0.0.1" || normalized.hasPrefix("127.") {
-            return true
-        }
-        return false
-    }
     func isTrustedCanvasUIURL(_ url: URL) -> Bool {
         guard url.isFileURL else { return false }
         let std = url.standardizedFileURL
@@ -290,59 +235,8 @@ final class ScreenController {
         scrollView.bounces = allowScroll
     }
 
-    private static func jsValue(_ value: String?) -> String {
-        guard let value else { return "null" }
-        if let data = try? JSONSerialization.data(withJSONObject: [value]),
-           let encoded = String(data: data, encoding: .utf8),
-           encoded.count >= 2
-        {
-            return String(encoded.dropFirst().dropLast())
-        }
-        return "null"
-    }
-
     func isLocalNetworkCanvasURL(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
-            return false
-        }
-        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty else {
-            return false
-        }
-        if host == "localhost" { return true }
-        if host.hasSuffix(".local") { return true }
-        if host.hasSuffix(".ts.net") { return true }
-        if host.hasSuffix(".tailscale.net") { return true }
-        // Allow MagicDNS / LAN hostnames like "peters-mac-studio-1".
-        if !host.contains("."), !host.contains(":") { return true }
-        if let ipv4 = Self.parseIPv4(host) {
-            return Self.isLocalNetworkIPv4(ipv4)
-        }
-        return false
-    }
-
-    private static func parseIPv4(_ host: String) -> (UInt8, UInt8, UInt8, UInt8)? {
-        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 4 else { return nil }
-        let bytes: [UInt8] = parts.compactMap { UInt8($0) }
-        guard bytes.count == 4 else { return nil }
-        return (bytes[0], bytes[1], bytes[2], bytes[3])
-    }
-
-    private static func isLocalNetworkIPv4(_ ip: (UInt8, UInt8, UInt8, UInt8)) -> Bool {
-        let (a, b, _, _) = ip
-        // 10.0.0.0/8
-        if a == 10 { return true }
-        // 172.16.0.0/12
-        if a == 172, (16...31).contains(Int(b)) { return true }
-        // 192.168.0.0/16
-        if a == 192, b == 168 { return true }
-        // 127.0.0.0/8
-        if a == 127 { return true }
-        // 169.254.0.0/16 (link-local)
-        if a == 169, b == 254 { return true }
-        // Tailscale: 100.64.0.0/10
-        if a == 100, (64...127).contains(Int(b)) { return true }
-        return false
+        LocalNetworkURLSupport.isLocalNetworkHTTPURL(url)
     }
 
     nonisolated static func parseA2UIActionBody(_ body: Any) -> [String: Any]? {
