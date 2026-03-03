@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -13,6 +14,7 @@ import {
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -129,9 +131,32 @@ export async function runAgentTurnWithFallback(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
+  const codexCliBackend = resolveCliBackendConfig("codex-cli", params.followupRun.run.config);
+  const modelApiByRef = new Map<string, string | undefined>();
 
   while (true) {
     try {
+      const resolveModelApi = (provider: string, model: string): string | undefined => {
+        const key = `${provider}\0${model}`;
+        if (modelApiByRef.has(key)) {
+          return modelApiByRef.get(key);
+        }
+        let resolvedApi: string | undefined;
+        try {
+          const resolved = resolveModel(
+            provider,
+            model,
+            params.followupRun.run.agentDir,
+            params.followupRun.run.config,
+          );
+          resolvedApi = resolved.model?.api;
+        } catch {
+          resolvedApi = undefined;
+        }
+        modelApiByRef.set(key, resolvedApi);
+        return resolvedApi;
+      };
+
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
@@ -195,7 +220,23 @@ export async function runAgentTurnWithFallback(params: {
             thinkLevel: params.followupRun.run.thinkLevel,
           });
 
-          if (isCliProvider(provider, params.followupRun.run.config)) {
+          // Detect codex-responses models and auto-fallback to CLI backend
+          // when available. Codex embedded runner silently ignores tool calls.
+          // See: https://github.com/openclaw/openclaw/issues/33587
+          let cliProvider = isCliProvider(provider, params.followupRun.run.config)
+            ? provider
+            : undefined;
+          if (!cliProvider && codexCliBackend) {
+            const modelApi = resolveModelApi(provider, model);
+            if (modelApi === "openai-codex-responses") {
+              defaultRuntime.error(
+                "Codex model detected, routing through CLI backend for tool support",
+              );
+              cliProvider = codexCliBackend.id;
+            }
+          }
+
+          if (cliProvider) {
             const startedAt = Date.now();
             notifyAgentRunStart();
             emitAgentEvent({
@@ -206,7 +247,7 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
-            const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
+            const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), cliProvider);
             return (async () => {
               let lifecycleTerminalEmitted = false;
               try {
@@ -218,7 +259,7 @@ export async function runAgentTurnWithFallback(params: {
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: params.followupRun.run.config,
                   prompt: params.commandBody,
-                  provider,
+                  provider: cliProvider,
                   model,
                   thinkLevel: params.followupRun.run.thinkLevel,
                   timeoutMs: params.followupRun.run.timeoutMs,
