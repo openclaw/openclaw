@@ -236,6 +236,14 @@ Check the server logs
     expect(isHeartbeatContentEffectivelyEmpty("- - -")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("* * *")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("_ _ _")).toBe(true);
+    // Longer spaced rules (4+ characters) are valid per CommonMark
+    expect(isHeartbeatContentEffectivelyEmpty("- - - - -")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("* * * * *")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("_ _ _ _ _")).toBe(true);
+    // Mixed-character sequences are NOT valid horizontal rules
+    expect(isHeartbeatContentEffectivelyEmpty("-*-")).toBe(false);
+    expect(isHeartbeatContentEffectivelyEmpty("-_-")).toBe(false);
+    expect(isHeartbeatContentEffectivelyEmpty("_*_")).toBe(false);
   });
 
   it("returns true for headers + horizontal rules only", () => {
