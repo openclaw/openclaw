@@ -268,7 +268,7 @@ export function registerBrowserAgentSnapshotRoutes(
           Boolean(selectorValue) ||
           Boolean(frameSelectorValue);
         const roleSnapshotArgs = {
-          cdpUrl: profileCtx.profile.cdpUrl,
+          cdpUrl: profileCtx.getCdpUrl(),
           targetId: tab.targetId,
           selector: selectorValue,
           frameSelector: frameSelectorValue,
@@ -284,7 +284,7 @@ export function registerBrowserAgentSnapshotRoutes(
           ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
           : await pw
               .snapshotAiViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
+                cdpUrl: profileCtx.getCdpUrl(),
                 targetId: tab.targetId,
                 ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
               })
@@ -297,7 +297,7 @@ export function registerBrowserAgentSnapshotRoutes(
               });
         if (labels) {
           const labeled = await pw.screenshotWithLabelsViaPlaywright({
-            cdpUrl: profileCtx.profile.cdpUrl,
+            cdpUrl: profileCtx.getCdpUrl(),
             targetId: tab.targetId,
             refs: "refs" in snap ? snap.refs : {},
             type: "png",
@@ -347,7 +347,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   return null;
                 }
                 return await pw.snapshotAriaViaPlaywright({
-                  cdpUrl: profileCtx.profile.cdpUrl,
+                  cdpUrl: profileCtx.getCdpUrl(),
                   targetId: tab.targetId,
                   limit,
                 });

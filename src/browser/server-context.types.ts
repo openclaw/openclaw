@@ -57,6 +57,8 @@ export type BrowserRouteContext = {
 
 export type ProfileContext = {
   profile: ResolvedBrowserProfile;
+  /** Runtime CDP URL — reflects dynamic session URLs (e.g. firecrawl WSS). */
+  getCdpUrl: () => string;
 } & BrowserProfileActions;
 
 export type ProfileStatus = {

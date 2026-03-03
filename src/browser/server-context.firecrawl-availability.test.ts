@@ -105,7 +105,8 @@ describe("firecrawl browser availability", () => {
         profile: {
           name: "firecrawl",
           cdpPort: 0,
-          cdpUrl: "wss://connect.firecrawl.dev/sess-existing",
+          // Simulate config-refresh clobbering cdpUrl back to ""
+          cdpUrl: "",
           cdpHost: "",
           cdpIsLoopback: false,
           color: "#FF4500",
@@ -130,6 +131,9 @@ describe("firecrawl browser availability", () => {
 
       expect(createMock).not.toHaveBeenCalled();
       expect(reachableMock).toHaveBeenCalledWith("wss://connect.firecrawl.dev/sess-existing");
+      // cdpUrl should be re-applied from the session even though config refresh cleared it
+      const runtimeProfile = state.profiles.get("firecrawl")?.profile;
+      expect(runtimeProfile?.cdpUrl).toBe("wss://connect.firecrawl.dev/sess-existing");
     });
 
     it("replaces stale session when not reachable", async () => {
@@ -344,10 +348,7 @@ describe("firecrawl browser availability", () => {
 
       const result = await profile.isReachable(5000);
       expect(result).toBe(true);
-      expect(reachableMock).toHaveBeenCalledWith(
-        "wss://connect.firecrawl.dev/sess-r",
-        5000,
-      );
+      expect(reachableMock).toHaveBeenCalledWith("wss://connect.firecrawl.dev/sess-r", 5000);
     });
 
     it("isHttpReachable returns false when no session", async () => {
@@ -431,10 +432,7 @@ describe("firecrawl browser availability", () => {
 
       const result = await profile.isHttpReachable(2000);
       expect(result).toBe(true);
-      expect(reachableMock).toHaveBeenCalledWith(
-        "wss://connect.firecrawl.dev/sess-ht",
-        2000,
-      );
+      expect(reachableMock).toHaveBeenCalledWith("wss://connect.firecrawl.dev/sess-ht", 2000);
     });
 
     it("does not call isChromeReachable or isChromeCdpReady for firecrawl", async () => {

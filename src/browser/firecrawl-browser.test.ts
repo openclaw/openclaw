@@ -61,14 +61,14 @@ describe("firecrawl-browser", () => {
 
       await createFirecrawlBrowserSession({
         ...baseParams,
-        ttlTotal: 600,
-        ttlWithoutActivity: 120,
+        ttl: 600,
+        activityTtl: 120,
         streamWebView: true,
       });
 
       const body = JSON.parse((fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
-      expect(body.ttlTotal).toBe(600);
-      expect(body.ttlWithoutActivity).toBe(120);
+      expect(body.ttl).toBe(600);
+      expect(body.activityTtl).toBe(120);
       expect(body.streamWebView).toBe(true);
     });
 
@@ -101,10 +101,7 @@ describe("firecrawl-browser", () => {
         baseUrl: "https://api.firecrawl.dev/",
       });
 
-      expect(fetch).toHaveBeenCalledWith(
-        "https://api.firecrawl.dev/v2/browser",
-        expect.anything(),
-      );
+      expect(fetch).toHaveBeenCalledWith("https://api.firecrawl.dev/v2/browser", expect.anything());
     });
 
     it("works with custom baseUrl", async () => {
@@ -121,10 +118,7 @@ describe("firecrawl-browser", () => {
         baseUrl: "https://custom.host:8080",
       });
 
-      expect(fetch).toHaveBeenCalledWith(
-        "https://custom.host:8080/v2/browser",
-        expect.anything(),
-      );
+      expect(fetch).toHaveBeenCalledWith("https://custom.host:8080/v2/browser", expect.anything());
     });
 
     it("defaults liveViewUrl to empty string when missing from response", async () => {

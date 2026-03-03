@@ -107,7 +107,7 @@ export async function withRouteTabContext<T>(
     return await params.run({
       profileCtx,
       tab,
-      cdpUrl: profileCtx.profile.cdpUrl,
+      cdpUrl: profileCtx.getCdpUrl(),
     });
   } catch (err) {
     handleRouteError(params.ctx, params.res, err);

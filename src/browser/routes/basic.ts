@@ -77,7 +77,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       cdpHttp,
       pid: profileState?.running?.pid ?? null,
       cdpPort: profileCtx.profile.cdpPort,
-      cdpUrl: profileCtx.profile.cdpUrl,
+      cdpUrl: profileCtx.getCdpUrl(),
       chosenBrowser: profileState?.running?.exe.kind ?? null,
       detectedBrowser,
       detectedExecutablePath,
@@ -88,10 +88,12 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       noSandbox: current.resolved.noSandbox,
       executablePath: current.resolved.executablePath ?? null,
       attachOnly: profileCtx.profile.attachOnly,
-      ...(firecrawlSession ? {
-        liveViewUrl: firecrawlSession.liveViewUrl,
-        firecrawlSessionId: firecrawlSession.sessionId,
-      } : {}),
+      ...(firecrawlSession
+        ? {
+            liveViewUrl: firecrawlSession.liveViewUrl,
+            firecrawlSessionId: firecrawlSession.sessionId,
+          }
+        : {}),
     });
   });
 

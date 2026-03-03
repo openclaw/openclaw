@@ -19,10 +19,10 @@ export type FirecrawlBrowserSession = {
 export type CreateFirecrawlBrowserSessionParams = {
   apiKey: string;
   baseUrl: string;
-  /** Total session TTL in seconds. */
-  ttlTotal?: number;
-  /** Idle TTL (seconds without activity) before session is destroyed. */
-  ttlWithoutActivity?: number;
+  /** Total session TTL in seconds (30–3600, default 300). */
+  ttl?: number;
+  /** Inactivity TTL in seconds (10–3600, default 120). */
+  activityTtl?: number;
   /** Enable live web-view streaming. */
   streamWebView?: boolean;
 };
@@ -36,12 +36,18 @@ export type DeleteFirecrawlBrowserSessionParams = {
 export async function createFirecrawlBrowserSession(
   params: CreateFirecrawlBrowserSessionParams,
 ): Promise<FirecrawlBrowserSession> {
-  const { apiKey, baseUrl, ttlTotal, ttlWithoutActivity, streamWebView } = params;
+  const { apiKey, baseUrl, ttl, activityTtl, streamWebView } = params;
   const endpoint = `${baseUrl.replace(/\/$/, "")}/v2/browser`;
   const body: Record<string, unknown> = {};
-  if (ttlTotal !== undefined) body.ttlTotal = ttlTotal;
-  if (ttlWithoutActivity !== undefined) body.ttlWithoutActivity = ttlWithoutActivity;
-  if (streamWebView !== undefined) body.streamWebView = streamWebView;
+  if (ttl !== undefined) {
+    body.ttl = ttl;
+  }
+  if (activityTtl !== undefined) {
+    body.activityTtl = activityTtl;
+  }
+  if (streamWebView !== undefined) {
+    body.streamWebView = streamWebView;
+  }
 
   const res = await fetch(endpoint, {
     method: "POST",
@@ -110,7 +116,9 @@ export async function isFirecrawlSessionReachable(
   return new Promise<boolean>((resolve) => {
     let resolved = false;
     const done = (result: boolean) => {
-      if (resolved) return;
+      if (resolved) {
+        return;
+      }
       resolved = true;
       resolve(result);
     };

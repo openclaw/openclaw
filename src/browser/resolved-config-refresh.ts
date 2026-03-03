@@ -1,7 +1,4 @@
-import {
-  resolveFirecrawlApiKey,
-  resolveFirecrawlConfig,
-} from "../agents/tools/web-fetch.js";
+import { resolveFirecrawlApiKey, resolveFirecrawlConfig } from "../agents/tools/web-fetch.js";
 import { createConfigIO, loadConfig } from "../config/config.js";
 import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import type { BrowserServerState } from "./server-context.types.js";
@@ -14,6 +11,12 @@ function applyResolvedConfig(
   for (const [name, runtime] of current.profiles) {
     const nextProfile = resolveProfile(freshResolved, name);
     if (nextProfile) {
+      // Preserve dynamic cdpUrl from active firecrawl sessions — resolveProfile
+      // always returns cdpUrl="" for firecrawl, but ensureBrowserAvailable sets it
+      // to the session's WSS URL at runtime.
+      if (nextProfile.driver === "firecrawl" && runtime.firecrawlSession) {
+        nextProfile.cdpUrl = runtime.firecrawlSession.cdpWebSocketUrl;
+      }
       runtime.profile = nextProfile;
       continue;
     }

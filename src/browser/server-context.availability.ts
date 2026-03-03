@@ -64,7 +64,9 @@ export function createProfileAvailability({
   const isReachable = async (timeoutMs?: number) => {
     if (profile.driver === "firecrawl") {
       const session = getProfileState().firecrawlSession;
-      return session ? await isFirecrawlSessionReachable(session.cdpWebSocketUrl, timeoutMs) : false;
+      return session
+        ? await isFirecrawlSessionReachable(session.cdpWebSocketUrl, timeoutMs)
+        : false;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
     return await isChromeCdpReady(profile.cdpUrl, httpTimeoutMs, wsTimeoutMs);
@@ -73,7 +75,9 @@ export function createProfileAvailability({
   const isHttpReachable = async (timeoutMs?: number) => {
     if (profile.driver === "firecrawl") {
       const session = getProfileState().firecrawlSession;
-      return session ? await isFirecrawlSessionReachable(session.cdpWebSocketUrl, timeoutMs) : false;
+      return session
+        ? await isFirecrawlSessionReachable(session.cdpWebSocketUrl, timeoutMs)
+        : false;
     }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
     return await isChromeReachable(profile.cdpUrl, httpTimeoutMs);
@@ -125,6 +129,11 @@ export function createProfileAvailability({
     if (profile.driver === "firecrawl") {
       if (profileState.firecrawlSession) {
         if (await isFirecrawlSessionReachable(profileState.firecrawlSession.cdpWebSocketUrl)) {
+          // Re-apply dynamic cdpUrl in case config refresh overwrote it
+          profileState.profile = {
+            ...profileState.profile,
+            cdpUrl: profileState.firecrawlSession.cdpWebSocketUrl,
+          };
           return; // existing session still alive
         }
         profileState.firecrawlSession = null;
@@ -133,7 +142,7 @@ export function createProfileAvailability({
       const baseUrl = opts.firecrawlBaseUrl || "https://api.firecrawl.dev";
       if (!apiKey) {
         throw new Error(
-          'Firecrawl browser profile requires an API key. Set tools.web.fetch.firecrawl.apiKey or FIRECRAWL_API_KEY.',
+          "Firecrawl browser profile requires an API key. Set tools.web.fetch.firecrawl.apiKey or FIRECRAWL_API_KEY.",
         );
       }
       const session = await createFirecrawlBrowserSession({ apiKey, baseUrl });
@@ -241,8 +250,11 @@ export function createProfileAvailability({
         const apiKey = opts.firecrawlApiKey;
         const baseUrl = opts.firecrawlBaseUrl || "https://api.firecrawl.dev";
         if (apiKey) {
-          await deleteFirecrawlBrowserSession({ apiKey, baseUrl, sessionId: session.sessionId })
-            .catch(() => {}); // best-effort cleanup
+          await deleteFirecrawlBrowserSession({
+            apiKey,
+            baseUrl,
+            sessionId: session.sessionId,
+          }).catch(() => {}); // best-effort cleanup
         }
         profileState.firecrawlSession = null;
       }

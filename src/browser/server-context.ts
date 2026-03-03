@@ -101,6 +101,7 @@ function createProfileContext(
 
   return {
     profile,
+    getCdpUrl: () => getProfileState().profile.cdpUrl || profile.cdpUrl,
     ensureBrowserAvailable,
     ensureTabAvailable,
     isHttpReachable,
