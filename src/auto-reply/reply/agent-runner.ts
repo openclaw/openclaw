@@ -508,8 +508,11 @@ export async function runReplyAgent(params: {
     ) {
       try {
         const { reactMessageDiscord } = await import("../../discord/send.js");
-        const channelId = sessionCtx.To || sessionCtx.OriginatingTo;
-        if (channelId) {
+        const { resolveDiscordChannelId } = await import("../../discord/targets.js");
+        const rawChannelId = sessionCtx.To || sessionCtx.OriginatingTo;
+        if (rawChannelId) {
+          // Strip routing prefix (e.g., "channel:123456" -> "123456")
+          const channelId = resolveDiscordChannelId(rawChannelId);
           await reactMessageDiscord(channelId, sessionCtx.MessageSid, "⚠️");
         }
       } catch (error: unknown) {

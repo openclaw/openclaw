@@ -52,12 +52,17 @@ export function buildReplyPayloads(params: {
   let errorReactionRequested = false;
 
   // Apply errorPolicy filtering (skip for heartbeat to preserve alerts)
+  // For react-only on non-Discord channels, fall back to silent (no reaction support)
+  const supportsReaction = params.originatingChannel === "discord";
+  const effectiveErrorPolicy =
+    params.errorPolicy === "react-only" && !supportsReaction ? "silent" : params.errorPolicy;
+
   const errorFilteredPayloads =
-    params.isHeartbeat || !params.errorPolicy
+    params.isHeartbeat || !effectiveErrorPolicy
       ? params.payloads
-      : params.errorPolicy === "silent"
+      : effectiveErrorPolicy === "silent"
         ? params.payloads.filter((payload) => !payload.isError)
-        : params.errorPolicy === "react-only"
+        : effectiveErrorPolicy === "react-only"
           ? params.payloads
               .map((payload) => {
                 if (payload.isError) {
