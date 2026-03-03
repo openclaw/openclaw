@@ -71,7 +71,7 @@ describe("gateway probe endpoints — /ready with readiness checker", () => {
         await dispatchRequest(server, req, res);
 
         expect(res.statusCode).toBe(503);
-        expect(JSON.parse(getBody())).toMatchObject({ ready: false, failing: ["internal"] });
+        expect(JSON.parse(getBody())).toEqual({ ready: false, failing: ["internal"], uptimeMs: 0 });
       },
     });
   });

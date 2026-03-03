@@ -184,7 +184,7 @@ function handleGatewayProbeRequest(
       body = JSON.stringify(result);
     } catch {
       statusCode = 503;
-      body = JSON.stringify({ ready: false, failing: ["internal"] });
+      body = JSON.stringify({ ready: false, failing: ["internal"], uptimeMs: 0 });
     }
   } else {
     statusCode = 200;
