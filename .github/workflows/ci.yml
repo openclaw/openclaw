@@ -323,11 +323,11 @@ jobs:
   checks-windows:
     needs: [docs-scope, changed-scope, build-artifacts, check]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    runs-on: blacksmith-32vcpu-windows-2025
+    runs-on: blacksmith-16vcpu-windows-2025
     timeout-minutes: 45
     env:
       NODE_OPTIONS: --max-old-space-size=4096
-      # Keep total concurrency predictable on the 32 vCPU runner:
+      # Keep total concurrency predictable on the 16 vCPU runner:
       # `scripts/test-parallel.mjs` runs some vitest suites in parallel processes.
       OPENCLAW_TEST_WORKERS: 4
     defaults:
