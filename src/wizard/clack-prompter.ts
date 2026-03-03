@@ -62,6 +62,9 @@ export function createClackPrompter(): WizardPrompter {
     note: async (message, title) => {
       emitNote(message, title);
     },
+    raw: async (message) => {
+      process.stdout.write(message);
+    },
     select: async (params) =>
       guardCancel(
         await select({

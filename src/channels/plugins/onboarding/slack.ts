@@ -109,9 +109,9 @@ export async function noteSlackTokenHelp(prompter: WizardPrompter, botName: stri
     `Docs: ${formatDocsLink("/slack", "slack")}`,
   ];
   await prompter.note(setupLines.join("\n"), "Slack socket mode tokens");
-  if (process.stdout.isTTY) {
+  if (prompter.raw) {
     // Keep manifest unframed so users can copy/paste valid JSON directly.
-    process.stdout.write(`${manifest}\n`);
+    await prompter.raw(`${manifest}\n`);
     return;
   }
   await prompter.note(`Manifest (JSON):\n${manifest}`, "Slack socket mode tokens");
