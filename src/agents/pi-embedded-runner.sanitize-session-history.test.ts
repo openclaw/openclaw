@@ -1,5 +1,4 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as helpers from "./pi-embedded-helpers.js";
 import {
@@ -24,8 +23,6 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 }));
 
 let sanitizeSessionHistory: SanitizeSessionHistoryFn;
-let testTimestamp = 1;
-const nextTimestamp = () => testTimestamp++;
 
 // We don't mock session-transcript-repair.js as it is a pure function and complicates mocking.
 // We rely on the real implementation which should pass through our simple messages.
@@ -61,33 +58,23 @@ describe("sanitizeSessionHistory", () => {
 
   const makeThinkingAndTextAssistantMessages = (
     thinkingSignature: string = "some_sig",
-  ): AgentMessage[] => {
-    const user: UserMessage = {
-      role: "user",
-      content: "hello",
-      timestamp: nextTimestamp(),
-    };
-    const assistant: AssistantMessage = {
-      role: "assistant",
-      content: [
-        {
-          type: "thinking",
-          thinking: "internal",
-          thinkingSignature,
-        },
-        { type: "text", text: "hi" },
-      ],
-      api: "openai-responses",
-      provider: "openai",
-      model: "gpt-5.2",
-      usage: makeUsage(0, 0, 0),
-      stopReason: "stop",
-      timestamp: nextTimestamp(),
-    };
-    return [user, assistant];
-  };
+  ): AgentMessage[] =>
+    [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal",
+            thinkingSignature,
+          },
+          { type: "text", text: "hi" },
+        ],
+      },
+    ] as unknown as AgentMessage[];
 
-  const makeUsage = (input: number, output: number, totalTokens: number): Usage => ({
+  const makeUsage = (input: number, output: number, totalTokens: number) => ({
     input,
     output,
     cacheRead: 0,
@@ -100,40 +87,14 @@ describe("sanitizeSessionHistory", () => {
     text: string;
     usage: ReturnType<typeof makeUsage>;
     timestamp?: number;
-  }): AssistantMessage => ({
-    role: "assistant",
-    content: [{ type: "text", text: params.text }],
-    api: "openai-responses",
-    provider: "openai",
-    model: "gpt-5.2",
-    stopReason: "stop",
-    timestamp: params.timestamp ?? nextTimestamp(),
-    usage: params.usage,
-  });
-
-  const makeUserMessage = (content: string, timestamp = nextTimestamp()): UserMessage => ({
-    role: "user",
-    content,
-    timestamp,
-  });
-
-  const makeAssistantMessage = (
-    content: AssistantMessage["content"],
-    params: {
-      stopReason?: AssistantMessage["stopReason"];
-      usage?: Usage;
-      timestamp?: number;
-    } = {},
-  ): AssistantMessage => ({
-    role: "assistant",
-    content,
-    api: "openai-responses",
-    provider: "openai",
-    model: "gpt-5.2",
-    usage: params.usage ?? makeUsage(0, 0, 0),
-    stopReason: params.stopReason ?? "stop",
-    timestamp: params.timestamp ?? nextTimestamp(),
-  });
+  }) =>
+    ({
+      role: "assistant",
+      content: [{ type: "text", text: params.text }],
+      stopReason: "stop",
+      ...(typeof params.timestamp === "number" ? { timestamp: params.timestamp } : {}),
+      usage: params.usage,
+    }) as unknown as AgentMessage;
 
   const makeCompactionSummaryMessage = (tokensBefore: number, timestamp: string) =>
     ({
@@ -162,7 +123,6 @@ describe("sanitizeSessionHistory", () => {
     >;
 
   beforeEach(async () => {
-    testTimestamp = 1;
     sanitizeSessionHistory = await loadSanitizeSessionHistoryWithCleanMocks();
   });
 
@@ -385,19 +345,20 @@ describe("sanitizeSessionHistory", () => {
   it("keeps reasoning-only assistant messages for openai-responses", async () => {
     setNonGoogleModelApi();
 
-    const messages: AgentMessage[] = [
-      makeUserMessage("hello"),
-      makeAssistantMessage(
-        [
+    const messages = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        stopReason: "aborted",
+        content: [
           {
             type: "thinking",
             thinking: "reasoning",
             thinkingSignature: "sig",
           },
         ],
-        { stopReason: "aborted" },
-      ),
-    ];
+      },
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeSessionHistory({
       messages,
@@ -412,11 +373,12 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("synthesizes missing tool results for openai-responses after repair", async () => {
-    const messages: AgentMessage[] = [
-      makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }], {
-        stopReason: "toolUse",
-      }),
-    ];
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -427,57 +389,49 @@ describe("sanitizeSessionHistory", () => {
     expect(result[1]?.role).toBe("toolResult");
   });
 
-  it.each([
-    {
-      name: "missing input or arguments",
-      makeMessages: () =>
-        [
+  it("drops malformed tool calls missing input or arguments", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read" }],
+      },
+      { role: "user", content: "hello" },
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeOpenAIHistory(messages, { sessionId: "test-session" });
+
+    expect(result.map((msg) => msg.role)).toEqual(["user"]);
+  });
+
+  it("drops malformed tool calls with invalid/overlong names", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
           {
-            role: "assistant",
-            content: [{ type: "toolCall", id: "call_1", name: "read" }],
-          } as unknown as AgentMessage,
-          makeUserMessage("hello"),
-        ] as AgentMessage[],
-      overrides: { sessionId: "test-session" } as Partial<
-        Parameters<typeof sanitizeOpenAIHistory>[1]
-      >,
-    },
-    {
-      name: "invalid or overlong names",
-      makeMessages: () =>
-        [
-          makeAssistantMessage(
-            [
-              {
-                type: "toolCall",
-                id: "call_bad",
-                name: 'toolu_01mvznfebfuu <|tool_call_argument_begin|> {"command"',
-                arguments: {},
-              },
-              {
-                type: "toolCall",
-                id: "call_long",
-                name: `read_${"x".repeat(80)}`,
-                arguments: {},
-              },
-            ],
-            { stopReason: "toolUse" },
-          ),
-          makeUserMessage("hello"),
-        ] as AgentMessage[],
-      overrides: {} as Partial<Parameters<typeof sanitizeOpenAIHistory>[1]>,
-    },
-  ])("drops malformed tool calls: $name", async ({ makeMessages, overrides }) => {
-    const result = await sanitizeOpenAIHistory(makeMessages(), overrides);
+            type: "toolCall",
+            id: "call_bad",
+            name: 'toolu_01mvznfebfuu <|tool_call_argument_begin|> {"command"',
+            arguments: {},
+          },
+          { type: "toolCall", id: "call_long", name: `read_${"x".repeat(80)}`, arguments: {} },
+        ],
+      },
+      { role: "user", content: "hello" },
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeOpenAIHistory(messages);
+
     expect(result.map((msg) => msg.role)).toEqual(["user"]);
   });
 
   it("drops tool calls that are not in the allowed tool set", async () => {
-    const messages: AgentMessage[] = [
-      makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "write", arguments: {} }], {
-        stopReason: "toolUse",
-      }),
-    ];
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "write", arguments: {} }],
+      },
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeOpenAIHistory(messages, {
       allowedToolNames: ["read"],
@@ -512,7 +466,12 @@ describe("sanitizeSessionHistory", () => {
       sanitizeSessionHistory,
     });
 
-    expect(result).toEqual([]);
+    // Signed thinking blocks are converted to text on model switch (context preserved).
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    expect((content[0] as { text: string }).text).toBe("reasoning");
   });
 
   it("drops orphaned toolResult entries when switching from openai history to anthropic", async () => {
@@ -524,28 +483,25 @@ describe("sanitizeSessionHistory", () => {
       }),
     ];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
-    const messages: AgentMessage[] = [
-      makeAssistantMessage([{ type: "toolCall", id: "tool_abc123", name: "read", arguments: {} }], {
-        stopReason: "toolUse",
-      }),
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool_abc123", name: "read", arguments: {} }],
+      },
       {
         role: "toolResult",
         toolCallId: "tool_abc123",
         toolName: "read",
         content: [{ type: "text", text: "ok" }],
-        isError: false,
-        timestamp: nextTimestamp(),
-      },
-      makeUserMessage("continue"),
+      } as unknown as AgentMessage,
+      { role: "user", content: "continue" },
       {
         role: "toolResult",
         toolCallId: "tool_01VihkDRptyLpX1ApUPe7ooU",
         toolName: "read",
         content: [{ type: "text", text: "stale result" }],
-        isError: false,
-        timestamp: nextTimestamp(),
-      },
-    ];
+      } as unknown as AgentMessage,
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeSessionHistory({
       messages,
@@ -579,17 +535,20 @@ describe("sanitizeSessionHistory", () => {
   it("preserves assistant turn when all content is thinking blocks (github-copilot)", async () => {
     setNonGoogleModelApi();
 
-    const messages: AgentMessage[] = [
-      makeUserMessage("hello"),
-      makeAssistantMessage([
-        {
-          type: "thinking",
-          thinking: "some reasoning",
-          thinkingSignature: "reasoning_text",
-        },
-      ]),
-      makeUserMessage("follow up"),
-    ];
+    const messages = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "some reasoning",
+            thinkingSignature: "reasoning_text",
+          },
+        ],
+      },
+      { role: "user", content: "follow up" },
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeGithubCopilotHistory({ messages });
 
@@ -602,18 +561,21 @@ describe("sanitizeSessionHistory", () => {
   it("preserves tool_use blocks when dropping thinking blocks (github-copilot)", async () => {
     setNonGoogleModelApi();
 
-    const messages: AgentMessage[] = [
-      makeUserMessage("read a file"),
-      makeAssistantMessage([
-        {
-          type: "thinking",
-          thinking: "I should use the read tool",
-          thinkingSignature: "reasoning_text",
-        },
-        { type: "toolCall", id: "tool_123", name: "read", arguments: { path: "/tmp/test" } },
-        { type: "text", text: "Let me read that file." },
-      ]),
-    ];
+    const messages = [
+      { role: "user", content: "read a file" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "I should use the read tool",
+            thinkingSignature: "reasoning_text",
+          },
+          { type: "toolCall", id: "tool_123", name: "read", arguments: { path: "/tmp/test" } },
+          { type: "text", text: "Let me read that file." },
+        ],
+      },
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeGithubCopilotHistory({ messages });
     const types = getAssistantContentTypes(result);
@@ -648,5 +610,326 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeGithubCopilotHistory({ messages, modelId: "gpt-5.2" });
     const types = getAssistantContentTypes(result);
     expect(types).toContain("thinking");
+  });
+
+  it("downgrades signed thinking blocks to text when switching from azure-foundry to copilot", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "azure-foundry",
+        modelApi: "openai-completions",
+        modelId: "gpt-52-chat",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "json" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Thinking block should be converted to text, not kept with invalid signature.
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    expect((content[0] as { text: string }).text).toBe("reasoning");
+  });
+
+  it("downgrades base64 anthropic signatures when switching to openai-completions", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "azure-foundry",
+      modelId: "deepseek-v3-2",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    expect((content[0] as { text: string }).text).toBe("reasoning");
+  });
+
+  it("keeps unsigned thinking blocks when model changes", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "azure-foundry",
+        modelApi: "openai-completions",
+        modelId: "gpt-52-chat",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "some reasoning" },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(2);
+    expect((content[0] as { type: string }).type).toBe("thinking");
+    expect((content[1] as { type: string }).type).toBe("text");
+  });
+
+  it("does not downgrade thinking blocks when provider has not changed", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Same model — thinking blocks should be preserved as-is.
+    expect(result).toEqual(messages);
+  });
+
+  it("preserves thinking signatures when switching models within the same provider", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-sonnet-4-5",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Different model but same provider+API — thinking signatures are provider-level
+    // and should be preserved. Opus → Sonnet on github-copilot should NOT strip sigs.
+    expect(result).toEqual(messages);
+  });
+
+  it("downgrades signed thinking blocks in legacy sessions without model snapshots", async () => {
+    // Legacy sessions predate model snapshot tracking — no snapshot entries exist.
+    // Signed thinking blocks from a previous provider should still be downgraded.
+    const sessionManager = makeInMemorySessionManager([]);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // No prior snapshot + messages exist → treat as potential provider mismatch.
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    expect((content[0] as { text: string }).text).toBe("reasoning");
+  });
+
+  // -- Signature preservation matrix --
+  // These tests prove that model switches within the same provider preserve thinking
+  // quality, while cross-provider switches correctly strip incompatible signatures.
+
+  it("preserves base64 sigs: opus-4-6 → opus-4-6-fast on same provider (model upgrade)", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6-fast",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Same provider — base64 signatures stay valid.
+    expect(result).toEqual(messages);
+  });
+
+  it("preserves JSON sigs: gpt-5.2 → o3-pro on same openai provider", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.2",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "json" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      modelId: "o3-pro",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Same provider + API — OpenAI reasoning JSON stays valid.
+    expect(result).toEqual(messages);
+  });
+
+  it("downgrades sigs when same modelApi but different provider", async () => {
+    // Both use openai-completions but different providers — signatures are not portable.
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "openai",
+        modelApi: "openai-completions",
+        modelId: "gpt-5.2",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "json" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "azure-foundry",
+      modelId: "gpt-5.2",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Different provider — even with same model and API, signatures are downgraded.
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+  });
+
+  it("downgrades sigs when provider changes but modelId stays the same", async () => {
+    // Same model name on two different providers — signatures not compatible.
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Same model name but different provider+API — must downgrade.
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+  });
+
+  it("writes a new snapshot on model switch within same provider", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-sonnet-4-5",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Even though signatures were preserved, the snapshot should update to track the new model.
+    const snapshots = sessionEntries.filter((e) => e.customType === "model-snapshot");
+    expect(snapshots).toHaveLength(2);
+    const latest = snapshots[1].data as { modelId: string };
+    expect(latest.modelId).toBe("claude-sonnet-4-5");
+  });
+
+  it("does not write a duplicate snapshot when model is identical", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Same exact model — no new snapshot written.
+    const snapshots = sessionEntries.filter((e) => e.customType === "model-snapshot");
+    expect(snapshots).toHaveLength(1);
   });
 });

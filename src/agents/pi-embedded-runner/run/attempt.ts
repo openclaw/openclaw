@@ -645,7 +645,6 @@ export async function runEmbeddedAttempt(
           senderIsOwner: params.senderIsOwner,
           sessionKey: sandboxSessionKey,
           sessionId: params.sessionId,
-          runId: params.runId,
           agentDir,
           workspaceDir: effectiveWorkspace,
           config: params.config,
@@ -921,7 +920,6 @@ export async function runEmbeddedAttempt(
               agentId: sessionAgentId,
               sessionKey: sandboxSessionKey,
               sessionId: params.sessionId,
-              runId: params.runId,
               loopDetection: clientToolLoopDetection,
             },
           )
@@ -1145,6 +1143,7 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           policy: transcriptPolicy,
         });
+
         cacheTrace?.recordStage("session:sanitized", { messages: prior });
         const validatedGemini = transcriptPolicy.validateGeminiTurns
           ? validateGeminiTurns(prior)
@@ -1356,8 +1355,6 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           workspaceDir: params.workspaceDir,
           messageProvider: params.messageProvider ?? undefined,
-          trigger: params.trigger,
-          channelId: params.messageChannel ?? params.messageProvider ?? undefined,
         };
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
