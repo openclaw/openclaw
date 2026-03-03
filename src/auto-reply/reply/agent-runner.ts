@@ -49,6 +49,13 @@ import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-repl
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import {
+  auditPostCompactionReads,
+  extractReadPaths,
+  formatAuditWarning,
+  pendingPostCompactionAudits,
+  readSessionMessages,
+} from "./post-compaction-audit.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
@@ -678,6 +685,8 @@ export async function runReplyAgent(params: {
           .catch(() => {
             // Silent failure — post-compaction context is best-effort
           });
+        // Mark this session as pending a post-compaction read audit on the next turn
+        pendingPostCompactionAudits.set(sessionKey, true);
       }
 
       if (verboseEnabled) {
