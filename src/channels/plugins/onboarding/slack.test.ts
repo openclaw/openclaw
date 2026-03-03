@@ -8,15 +8,28 @@ describe("buildSlackManifest", () => {
     expect(parsed.display_information?.name).toBe("OpenClaw");
     expect(manifest).not.toContain("│");
   });
+
+  it("falls back to OpenClaw when botName is blank", () => {
+    const manifest = buildSlackManifest("   ");
+    const parsed = JSON.parse(manifest) as { display_information?: { name?: string } };
+    expect(parsed.display_information?.name).toBe("OpenClaw");
+  });
 });
 
 describe("writeSlackManifestRaw", () => {
   it("writes raw manifest content with trailing newline", () => {
-    const write = vi.fn<Pick<NodeJS.WriteStream, "write">["write"]>(() => true);
+    const stream = {
+      write: (
+        _buffer: string | Uint8Array,
+        _encodingOrCallback?: BufferEncoding | ((err?: Error | null) => void),
+        _callback?: (err?: Error | null) => void,
+      ) => true,
+    } satisfies Pick<NodeJS.WriteStream, "write">;
+    const writeSpy = vi.spyOn(stream, "write");
     const manifest = '{\n  "hello": "world"\n}';
 
-    writeSlackManifestRaw(manifest, { write });
+    writeSlackManifestRaw(manifest, stream);
 
-    expect(write).toHaveBeenCalledWith(`${manifest}\n`);
+    expect(writeSpy).toHaveBeenCalledWith(`${manifest}\n`);
   });
 });
