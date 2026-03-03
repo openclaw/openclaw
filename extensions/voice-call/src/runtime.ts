@@ -125,6 +125,7 @@ export async function createVoiceCallRuntime(params: {
   const webhookServer = new VoiceCallWebhookServer(config, manager, provider, coreConfig);
 
   const localUrl = await webhookServer.start();
+  let tunnelResult: TunnelResult | null = null;
 
   // Wrap remaining initialization in try/catch so the webhook server is
   // properly stopped if any subsequent step fails.  Without this, the server
@@ -133,7 +134,6 @@ export async function createVoiceCallRuntime(params: {
   try {
     // Determine public URL - priority: config.publicUrl > tunnel > legacy tailscale
     let publicUrl: string | null = config.publicUrl ?? null;
-    let tunnelResult: TunnelResult | null = null;
 
     if (!publicUrl && config.tunnel?.provider && config.tunnel.provider !== "none") {
       try {
@@ -217,8 +217,13 @@ export async function createVoiceCallRuntime(params: {
       stop,
     };
   } catch (err) {
-    // If any step after the server started fails, close the server to
-    // release the port so the next attempt doesn't hit EADDRINUSE.
+    // If any step after the server started fails, clean up every provisioned
+    // resource (tunnel, tailscale exposure, and webhook server) so retries
+    // don't leak processes or keep the port bound.
+    if (tunnelResult) {
+      await tunnelResult.stop().catch(() => {});
+    }
+    await cleanupTailscaleExposure(config).catch(() => {});
     await webhookServer.stop().catch(() => {});
     throw err;
   }
