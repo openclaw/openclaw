@@ -23,6 +23,7 @@ import { buildTestCtx } from "./test-ctx.js";
 vi.mock("../../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(true),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  createAdaptiveEmbeddedRunner: () => vi.fn(),
 }));
 
 const commandQueueMocks = vi.hoisted(() => ({

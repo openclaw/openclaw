@@ -32,7 +32,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { createAdaptiveEmbeddedRunner, runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
@@ -173,6 +173,10 @@ function runAgentAttempt(params: {
   primaryProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
+  /** True when the user has an explicit per-session or API model override (not just config default). */
+  hasExplicitModelOverride: boolean;
+  /** Stateful runner from createAdaptiveEmbeddedRunner() for this fallback chain. */
+  runAgent: ReturnType<typeof createAdaptiveEmbeddedRunner>;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
@@ -277,7 +281,7 @@ function runAgentAttempt(params: {
     params.providerOverride === params.primaryProvider
       ? params.sessionEntry?.authProfileOverride
       : undefined;
-  return runEmbeddedPiAgent({
+  return params.runAgent({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
@@ -294,7 +298,7 @@ function runAgentAttempt(params: {
     currentThreadTs: params.runContext.currentThreadTs,
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
-    senderIsOwner: params.opts.senderIsOwner,
+    senderIsOwner: params.opts.senderIsOwner ?? true,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
@@ -317,6 +321,10 @@ function runAgentAttempt(params: {
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     onAgentEvent: params.onAgentEvent,
+    // True only when user set a per-session model override (e.g. /model gpt-4o).
+    // providerOverride/modelOverride are always set (they're the resolved default), so
+    // we use the dedicated flag from the caller instead.
+    _hasExplicitModelOverride: params.hasExplicitModelOverride,
   });
 }
 
@@ -655,9 +663,7 @@ async function agentCommandInternal(
     let provider = defaultProvider;
     let model = defaultModel;
     const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
-    const hasStoredOverride = Boolean(
-      sessionEntry?.modelOverride || sessionEntry?.providerOverride,
-    );
+    let hasStoredOverride = Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
     const needsModelCatalog = hasAllowlist || hasStoredOverride;
     let allowedModelKeys = new Set<string>();
     let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
@@ -700,6 +706,8 @@ async function agentCommandInternal(
               storePath,
               entry,
             });
+            // Recompute: the allowlist cleanup may have cleared the override.
+            hasStoredOverride = Boolean(entry.modelOverride || entry.providerOverride);
           }
         }
       }
@@ -822,6 +830,10 @@ async function agentCommandInternal(
       // Track model fallback attempts so retries on an existing session don't
       // re-inject the original prompt as a duplicate user message.
       let fallbackAttemptIndex = 0;
+      // One stateful runner per turn: createAdaptiveEmbeddedRunner captures escalation
+      // state so retries within this runWithModelFallback chain skip re-running the
+      // local model if cloud escalation already occurred.
+      const runAgent = createAdaptiveEmbeddedRunner();
       const fallbackResult = await runWithModelFallback({
         cfg,
         provider,
@@ -856,6 +868,9 @@ async function agentCommandInternal(
             primaryProvider: provider,
             sessionStore,
             storePath,
+            // hasStoredOverride = user previously ran /model to set an explicit model
+            hasExplicitModelOverride: hasStoredOverride,
+            runAgent,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (

@@ -22,7 +22,7 @@ import {
   resolveHooksGmailModel,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { createAdaptiveEmbeddedRunner } from "../../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -429,7 +429,7 @@ export async function runCronIsolatedAgentTurn(params: {
   });
   const authProfileIdSource = cronSession.sessionEntry.authProfileOverrideSource;
 
-  let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+  let runResult: Awaited<ReturnType<ReturnType<typeof createAdaptiveEmbeddedRunner>>>;
   let fallbackProvider = provider;
   let fallbackModel = model;
   const runStartedAt = Date.now();
@@ -450,6 +450,7 @@ export async function runCronIsolatedAgentTurn(params: {
       params.job.payload.kind === "agentTurn" && Array.isArray(params.job.payload.fallbacks)
         ? params.job.payload.fallbacks
         : undefined;
+    const runAgent = createAdaptiveEmbeddedRunner();
     const fallbackResult = await runWithModelFallback({
       cfg: cfgWithAgentDefaults,
       provider,
@@ -486,7 +487,7 @@ export async function runCronIsolatedAgentTurn(params: {
             cliSessionId,
           });
         }
-        return runEmbeddedPiAgent({
+        return runAgent({
           sessionId: cronSession.sessionEntry.sessionId,
           sessionKey: agentSessionKey,
           agentId,

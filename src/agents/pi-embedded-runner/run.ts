@@ -6,6 +6,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
+import { runEmbeddedPiAgentWithAdaptiveRouting } from "../adaptive-routing.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
@@ -200,7 +201,7 @@ function resolveActiveErrorContext(params: {
   };
 }
 
-export async function runEmbeddedPiAgent(
+async function runEmbeddedPiAgentCore(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
@@ -1271,6 +1272,10 @@ export async function runEmbeddedPiAgent(
             };
           }
 
+          // Fire the adaptive-routing callback so the wrapper can inspect
+          // the rich attempt data for outcome validation.
+          params._onAttemptResult?.(attempt);
+
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
@@ -1323,4 +1328,45 @@ export async function runEmbeddedPiAgent(
       }
     }),
   );
+}
+
+// ─── Adaptive-routing seam ─────────────────────────────────────────────────
+//
+// `runEmbeddedPiAgent` is the single public entry point for all agent runs.
+// Adaptive model routing is an internal concern: call sites never import from
+// adaptive-routing.ts. The factory keeps escalation state across
+// runWithModelFallback retries without leaking it into the call site.
+
+/**
+ * Create a stateful runner that wraps adaptive routing for one full agent
+ * turn (including all runWithModelFallback retries for that turn).
+ *
+ * The returned function has the same signature as runEmbeddedPiAgent; pass it
+ * to runWithModelFallback's `run` callback instead of calling runEmbeddedPiAgent
+ * directly so escalation state persists across retries.
+ */
+export function createAdaptiveEmbeddedRunner(): (
+  params: RunEmbeddedPiAgentParams,
+) => Promise<EmbeddedPiRunResult> {
+  const escalationState = { done: false };
+  return (params) =>
+    runEmbeddedPiAgentWithAdaptiveRouting(
+      {
+        ...params,
+        _adaptiveEscalationDone: escalationState.done,
+        _onAdaptiveEscalation: () => {
+          escalationState.done = true;
+        },
+      },
+      runEmbeddedPiAgentCore,
+    );
+}
+
+/**
+ * Run the embedded Pi agent for a single non-fallback call.
+ * For runWithModelFallback loops use createAdaptiveEmbeddedRunner() instead
+ * so escalation state persists across retries.
+ */
+export function runEmbeddedPiAgent(params: RunEmbeddedPiAgentParams): Promise<EmbeddedPiRunResult> {
+  return createAdaptiveEmbeddedRunner()(params);
 }

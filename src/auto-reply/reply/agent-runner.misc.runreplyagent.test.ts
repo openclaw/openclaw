@@ -32,6 +32,7 @@ vi.mock("../../agents/pi-embedded.js", async () => {
     ...actual,
     queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+    createAdaptiveEmbeddedRunner: () => (params: unknown) => runEmbeddedPiAgentMock(params),
   };
 });
 

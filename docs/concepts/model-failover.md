@@ -139,6 +139,90 @@ timeouts that exhausted profile rotation (other errors do not advance fallback).
 When a run starts with a model override (hooks or CLI), fallbacks still end at
 `agents.defaults.model.primary` after trying any configured fallbacks.
 
+## Adaptive Model Routing
+
+**Failover** (above) handles provider failures: rate limits, auth errors, and timeouts.
+**Adaptive Model Routing** is a separate, opt-in feature that handles _outcome quality_: it
+runs a cheap or local model first, validates whether the result actually completed the job,
+and automatically escalates to a cloud model on failure — all in one turn.
+
+|                 | Failover                    | Adaptive Model Routing                          |
+| --------------- | --------------------------- | ----------------------------------------------- |
+| Trigger         | Provider error / rate limit | Outcome validation failure                      |
+| Default         | On                          | Off                                             |
+| Max retries     | Configurable fallback chain | 1 escalation (v1)                               |
+| Session history | Same session, next model    | Rerun from scratch (local attempt not appended) |
+
+### How it works
+
+1. First run uses `localFirstModel` (e.g. a local Ollama model).
+2. The outcome is validated — by heuristic (default) or by an optional LLM validator.
+3. If validation **passes**: the local result is returned.
+4. If validation **fails**: the run is discarded and re-attempted with `cloudEscalationModel`.
+5. If the cloud run encounters a provider error, the normal failover chain takes over.
+
+### Enable adaptive routing
+
+Add `adaptiveRouting` inside `agents.defaults.model`:
+
+```yaml
+agents:
+  defaults:
+    model:
+      primary: "openai/gpt-4.1-mini"
+      fallbacks:
+        - "openai/gpt-4.1-nano"
+      adaptiveRouting:
+        enabled: true
+        localFirstModel: "ollama/qwen2.5-coder" # cheap/local first
+        cloudEscalationModel: "openai/gpt-4.1-mini" # escalate here on failure
+        maxEscalations: 1 # hard cap (v1)
+        bypassOnExplicitOverride: true # skip when user forces a model
+        validation:
+          mode: "heuristic" # "heuristic" (default) or "llm"
+          minScore: 0.75
+```
+
+#### Optional LLM validator (experimental)
+
+> **Note:** LLM validation mode is experimental and not yet fully implemented. When
+> `mode: "llm"` is configured, the current implementation falls back to heuristic
+> validation with a warning. Full LLM validation support is planned for a future release.
+
+```yaml
+validation:
+  mode: "llm"
+  validatorModel: "ollama/llama3.2"
+  minScore: 0.75
+  maxToolOutputChars: 2000
+  maxAssistantChars: 4000
+  redactSecrets: true
+```
+
+When `mode: "llm"` is fully implemented, a small validator prompt will be sent to
+`validatorModel`. The validator must return JSON `{ "score": 0..1, "passed": true/false, "reason": "..." }`.
+Invalid JSON or validator errors are treated as a fail, triggering escalation.
+
+### Heuristic validation rules
+
+The default heuristic applies the following scoring (starting from 1.0, deducting penalties):
+
+| Condition                       | Score deduction |
+| ------------------------------- | --------------- |
+| Provider/runtime error          | −1.0            |
+| Tool execution error            | −0.6            |
+| Empty assistant output          | −0.4            |
+| Pending (unresolved) tool calls | −0.4            |
+| Timeout / truncation            | −0.3            |
+
+Pass threshold: score ≥ `validation.minScore` (default 0.75) **and** no failure conditions.
+
+### Relationship to the normal failover chain
+
+Adaptive routing wraps the run _before_ the failover chain runs. Each adaptive attempt
+(local and cloud) has full access to the normal provider fallback chain for provider-level
+errors. Adaptive routing only escalates based on _outcome_, not on provider errors.
+
 ## Related config
 
 See [Gateway configuration](/gateway/configuration) for:

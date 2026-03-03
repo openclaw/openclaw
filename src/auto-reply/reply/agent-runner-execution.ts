@@ -11,7 +11,8 @@ import {
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { createAdaptiveEmbeddedRunner } from "../../agents/pi-embedded.js";
+import type { EmbeddedPiRunResult } from "../../agents/pi-embedded.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -58,7 +59,7 @@ export type AgentRunLoopResult =
   | {
       kind: "success";
       runId: string;
-      runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+      runResult: EmbeddedPiRunResult;
       fallbackProvider?: string;
       fallbackModel?: string;
       fallbackAttempts: RuntimeFallbackAttempt[];
@@ -119,7 +120,7 @@ export async function runAgentTurnWithFallback(params: {
       isHeartbeat: params.isHeartbeat,
     });
   }
-  let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+  let runResult: EmbeddedPiRunResult;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
@@ -180,6 +181,10 @@ export async function runAgentTurnWithFallback(params: {
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
+      // One stateful runner per turn: createAdaptiveEmbeddedRunner captures escalation
+      // state so retries within this runWithModelFallback chain skip re-running the
+      // local model if cloud escalation already occurred.
+      const runAgent = createAdaptiveEmbeddedRunner();
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
         run: (provider, model) => {
@@ -293,7 +298,7 @@ export async function runAgentTurnWithFallback(params: {
             runId,
             authProfile,
           });
-          return runEmbeddedPiAgent({
+          return runAgent({
             ...embeddedContext,
             trigger: params.isHeartbeat ? "heartbeat" : "user",
             groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
@@ -426,12 +431,22 @@ export async function runAgentTurnWithFallback(params: {
                   };
                 })()
               : undefined,
+            _hasExplicitModelOverride: params.followupRun.run.modelExplicitOverride ?? false,
           });
         },
       });
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      // If adaptive routing changed the model, re-emit onModelSelected with the
+      // actual provider/model so callers (e.g. responsePrefix template) see it.
+      if (runResult.adaptiveRoutingMeta) {
+        params.opts?.onModelSelected?.({
+          provider: runResult.adaptiveRoutingMeta.actualProvider,
+          model: runResult.adaptiveRoutingMeta.actualModel,
+          thinkLevel: params.followupRun.run.thinkLevel,
+        });
+      }
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
             provider: String(attempt.provider ?? ""),

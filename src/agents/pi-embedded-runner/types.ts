@@ -74,6 +74,14 @@ export type EmbeddedPiRunResult = {
   messagingToolSentTargets?: MessagingToolSend[];
   // Count of successful cron.add tool calls in this run.
   successfulCronAdds?: number;
+  /** Adaptive routing metadata attached when the run was routed. */
+  adaptiveRoutingMeta?: {
+    /** The provider/model that actually served this response. */
+    actualProvider: string;
+    actualModel: string;
+    /** Whether cloud escalation occurred. */
+    escalated: boolean;
+  };
 };
 
 export type EmbeddedPiCompactResult = {
