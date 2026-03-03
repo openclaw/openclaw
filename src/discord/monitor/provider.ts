@@ -450,6 +450,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     class DiscordStatusReadyListener extends ReadyListener {
       async handle(_data: unknown, client: Client) {
+        const connectedAt = Date.now();
+        opts.setStatus?.({
+          connected: true,
+          lastConnectedAt: connectedAt,
+          lastEventAt: connectedAt,
+          lastDisconnect: null,
+        });
+
         const gateway = client.getPlugin<GatewayPlugin>("gateway");
         if (!gateway) {
           return;

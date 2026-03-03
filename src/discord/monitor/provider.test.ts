@@ -7,6 +7,7 @@ const {
   clientFetchUserMock,
   clientGetPluginMock,
   clientConstructorOptionsMock,
+  clientConstructorHandlersMock,
   createDiscordNativeCommandMock,
   createNoopThreadBindingManagerMock,
   createThreadBindingManagerMock,
@@ -19,10 +20,12 @@ const {
   resolveDiscordAllowlistConfigMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
+  resolveDiscordPresenceUpdateMock,
 } = vi.hoisted(() => {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
   return {
     clientConstructorOptionsMock: vi.fn(),
+    clientConstructorHandlersMock: vi.fn(),
     clientFetchUserMock: vi.fn(async (_target: string) => ({ id: "bot-1" })),
     clientGetPluginMock: vi.fn<(_name: string) => unknown>(() => undefined),
     createDiscordNativeCommandMock: vi.fn(() => ({ name: "mock-command" })),
@@ -63,6 +66,7 @@ const {
     })),
     resolveNativeCommandsEnabledMock: vi.fn(() => true),
     resolveNativeSkillsEnabledMock: vi.fn(() => false),
+    resolveDiscordPresenceUpdateMock: vi.fn(() => undefined),
   };
 });
 
@@ -77,6 +81,7 @@ vi.mock("@buape/carbon", () => {
       this.listeners = handlers.listeners ?? [];
       this.rest = { put: vi.fn(async () => undefined) };
       clientConstructorOptionsMock(options);
+      clientConstructorHandlersMock(handlers);
     }
     async handleDeployRequest() {
       return undefined;
@@ -217,7 +222,7 @@ vi.mock("./native-command.js", () => ({
 }));
 
 vi.mock("./presence.js", () => ({
-  resolveDiscordPresenceUpdate: () => undefined,
+  resolveDiscordPresenceUpdate: resolveDiscordPresenceUpdateMock,
 }));
 
 vi.mock("./provider.allowlist.js", () => ({
@@ -268,6 +273,7 @@ describe("monitorDiscordProvider", () => {
 
   beforeEach(() => {
     clientConstructorOptionsMock.mockClear();
+    clientConstructorHandlersMock.mockClear();
     clientFetchUserMock.mockClear().mockResolvedValue({ id: "bot-1" });
     clientGetPluginMock.mockClear().mockReturnValue(undefined);
     createDiscordNativeCommandMock.mockClear().mockReturnValue({ name: "mock-command" });
@@ -291,6 +297,7 @@ describe("monitorDiscordProvider", () => {
     });
     resolveNativeCommandsEnabledMock.mockClear().mockReturnValue(true);
     resolveNativeSkillsEnabledMock.mockClear().mockReturnValue(false);
+    resolveDiscordPresenceUpdateMock.mockClear().mockReturnValue(undefined);
   });
 
   it("stops thread bindings when startup fails before lifecycle begins", async () => {
@@ -384,5 +391,40 @@ describe("monitorDiscordProvider", () => {
 
     const eventQueue = getConstructedEventQueue();
     expect(eventQueue?.listenerTimeout).toBe(300_000);
+  });
+
+  it("marks channel connected when Discord ready listener fires", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const setStatus = vi.fn();
+    const updatePresence = vi.fn();
+    const presence = { status: "online" };
+    resolveDiscordPresenceUpdateMock.mockReturnValue(presence);
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+      setStatus,
+    });
+
+    const handlers = clientConstructorHandlersMock.mock.calls[0]?.[0] as
+      | { listeners?: Array<{ handle?: (data: unknown, client: unknown) => Promise<void> }> }
+      | undefined;
+    const readyListener = handlers?.listeners?.[0];
+    expect(readyListener?.handle).toBeTypeOf("function");
+
+    await readyListener?.handle?.({}, { getPlugin: () => ({ updatePresence }) });
+
+    const connectedCall = setStatus.mock.calls.find((call) => {
+      const patch = (call[0] ?? {}) as Record<string, unknown>;
+      return patch.connected === true;
+    });
+    expect(connectedCall).toBeDefined();
+    expect(connectedCall?.[0]).toMatchObject({
+      connected: true,
+      lastDisconnect: null,
+    });
+    expect(connectedCall?.[0].lastConnectedAt).toBeTypeOf("number");
+    expect(connectedCall?.[0].lastEventAt).toBeTypeOf("number");
+    expect(updatePresence).toHaveBeenCalledWith(presence);
   });
 });
