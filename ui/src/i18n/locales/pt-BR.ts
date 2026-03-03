@@ -113,6 +113,9 @@ export const pt_BR: TranslationMap = {
     refreshTitle: "Atualizar dados do chat",
     thinkingToggle: "Alternar saída de pensamento/trabalho do assistente",
     focusToggle: "Alternar modo de foco (ocultar barra lateral + cabeçalho da página)",
+    hideCronSessions: "Ocultar sessões de cron",
+    showCronSessions: "Mostrar sessões de cron",
+    showCronSessionsHidden: "Mostrar sessões de cron ({count} ocultas)",
     onboardingDisabled: "Desativado durante a integração",
   },
   languages: {
@@ -120,5 +123,6 @@ export const pt_BR: TranslationMap = {
     zhCN: "简体中文 (Chinês Simplificado)",
     zhTW: "繁體中文 (Chinês Tradicional)",
     ptBR: "Português (Português Brasileiro)",
+    de: "Deutsch (Alemão)",
   },
 };

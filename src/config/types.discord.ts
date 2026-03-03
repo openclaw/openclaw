@@ -31,6 +31,11 @@ export type DiscordDmConfig = {
 export type DiscordGuildChannelConfig = {
   allow?: boolean;
   requireMention?: boolean;
+  /**
+   * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
+   * Default: false.
+   */
+  ignoreOtherMentions?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -53,6 +58,11 @@ export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
+  /**
+   * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
+   * Default: false.
+   */
+  ignoreOtherMentions?: boolean;
   /** Optional tool policy overrides for this guild (used when channel override is missing). */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -154,10 +164,15 @@ export type DiscordThreadBindingsConfig = {
    */
   enabled?: boolean;
   /**
-   * Auto-unfocus TTL for thread-bound sessions in hours.
-   * Set to 0 to disable TTL. Default: 24.
+   * Inactivity window for thread-bound sessions in hours.
+   * Session auto-unfocuses after this amount of idle time. Set to 0 to disable. Default: 24.
    */
-  ttlHours?: number;
+  idleHours?: number;
+  /**
+   * Optional hard max age for thread-bound sessions in hours.
+   * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
+   */
+  maxAgeHours?: number;
   /**
    * Allow `sessions_spawn({ thread: true })` to auto-create + bind Discord
    * threads for subagent sessions. Default: false (opt-in).
@@ -173,6 +188,21 @@ export type DiscordThreadBindingsConfig = {
 export type DiscordSlashCommandConfig = {
   /** Reply ephemerally (default: true). */
   ephemeral?: boolean;
+};
+
+export type DiscordAutoPresenceConfig = {
+  /** Enable automatic runtime/quota-based Discord presence updates. Default: false. */
+  enabled?: boolean;
+  /** Poll interval for evaluating runtime availability state (ms). Default: 30000. */
+  intervalMs?: number;
+  /** Minimum spacing between actual gateway presence updates (ms). Default: 15000. */
+  minUpdateIntervalMs?: number;
+  /** Optional custom status text while runtime is healthy; supports plain text. */
+  healthyText?: string;
+  /** Optional custom status text while runtime/quota state is degraded or unknown. */
+  degradedText?: string;
+  /** Optional custom status text while runtime detects quota/token exhaustion. */
+  exhaustedText?: string;
 };
 
 export type DiscordAccountConfig = {
@@ -287,17 +317,37 @@ export type DiscordAccountConfig = {
    * Discord supports both unicode emoji and custom emoji names.
    */
   ackReaction?: string;
+  /** When to send ack reactions for this Discord account. Overrides messages.ackReactionScope. */
+  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
   /** Bot activity status text (e.g. "Watching X"). */
   activity?: string;
   /** Bot status (online|dnd|idle|invisible). Defaults to online when presence is configured. */
   status?: "online" | "dnd" | "idle" | "invisible";
+  /** Automatic runtime/quota presence signaling (status text + status mapping). */
+  autoPresence?: DiscordAutoPresenceConfig;
   /** Activity type (0=Game, 1=Streaming, 2=Listening, 3=Watching, 4=Custom, 5=Competing). Defaults to 4 (Custom) when activity is set. */
   activityType?: 0 | 1 | 2 | 3 | 4 | 5;
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
   activityUrl?: string;
+  /**
+   * Carbon EventQueue configuration. Controls how Discord gateway events are processed.
+   * The most important option is `listenerTimeout` which defaults to 30s in Carbon --
+   * too short for LLM calls with extended thinking. Set a higher value (e.g. 120000)
+   * to prevent the event queue from killing long-running message handlers.
+   */
+  eventQueue?: {
+    /** Max time (ms) a single listener can run before being killed. Default: 120000. */
+    listenerTimeout?: number;
+    /** Max events queued before backpressure is applied. Default: 10000. */
+    maxQueueSize?: number;
+    /** Max concurrent event processing operations. Default: 50. */
+    maxConcurrency?: number;
+  };
 };
 
 export type DiscordConfig = {
   /** Optional per-account Discord configuration (multi-account). */
   accounts?: Record<string, DiscordAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & DiscordAccountConfig;
