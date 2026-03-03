@@ -102,12 +102,15 @@ export function createTelegramDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   const requestedPreviewTransport = params.previewTransport ?? "auto";
+  // Bot API 9.5 (March 2026) opened sendMessageDraft to all bots and
+  // chat types.  Default to draft transport everywhere ("auto") and let
+  // the runtime fallback handle older servers gracefully.
   const prefersDraftTransport =
     requestedPreviewTransport === "draft"
       ? true
       : requestedPreviewTransport === "message"
         ? false
-        : params.thread?.scope === "dm";
+        : true;
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyParams =
     params.replyToMessageId != null

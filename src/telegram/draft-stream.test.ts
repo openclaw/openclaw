@@ -13,8 +13,11 @@ function createMockDraftApi(sendMessageImpl?: () => Promise<{ message_id: number
   };
 }
 
-function createForumDraftStream(api: ReturnType<typeof createMockDraftApi>) {
-  return createThreadedDraftStream(api, { id: 99, scope: "forum" });
+function createForumMessageStream(api: ReturnType<typeof createMockDraftApi>) {
+  return createDraftStream(api, {
+    thread: { id: 99, scope: "forum" },
+    previewTransport: "message",
+  });
 }
 
 function createThreadedDraftStream(
@@ -57,17 +60,17 @@ function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
   api.sendMessage
     .mockResolvedValueOnce({ message_id: 17 })
     .mockResolvedValueOnce({ message_id: 42 });
-  const stream = createDraftStream(
-    api,
-    params.throttleMs != null ? { throttleMs: params.throttleMs } : {},
-  );
+  const stream = createDraftStream(api, {
+    previewTransport: "message",
+    ...(params.throttleMs != null ? { throttleMs: params.throttleMs } : {}),
+  });
   return { api, stream };
 }
 
 describe("createTelegramDraftStream", () => {
   it("sends stream preview message with message_thread_id when provided", async () => {
     const api = createMockDraftApi();
-    const stream = createForumDraftStream(api);
+    const stream = createForumMessageStream(api);
 
     stream.update("Hello");
     await expectInitialForumSend(api);
@@ -75,7 +78,7 @@ describe("createTelegramDraftStream", () => {
 
   it("edits existing stream preview message on subsequent updates", async () => {
     const api = createMockDraftApi();
-    const stream = createForumDraftStream(api);
+    const stream = createForumMessageStream(api);
 
     stream.update("Hello");
     await expectInitialForumSend(api);
@@ -93,7 +96,7 @@ describe("createTelegramDraftStream", () => {
       resolveSend = resolve;
     });
     const api = createMockDraftApi(() => firstSend);
-    const stream = createForumDraftStream(api);
+    const stream = createForumMessageStream(api);
 
     stream.update("Hello");
     await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
@@ -109,7 +112,10 @@ describe("createTelegramDraftStream", () => {
 
   it("omits message_thread_id for general topic id", async () => {
     const api = createMockDraftApi();
-    const stream = createThreadedDraftStream(api, { id: 1, scope: "forum" });
+    const stream = createDraftStream(api, {
+      thread: { id: 1, scope: "forum" },
+      previewTransport: "message",
+    });
 
     stream.update("Hello");
 
@@ -131,6 +137,56 @@ describe("createTelegramDraftStream", () => {
     await stream.clear();
 
     expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
+
+  it("uses sendMessageDraft for forum threads by default (Bot API 9.5)", async () => {
+    const api = createMockDraftApi();
+    const stream = createThreadedDraftStream(api, { id: 99, scope: "forum" });
+
+    stream.update("Hello");
+    await vi.waitFor(() =>
+      expect(api.sendMessageDraft).toHaveBeenCalledWith(123, expect.any(Number), "Hello", {
+        message_thread_id: 99,
+      }),
+    );
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("uses sendMessageDraft for subsequent forum updates without editing", async () => {
+    const api = createMockDraftApi();
+    const stream = createThreadedDraftStream(api, { id: 99, scope: "forum" });
+
+    stream.update("Hello");
+    await vi.waitFor(() => expect(api.sendMessageDraft).toHaveBeenCalledTimes(1));
+
+    stream.update("Hello again");
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(2);
+    expect(api.sendMessageDraft).toHaveBeenLastCalledWith(
+      123,
+      expect.any(Number),
+      "Hello again",
+      { message_thread_id: 99 },
+    );
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("supports forcing message transport in forum threads", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 99, scope: "forum" },
+      previewTransport: "message",
+    });
+
+    stream.update("Hello");
+    await vi.waitFor(() =>
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 99 }),
+    );
+    expect(api.sendMessageDraft).not.toHaveBeenCalled();
   });
 
   it("supports forcing message transport in dm threads", async () => {
@@ -327,6 +383,7 @@ describe("createTelegramDraftStream", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      previewTransport: "message",
       onSupersededPreview,
     });
 
@@ -355,6 +412,7 @@ describe("createTelegramDraftStream", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      previewTransport: "message",
       renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
     });
 
