@@ -12,15 +12,19 @@ describe("browser config", () => {
     expect(resolved.cdpHost).toBe("127.0.0.1");
     expect(resolved.cdpProtocol).toBe("http");
     const profile = resolveProfile(resolved, resolved.defaultProfile);
-    expect(profile?.name).toBe("chrome");
-    expect(profile?.driver).toBe("extension");
-    expect(profile?.cdpPort).toBe(18792);
-    expect(profile?.cdpUrl).toBe("http://127.0.0.1:18792");
+    expect(profile?.name).toBe("openclaw");
+    expect(profile?.driver).toBe("openclaw");
+    expect(profile?.cdpPort).toBe(18800);
+    expect(profile?.cdpUrl).toBe("http://127.0.0.1:18800");
 
     const openclaw = resolveProfile(resolved, "openclaw");
     expect(openclaw?.driver).toBe("openclaw");
     expect(openclaw?.cdpPort).toBe(18800);
     expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:18800");
+    const chrome = resolveProfile(resolved, "chrome");
+    expect(chrome?.driver).toBe("extension");
+    expect(chrome?.cdpPort).toBe(18792);
+    expect(chrome?.cdpUrl).toBe("http://127.0.0.1:18792");
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
   });
@@ -53,6 +57,22 @@ describe("browser config", () => {
       expect(openclaw?.cdpPort).toBe(19022);
       expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19022");
     });
+  });
+
+  it("supports overriding the local CDP auto-allocation range start", () => {
+    const resolved = resolveBrowserConfig({
+      cdpPortRangeStart: 19000,
+    });
+    const openclaw = resolveProfile(resolved, "openclaw");
+    expect(resolved.cdpPortRangeStart).toBe(19000);
+    expect(openclaw?.cdpPort).toBe(19000);
+    expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19000");
+  });
+
+  it("rejects cdpPortRangeStart values that overflow the CDP range window", () => {
+    expect(() => resolveBrowserConfig({ cdpPortRangeStart: 65535 })).toThrow(
+      /cdpPortRangeStart .* too high/i,
+    );
   });
 
   it("normalizes hex colors", () => {
@@ -107,6 +127,30 @@ describe("browser config", () => {
     expect(remote?.cdpUrl).toBe("http://10.0.0.42:9222");
     expect(remote?.cdpHost).toBe("10.0.0.42");
     expect(remote?.cdpIsLoopback).toBe(false);
+  });
+
+  it("inherits attachOnly from global browser config when profile override is not set", () => {
+    const resolved = resolveBrowserConfig({
+      attachOnly: true,
+      profiles: {
+        remote: { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.attachOnly).toBe(true);
+  });
+
+  it("allows profile attachOnly to override global browser attachOnly", () => {
+    const resolved = resolveBrowserConfig({
+      attachOnly: false,
+      profiles: {
+        remote: { cdpUrl: "http://127.0.0.1:9222", attachOnly: true, color: "#0066CC" },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.attachOnly).toBe(true);
   });
 
   it("uses base protocol for profiles with only cdpPort", () => {
@@ -197,5 +241,64 @@ describe("browser config", () => {
       },
     });
     expect(resolved.ssrfPolicy).toEqual({});
+  });
+
+  describe("default profile preference", () => {
+    it("defaults to openclaw profile when defaultProfile is not configured", () => {
+      const resolved = resolveBrowserConfig({
+        headless: false,
+        noSandbox: false,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("keeps openclaw default when headless=true", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("keeps openclaw default when noSandbox=true", () => {
+      const resolved = resolveBrowserConfig({
+        noSandbox: true,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("keeps openclaw default when both headless and noSandbox are true", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        noSandbox: true,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("explicit defaultProfile config overrides defaults in headless mode", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        defaultProfile: "chrome",
+      });
+      expect(resolved.defaultProfile).toBe("chrome");
+    });
+
+    it("explicit defaultProfile config overrides defaults in noSandbox mode", () => {
+      const resolved = resolveBrowserConfig({
+        noSandbox: true,
+        defaultProfile: "chrome",
+      });
+      expect(resolved.defaultProfile).toBe("chrome");
+    });
+
+    it("allows custom profile as default even in headless mode", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        defaultProfile: "custom",
+        profiles: {
+          custom: { cdpPort: 19999, color: "#00FF00" },
+        },
+      });
+      expect(resolved.defaultProfile).toBe("custom");
+    });
   });
 });
