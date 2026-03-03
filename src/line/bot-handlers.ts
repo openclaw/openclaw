@@ -106,6 +106,25 @@ function buildLineWebhookReplayKey(
   event: WebhookEvent,
   accountId: string,
 ): { key: string; eventId: string } | null {
+  if (event.type === "message") {
+    const messageId = event.message?.id?.trim();
+    if (messageId) {
+      return {
+        key: `${accountId}|message:${messageId}`,
+        eventId: `message:${messageId}`,
+      };
+    }
+  }
+  if (event.type === "postback") {
+    const replyToken = event.replyToken?.trim();
+    if (replyToken) {
+      return {
+        key: `${accountId}|postback:${replyToken}`,
+        eventId: `postback:${replyToken}`,
+      };
+    }
+  }
+
   const eventId = (event as { webhookEventId?: string }).webhookEventId?.trim();
   if (!eventId) {
     return null;
@@ -122,7 +141,7 @@ function buildLineWebhookReplayKey(
       : source?.type === "room"
         ? `room:${source.roomId ?? ""}`
         : `user:${source?.userId ?? ""}`;
-  return { key: `${accountId}|${event.type}|${sourceId}|${eventId}`, eventId };
+  return { key: `${accountId}|${event.type}|${sourceId}|${eventId}`, eventId: `event:${eventId}` };
 }
 
 function shouldSkipLineReplayEvent(event: WebhookEvent, context: LineHandlerContext): boolean {

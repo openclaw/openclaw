@@ -416,6 +416,53 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("deduplicates redeliveries by LINE message id when webhookEventId changes", async () => {
+    const processMessage = vi.fn();
+    const event = {
+      type: "message",
+      message: { id: "m-dup-1", type: "text", text: "hello" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-dup", userId: "user-dup" },
+      mode: "active",
+      webhookEventId: "evt-dup-1",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
+      cfg: {
+        channels: { line: { groupPolicy: "allowlist", groupAllowFrom: ["user-dup"] } },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "allowlist", groupAllowFrom: ["user-dup"] },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+      replayCache: createLineWebhookReplayCache(),
+    };
+
+    await handleLineWebhookEvents([event], context);
+    await handleLineWebhookEvents(
+      [
+        {
+          ...event,
+          webhookEventId: "evt-dup-redelivery",
+          deliveryContext: { isRedelivery: true },
+        } as MessageEvent,
+      ],
+      context,
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("downloads file attachments and forwards media refs to message context", async () => {
     const processMessage = vi.fn();
     const event = {
