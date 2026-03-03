@@ -800,6 +800,13 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";
   }
+  // Check timeout patterns (connection errors, fetch failures, socket hang-ups)
+  // before overloaded patterns, because a generic "service unavailable" response
+  // from a proxy/CDN should not be classified as rate_limit when the underlying
+  // issue is a transient network or server error.
+  if (isTimeoutErrorMessage(raw)) {
+    return "timeout";
+  }
   if (isOverloadedErrorMessage(raw)) {
     return "rate_limit";
   }
@@ -808,9 +815,6 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isBillingErrorMessage(raw)) {
     return "billing";
-  }
-  if (isTimeoutErrorMessage(raw)) {
-    return "timeout";
   }
   if (isAuthPermanentErrorMessage(raw)) {
     return "auth_permanent";

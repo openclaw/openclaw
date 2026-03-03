@@ -527,12 +527,21 @@ describe("classifyFailoverReason", () => {
         "This model is currently experiencing high demand. Please try again later.",
       ),
     ).toBe("rate_limit");
-    expect(classifyFailoverReason("LLM error: service unavailable")).toBe("rate_limit");
     expect(
       classifyFailoverReason(
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
       ),
     ).toBe("rate_limit");
+    // "service unavailable" combined with an overload indicator should still classify
+    expect(classifyFailoverReason("service unavailable due to high demand")).toBe("rate_limit");
+    expect(classifyFailoverReason("service_unavailable: overloaded, please retry")).toBe(
+      "rate_limit",
+    );
+  });
+  it("does not classify bare 'service unavailable' as rate_limit (#32828)", () => {
+    // A generic 503 from a proxy/CDN should not be classified as provider-overload
+    expect(classifyFailoverReason("LLM error: service unavailable")).toBeNull();
+    expect(classifyFailoverReason("503 service unavailable")).toBe("timeout");
   });
   it("classifies permanent auth errors as auth_permanent", () => {
     expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
