@@ -461,10 +461,11 @@ export async function acquireSessionWriteLock(params: {
       handle = await fs.open(lockPath, "wx");
       const createdAt = new Date().toISOString();
       const bootId = getSystemBootId();
-      const lockData: LockFilePayload = { pid: process.pid, createdAt };
-      if (bootId) {
-        lockData.bootId = bootId;
-      }
+      const lockData: LockFilePayload = {
+        pid: process.pid,
+        ...(bootId ? { bootId } : {}),
+        createdAt,
+      };
       await handle.writeFile(JSON.stringify(lockData, null, 2), "utf8");
       const createdHeld: HeldLock = {
         count: 1,
