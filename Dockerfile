@@ -72,7 +72,7 @@ RUN if [ -n "$OPENCLAW_INSTALL_DOCKER_CLI" ]; then \
       # Update OPENCLAW_DOCKER_GPG_FINGERPRINT when Docker rotates release keys.
       curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc && \
       expected_fingerprint="$(printf '%s' "$OPENCLAW_DOCKER_GPG_FINGERPRINT" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')" && \
-      actual_fingerprint="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == \"fpr\" { print toupper($10); exit }')" && \
+      actual_fingerprint="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == "fpr" { print toupper($10); exit }')" && \
       if [ -z "$actual_fingerprint" ] || [ "$actual_fingerprint" != "$expected_fingerprint" ]; then \
         echo "ERROR: Docker apt key fingerprint mismatch (expected $expected_fingerprint, got ${actual_fingerprint:-<empty>})" >&2; \
         exit 1; \
