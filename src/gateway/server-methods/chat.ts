@@ -52,7 +52,14 @@ import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
-/** Associate a session key with a client for session-scoped chat delivery. */
+/**
+ * Associate a session key with a client for session-scoped chat delivery.
+ *
+ * In addition to the exact key, the lowercased form is also registered so
+ * that the broadcast-side matching (which only checks raw + lowercase) can
+ * handle case-insensitive aliases without calling `loadConfig()` on the
+ * hot path.
+ */
 function trackChatSessionKey(client: GatewayClient | null, sessionKey: string | undefined): void {
   if (!client || !sessionKey) {
     return;
@@ -60,17 +67,26 @@ function trackChatSessionKey(client: GatewayClient | null, sessionKey: string | 
   if (!client.chatSessionKeys) {
     client.chatSessionKeys = new Set();
   }
-  // Re-insert to refresh iteration order (most-recently-used last).
-  if (client.chatSessionKeys.has(sessionKey)) {
-    client.chatSessionKeys.delete(sessionKey);
-  } else if (client.chatSessionKeys.size >= MAX_TRACKED_CHAT_SESSION_KEYS) {
-    // Evict the oldest (first-inserted) key to stay within the cap.
-    const oldest = client.chatSessionKeys.values().next().value;
-    if (oldest !== undefined) {
-      client.chatSessionKeys.delete(oldest);
+  const addKey = (key: string) => {
+    // Re-insert to refresh iteration order (most-recently-used last).
+    if (client.chatSessionKeys!.has(key)) {
+      client.chatSessionKeys!.delete(key);
+    } else if (client.chatSessionKeys!.size >= MAX_TRACKED_CHAT_SESSION_KEYS) {
+      // Evict the oldest (first-inserted) key to stay within the cap.
+      const oldest = client.chatSessionKeys!.values().next().value;
+      if (oldest !== undefined) {
+        client.chatSessionKeys!.delete(oldest);
+      }
     }
+    client.chatSessionKeys!.add(key);
+  };
+  addKey(sessionKey);
+  // Also register the lowercased form so broadcast-side matching can
+  // handle case-insensitive aliases without loadConfig() overhead.
+  const lower = sessionKey.toLowerCase();
+  if (lower !== sessionKey) {
+    addKey(lower);
   }
-  client.chatSessionKeys.add(sessionKey);
 }
 
 type TranscriptAppendResult = {

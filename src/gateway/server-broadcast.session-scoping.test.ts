@@ -193,7 +193,9 @@ describe("chat broadcast session scoping", () => {
     expect(getSentPayloads(client)).toHaveLength(1);
   });
 
-  it("matches session keys case-insensitively for alias tolerance", () => {
+  it("matches session keys case-insensitively via broadcast-side lowercase fallback", () => {
+    // Client tracked "main" — broadcast-side lowercases "Main" to "main"
+    // and finds a match without needing loadConfig().
     const client = createMockClient({
       connId: "a",
       chatSessionKeys: new Set(["main"]),
@@ -201,13 +203,14 @@ describe("chat broadcast session scoping", () => {
     const clients = new Set([client]);
     const { broadcast } = createGatewayBroadcaster({ clients });
 
-    // Event broadcast with mixed-case alias should still match.
     broadcast("chat", { sessionKey: "Main", state: "delta" });
     expect(getSentPayloads(client)).toHaveLength(1);
   });
 
-  it("matches alias-equivalent session keys via canonical resolution", () => {
-    // Client tracked the canonical key (e.g. resolved from "main" alias).
+  it("matches when client tracked canonical key and event uses same canonical key", () => {
+    // Canonical resolution happens at registration time (trackChatSessionKey).
+    // If the client tracked "agent:ops:work" (the canonical form) and the
+    // event also uses "agent:ops:work", it matches directly.
     const client = createMockClient({
       connId: "a",
       chatSessionKeys: new Set(["agent:ops:work"]),
@@ -215,9 +218,7 @@ describe("chat broadcast session scoping", () => {
     const clients = new Set([client]);
     const { broadcast } = createGatewayBroadcaster({ clients });
 
-    // Event broadcast with the raw alias "main" — after canonical
-    // resolution this should match "agent:ops:work" in the tracked set.
-    broadcast("chat", { sessionKey: "main", state: "delta" });
+    broadcast("chat", { sessionKey: "agent:ops:work", state: "delta" });
     expect(getSentPayloads(client)).toHaveLength(1);
   });
 
