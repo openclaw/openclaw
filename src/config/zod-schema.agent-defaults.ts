@@ -110,7 +110,7 @@ export const AgentDefaultsSchema = z
           .optional(),
         identifierInstructions: z.string().optional(),
         fallbackModel: z
-          .string()
+          .union([z.literal("off"), z.literal("fallback"), z.string().min(1)])
           .optional()
           .describe(
             'Fallback model for compaction on quota or rate-limit errors. "off" (default) disables fallback. "fallback" uses the agents.defaults.model.fallbacks chain in order. An explicit "provider/model" string (e.g. "anthropic/claude-haiku-4-5") targets a specific model.',

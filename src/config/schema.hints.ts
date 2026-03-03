@@ -77,6 +77,8 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
   "channels.mattermost.baseUrl": "https://chat.example.com",
   "agents.list[].identity.avatar": "avatars/openclaw.png",
+  "agents.defaults.compaction.fallbackModel":
+    "provider/model (e.g. google-gemini-cli/gemini-3-flash-preview)",
 };
 
 /**

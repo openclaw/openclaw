@@ -415,6 +415,21 @@ export function renderNode(params: {
       return renderSelect({ ...params, options: literals, value: value ?? schema.default });
     }
 
+    // Composite: fixed literal buttons + open string text input (e.g. "off"/"fallback"/custom)
+    if (!allLiterals) {
+      const fixedLiterals = literals.filter((v): v is NonNullable<unknown> => v !== undefined);
+      const openStringCount = nonNull.filter(
+        (v) => extractLiteral(v) === undefined && schemaType(v) === "string",
+      ).length;
+      if (
+        fixedLiterals.length >= 1 &&
+        openStringCount === 1 &&
+        fixedLiterals.length + 1 === nonNull.length
+      ) {
+        return renderLiteralsOrTextComposite({ ...params, fixedLiterals });
+      }
+    }
+
     // Handle mixed primitive types
     const primitiveTypes = new Set(nonNull.map((variant) => schemaType(variant)).filter(Boolean));
     const normalizedTypes = new Set(
@@ -525,6 +540,90 @@ export function renderNode(params: {
     <div class="cfg-field cfg-field--error">
       <div class="cfg-field__label">${label}</div>
       <div class="cfg-field__error">Unsupported type: ${type}. Use Raw mode.</div>
+    </div>
+  `;
+}
+
+/**
+ * Renders a composite field for anyOf schemas with fixed literal options and one open string type.
+ * Shows segmented buttons for each fixed option plus a "custom" button, and reveals a text input
+ * when the value is a custom (non-literal) string.
+ */
+function renderLiteralsOrTextComposite(params: {
+  schema: JsonSchema;
+  value: unknown;
+  path: Array<string | number>;
+  hints: ConfigUiHints;
+  disabled: boolean;
+  showLabel?: boolean;
+  fixedLiterals: NonNullable<unknown>[];
+  onPatch: (path: Array<string | number>, value: unknown) => void;
+}): TemplateResult {
+  const { schema, value, path, hints, disabled, onPatch, fixedLiterals } = params;
+  const showLabel = params.showLabel ?? true;
+  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const hint = hintForPath(path, hints);
+
+  const isCustom =
+    value !== undefined &&
+    value !== null &&
+    value !== "" &&
+    !fixedLiterals.some((lit) => lit === value || String(lit) === String(value));
+  const customValue = isCustom ? String(value) : "";
+  const placeholder = hint?.placeholder ?? "";
+
+  return html`
+    <div class="cfg-field">
+      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
+      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      ${renderTags(tags)}
+      <div class="cfg-segmented">
+        ${fixedLiterals.map(
+          (lit) => html`
+          <button
+            type="button"
+            class="cfg-segmented__btn ${
+              // oxlint-disable typescript/no-base-to-string
+              lit === value || String(lit) === String(value) ? "active" : ""
+            }"
+            ?disabled=${disabled}
+            @click=${() => onPatch(path, lit)}
+          >
+            ${
+              // oxlint-disable typescript/no-base-to-string
+              String(lit)
+            }
+          </button>
+        `,
+        )}
+        <button
+          type="button"
+          class="cfg-segmented__btn ${isCustom ? "active" : ""}"
+          ?disabled=${disabled}
+          @click=${() => {
+            if (!isCustom) {
+              onPatch(path, "");
+            }
+          }}
+        >custom</button>
+      </div>
+      ${
+        isCustom
+          ? html`
+          <div class="cfg-input-wrap" style="margin-top:8px">
+            <input
+              type="text"
+              class="cfg-input"
+              placeholder=${placeholder}
+              .value=${customValue}
+              ?disabled=${disabled}
+              @input=${(e: Event) => onPatch(path, (e.target as HTMLInputElement).value)}
+              @change=${(e: Event) => onPatch(path, (e.target as HTMLInputElement).value.trim())}
+            />
+          </div>
+        `
+          : nothing
+      }
     </div>
   `;
 }
