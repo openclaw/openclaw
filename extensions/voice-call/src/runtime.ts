@@ -224,21 +224,13 @@ export async function createVoiceCallRuntime(params: {
       stop,
     };
   } catch (err) {
-    // Clean up webhook server on initialization failure
+    // Clean up all resources on initialization failure
     log.error(
-      `[voice-call] Runtime initialization failed, cleaning up webhook server: ${
+      `[voice-call] Runtime initialization failed, cleaning up resources: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );
-    try {
-      await webhookServer.stop();
-    } catch (stopErr) {
-      log.warn(
-        `[voice-call] Failed to stop webhook server during cleanup: ${
-          stopErr instanceof Error ? stopErr.message : String(stopErr)
-        }`,
-      );
-    }
+    
     // Clean up tunnel if started
     if (tunnelResult) {
       try {
@@ -251,6 +243,29 @@ export async function createVoiceCallRuntime(params: {
         );
       }
     }
+    
+    // Clean up tailscale exposure (idempotent, safe to call even if not set up)
+    try {
+      await cleanupTailscaleExposure(config);
+    } catch (tailscaleErr) {
+      log.warn(
+        `[voice-call] Failed to cleanup tailscale during cleanup: ${
+          tailscaleErr instanceof Error ? tailscaleErr.message : String(tailscaleErr)
+        }`,
+      );
+    }
+    
+    // Clean up webhook server last
+    try {
+      await webhookServer.stop();
+    } catch (stopErr) {
+      log.warn(
+        `[voice-call] Failed to stop webhook server during cleanup: ${
+          stopErr instanceof Error ? stopErr.message : String(stopErr)
+        }`,
+      );
+    }
+    
     throw err;
   }
 }
