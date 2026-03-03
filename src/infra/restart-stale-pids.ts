@@ -4,8 +4,17 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 
 const SPAWN_TIMEOUT_MS = 2000;
-const STALE_SIGTERM_WAIT_MS = 300;
-const STALE_SIGKILL_WAIT_MS = 200;
+const STALE_SIGTERM_WAIT_MS = 600;
+const STALE_SIGKILL_WAIT_MS = 400;
+/**
+ * After SIGKILL, the kernel may not release the TCP port immediately.
+ * Poll until the port is confirmed free (or until the budget expires) before
+ * returning control to the caller (typically `triggerOpenClawRestart` →
+ * `systemctl restart`). Without this wait the new process races the dying
+ * process for the port and systemd enters an EADDRINUSE restart loop.
+ */
+const PORT_FREE_POLL_INTERVAL_MS = 50;
+const PORT_FREE_TIMEOUT_MS = 2000;
 
 const restartLog = createSubsystemLogger("restart");
 let sleepSyncOverride: ((ms: number) => void) | null = null;
@@ -101,7 +110,35 @@ function terminateStaleProcessesSync(pids: number[]): number[] {
 }
 
 /**
+ * Poll the given port using lsof until no listeners are found or the timeout
+ * expires. Runs synchronously so callers (e.g. systemctl restart wrappers)
+ * block until the port is actually free before handing off to the supervisor.
+ */
+function waitForPortFreeSync(port: number): void {
+  const deadline = Date.now() + PORT_FREE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      const pids = findGatewayPidsOnPortSync(port);
+      if (pids.length === 0) {
+        return;
+      }
+    } catch {
+      // lsof unavailable — bail out rather than spin forever
+      return;
+    }
+    sleepSync(PORT_FREE_POLL_INTERVAL_MS);
+  }
+  restartLog.warn(
+    `port ${port} still in use after ${PORT_FREE_TIMEOUT_MS}ms; proceeding anyway`,
+  );
+}
+
+/**
  * Inspect the gateway port and kill any stale gateway processes holding it.
+ * Blocks until the port is confirmed free (or the poll budget expires) so
+ * the supervisor (systemd / launchctl) does not race a zombie process for
+ * the port and enter an EADDRINUSE restart loop.
+ *
  * Called before service restart commands to prevent port conflicts.
  */
 export function cleanStaleGatewayProcessesSync(): number[] {
@@ -114,7 +151,12 @@ export function cleanStaleGatewayProcessesSync(): number[] {
     restartLog.warn(
       `killing ${stalePids.length} stale gateway process(es) before restart: ${stalePids.join(", ")}`,
     );
-    return terminateStaleProcessesSync(stalePids);
+    const killed = terminateStaleProcessesSync(stalePids);
+    // Wait for the port to be released before returning — without this, the
+    // supervisor fires `systemctl restart` while the kernel still has the
+    // socket in TIME_WAIT / FIN_WAIT and the new process hits EADDRINUSE.
+    waitForPortFreeSync(port);
+    return killed;
   } catch {
     return [];
   }
