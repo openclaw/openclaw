@@ -672,7 +672,7 @@ export function renderCron(props: CronProps) {
                   `
                 : html`
                     <div class="list" style="margin-top: 12px;">
-                      ${[...runs].sort((a, b) => b.ts - a.ts).map((entry) => renderRun(entry, props.basePath))}
+                      ${runs.map((entry) => renderRun(entry, props.basePath))}
                     </div>
                   `
           }
