@@ -3,6 +3,7 @@
  */
 
 import { loadConfig } from "../config/config.js";
+import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
@@ -22,11 +23,26 @@ export type SignalReactionResult = {
   timestamp?: number;
 };
 
+type SignalSendReactionRecipientResult = {
+  type?: string;
+  recipientAddress?: {
+    uuid?: string | null;
+    number?: string | null;
+    username?: string | null;
+  } | null;
+};
+
+type SignalSendReactionRpcResult = {
+  timestamp?: number;
+  results?: SignalSendReactionRecipientResult[];
+};
+
 type SignalReactionErrorMessages = {
   missingRecipient: string;
   invalidTargetTimestamp: string;
   missingEmoji: string;
-  missingTargetAuthor: string;
+  missingGroupTargetAuthor: string;
+  missingDirectTargetAuthor: string;
 };
 
 function normalizeSignalId(raw: string): string {
@@ -48,12 +64,10 @@ function normalizeSignalUuid(raw: string): string {
   return trimmed;
 }
 
-function resolveTargetAuthorParams(params: {
+function resolveTargetAuthorParams(params: { targetAuthor?: string; targetAuthorUuid?: string }): {
   targetAuthor?: string;
-  targetAuthorUuid?: string;
-  fallback?: string;
-}): { targetAuthor?: string } {
-  const candidates = [params.targetAuthor, params.targetAuthorUuid, params.fallback];
+} {
+  const candidates = [params.targetAuthor, params.targetAuthorUuid];
   for (const candidate of candidates) {
     const raw = candidate?.trim();
     if (!raw) {
@@ -65,6 +79,22 @@ function resolveTargetAuthorParams(params: {
     }
   }
   return {};
+}
+
+function resolveReactionRecipientLabel(entry: SignalSendReactionRecipientResult): string {
+  const number = entry.recipientAddress?.number?.trim();
+  if (number) {
+    return number;
+  }
+  const uuid = entry.recipientAddress?.uuid?.trim();
+  if (uuid) {
+    return `uuid:${uuid}`;
+  }
+  const username = entry.recipientAddress?.username?.trim();
+  if (username) {
+    return username;
+  }
+  return "unknown";
 }
 
 async function sendReactionSignalCore(params: {
@@ -97,17 +127,21 @@ async function sendReactionSignalCore(params: {
   const targetAuthorParams = resolveTargetAuthorParams({
     targetAuthor: params.opts.targetAuthor,
     targetAuthorUuid: params.opts.targetAuthorUuid,
-    fallback: normalizedRecipient,
   });
   if (groupId && !targetAuthorParams.targetAuthor) {
-    throw new Error(params.errors.missingTargetAuthor);
+    throw new Error(params.errors.missingGroupTargetAuthor);
   }
+  if (!groupId && !targetAuthorParams.targetAuthor) {
+    throw new Error(params.errors.missingDirectTargetAuthor);
+  }
+
+  const resolvedTargetAuthor = targetAuthorParams.targetAuthor;
 
   const requestParams: Record<string, unknown> = {
     emoji: normalizedEmoji,
     targetTimestamp: params.targetTimestamp,
     ...(params.remove ? { remove: true } : {}),
-    ...targetAuthorParams,
+    ...(resolvedTargetAuthor ? { targetAuthor: resolvedTargetAuthor } : {}),
   };
   if (normalizedRecipient) {
     requestParams.recipients = [normalizedRecipient];
@@ -119,14 +153,34 @@ async function sendReactionSignalCore(params: {
     requestParams.account = account;
   }
 
-  const result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", requestParams, {
-    baseUrl,
-    timeoutMs: params.opts.timeoutMs,
+  const result = await signalRpcRequest<SignalSendReactionRpcResult>(
+    "sendReaction",
+    requestParams,
+    {
+      baseUrl,
+      timeoutMs: params.opts.timeoutMs,
+    },
+  );
+  const failures =
+    result.results?.filter((entry) => String(entry.type ?? "").toUpperCase() !== "SUCCESS") ?? [];
+  if (failures.length > 0) {
+    const details = failures
+      .map((entry) => `${resolveReactionRecipientLabel(entry)}:${String(entry.type ?? "UNKNOWN")}`)
+      .join(", ");
+    throw new Error(`Signal sendReaction failed for recipient result(s): ${details}`);
+  }
+  const timestamp = result.timestamp;
+
+  recordChannelActivity({
+    channel: "signal",
+    accountId: accountInfo.accountId,
+    direction: "outbound",
+    at: timestamp,
   });
 
   return {
     ok: true,
-    timestamp: result?.timestamp,
+    timestamp,
   };
 }
 
@@ -153,7 +207,8 @@ export async function sendReactionSignal(
       missingRecipient: "Recipient or groupId is required for Signal reaction",
       invalidTargetTimestamp: "Valid targetTimestamp is required for Signal reaction",
       missingEmoji: "Emoji is required for Signal reaction",
-      missingTargetAuthor: "targetAuthor is required for group reactions",
+      missingGroupTargetAuthor: "targetAuthor is required for group reactions",
+      missingDirectTargetAuthor: "targetAuthor is required for direct reactions",
     },
   });
 }
@@ -181,7 +236,8 @@ export async function removeReactionSignal(
       missingRecipient: "Recipient or groupId is required for Signal reaction removal",
       invalidTargetTimestamp: "Valid targetTimestamp is required for Signal reaction removal",
       missingEmoji: "Emoji is required for Signal reaction removal",
-      missingTargetAuthor: "targetAuthor is required for group reaction removal",
+      missingGroupTargetAuthor: "targetAuthor is required for group reaction removal",
+      missingDirectTargetAuthor: "targetAuthor is required for direct reaction removal",
     },
   });
 }

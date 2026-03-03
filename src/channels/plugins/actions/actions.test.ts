@@ -834,7 +834,7 @@ describe("signalMessageActions", () => {
       channels: { signal: { account: "+15550001111", actions: { reactions: false } } },
     } as OpenClawConfig;
     await expectSignalActionRejected(
-      { to: "+15550001111", messageId: "123", emoji: "✅" },
+      { to: "+15550001111", messageId: "123", emoji: "✅", targetAuthor: "+15550001111" },
       /actions\.reactions/,
       cfg,
     );
@@ -846,8 +846,13 @@ describe("signalMessageActions", () => {
         name: "uses account-level actions when enabled",
         cfg: createSignalAccountOverrideCfg(),
         accountId: "work",
-        params: { to: "+15550001111", messageId: "123", emoji: "👍" },
-        expectedArgs: ["+15550001111", 123, "👍", { accountId: "work" }],
+        params: { to: "+15550001111", messageId: "123", emoji: "👍", targetAuthor: "+15550001111" },
+        expectedArgs: [
+          "+15550001111",
+          123,
+          "👍",
+          { accountId: "work", targetAuthor: "+15550001111", targetAuthorUuid: undefined },
+        ],
       },
       {
         name: "normalizes uuid recipients",
@@ -857,8 +862,14 @@ describe("signalMessageActions", () => {
           recipient: "uuid:123e4567-e89b-12d3-a456-426614174000",
           messageId: "123",
           emoji: "🔥",
+          targetAuthor: "+15550001111",
         },
-        expectedArgs: ["123e4567-e89b-12d3-a456-426614174000", 123, "🔥", { accountId: undefined }],
+        expectedArgs: [
+          "123e4567-e89b-12d3-a456-426614174000",
+          123,
+          "🔥",
+          { accountId: undefined, targetAuthor: "+15550001111", targetAuthorUuid: undefined },
+        ],
       },
       {
         name: "passes groupId and targetAuthor for group reactions",
@@ -898,7 +909,7 @@ describe("signalMessageActions", () => {
     sendReactionSignal.mockClear();
     await runSignalAction(
       "react",
-      { to: "+15559999999", emoji: "🔥" },
+      { to: "+15559999999", emoji: "🔥", targetAuthor: "+15550001111" },
       { toolContext: { currentMessageId: "1737630212345" } },
     );
     expect(sendReactionSignal).toHaveBeenCalledTimes(1);
@@ -921,10 +932,17 @@ describe("signalMessageActions", () => {
     );
   });
 
-  it("requires targetAuthor for group reactions", async () => {
+  it("requires targetAuthor for reactions", async () => {
     const cfg = {
       channels: { signal: { account: "+15550001111" } },
     } as OpenClawConfig;
+    // Direct reaction without targetAuthor
+    await expectSignalActionRejected(
+      { to: "+15550001111", messageId: "123", emoji: "✅" },
+      /targetAuthor/,
+      cfg,
+    );
+    // Group reaction without targetAuthor
     await expectSignalActionRejected(
       { to: "signal:group:group-id", messageId: "123", emoji: "✅" },
       /targetAuthor/,
