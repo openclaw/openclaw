@@ -516,9 +516,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       clientPlugins.push(new VoicePlugin());
     }
     // Pass eventQueue config to Carbon so the listener timeout can be tuned.
-    // Default listenerTimeout is 120s (Carbon defaults to 30s which is too short for LLM calls).
+    // DiscordMessageListener.handle() is fire-and-forget (uses `void` internally),
+    // so it returns almost immediately regardless of how long the agent run takes.
+    // Setting listenerTimeout to 0 disables Carbon's timeout so it never falsely
+    // kills the Discord connection mid-run and triggers the health-monitor stuck cycle.
+    // See: https://github.com/openclaw/openclaw/issues/33452
     const eventQueueOpts = {
-      listenerTimeout: 120_000,
+      listenerTimeout: 0,
       ...discordCfg.eventQueue,
     };
     const client = new Client(
