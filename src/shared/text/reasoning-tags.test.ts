@@ -95,6 +95,12 @@ describe("stripReasoningTagsFromText", () => {
       );
     });
 
+    it("drops leaked preamble when a lone closing tag appears on its own line", () => {
+      const input =
+        "User sent a greeting in Discord so I should send a friendly reply.\n</think>\n\nHello!";
+      expect(stripReasoningTagsFromText(input)).toBe("Hello!");
+    });
+
     it("handles tags with whitespace", () => {
       const input = "A < think >content< /think > B";
       expect(stripReasoningTagsFromText(input)).toBe("A  B");

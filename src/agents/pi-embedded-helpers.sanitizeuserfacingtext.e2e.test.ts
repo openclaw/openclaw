@@ -14,6 +14,12 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
+  it("strips leaked thinking preamble with lone closing tag", () => {
+    const leaked =
+      "User sent a greeting in a Discord channel, so I should respond.\n</think>\n\nHello!";
+    expect(sanitizeUserFacingText(leaked)).toBe("Hello!");
+  });
+
   it("does not clobber normal numeric prefixes", () => {
     expect(sanitizeUserFacingText("202 results found")).toBe("202 results found");
     expect(sanitizeUserFacingText("400 days left")).toBe("400 days left");

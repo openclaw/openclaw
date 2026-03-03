@@ -4,6 +4,8 @@ export type ReasoningTagTrim = "none" | "start" | "both";
 const QUICK_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking|final)\b/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/gi;
 const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const THINKING_OPEN_TAG_RE = /<\s*(?!\/)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const THINKING_CLOSE_TAG_RE = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 
 interface CodeRegion {
   start: number;
@@ -35,6 +37,29 @@ function findCodeRegions(text: string): CodeRegion[] {
 
 function isInsideCode(pos: number, regions: CodeRegion[]): boolean {
   return regions.some((r) => pos >= r.start && pos < r.end);
+}
+
+function findFirstTagOutsideCode(
+  regex: RegExp,
+  text: string,
+  codeRegions: CodeRegion[],
+): RegExpMatchArray | null {
+  regex.lastIndex = 0;
+  for (const match of text.matchAll(regex)) {
+    const start = match.index ?? 0;
+    if (!isInsideCode(start, codeRegions)) {
+      return match;
+    }
+  }
+  return null;
+}
+
+function isTagAloneOnLine(text: string, start: number, end: number): boolean {
+  const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+  const lineEndIdx = text.indexOf("\n", end);
+  const lineEnd = lineEndIdx === -1 ? text.length : lineEndIdx;
+  const line = text.slice(lineStart, lineEnd).trim();
+  return line.length > 0 && /^<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>$/.test(line);
 }
 
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
@@ -89,6 +114,19 @@ export function stripReasoningTagsFromText(
   }
 
   const codeRegions = findCodeRegions(cleaned);
+
+  // Some models leak plain-text planning followed by a lone `</think>` line
+  // (without an opening thinking tag). If so, drop the leaked preamble.
+  const firstClose = findFirstTagOutsideCode(THINKING_CLOSE_TAG_RE, cleaned, codeRegions);
+  const firstOpen = findFirstTagOutsideCode(THINKING_OPEN_TAG_RE, cleaned, codeRegions);
+  if (firstClose) {
+    const closeStart = firstClose.index ?? 0;
+    const closeEnd = closeStart + firstClose[0].length;
+    const openStart = firstOpen?.index ?? Number.POSITIVE_INFINITY;
+    if (openStart > closeStart && isTagAloneOnLine(cleaned, closeStart, closeEnd)) {
+      cleaned = cleaned.slice(closeEnd);
+    }
+  }
 
   THINKING_TAG_RE.lastIndex = 0;
   let result = "";
