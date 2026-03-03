@@ -65,7 +65,8 @@ export function buildReplyPayloads(params: {
       text.includes("timeout") ||
       text.includes("api error") ||
       text.includes("429") ||
-      text.includes("503")
+      text.includes("503") ||
+      text.includes("socket connection was closed") // Bun transport failure
     );
   };
 

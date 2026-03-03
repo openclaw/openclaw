@@ -495,18 +495,21 @@ export async function runReplyAgent(params: {
         to: sessionCtx.To,
       }),
       accountId: sessionCtx.AccountId,
-      errorPolicy: cfg.channels?.defaults?.errorPolicy,
+      // Apply errorPolicy only to non-direct (group) chats
+      errorPolicy:
+        sessionCtx.ChatType === "direct" ? undefined : cfg.channels?.defaults?.errorPolicy,
     });
     const { replyPayloads, errorReactionRequested } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     // Handle react-only mode: send ⚠️ emoji reaction instead of error text
-    // Skip for slash commands (CommandSource: "native") - their MessageSid is interaction id, not message id
+    // Skip for slash commands and component interactions - their MessageSid is interaction id, not message id
     if (
       errorReactionRequested &&
       sessionCtx.MessageSid &&
       sessionCtx.OriginatingChannel === "discord" &&
-      sessionCtx.CommandSource !== "native"
+      sessionCtx.CommandSource !== "native" &&
+      !sessionCtx.MessageSid.startsWith("interaction_") // Component interactions
     ) {
       try {
         const { reactMessageDiscord } = await import("../../discord/send.js");
