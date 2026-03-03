@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Models/MiniMax: add first-class `MiniMax-M2.5-highspeed` support across built-in provider catalogs, onboarding flows, and MiniMax OAuth plugin defaults, while keeping legacy `MiniMax-M2.5-Lightning` compatibility for existing configs.
 - Docs/Models: refresh MiniMax, Moonshot (Kimi), GLM/Z.AI model docs to align with latest defaults (`MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `moonshot/kimi-k2.5`, `zai/glm-5`) and keep Moonshot model lists synced from shared source data.
+- Memory/Ollama embeddings: add `memorySearch.provider = "ollama"` and `memorySearch.fallback = "ollama"` support, honor `models.providers.ollama` settings for memory embedding requests, and document Ollama embedding usage. (#26349) Thanks @nico-hoff.
 - Outbound adapters/plugins: add shared `sendPayload` support across direct-text-media, Discord, Slack, WhatsApp, Zalo, and Zalouser with multi-media iteration and chunk-aware text fallback. (#30144) Thanks @nohat.
 - Media understanding/audio echo: add optional `tools.media.audio.echoTranscript` + `echoFormat` to send a pre-agent transcript confirmation message to the originating chat, with echo disabled by default. (#32150) Thanks @AytuncYildizli.
 - Plugin runtime/STT: add `api.runtime.stt.transcribeAudioFile(...)` so extensions can transcribe local audio files through OpenClaw's configured media-understanding audio providers. (#22402) Thanks @benthecarman.
