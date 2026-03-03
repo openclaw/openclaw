@@ -98,7 +98,9 @@ describe("exec wakeOnExit", () => {
     const sessionId = await runBackgroundExec(false);
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventMock.mock.calls[0]?.[0]).toContain(`session=${sessionId}`);
+    const firstCall = enqueueSystemEventMock.mock.calls.at(0);
+    expect(firstCall).toBeDefined();
+    expect(String(firstCall?.[0])).toContain(`session=${sessionId}`);
     expect(requestSessionEventRunMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: expect.stringMatching(/^exec:.*:exit$/),

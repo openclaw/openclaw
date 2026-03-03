@@ -47,9 +47,11 @@ vi.mock("../config/sessions.js", () => ({
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
   pruneLegacyStoreKeys: vi.fn(),
-  resolveGatewaySessionStoreTarget: vi.fn(({ key }: { key: string }) => ({
-    canonicalKey: key,
-    storeKeys: [key],
+  resolveGatewaySessionStoreTarget: vi.fn((params: { key: string }) => ({
+    agentId: "main",
+    storePath: "/tmp/sessions.json",
+    canonicalKey: params.key,
+    storeKeys: [params.key],
   })),
 }));
 
@@ -104,9 +106,11 @@ describe("node exec events", () => {
     requestHeartbeatNowMock.mockClear();
     requestSessionEventRunMock.mockClear();
     resolveGatewaySessionStoreTargetMock.mockReset();
-    resolveGatewaySessionStoreTargetMock.mockImplementation(({ key }: { key: string }) => ({
-      canonicalKey: key,
-      storeKeys: [key],
+    resolveGatewaySessionStoreTargetMock.mockImplementation((params) => ({
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+      canonicalKey: params.key,
+      storeKeys: [params.key],
     }));
   });
 
@@ -502,6 +506,8 @@ describe("node exec events", () => {
 
   it("falls back to heartbeat for non-agent exec.denied session keys when immediate wake is unsupported", async () => {
     resolveGatewaySessionStoreTargetMock.mockReturnValueOnce({
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
       canonicalKey: "global",
       storeKeys: ["global"],
     });

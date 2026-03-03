@@ -21,7 +21,7 @@ const {
     responsePrefixContextProvider: () => ({ identityName: "OpenClaw" }),
     onModelSelected: vi.fn(),
   })),
-  hasSystemEventsMock: vi.fn(() => true),
+  hasSystemEventsMock: vi.fn((_sessionKey: string) => true),
   getQueueSizeMock: vi.fn(() => 0),
   loadSessionEntryMock: vi.fn(
     (sessionKey: string): ReturnType<typeof loadSessionEntryType> => ({

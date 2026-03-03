@@ -39,7 +39,7 @@ let runTimerDueAt: number | null = null;
 let runTimerKind: WakeTimerKind | null = null;
 let running = false;
 
-function normalizePendingTarget(value?: string): string | undefined {
+function normalizePendingTarget(value?: string | null): string | undefined {
   const trimmed = typeof value === "string" ? value.trim() : "";
   return trimmed || undefined;
 }
