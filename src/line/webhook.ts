@@ -71,13 +71,11 @@ export function createLineWebhookMiddleware(
         return;
       }
 
-      // Respond immediately to avoid timeout
       res.status(200).json({ status: "ok" });
 
-      // Process events asynchronously
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
-        await onEvents(body).catch((err) => {
+        void onEvents(body).catch((err) => {
           runtime?.error?.(danger(`line webhook handler failed: ${String(err)}`));
         });
       }
