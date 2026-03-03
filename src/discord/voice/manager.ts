@@ -157,32 +157,22 @@ type OpusDecoder = {
   decode: (buffer: Buffer) => Buffer;
 };
 
-let warnedOpusFallback = false;
+let warnedOpusMissing = false;
 
 function createOpusDecoder(): { decoder: OpusDecoder; name: string } | null {
   try {
-    const { OpusEncoder } = require("@discordjs/opus") as {
-      OpusEncoder: new (sampleRate: number, channels: number) => OpusDecoder;
+    const OpusScript = require("opusscript") as {
+      new (sampleRate: number, channels: number, application: number): OpusDecoder;
+      Application: { AUDIO: number };
     };
-    const decoder = new OpusEncoder(SAMPLE_RATE, CHANNELS);
-    return { decoder, name: "@discordjs/opus" };
-  } catch (nativeErr) {
-    try {
-      const OpusScript = require("opusscript") as {
-        new (sampleRate: number, channels: number, application: number): OpusDecoder;
-        Application: { AUDIO: number };
-      };
-      const decoder = new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
-      if (!warnedOpusFallback) {
-        warnedOpusFallback = true;
-        logger.warn(
-          `discord voice: @discordjs/opus unavailable (${formatErrorMessage(nativeErr)}); using opusscript fallback`,
-        );
-      }
-      return { decoder, name: "opusscript" };
-    } catch (jsErr) {
-      logger.warn(`discord voice: opus decoder init failed: ${formatErrorMessage(nativeErr)}`);
-      logger.warn(`discord voice: opusscript init failed: ${formatErrorMessage(jsErr)}`);
+    const decoder = new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
+    return { decoder, name: "opusscript" };
+  } catch (err) {
+    if (!warnedOpusMissing) {
+      warnedOpusMissing = true;
+      logger.warn(
+        `discord voice: opusscript unavailable (${formatErrorMessage(err)}); cannot decode voice audio`,
+      );
     }
   }
   return null;
