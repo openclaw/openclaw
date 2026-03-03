@@ -27,6 +27,29 @@ function sanitizeSurrogates(text: string): string {
   );
 }
 
+function parseFunctionCallArgumentsSafe(raw: unknown, fallback: unknown = {}): unknown {
+  if (raw && typeof raw === "object") {
+    return raw;
+  }
+  if (typeof raw !== "string") {
+    return fallback;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // Continue with tolerant parsing for partially streamed JSON.
+  }
+  try {
+    const streamed = parseStreamingJson(raw);
+    if (streamed !== null && streamed !== undefined) {
+      return streamed;
+    }
+  } catch {
+    // Fall through to fallback.
+  }
+  return fallback;
+}
+
 // =============================================================================
 // Message conversion
 // =============================================================================
@@ -491,10 +514,16 @@ export async function processResponsesStream(
         });
         currentBlock = null;
       } else if (item.type === "function_call") {
+        const fallbackArgs =
+          currentBlock?.type === "toolCall" &&
+          currentBlock.arguments &&
+          typeof currentBlock.arguments === "object"
+            ? currentBlock.arguments
+            : {};
         const args =
           currentBlock?.type === "toolCall" && currentBlock.partialJson
-            ? JSON.parse(currentBlock.partialJson)
-            : JSON.parse(item.arguments);
+            ? parseFunctionCallArgumentsSafe(currentBlock.partialJson, fallbackArgs)
+            : parseFunctionCallArgumentsSafe(item.arguments, fallbackArgs);
         const providerMetadata =
           item.provider_metadata ??
           (currentBlock?.type === "toolCall" ? currentBlock.providerMetadata : undefined);
