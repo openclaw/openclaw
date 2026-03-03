@@ -349,7 +349,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         return {
           ...next,
           channels: {
-            ...next.channels,
+            ...(next.channels ?? {}),
             googlechat: {
               ...next.channels?.["googlechat"],
               enabled: true,
@@ -361,7 +361,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       return {
         ...next,
         channels: {
-          ...next.channels,
+          ...(next.channels ?? {}),
           googlechat: {
             ...next.channels?.["googlechat"],
             enabled: true,
