@@ -235,6 +235,32 @@ describe("noteMemorySearchHealth", () => {
     const message = String(note.mock.calls[0]?.[0] ?? "");
     expect(message).toContain("openclaw configure --section model");
   });
+
+  it("still warns in auto mode when only ollama credentials exist", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+    resolveApiKeyForProvider.mockImplementation(async ({ provider }: { provider: string }) => {
+      if (provider === "ollama") {
+        return {
+          apiKey: "ollama-local",
+          source: "env: OLLAMA_API_KEY",
+          mode: "api-key",
+        };
+      }
+      throw new Error("missing key");
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const providersChecked = resolveApiKeyForProvider.mock.calls.map(
+      ([arg]: [{ provider: string }]) => arg.provider,
+    );
+    expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
+  });
 });
 
 describe("detectLegacyWorkspaceDirs", () => {

@@ -13,6 +13,7 @@ import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "./embeddings-mistral.js";
+import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
 import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
 import { DEFAULT_VOYAGE_EMBEDDING_MODEL } from "./embeddings-voyage.js";
 import {
@@ -980,7 +981,9 @@ export abstract class MemoryManagerSyncOps {
             ? DEFAULT_VOYAGE_EMBEDDING_MODEL
             : fallback === "mistral"
               ? DEFAULT_MISTRAL_EMBEDDING_MODEL
-              : this.settings.model;
+              : fallback === "ollama"
+                ? DEFAULT_OLLAMA_EMBEDDING_MODEL
+                : this.settings.model;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
