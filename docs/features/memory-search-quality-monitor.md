@@ -31,27 +31,27 @@ log_search_result(
 ### Generate quality report
 ```bash
 # Last 7 days (default)
-python3 memory-quality-monitor.py report
+python3 memory_quality_monitor.py report
 
 # Last 30 days
-python3 memory-quality-monitor.py report 30
+python3 memory_quality_monitor.py report 30
 ```
 
 ## 📈 Example Report
 
 ```
-🌙 银月记忆搜索质量报告
+🌙 Memory Search Quality Report
 ============================================================
-统计周期：7 天
-总搜索次数：75
-低质量搜索：12 (16.0%)
-平均结果数：4.2
-平均最高分：0.68
+Period: 7 days
+Total searches: 75
+Poor quality searches: 12 (16.0%)
+Avg results per search: 4.2
+Avg max score: 0.68
 
-⚠️  最近低质量搜索:
-  • "ECS 配置" → 1 结果，最高分 0.3
-  • "博客密码" → 0 结果，最高分 0
-  • "定时任务" → 2 结果，最高分 0.4
+⚠️  Recent poor quality searches:
+  • "ECS config" → 1 result, max score 0.3
+  • "blog password" → 0 results, max score 0
+  • "scheduled tasks" → 2 results, max score 0.4
 ```
 
 ## 💡 Integration Suggestion for OpenClaw Core
@@ -65,7 +65,7 @@ This script currently requires manual integration. We suggest the OpenClaw team 
 
 ## 📁 Files
 
-- `memory-quality-monitor.py` - Main monitoring script
+- `memory_quality_monitor.py` - Main monitoring script
 - `memory/search-quality-log.jsonl` - Auto-generated log file (JSONL format)
 
 ## 🔧 Configuration
