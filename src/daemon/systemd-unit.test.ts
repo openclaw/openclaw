@@ -34,6 +34,13 @@ describe("parseSystemdEnvAssignment", () => {
     expect(parseSystemdEnvAssignment('"FOO=bar\\"baz"')).toEqual({ key: "FOO", value: 'bar"baz' });
   });
 
+  it("handles backslash-escaped backslashes in values", () => {
+    expect(parseSystemdEnvAssignment('"FOO=bar\\\\baz"')).toEqual({
+      key: "FOO",
+      value: "bar\\baz",
+    });
+  });
+
   it("returns null for empty input", () => {
     expect(parseSystemdEnvAssignment("")).toBeNull();
   });
