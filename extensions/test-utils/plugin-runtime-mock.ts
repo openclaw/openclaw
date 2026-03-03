@@ -46,6 +46,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       formatNativeDependencyHint: vi.fn(
         () => "",
       ) as unknown as PluginRuntime["system"]["formatNativeDependencyHint"],
+      deliverToSession: vi.fn() as unknown as PluginRuntime["system"]["deliverToSession"],
     },
     media: {
       loadWebMedia: vi.fn() as unknown as PluginRuntime["media"]["loadWebMedia"],
