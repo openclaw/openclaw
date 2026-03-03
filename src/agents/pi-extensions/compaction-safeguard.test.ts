@@ -15,6 +15,10 @@ import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.
 const {
   collectToolFailures,
   formatToolFailuresSection,
+  splitPreservedRecentTurns,
+  formatPreservedTurnsSection,
+  appendSummarySection,
+  resolveRecentTurnsPreserve,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
@@ -382,6 +386,259 @@ describe("compaction-safeguard runtime registry", () => {
       contextWindowTokens: 200000,
       model,
     });
+  });
+});
+
+describe("compaction-safeguard recent-turn preservation", () => {
+  it("preserves the most recent user/assistant messages", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "older ask", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "older answer" }],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+      { role: "user", content: "recent ask", timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "recent answer" }],
+        timestamp: 4,
+      } as unknown as AgentMessage,
+    ];
+
+    const split = splitPreservedRecentTurns({
+      messages,
+      recentTurnsPreserve: 1,
+    });
+
+    expect(split.preservedMessages).toHaveLength(2);
+    expect(split.summarizableMessages).toHaveLength(2);
+    expect(formatPreservedTurnsSection(split.preservedMessages)).toContain(
+      "## Recent turns preserved verbatim",
+    );
+  });
+
+  it("drops orphaned tool results from preserved assistant turns", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "older ask", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_old", name: "read", arguments: {} }],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call_old",
+        toolName: "read",
+        content: [{ type: "text", text: "old result" }],
+        timestamp: 3,
+      } as unknown as AgentMessage,
+      { role: "user", content: "recent ask", timestamp: 4 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_recent", name: "read", arguments: {} }],
+        timestamp: 5,
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call_recent",
+        toolName: "read",
+        content: [{ type: "text", text: "recent result" }],
+        timestamp: 6,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "recent final answer" }],
+        timestamp: 7,
+      } as unknown as AgentMessage,
+    ];
+
+    const split = splitPreservedRecentTurns({
+      messages,
+      recentTurnsPreserve: 1,
+    });
+
+    expect(split.preservedMessages.map((msg) => msg.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(
+      split.preservedMessages.some(
+        (msg) => msg.role === "user" && (msg as { content?: unknown }).content === "recent ask",
+      ),
+    ).toBe(true);
+
+    const summarizableToolResultIds = split.summarizableMessages
+      .filter((msg) => msg.role === "toolResult")
+      .map((msg) => (msg as { toolCallId?: unknown }).toolCallId);
+    expect(summarizableToolResultIds).toContain("call_old");
+    expect(summarizableToolResultIds).not.toContain("call_recent");
+  });
+
+  it("includes preserved tool results in the preserved-turns section", () => {
+    const split = splitPreservedRecentTurns({
+      messages: [
+        { role: "user", content: "older ask", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "older answer" }],
+          timestamp: 2,
+        } as unknown as AgentMessage,
+        { role: "user", content: "recent ask", timestamp: 3 },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_recent", name: "read", arguments: {} }],
+          timestamp: 4,
+        } as unknown as AgentMessage,
+        {
+          role: "toolResult",
+          toolCallId: "call_recent",
+          toolName: "read",
+          content: [{ type: "text", text: "recent raw output" }],
+          timestamp: 5,
+        } as unknown as AgentMessage,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "recent final answer" }],
+          timestamp: 6,
+        } as unknown as AgentMessage,
+      ],
+      recentTurnsPreserve: 1,
+    });
+
+    const section = formatPreservedTurnsSection(split.preservedMessages);
+    expect(section).toContain("- Tool result (read): recent raw output");
+    expect(section).toContain("- User: recent ask");
+  });
+
+  it("formats preserved non-text messages with placeholders", () => {
+    const section = formatPreservedTurnsSection([
+      {
+        role: "user",
+        content: [{ type: "image", data: "abc", mimeType: "image/png" }],
+        timestamp: 1,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_recent", name: "read", arguments: {} }],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+    ]);
+
+    expect(section).toContain("- User: [non-text content: image]");
+    expect(section).toContain("- Assistant: [non-text content: toolCall]");
+  });
+
+  it("keeps non-text placeholders for mixed-content preserved messages", () => {
+    const section = formatPreservedTurnsSection([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "caption text" },
+          { type: "image", data: "abc", mimeType: "image/png" },
+        ],
+        timestamp: 1,
+      } as unknown as AgentMessage,
+    ]);
+
+    expect(section).toContain("- User: caption text");
+    expect(section).toContain("[non-text content: image]");
+  });
+
+  it("does not add non-text placeholders for text-only content blocks", () => {
+    const section = formatPreservedTurnsSection([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "plain text reply" }],
+        timestamp: 1,
+      } as unknown as AgentMessage,
+    ]);
+
+    expect(section).toContain("- Assistant: plain text reply");
+    expect(section).not.toContain("[non-text content]");
+  });
+
+  it("caps preserved tail when user turns are below preserve target", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "single user prompt", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-1" }],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-2" }],
+        timestamp: 3,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-3" }],
+        timestamp: 4,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-4" }],
+        timestamp: 5,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-5" }],
+        timestamp: 6,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-6" }],
+        timestamp: 7,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-7" }],
+        timestamp: 8,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-8" }],
+        timestamp: 9,
+      } as unknown as AgentMessage,
+    ];
+
+    const split = splitPreservedRecentTurns({
+      messages,
+      recentTurnsPreserve: 3,
+    });
+
+    // preserve target is 3 turns -> fallback should cap at 6 role messages
+    expect(split.preservedMessages).toHaveLength(6);
+    expect(
+      split.preservedMessages.some(
+        (msg) =>
+          msg.role === "user" && (msg as { content?: unknown }).content === "single user prompt",
+      ),
+    ).toBe(true);
+    expect(formatPreservedTurnsSection(split.preservedMessages)).toContain("assistant-8");
+    expect(formatPreservedTurnsSection(split.preservedMessages)).not.toContain("assistant-2");
+  });
+
+  it("trim-starts preserved section when history summary is empty", () => {
+    const summary = appendSummarySection(
+      "",
+      "\n\n## Recent turns preserved verbatim\n- User: hello",
+    );
+    expect(summary.startsWith("## Recent turns preserved verbatim")).toBe(true);
+  });
+
+  it("does not append empty summary sections", () => {
+    expect(appendSummarySection("History", "")).toBe("History");
+    expect(appendSummarySection("", "")).toBe("");
+  });
+
+  it("clamps preserve count into a safe range", () => {
+    expect(resolveRecentTurnsPreserve(undefined)).toBe(3);
+    expect(resolveRecentTurnsPreserve(-1)).toBe(0);
+    expect(resolveRecentTurnsPreserve(99)).toBe(12);
   });
 });
 
