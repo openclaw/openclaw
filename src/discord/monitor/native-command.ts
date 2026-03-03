@@ -115,9 +115,10 @@ function buildDiscordCommandOptions(params: {
       };
     }
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
-    const shouldAutocomplete =
-      resolvedChoices.length > 0 &&
-      (typeof arg.choices === "function" || resolvedChoices.length > 25);
+    // Always use autocomplete when choices exist to allow inline argument input.
+    // Previously only used autocomplete for function-based choices or >25 choices,
+    // which forced static dropdowns and broke inline args like /acp close.
+    const shouldAutocomplete = resolvedChoices.length > 0;
     const autocomplete = shouldAutocomplete
       ? async (interaction: AutocompleteInteraction) => {
           const focused = interaction.options.getFocused();
