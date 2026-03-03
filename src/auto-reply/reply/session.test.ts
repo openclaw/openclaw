@@ -1162,6 +1162,42 @@ describe("buildQueuedSystemPrompt", () => {
       vi.useRealTimers();
     }
   });
+
+  it("defaults system event timestamps to userTimezone when envelopeTimezone is unset", async () => {
+    vi.useFakeTimers();
+    const originalTz = process.env.TZ;
+    process.env.TZ = "Asia/Shanghai";
+    try {
+      const timestamp = new Date("2026-03-03T13:53:00Z");
+      const expectedTimestamp = formatZonedTimestamp(timestamp, {
+        timeZone: "America/Vancouver",
+        displaySeconds: true,
+      });
+      vi.setSystemTime(timestamp);
+
+      enqueueSystemEvent("Exec failed.", { sessionKey: "agent:main:main" });
+
+      const result = await buildQueuedSystemPrompt({
+        cfg: {
+          agents: {
+            defaults: {
+              userTimezone: "America/Vancouver",
+            },
+          },
+        } as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        isMainSession: false,
+        isNewSession: false,
+      });
+
+      expect(expectedTimestamp).toBeDefined();
+      expect(result).toContain(`- [${expectedTimestamp}] Exec failed.`);
+    } finally {
+      resetSystemEventsForTest();
+      process.env.TZ = originalTz;
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("persistSessionUsageUpdate", () => {

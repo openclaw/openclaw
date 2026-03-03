@@ -46,7 +46,10 @@ export async function buildQueuedSystemPrompt(params: {
   const resolveSystemEventTimezone = (cfg: OpenClawConfig) => {
     const raw = cfg.agents?.defaults?.envelopeTimezone?.trim();
     if (!raw) {
-      return { mode: "local" as const };
+      return {
+        mode: "iana" as const,
+        timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
+      };
     }
     const lowered = raw.toLowerCase();
     if (lowered === "utc" || lowered === "gmt") {
