@@ -66,12 +66,13 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     threadIdForConfig,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-  // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
-  // DM pairing store entries are not included by default, but can be opted in via config.
+  // Group sender access now includes pairing store by default for backward compatibility.
+  // Users who paired via DM should be allowed in group chats (restores pre-v2026.2.24 behavior).
   // When dmPolicy is "allowlist", pairing store is never included (explicit allowlist only).
+  // Users can opt out by setting groupAuthIncludesPairingStore: false.
   const baseGroupAllow = groupAllowOverride ?? params.groupAllowFrom ?? [];
   const includePairingStore =
-    params.groupAuthIncludesPairingStore && params.dmPolicy !== "allowlist";
+    (params.groupAuthIncludesPairingStore ?? true) && params.dmPolicy !== "allowlist";
   const groupAllowWithStore = includePairingStore
     ? [...(Array.isArray(baseGroupAllow) ? baseGroupAllow : []), ...storeAllowFrom]
     : baseGroupAllow;
