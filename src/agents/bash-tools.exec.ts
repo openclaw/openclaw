@@ -10,6 +10,7 @@ import {
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { markBackgrounded } from "./bash-process-registry.js";
+import { maybeInterceptGatewayManagementExec } from "./bash-tools.exec-gateway-management.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import {
@@ -463,6 +464,24 @@ export function createExecTool(
         : (explicitTimeoutSec ?? defaultTimeoutSec);
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
+
+      const gatewayInterceptResult = await maybeInterceptGatewayManagementExec({
+        host,
+        command: params.command,
+        cwd: workdir,
+        env,
+        sessionKey: defaults?.sessionKey,
+      });
+      if (gatewayInterceptResult) {
+        const text = gatewayInterceptResult.content.find((part) => part.type === "text")?.text;
+        if (text) {
+          return {
+            ...gatewayInterceptResult,
+            content: [{ type: "text", text: `${getWarningText()}${text}` }],
+          };
+        }
+        return gatewayInterceptResult;
+      }
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
