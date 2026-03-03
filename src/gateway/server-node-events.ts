@@ -584,23 +584,26 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!queued) {
         return;
       }
-      if (wakeOnExit) {
-        if (evt.event === "exec.finished") {
-          const wakeTarget = resolveGatewaySessionStoreTarget({
-            cfg,
-            key: sessionKeyRaw,
-            scanLegacyKeys: false,
-          });
-          if (!isAgentScopedSessionKey(wakeTarget.canonicalKey)) {
-            ctx.logGateway.warn(
-              `exec wakeOnExit ignored for non-agent session key node=${nodeId}${runId ? ` id=${runId}` : ""} sessionKey=${sessionKeyRaw} canonicalKey=${wakeTarget.canonicalKey}`,
-            );
-            return;
-          }
-          // Known limitation: runs originating from internal webchat sessions may not emit
-          // routable outbound replies because webchat is not supported by route-reply.
-          requestSessionEventRun({ source: "exec-event", sessionKey: sessionKeyRaw });
+      const shouldImmediateWake =
+        wakeOnExit && (evt.event === "exec.finished" || evt.event === "exec.denied");
+      if (shouldImmediateWake) {
+        const wakeTarget = resolveGatewaySessionStoreTarget({
+          cfg,
+          key: sessionKeyRaw,
+          scanLegacyKeys: false,
+        });
+        if (!isAgentScopedSessionKey(wakeTarget.canonicalKey)) {
+          ctx.logGateway.warn(
+            `exec wakeOnExit ignored for non-agent session key node=${nodeId}${runId ? ` id=${runId}` : ""} sessionKey=${sessionKeyRaw} canonicalKey=${wakeTarget.canonicalKey}`,
+          );
+          return;
         }
+        // Known limitation: runs originating from internal webchat sessions may not emit
+        // routable outbound replies because webchat is not supported by route-reply.
+        requestSessionEventRun({ source: "exec-event", sessionKey: sessionKeyRaw });
+        return;
+      }
+      if (wakeOnExit) {
         return;
       }
       requestHeartbeatNow({ reason: "exec-event", sessionKey: sessionKeyRaw });

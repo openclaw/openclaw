@@ -347,7 +347,10 @@ describe("node exec events", () => {
       "Exec denied (node=node-3 id=run-3, allowlist-miss): rm -rf /",
       { sessionKey: "agent:demo:main", contextKey: "exec:run-3" },
     );
-    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+    expect(requestSessionEventRunMock).toHaveBeenCalledWith({
+      source: "exec-event",
+      sessionKey: "agent:demo:main",
+    });
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
@@ -487,7 +490,40 @@ describe("node exec events", () => {
       { sessionKey: "agent:demo:main", contextKey: "exec:run-force-denied" },
     );
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestSessionEventRunMock).toHaveBeenCalledWith({
+      source: "exec-event",
+      sessionKey: "agent:demo:main",
+    });
+  });
+
+  it("warns and skips immediate wake for non-agent exec.denied session keys", async () => {
+    resolveGatewaySessionStoreTargetMock.mockReturnValueOnce({
+      canonicalKey: "global",
+      storeKeys: ["global"],
+    });
+    const ctx = buildCtx();
+    const warn = vi.fn();
+    ctx.logGateway = { warn };
+    await handleNodeEvent(ctx, "node-3", {
+      event: "exec.denied",
+      payloadJSON: JSON.stringify({
+        runId: "run-global-denied",
+        sessionKey: "global",
+        command: "rm -rf /",
+        reason: "allowlist-miss",
+        wakeOnExit: true,
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec denied (node=node-3 id=run-global-denied, allowlist-miss): rm -rf /",
+      { sessionKey: "global", contextKey: "exec:run-global-denied" },
+    );
     expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("exec wakeOnExit ignored for non-agent session key"),
+    );
   });
 });
 
