@@ -1,5 +1,5 @@
 import path from "node:path";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fetch-guard.js";
 import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
@@ -95,14 +95,16 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
   let finalUrl = url;
   let release: (() => Promise<void>) | null = null;
   try {
-    const result = await fetchWithSsrFGuard({
-      url,
-      fetchImpl,
-      init: requestInit,
-      maxRedirects,
-      policy: ssrfPolicy,
-      lookupFn,
-    });
+    const result = await fetchWithSsrFGuard(
+      withStrictGuardedFetchMode({
+        url,
+        fetchImpl,
+        init: requestInit,
+        maxRedirects,
+        policy: ssrfPolicy,
+        lookupFn,
+      }),
+    );
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;

@@ -30,6 +30,28 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
+function buildFocusSessionBindingService() {
+  const service = {
+    touch: vi.fn(),
+    listBySession(targetSessionKey: string) {
+      return hoisted.sessionBindingListBySessionMock(targetSessionKey);
+    },
+    resolveByConversation(ref: unknown) {
+      return hoisted.sessionBindingResolveByConversationMock(ref);
+    },
+    getCapabilities(params: unknown) {
+      return hoisted.sessionBindingCapabilitiesMock(params);
+    },
+    bind(input: unknown) {
+      return hoisted.sessionBindingBindMock(input);
+    },
+    unbind(input: unknown) {
+      return hoisted.sessionBindingUnbindMock(input);
+    },
+  };
+  return service;
+}
+
 vi.mock("../../gateway/call.js", () => ({
   callGateway: hoisted.callGatewayMock,
 }));
@@ -56,15 +78,7 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
     await importOriginal<typeof import("../../infra/outbound/session-binding-service.js")>();
   return {
     ...actual,
-    getSessionBindingService: () => ({
-      bind: (input: unknown) => hoisted.sessionBindingBindMock(input),
-      getCapabilities: (params: unknown) => hoisted.sessionBindingCapabilitiesMock(params),
-      listBySession: (targetSessionKey: string) =>
-        hoisted.sessionBindingListBySessionMock(targetSessionKey),
-      resolveByConversation: (ref: unknown) => hoisted.sessionBindingResolveByConversationMock(ref),
-      touch: vi.fn(),
-      unbind: (input: unknown) => hoisted.sessionBindingUnbindMock(input),
-    }),
+    getSessionBindingService: () => buildFocusSessionBindingService(),
   };
 });
 
@@ -217,13 +231,33 @@ function createSessionBindingRecord(
   };
 }
 
-async function focusCodexAcpInThread(options?: { existingBinding?: SessionBindingRecord | null }) {
-  hoisted.sessionBindingCapabilitiesMock.mockReturnValue({
+function createSessionBindingCapabilities() {
+  return {
     adapterAvailable: true,
     bindSupported: true,
     unbindSupported: true,
-    placements: ["current", "child"],
-  });
+    placements: ["current", "child"] as const,
+  };
+}
+
+async function runUnfocusAndExpectManualUnbind(initialBindings: FakeBinding[]) {
+  const fake = createFakeThreadBindingManager(initialBindings);
+  hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
+
+  const params = createDiscordCommandParams("/unfocus");
+  const result = await handleSubagentsCommand(params, true);
+
+  expect(result?.reply?.text).toContain("Thread unfocused");
+  expect(fake.manager.unbindThread).toHaveBeenCalledWith(
+    expect.objectContaining({
+      threadId: "thread-1",
+      reason: "manual",
+    }),
+  );
+}
+
+async function focusCodexAcpInThread(options?: { existingBinding?: SessionBindingRecord | null }) {
+  hoisted.sessionBindingCapabilitiesMock.mockReturnValue(createSessionBindingCapabilities());
   hoisted.sessionBindingResolveByConversationMock.mockReturnValue(options?.existingBinding ?? null);
   hoisted.sessionBindingBindMock.mockImplementation(
     async (input: {
@@ -256,6 +290,12 @@ async function focusCodexAcpInThread(options?: { existingBinding?: SessionBindin
   return { result };
 }
 
+async function runAgentsCommandAndText(): Promise<string> {
+  const params = createDiscordCommandParams("/agents");
+  const result = await handleSubagentsCommand(params, true);
+  return result?.reply?.text ?? "";
+}
+
 describe("/focus, /unfocus, /agents", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
@@ -263,12 +303,9 @@ describe("/focus, /unfocus, /agents", () => {
     hoisted.getThreadBindingManagerMock.mockClear().mockReturnValue(null);
     hoisted.resolveThreadBindingThreadNameMock.mockClear().mockReturnValue("🤖 codex");
     hoisted.readAcpSessionEntryMock.mockReset().mockReturnValue(null);
-    hoisted.sessionBindingCapabilitiesMock.mockReset().mockReturnValue({
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current", "child"],
-    });
+    hoisted.sessionBindingCapabilitiesMock
+      .mockReset()
+      .mockReturnValue(createSessionBindingCapabilities());
     hoisted.sessionBindingResolveByConversationMock.mockReset().mockReturnValue(null);
     hoisted.sessionBindingListBySessionMock.mockReset().mockReturnValue([]);
     hoisted.sessionBindingUnbindMock.mockReset().mockResolvedValue([]);
@@ -340,23 +377,11 @@ describe("/focus, /unfocus, /agents", () => {
   });
 
   it("/unfocus removes an active thread binding for the binding owner", async () => {
-    const fake = createFakeThreadBindingManager([createStoredBinding()]);
-    hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
-
-    const params = createDiscordCommandParams("/unfocus");
-    const result = await handleSubagentsCommand(params, true);
-
-    expect(result?.reply?.text).toContain("Thread unfocused");
-    expect(fake.manager.unbindThread).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: "thread-1",
-        reason: "manual",
-      }),
-    );
+    await runUnfocusAndExpectManualUnbind([createStoredBinding()]);
   });
 
   it("/unfocus also unbinds ACP-focused thread bindings", async () => {
-    const fake = createFakeThreadBindingManager([
+    await runUnfocusAndExpectManualUnbind([
       createStoredBinding({
         targetKind: "acp",
         targetSessionKey: "agent:codex:acp:session-1",
@@ -364,18 +389,6 @@ describe("/focus, /unfocus, /agents", () => {
         label: "codex-session",
       }),
     ]);
-    hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
-
-    const params = createDiscordCommandParams("/unfocus");
-    const result = await handleSubagentsCommand(params, true);
-
-    expect(result?.reply?.text).toContain("Thread unfocused");
-    expect(fake.manager.unbindThread).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: "thread-1",
-        reason: "manual",
-      }),
-    );
   });
 
   it("/focus rejects rebinding when the thread is focused by another user", async () => {
@@ -428,9 +441,7 @@ describe("/focus, /unfocus, /agents", () => {
     ]);
     hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
 
-    const params = createDiscordCommandParams("/agents");
-    const result = await handleSubagentsCommand(params, true);
-    const text = result?.reply?.text ?? "";
+    const text = await runAgentsCommandAndText();
 
     expect(text).toContain("agents:");
     expect(text).toContain("thread:thread-1");
@@ -464,9 +475,7 @@ describe("/focus, /unfocus, /agents", () => {
     ]);
     hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
 
-    const params = createDiscordCommandParams("/agents");
-    const result = await handleSubagentsCommand(params, true);
-    const text = result?.reply?.text ?? "";
+    const text = await runAgentsCommandAndText();
 
     expectAgentListContainsThreadBinding(text, "persistent-1", "thread-persistent-1");
   });

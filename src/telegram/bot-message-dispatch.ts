@@ -190,12 +190,15 @@ export const dispatchTelegramMessage = async ({
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
+    const useMessagePreviewTransportForDmReasoning =
+      laneName === "reasoning" && threadSpec?.scope === "dm" && canStreamAnswerDraft;
     const stream = enabled
       ? createTelegramDraftStream({
           api: bot.api,
           chatId,
           maxChars: draftMaxChars,
           thread: threadSpec,
+          previewTransport: useMessagePreviewTransportForDmReasoning ? "message" : "auto",
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,
@@ -382,6 +385,7 @@ export const dispatchTelegramMessage = async ({
   };
   const deliveryBaseOptions = {
     chatId: String(chatId),
+    accountId: route.accountId,
     token: opts.token,
     runtime,
     bot,
@@ -548,7 +552,7 @@ export const dispatchTelegramMessage = async ({
             reasoningStepState.resetForNextStep();
           }
           const canSendAsIs =
-            hasMedia || typeof payload.text !== "string" || payload.text.length > 0;
+            hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
           if (!canSendAsIs) {
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();

@@ -9,12 +9,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
-import org.robolectric.RuntimeEnvironment
 
-@RunWith(RobolectricTestRunner::class)
-class ContactsHandlerTest {
+class ContactsHandlerTest : NodeHandlerRobolectricTest() {
   @Test
   fun handleContactsSearch_requiresReadPermission() {
     val handler = ContactsHandler.forTesting(appContext(), FakeContactsDataSource(canRead = false))
@@ -92,8 +88,6 @@ class ContactsHandlerTest {
     assertEquals("Grace Hopper", contact.getValue("displayName").jsonPrimitive.content)
     assertEquals(1, source.addCalls)
   }
-
-  private fun appContext(): Context = RuntimeEnvironment.getApplication()
 }
 
 private class FakeContactsDataSource(
