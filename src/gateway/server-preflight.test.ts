@@ -61,6 +61,24 @@ describe("server-preflight", () => {
     expect(call.authStore).toBeTruthy();
   });
 
+  it("passes providers with configured apiKey as externalApiKeyProviders", async () => {
+    const { runPreflightAtStartup } = await import("./server-preflight.js");
+    const cfg = {
+      models: {
+        providers: {
+          "google-gemini": { apiKey: "test-key" },
+          openai: { baseUrl: "https://api.openai.com" },
+        },
+      },
+    };
+
+    runPreflightAtStartup({ cfg: cfg as never });
+
+    const call = mockRunAndLogPreflight.mock.calls.at(-1)![0];
+    expect(call.externalApiKeyProviders).toContain("google-gemini");
+    expect(call.externalApiKeyProviders).not.toContain("openai");
+  });
+
   it("does not throw when ensureAuthProfileStore fails", async () => {
     mockEnsureAuthProfileStore.mockImplementationOnce(() => {
       throw new Error("store unavailable");

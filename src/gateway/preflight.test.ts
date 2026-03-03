@@ -57,6 +57,68 @@ describe("preflight", () => {
       expect(result.checks[0].code).toBe("PROVIDER_HEALTHY");
     });
 
+    it("returns pass when provider has external API key configured without auth profiles", () => {
+      const store = makeAuthProfileStore({});
+      const result = runPreflightChecks({
+        providers: ["google-gemini"],
+        authStore: store,
+        externalApiKeyProviders: ["google-gemini"],
+      });
+      expect(result.ok).toBe(true);
+      expect(result.checks[0].code).toBe("PROVIDER_HEALTHY");
+    });
+
+    it("prioritizes expiring warning over cooldown warning", () => {
+      const now = Date.now();
+      const store = makeAuthProfileStore(
+        {
+          "anthropic:default": {
+            type: "token",
+            provider: "anthropic",
+            token: "tok-expiring",
+            expires: now + 30 * 60_000,
+          },
+        },
+        {
+          "anthropic:default": { cooldownUntil: now + 60_000 },
+        },
+      );
+      const result = runPreflightChecks({
+        providers: ["anthropic"],
+        authStore: store,
+        warnExpiryMs: 60 * 60_000,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.checks.find((c) => c.code === "CREDENTIALS_EXPIRING")).toBeTruthy();
+      expect(result.checks.find((c) => c.code === "ALL_PROFILES_COOLDOWN")).toBeFalsy();
+    });
+
+    it("flags fallback provider with permanent auth disable as failure", () => {
+      const now = Date.now();
+      const store = makeAuthProfileStore(
+        {
+          "openai:default": { type: "api_key", provider: "openai", key: "sk-openai-test" },
+        },
+        {
+          "openai:default": {
+            disabledUntil: now + 3_600_000,
+            disabledReason: "auth_permanent",
+          },
+        },
+      );
+      const result = runPreflightChecks({
+        providers: ["anthropic"],
+        authStore: store,
+        externalApiKeyProviders: ["anthropic"],
+        fallbackModels: [{ provider: "openai", model: "gpt-4o" }],
+      });
+      expect(result.ok).toBe(false);
+      const fallbackFail = result.checks.find(
+        (c) => c.provider === "openai" && c.model === "gpt-4o",
+      );
+      expect(fallbackFail?.code).toBe("AUTH_PERMANENT_FAILURE");
+    });
+
     it("returns fail when provider has no credentials", () => {
       const store = makeAuthProfileStore({});
       const result = runPreflightChecks({

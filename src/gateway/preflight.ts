@@ -257,19 +257,30 @@ export type PreflightParams = {
   fallbackModels?: Array<{ provider: string; model: string }>;
   /** Warn when token expires within this many ms (default: 1h). */
   warnExpiryMs?: number;
+  /** Providers that have API key configured outside auth-profiles (env/config). */
+  externalApiKeyProviders?: string[];
 };
 
 export function runPreflightChecks(params: PreflightParams): PreflightSummary {
-  const { providers, authStore, fallbackModels, warnExpiryMs } = params;
+  const { providers, authStore, fallbackModels, warnExpiryMs, externalApiKeyProviders } = params;
   const warnMs = warnExpiryMs ?? DEFAULT_WARN_EXPIRY_MS;
   const now = Date.now();
   const checks: PreflightCheckResult[] = [];
+  const externalKeyProviders = new Set(
+    (externalApiKeyProviders ?? []).map((p) => p.trim().toLowerCase()),
+  );
 
   // Track which providers have been validated so we can skip duplicates in fallback.
   const validatedProviders = new Set<string>();
 
   for (const provider of providers) {
-    const check = validateProvider(authStore, provider, now, warnMs);
+    const check = validateProvider(
+      authStore,
+      provider,
+      now,
+      warnMs,
+      externalKeyProviders.has(provider.trim().toLowerCase()),
+    );
     checks.push(check);
     validatedProviders.add(provider.trim().toLowerCase());
   }
@@ -283,9 +294,17 @@ export function runPreflightChecks(params: PreflightParams): PreflightSummary {
         continue;
       }
       validatedProviders.add(normalizedProvider);
-      const hasCredentials = hasAnyValidCredentials(authStore, fallback.provider, now);
-      if (!hasCredentials) {
-        checks.push(buildCheck("FALLBACK_NO_CREDENTIALS", fallback.provider, fallback.model));
+      const fallbackCheck = validateProvider(
+        authStore,
+        fallback.provider,
+        now,
+        warnMs,
+        externalKeyProviders.has(normalizedProvider),
+      );
+      if (fallbackCheck.code !== "PROVIDER_HEALTHY") {
+        const code =
+          fallbackCheck.code === "NO_CREDENTIALS" ? "FALLBACK_NO_CREDENTIALS" : fallbackCheck.code;
+        checks.push(buildCheck(code, fallback.provider, fallback.model));
       }
     }
   }
@@ -298,25 +317,20 @@ export function runPreflightChecks(params: PreflightParams): PreflightSummary {
   };
 }
 
-function hasAnyValidCredentials(store: AuthProfileStore, provider: string, now: number): boolean {
-  const profiles = listProfilesForProvider(store, provider);
-  return profiles.some(
-    ({ credential }) =>
-      isCredentialStructurallyValid(credential) && !isTokenExpired(credential, now),
-  );
-}
-
 function validateProvider(
   store: AuthProfileStore,
   provider: string,
   now: number,
   warnMs: number,
+  hasExternalApiKey: boolean,
 ): PreflightCheckResult {
   const profiles = listProfilesForProvider(store, provider);
 
   // No profiles at all for this provider.
   if (profiles.length === 0) {
-    return buildCheck("NO_CREDENTIALS", provider);
+    return hasExternalApiKey
+      ? buildCheck("PROVIDER_HEALTHY", provider)
+      : buildCheck("NO_CREDENTIALS", provider);
   }
 
   // Filter to structurally valid credentials.
@@ -324,7 +338,9 @@ function validateProvider(
     isCredentialStructurallyValid(credential),
   );
   if (validProfiles.length === 0) {
-    return buildCheck("NO_CREDENTIALS", provider);
+    return hasExternalApiKey
+      ? buildCheck("PROVIDER_HEALTHY", provider)
+      : buildCheck("NO_CREDENTIALS", provider);
   }
 
   // Check for permanent disable on ALL profiles.
@@ -342,15 +358,7 @@ function validateProvider(
     return buildCheck("CREDENTIALS_EXPIRED", provider);
   }
 
-  // Check all profiles in cooldown (transient — warn only).
-  const allInCooldown = validProfiles.every(({ profileId }) =>
-    isProfileInCooldown(store, profileId, now),
-  );
-  if (allInCooldown) {
-    return buildCheck("ALL_PROFILES_COOLDOWN", provider);
-  }
-
-  // Check for expiring-soon warning.
+  // Check for expiring-soon warning first — this requires user action.
   const nonExpiredProfiles = activeProfiles.filter(
     ({ credential }) => !isTokenExpired(credential, now),
   );
@@ -359,6 +367,14 @@ function validateProvider(
   );
   if (anyExpiringSoon) {
     return buildCheck("CREDENTIALS_EXPIRING", provider);
+  }
+
+  // Check all profiles in cooldown (transient — warn only).
+  const allInCooldown = validProfiles.every(({ profileId }) =>
+    isProfileInCooldown(store, profileId, now),
+  );
+  if (allInCooldown) {
+    return buildCheck("ALL_PROFILES_COOLDOWN", provider);
   }
 
   return buildCheck("PROVIDER_HEALTHY", provider);

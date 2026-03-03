@@ -6,7 +6,7 @@ import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runAndLogPreflight } from "./preflight.js";
 
-const log = createSubsystemLogger("gateway/preflight");
+const log = createSubsystemLogger("gateway/server-preflight");
 
 /**
  * Extract the list of distinct provider names configured in the system.
@@ -40,6 +40,19 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): string[] {
 /**
  * Extract fallback model refs from config for preflight validation.
  */
+
+function resolveExternalApiKeyProviders(cfg: OpenClawConfig): string[] {
+  const providers = new Set<string>();
+  const byProvider = cfg.models?.providers ?? {};
+  for (const [provider, providerCfg] of Object.entries(byProvider)) {
+    const apiKey = (providerCfg as { apiKey?: unknown })?.apiKey;
+    if (typeof apiKey === "string" && apiKey.trim()) {
+      providers.add(provider);
+    }
+  }
+  return Array.from(providers);
+}
+
 function resolveFallbackModelsFromConfig(
   cfg: OpenClawConfig,
 ): Array<{ provider: string; model: string }> {
@@ -72,11 +85,13 @@ export function runPreflightAtStartup(params: { cfg: OpenClawConfig; agentDir?: 
     const authStore = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
     const providers = resolveConfiguredProviders(params.cfg);
     const fallbackModels = resolveFallbackModelsFromConfig(params.cfg);
+    const externalApiKeyProviders = resolveExternalApiKeyProviders(params.cfg);
 
     runAndLogPreflight({
       providers,
       authStore,
       fallbackModels,
+      externalApiKeyProviders,
     });
   } catch (err) {
     // Preflight must never block startup. Log and continue.
