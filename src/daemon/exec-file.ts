@@ -20,12 +20,18 @@ export async function execFileUtf8(
 
       const e = error as { code?: unknown; message?: unknown };
       const stderrText = String(stderr ?? "");
+      const isSpawnFailure = typeof e.code !== "number";
       resolve({
         stdout: String(stdout ?? ""),
-        stderr:
-          stderrText ||
-          (typeof e.message === "string" ? e.message : typeof error === "string" ? error : ""),
-        code: typeof e.code === "number" ? e.code : 1,
+        // Only fall back to e.message for spawn failures (ENOENT/EACCES) where
+        // there is no real process output.  When the process ran but exited
+        // non-zero, preserve the actual (possibly empty) stderr so that
+        // downstream callers can inspect stdout without it being shadowed.
+        stderr: isSpawnFailure
+          ? stderrText ||
+            (typeof e.message === "string" ? e.message : typeof error === "string" ? error : "")
+          : stderrText,
+        code: isSpawnFailure ? 1 : (e.code as number),
       });
     });
   });
