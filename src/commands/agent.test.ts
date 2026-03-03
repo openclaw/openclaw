@@ -15,7 +15,7 @@ import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { agentCommand } from "./agent.js";
+import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import * as agentDeliveryModule from "./agent/delivery.js";
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
@@ -314,6 +314,27 @@ describe("agentCommand", () => {
   ])("$name", async ({ args, expected }) => {
     const callArgs = await runEmbeddedWithTempConfig({ args });
     expect(callArgs?.senderIsOwner).toBe(expected);
+  });
+
+  it("requires explicit senderIsOwner for ingress runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      await expect(
+        // Runtime guard for non-TS callers; TS callsites are statically typed.
+        agentCommandFromIngress({ message: "hi", to: "+1555" } as never, runtime),
+      ).rejects.toThrow("senderIsOwner must be explicitly set for ingress agent runs.");
+    });
+  });
+
+  it("honors explicit senderIsOwner for ingress runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      await agentCommandFromIngress({ message: "hi", to: "+1555", senderIsOwner: false }, runtime);
+      const ingressCall = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(ingressCall?.senderIsOwner).toBe(false);
+    });
   });
 
   it("resumes when session-id is provided", async () => {

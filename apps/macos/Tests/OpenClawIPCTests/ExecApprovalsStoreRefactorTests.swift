@@ -4,13 +4,21 @@ import Testing
 
 @Suite(.serialized)
 struct ExecApprovalsStoreRefactorTests {
-    @Test
-    func ensureFileSkipsRewriteWhenUnchanged() async throws {
+    private func withTempStateDir(
+        _ body: @escaping @Sendable (URL) async throws -> Void) async throws
+    {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: stateDir) }
 
         try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+            try await body(stateDir)
+        }
+    }
+
+    @Test
+    func ensureFileSkipsRewriteWhenUnchanged() async throws {
+        try await self.withTempStateDir { stateDir in
             _ = ExecApprovalsStore.ensureFile()
             let url = ExecApprovalsStore.fileURL()
             let firstWriteDate = try Self.modificationDate(at: url)
@@ -24,12 +32,8 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func updateAllowlistReportsRejectedBasenamePattern() async {
-        let stateDir = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager().removeItem(at: stateDir) }
-
-        await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+    func updateAllowlistReportsRejectedBasenamePattern() async throws {
+        try await self.withTempStateDir { _ in
             let rejected = ExecApprovalsStore.updateAllowlist(
                 agentId: "main",
                 allowlist: [
@@ -46,12 +50,8 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func updateAllowlistMigratesLegacyPatternFromResolvedPath() async {
-        let stateDir = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager().removeItem(at: stateDir) }
-
-        await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+    func updateAllowlistMigratesLegacyPatternFromResolvedPath() async throws {
+        try await self.withTempStateDir { _ in
             let rejected = ExecApprovalsStore.updateAllowlist(
                 agentId: "main",
                 allowlist: [
@@ -70,13 +70,10 @@ struct ExecApprovalsStoreRefactorTests {
 
     @Test
     func ensureFileHardensStateDirectoryPermissions() async throws {
-        let stateDir = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager().removeItem(at: stateDir) }
-        try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)
-        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: stateDir.path)
+        try await self.withTempStateDir { stateDir in
+            try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)
+            try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: stateDir.path)
 
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
             _ = ExecApprovalsStore.ensureFile()
             let attrs = try FileManager().attributesOfItem(atPath: stateDir.path)
             let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1

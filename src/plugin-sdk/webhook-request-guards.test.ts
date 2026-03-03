@@ -5,7 +5,10 @@ import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import { createFixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import {
   applyBasicWebhookRequestGuards,
+  beginWebhookRequestPipelineOrReject,
+  createWebhookInFlightLimiter,
   isJsonContentType,
+  readWebhookBodyOrReject,
   readJsonWebhookBodyOrReject,
 } from "./webhook-request-guards.js";
 
@@ -156,5 +159,78 @@ describe("readJsonWebhookBodyOrReject", () => {
     ).resolves.toEqual({ ok: false });
     expect(res.statusCode).toBe(400);
     expect(res.body).toBe("Bad Request");
+  });
+});
+
+describe("readWebhookBodyOrReject", () => {
+  it("returns raw body contents", async () => {
+    const req = createMockRequest({ chunks: ["plain text"] });
+    const res = createMockServerResponse();
+    await expect(
+      readWebhookBodyOrReject({
+        req,
+        res,
+      }),
+    ).resolves.toEqual({ ok: true, value: "plain text" });
+  });
+
+  it("enforces strict pre-auth default body limits", async () => {
+    const req = createMockRequest({
+      headers: { "content-length": String(70 * 1024) },
+    });
+    const res = createMockServerResponse();
+    await expect(
+      readWebhookBodyOrReject({
+        req,
+        res,
+        profile: "pre-auth",
+      }),
+    ).resolves.toEqual({ ok: false });
+    expect(res.statusCode).toBe(413);
+  });
+});
+
+describe("beginWebhookRequestPipelineOrReject", () => {
+  it("enforces in-flight request limits and releases slots", () => {
+    const limiter = createWebhookInFlightLimiter({
+      maxInFlightPerKey: 1,
+      maxTrackedKeys: 10,
+    });
+
+    const first = beginWebhookRequestPipelineOrReject({
+      req: createMockRequest({ method: "POST" }),
+      res: createMockServerResponse(),
+      allowMethods: ["POST"],
+      inFlightLimiter: limiter,
+      inFlightKey: "ip:127.0.0.1",
+    });
+    expect(first.ok).toBe(true);
+
+    const secondRes = createMockServerResponse();
+    const second = beginWebhookRequestPipelineOrReject({
+      req: createMockRequest({ method: "POST" }),
+      res: secondRes,
+      allowMethods: ["POST"],
+      inFlightLimiter: limiter,
+      inFlightKey: "ip:127.0.0.1",
+    });
+    expect(second.ok).toBe(false);
+    expect(secondRes.statusCode).toBe(429);
+
+    if (first.ok) {
+      first.release();
+    }
+
+    const third = beginWebhookRequestPipelineOrReject({
+      req: createMockRequest({ method: "POST" }),
+      res: createMockServerResponse(),
+      allowMethods: ["POST"],
+      inFlightLimiter: limiter,
+      inFlightKey: "ip:127.0.0.1",
+    });
+    expect(third.ok).toBe(true);
+    if (third.ok) {
+      third.release();
+    }
   });
 });

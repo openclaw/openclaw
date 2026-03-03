@@ -244,6 +244,54 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("\t  ");
     expect(baseFn).toHaveBeenCalledTimes(1);
   });
+
+  it("assigns fallback ids to missing/blank tool call ids in streamed and final messages", async () => {
+    const partialToolCall = { type: "toolCall", name: " read ", id: "   " };
+    const finalToolCallA = { type: "toolCall", name: " exec ", id: "" };
+    const finalToolCallB = { type: "toolCall", name: " write " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCallA, finalToolCallB] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.name).toBe("read");
+    expect(partialToolCall.id).toBe("call_auto_1");
+    expect(finalToolCallA.name).toBe("exec");
+    expect(finalToolCallA.id).toBe("call_auto_1");
+    expect(finalToolCallB.name).toBe("write");
+    expect(finalToolCallB.id).toBe("call_auto_2");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("trims surrounding whitespace on tool call ids", async () => {
+    const finalToolCall = { type: "toolCall", name: " read ", id: "  call_42  " };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    expect(finalToolCall.name).toBe("read");
+    expect(finalToolCall.id).toBe("call_42");
+  });
 });
 
 describe("isOllamaCompatProvider", () => {

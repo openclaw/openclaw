@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import type { HooksConfigResolved } from "./hooks.js";
+import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
 
 const { readJsonBodyMock } = vi.hoisted(() => ({
   readJsonBodyMock: vi.fn(),
@@ -19,39 +19,18 @@ import { createHooksRequestHandler } from "./server-http.js";
 
 type HooksHandlerDeps = Parameters<typeof createHooksRequestHandler>[0];
 
-function createHooksConfig(): HooksConfigResolved {
-  return {
-    basePath: "/hooks",
-    token: "hook-secret",
-    maxBodyBytes: 1024,
-    mappings: [],
-    agentPolicy: {
-      defaultAgentId: "main",
-      knownAgentIds: new Set(["main"]),
-      allowedAgentIds: undefined,
-    },
-    sessionPolicy: {
-      allowRequestSessionKey: false,
-      defaultSessionKey: undefined,
-      allowedSessionKeyPrefixes: undefined,
-    },
-  };
-}
-
 function createRequest(params?: {
   authorization?: string;
   remoteAddress?: string;
   url?: string;
 }): IncomingMessage {
-  return {
+  return createGatewayRequest({
     method: "POST",
-    url: params?.url ?? "/hooks/wake",
-    headers: {
-      host: "127.0.0.1:18789",
-      authorization: params?.authorization ?? "Bearer hook-secret",
-    },
-    socket: { remoteAddress: params?.remoteAddress ?? "127.0.0.1" },
-  } as IncomingMessage;
+    path: params?.url ?? "/hooks/wake",
+    host: "127.0.0.1:18789",
+    authorization: params?.authorization ?? "Bearer hook-secret",
+    remoteAddress: params?.remoteAddress,
+  });
 }
 
 function createResponse(): {

@@ -501,6 +501,7 @@ describe("exec approval handlers", () => {
       respond,
       context,
       params: {
+        timeoutMs: 10,
         commandArgv: ["echo", "ok"],
         env: {
           Z_VAR: "z",
@@ -528,6 +529,7 @@ describe("exec approval handlers", () => {
       respond,
       context,
       params: {
+        timeoutMs: 10,
         command: "echo stale",
         commandArgv: ["echo", "stale"],
         cwd: "/tmp/link/sub",

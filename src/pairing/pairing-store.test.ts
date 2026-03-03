@@ -1,13 +1,15 @@
 import crypto from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../config/paths.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   addChannelAllowFromStoreEntry,
+  clearPairingAllowFromReadCacheForTest,
   approveChannelPairingCode,
   listChannelPairingRequests,
   readChannelAllowFromStore,
@@ -29,6 +31,10 @@ afterAll(async () => {
   if (fixtureRoot) {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
+});
+
+beforeEach(() => {
+  clearPairingAllowFromReadCacheForTest();
 });
 
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
@@ -410,6 +416,64 @@ describe("pairing store", () => {
       const syncScoped = readChannelAllowFromStoreSync("telegram", process.env);
       expect(asyncScoped).toEqual(["1002", "1001"]);
       expect(syncScoped).toEqual(["1002", "1001"]);
+    });
+  });
+
+  it("reuses cached async allowFrom reads and invalidates on file updates", async () => {
+    await withTempStateDir(async (stateDir) => {
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: "yy",
+        allowFrom: ["1001"],
+      });
+      const readSpy = vi.spyOn(fs, "readFile");
+
+      const first = await readChannelAllowFromStore("telegram", process.env, "yy");
+      const second = await readChannelAllowFromStore("telegram", process.env, "yy");
+      expect(first).toEqual(["1001"]);
+      expect(second).toEqual(["1001"]);
+      expect(readSpy).toHaveBeenCalledTimes(1);
+
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: "yy",
+        allowFrom: ["10022"],
+      });
+      const third = await readChannelAllowFromStore("telegram", process.env, "yy");
+      expect(third).toEqual(["10022"]);
+      expect(readSpy).toHaveBeenCalledTimes(2);
+      readSpy.mockRestore();
+    });
+  });
+
+  it("reuses cached sync allowFrom reads and invalidates on file updates", async () => {
+    await withTempStateDir(async (stateDir) => {
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: "yy",
+        allowFrom: ["1001"],
+      });
+      const readSpy = vi.spyOn(fsSync, "readFileSync");
+
+      const first = readChannelAllowFromStoreSync("telegram", process.env, "yy");
+      const second = readChannelAllowFromStoreSync("telegram", process.env, "yy");
+      expect(first).toEqual(["1001"]);
+      expect(second).toEqual(["1001"]);
+      expect(readSpy).toHaveBeenCalledTimes(1);
+
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: "yy",
+        allowFrom: ["10022"],
+      });
+      const third = readChannelAllowFromStoreSync("telegram", process.env, "yy");
+      expect(third).toEqual(["10022"]);
+      expect(readSpy).toHaveBeenCalledTimes(2);
+      readSpy.mockRestore();
     });
   });
 });

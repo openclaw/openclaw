@@ -60,6 +60,13 @@ function expectResolveSlackMediaCalledWithDefaults() {
   });
 }
 
+function mockSuccessfulMediaDownload(client: ReturnType<typeof createClient>) {
+  client.files.info.mockResolvedValueOnce({
+    file: makeSlackFileInfo(),
+  });
+  resolveSlackMedia.mockResolvedValueOnce([makeResolvedSlackMedia()]);
+}
+
 describe("downloadSlackFile", () => {
   beforeEach(() => {
     resolveSlackMedia.mockReset();
@@ -86,10 +93,7 @@ describe("downloadSlackFile", () => {
 
   it("downloads via resolveSlackMedia using fresh files.info metadata", async () => {
     const client = createClient();
-    client.files.info.mockResolvedValueOnce({
-      file: makeSlackFileInfo(),
-    });
-    resolveSlackMedia.mockResolvedValueOnce([makeResolvedSlackMedia()]);
+    mockSuccessfulMediaDownload(client);
 
     const result = await downloadSlackFile("F123", {
       client,
@@ -143,10 +147,7 @@ describe("downloadSlackFile", () => {
 
   it("keeps legacy behavior when file metadata does not expose channel/thread shares", async () => {
     const client = createClient();
-    client.files.info.mockResolvedValueOnce({
-      file: makeSlackFileInfo(),
-    });
-    resolveSlackMedia.mockResolvedValueOnce([makeResolvedSlackMedia()]);
+    mockSuccessfulMediaDownload(client);
 
     const result = await downloadSlackFile("F123", {
       client,

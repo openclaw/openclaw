@@ -26,6 +26,31 @@ function appendToolResultText(sm: SessionManager, text: string) {
   );
 }
 
+function appendAssistantToolCall(
+  sm: SessionManager,
+  params: { id: string; name: string; withArguments?: boolean },
+) {
+  const toolCall: {
+    type: "toolCall";
+    id: string;
+    name: string;
+    arguments?: Record<string, never>;
+  } = {
+    type: "toolCall",
+    id: params.id,
+    name: params.name,
+  };
+  if (params.withArguments !== false) {
+    toolCall.arguments = {};
+  }
+  sm.appendMessage(
+    asAppendMessage({
+      role: "assistant",
+      content: [toolCall],
+    }),
+  );
+}
+
 function getPersistedMessages(sm: SessionManager): AgentMessage[] {
   return sm
     .getEntries()
@@ -83,6 +108,25 @@ describe("installSessionToolResultGuard", () => {
     guard.flushPendingToolResults();
 
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
+  });
+
+  it("clears pending on user interruption when synthetic tool results are disabled", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      allowSyntheticToolResults: false,
+    });
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "interrupt",
+        timestamp: Date.now(),
+      }),
+    );
+
+    expectPersistedRoles(sm, ["assistant", "user"]);
+    expect(guard.getPendingIds()).toEqual([]);
   });
 
   it("does not add synthetic toolResult when a matching one exists", () => {
@@ -254,21 +298,47 @@ describe("installSessionToolResultGuard", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
 
+    appendAssistantToolCall(sm, { id: "call_1", name: "read" });
+    appendAssistantToolCall(sm, { id: "call_2", name: "read", withArguments: false });
+
+    expectPersistedRoles(sm, ["assistant", "toolResult"]);
+  });
+
+  it("clears pending when a sanitized assistant message is dropped and synthetic results are disabled", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      allowSyntheticToolResults: false,
+      allowedToolNames: ["read"],
+    });
+
+    appendAssistantToolCall(sm, { id: "call_1", name: "read" });
+    appendAssistantToolCall(sm, { id: "call_2", name: "write" });
+
+    expectPersistedRoles(sm, ["assistant"]);
+    expect(guard.getPendingIds()).toEqual([]);
+  });
+
+  it("drops older pending ids before new tool calls when synthetic results are disabled", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      allowSyntheticToolResults: false,
+    });
+
     sm.appendMessage(
       asAppendMessage({
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
       }),
     );
-
     sm.appendMessage(
       asAppendMessage({
         role: "assistant",
-        content: [{ type: "toolCall", id: "call_2", name: "read" }],
+        content: [{ type: "toolCall", id: "call_2", name: "read", arguments: {} }],
       }),
     );
 
-    expectPersistedRoles(sm, ["assistant", "toolResult"]);
+    expectPersistedRoles(sm, ["assistant", "assistant"]);
+    expect(guard.getPendingIds()).toEqual(["call_2"]);
   });
 
   it("caps oversized tool result text during persistence", () => {

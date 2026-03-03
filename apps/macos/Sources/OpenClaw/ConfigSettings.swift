@@ -72,7 +72,7 @@ extension ConfigSettings {
     }
 
     private var sidebar: some View {
-        ScrollView {
+        SettingsSidebarScroll {
             LazyVStack(alignment: .leading, spacing: 8) {
                 if self.sections.isEmpty {
                     Text("No config sections available.")
@@ -86,14 +86,7 @@ extension ConfigSettings {
                     }
                 }
             }
-            .padding(.vertical, 10)
-            .padding(.horizontal, 10)
         }
-        .frame(minWidth: 220, idealWidth: 240, maxWidth: 280, maxHeight: .infinity, alignment: .topLeading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor)))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var detail: some View {

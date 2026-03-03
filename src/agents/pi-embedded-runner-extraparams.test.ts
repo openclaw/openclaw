@@ -317,6 +317,38 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]).toEqual({ reasoning: { max_tokens: 256 } });
   });
 
+  it("does not inject reasoning.effort for x-ai/grok models on OpenRouter (#32039)", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "openrouter",
+      "x-ai/grok-4.1-fast",
+      undefined,
+      "medium",
+    );
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "x-ai/grok-4.1-fast",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
   it("normalizes thinking=off to null for SiliconFlow Pro models", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -331,7 +363,7 @@ describe("applyExtraParamsToAgent", () => {
       agent,
       undefined,
       "siliconflow",
-      "Pro/MiniMaxAI/MiniMax-M2.1",
+      "Pro/MiniMaxAI/MiniMax-M2.5",
       undefined,
       "off",
     );
@@ -339,7 +371,7 @@ describe("applyExtraParamsToAgent", () => {
     const model = {
       api: "openai-completions",
       provider: "siliconflow",
-      id: "Pro/MiniMaxAI/MiniMax-M2.1",
+      id: "Pro/MiniMaxAI/MiniMax-M2.5",
     } as Model<"openai-completions">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});

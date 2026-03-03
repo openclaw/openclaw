@@ -41,118 +41,31 @@ function isRetryableGetFileError(err: unknown): boolean {
   return true;
 }
 
-export async function resolveMedia(
-  ctx: TelegramContext,
-  maxBytes: number,
-  token: string,
-  proxyFetch?: typeof fetch,
-): Promise<{
-  path: string;
-  contentType?: string;
-  placeholder: string;
-  stickerMetadata?: StickerMetadata;
-} | null> {
-  const msg = ctx.message;
-  const downloadAndSaveTelegramFile = async (filePath: string, fetchImpl: typeof fetch) => {
-    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
-    const fetched = await fetchRemoteMedia({
-      url,
-      fetchImpl,
-      filePathHint: filePath,
-      maxBytes,
-      ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
-    });
-    const originalName = fetched.fileName ?? filePath;
-    return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);
-  };
-
-  // Handle stickers separately - only static stickers (WEBP) are supported
-  if (msg.sticker) {
-    const sticker = msg.sticker;
-    // Skip animated (TGS) and video (WEBM) stickers - only static WEBP supported
-    if (sticker.is_animated || sticker.is_video) {
-      logVerbose("telegram: skipping animated/video sticker (only static stickers supported)");
-      return null;
-    }
-    if (!sticker.file_id) {
-      return null;
-    }
-
-    try {
-      const file = await ctx.getFile();
-      if (!file.file_path) {
-        logVerbose("telegram: getFile returned no file_path for sticker");
-        return null;
-      }
-      const fetchImpl = proxyFetch ?? globalThis.fetch;
-      if (!fetchImpl) {
-        logVerbose("telegram: fetch not available for sticker download");
-        return null;
-      }
-      const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
-
-      // Check sticker cache for existing description
-      const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
-      if (cached) {
-        logVerbose(`telegram: sticker cache hit for ${sticker.file_unique_id}`);
-        const fileId = sticker.file_id ?? cached.fileId;
-        const emoji = sticker.emoji ?? cached.emoji;
-        const setName = sticker.set_name ?? cached.setName;
-        if (fileId !== cached.fileId || emoji !== cached.emoji || setName !== cached.setName) {
-          // Refresh cached sticker metadata on hits so sends/searches use latest file_id.
-          cacheSticker({
-            ...cached,
-            fileId,
-            emoji,
-            setName,
-          });
-        }
-        return {
-          path: saved.path,
-          contentType: saved.contentType,
-          placeholder: "<media:sticker>",
-          stickerMetadata: {
-            emoji,
-            setName,
-            fileId,
-            fileUniqueId: sticker.file_unique_id,
-            cachedDescription: cached.description,
-          },
-        };
-      }
-
-      // Cache miss - return metadata for vision processing
-      return {
-        path: saved.path,
-        contentType: saved.contentType,
-        placeholder: "<media:sticker>",
-        stickerMetadata: {
-          emoji: sticker.emoji ?? undefined,
-          setName: sticker.set_name ?? undefined,
-          fileId: sticker.file_id,
-          fileUniqueId: sticker.file_unique_id,
-        },
-      };
-    } catch (err) {
-      logVerbose(`telegram: failed to process sticker: ${String(err)}`);
-      return null;
-    }
-  }
-
-  const m =
+function resolveMediaFileRef(msg: TelegramContext["message"]) {
+  return (
     msg.photo?.[msg.photo.length - 1] ??
     msg.video ??
     msg.video_note ??
     msg.document ??
     msg.audio ??
-    msg.voice;
-  if (!m?.file_id) {
-    return null;
-  }
+    msg.voice
+  );
+}
 
-  let file: { file_path?: string };
+function resolveTelegramFileName(msg: TelegramContext["message"]): string | undefined {
+  return (
+    msg.document?.file_name ??
+    msg.audio?.file_name ??
+    msg.video?.file_name ??
+    msg.animation?.file_name
+  );
+}
+
+async function resolveTelegramFileWithRetry(
+  ctx: TelegramContext,
+): Promise<{ file_path?: string } | null> {
   try {
-    file = await retryAsync(() => ctx.getFile(), {
+    return await retryAsync(() => ctx.getFile(), {
       attempts: 3,
       minDelayMs: 1000,
       maxDelayMs: 4000,
@@ -177,14 +90,179 @@ export async function resolveMedia(
     logVerbose(`telegram: getFile failed after retries: ${String(err)}`);
     return null;
   }
-  if (!file.file_path) {
-    throw new Error("Telegram getFile returned no file_path");
-  }
+}
+
+function resolveRequiredFetchImpl(proxyFetch?: typeof fetch): typeof fetch {
   const fetchImpl = proxyFetch ?? globalThis.fetch;
   if (!fetchImpl) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
-  const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
+  return fetchImpl;
+}
+
+async function downloadAndSaveTelegramFile(params: {
+  filePath: string;
+  token: string;
+  fetchImpl: typeof fetch;
+  maxBytes: number;
+  telegramFileName?: string;
+}) {
+  const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
+  const fetched = await fetchRemoteMedia({
+    url,
+    fetchImpl: params.fetchImpl,
+    filePathHint: params.filePath,
+    maxBytes: params.maxBytes,
+    ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
+  });
+  const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
+  return saveMediaBuffer(
+    fetched.buffer,
+    fetched.contentType,
+    "inbound",
+    params.maxBytes,
+    originalName,
+  );
+}
+
+async function resolveStickerMedia(params: {
+  msg: TelegramContext["message"];
+  ctx: TelegramContext;
+  maxBytes: number;
+  token: string;
+  proxyFetch?: typeof fetch;
+}): Promise<
+  | {
+      path: string;
+      contentType?: string;
+      placeholder: string;
+      stickerMetadata?: StickerMetadata;
+    }
+  | null
+  | undefined
+> {
+  const { msg, ctx, maxBytes, token, proxyFetch } = params;
+  if (!msg.sticker) {
+    return undefined;
+  }
+  const sticker = msg.sticker;
+  // Skip animated (TGS) and video (WEBM) stickers - only static WEBP supported
+  if (sticker.is_animated || sticker.is_video) {
+    logVerbose("telegram: skipping animated/video sticker (only static stickers supported)");
+    return null;
+  }
+  if (!sticker.file_id) {
+    return null;
+  }
+
+  try {
+    const file = await ctx.getFile();
+    if (!file.file_path) {
+      logVerbose("telegram: getFile returned no file_path for sticker");
+      return null;
+    }
+    const fetchImpl = proxyFetch ?? globalThis.fetch;
+    if (!fetchImpl) {
+      logVerbose("telegram: fetch not available for sticker download");
+      return null;
+    }
+    const saved = await downloadAndSaveTelegramFile({
+      filePath: file.file_path,
+      token,
+      fetchImpl,
+      maxBytes,
+    });
+
+    // Check sticker cache for existing description
+    const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
+    if (cached) {
+      logVerbose(`telegram: sticker cache hit for ${sticker.file_unique_id}`);
+      const fileId = sticker.file_id ?? cached.fileId;
+      const emoji = sticker.emoji ?? cached.emoji;
+      const setName = sticker.set_name ?? cached.setName;
+      if (fileId !== cached.fileId || emoji !== cached.emoji || setName !== cached.setName) {
+        // Refresh cached sticker metadata on hits so sends/searches use latest file_id.
+        cacheSticker({
+          ...cached,
+          fileId,
+          emoji,
+          setName,
+        });
+      }
+      return {
+        path: saved.path,
+        contentType: saved.contentType,
+        placeholder: "<media:sticker>",
+        stickerMetadata: {
+          emoji,
+          setName,
+          fileId,
+          fileUniqueId: sticker.file_unique_id,
+          cachedDescription: cached.description,
+        },
+      };
+    }
+
+    // Cache miss - return metadata for vision processing
+    return {
+      path: saved.path,
+      contentType: saved.contentType,
+      placeholder: "<media:sticker>",
+      stickerMetadata: {
+        emoji: sticker.emoji ?? undefined,
+        setName: sticker.set_name ?? undefined,
+        fileId: sticker.file_id,
+        fileUniqueId: sticker.file_unique_id,
+      },
+    };
+  } catch (err) {
+    logVerbose(`telegram: failed to process sticker: ${String(err)}`);
+    return null;
+  }
+}
+
+export async function resolveMedia(
+  ctx: TelegramContext,
+  maxBytes: number,
+  token: string,
+  proxyFetch?: typeof fetch,
+): Promise<{
+  path: string;
+  contentType?: string;
+  placeholder: string;
+  stickerMetadata?: StickerMetadata;
+} | null> {
+  const msg = ctx.message;
+  const stickerResolved = await resolveStickerMedia({
+    msg,
+    ctx,
+    maxBytes,
+    token,
+    proxyFetch,
+  });
+  if (stickerResolved !== undefined) {
+    return stickerResolved;
+  }
+
+  const m = resolveMediaFileRef(msg);
+  if (!m?.file_id) {
+    return null;
+  }
+
+  const file = await resolveTelegramFileWithRetry(ctx);
+  if (!file) {
+    return null;
+  }
+  if (!file.file_path) {
+    throw new Error("Telegram getFile returned no file_path");
+  }
+  const saved = await downloadAndSaveTelegramFile({
+    filePath: file.file_path,
+    token,
+    fetchImpl: resolveRequiredFetchImpl(proxyFetch),
+    maxBytes,
+    telegramFileName: resolveTelegramFileName(msg),
+  });
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }
