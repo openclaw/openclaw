@@ -31,6 +31,7 @@ export type CommandArgDefinition = {
   type: CommandArgType;
   required?: boolean;
   choices?: CommandArgChoice[] | CommandArgChoicesProvider;
+  preferAutocomplete?: boolean;
   captureRemaining?: boolean;
 };
 
