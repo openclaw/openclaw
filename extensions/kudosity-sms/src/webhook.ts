@@ -7,9 +7,13 @@
  * Webhook setup:
  * 1. In your Kudosity dashboard, create a webhook for SMS_INBOUND events
  * 2. Point it to: https://your-openclaw-instance/api/channels/kudosity-sms/webhook
- * 3. Optionally set a webhook secret for payload validation
+ *
+ * Note: Kudosity webhooks do not currently support payload signing or shared
+ * secrets. Security relies on endpoint URL obscurity. Consider IP allowlisting
+ * at the network/reverse-proxy level if your deployment requires it.
  *
  * @see https://developers.kudosity.com/reference/post_v2-webhook
+ * @see https://developers.kudosity.com/reference/about-webhooks
  */
 
 import type { InboundSMSEvent } from "./kudosity-api.js";

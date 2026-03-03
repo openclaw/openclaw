@@ -5,6 +5,7 @@
   "description": "Cloud SMS channel powered by Kudosity — send and receive SMS via the Kudosity API",
   "configSchema": {
     "type": "object",
+    "required": ["apiKey", "sender"],
     "additionalProperties": false,
     "properties": {
       "apiKey": {
@@ -14,10 +15,6 @@
       "sender": {
         "type": "string",
         "description": "Default sender number (E.164 format, e.g. +61400000000)"
-      },
-      "webhookSecret": {
-        "type": "string",
-        "description": "Optional secret for validating inbound webhook payloads"
       }
     }
   },
@@ -30,11 +27,6 @@
     "sender": {
       "label": "Sender Number",
       "placeholder": "+61400000000"
-    },
-    "webhookSecret": {
-      "label": "Webhook Secret",
-      "placeholder": "Optional — for validating inbound webhooks",
-      "sensitive": true
     }
   }
 }

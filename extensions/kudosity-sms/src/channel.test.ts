@@ -295,6 +295,134 @@ describe("kudositySmsPlugin", () => {
           } as any),
         ).rejects.toThrow("recipient phone number is required");
       });
+
+      it("should throw for invalid phone number format", async () => {
+        const cfg = {
+          channels: {
+            "kudosity-sms": {
+              apiKey: "test-key",
+              sender: "+61400000000",
+            },
+          },
+        };
+
+        await expect(
+          kudositySmsPlugin.outbound!.sendText!({
+            cfg,
+            to: "not-a-number",
+            text: "test",
+          } as any),
+        ).rejects.toThrow("invalid phone number format");
+      });
+    });
+
+    describe("sendMedia", () => {
+      it("should send text-only when media URL is provided", async () => {
+        const { sendSMS: mockSendSMS } = await import("./kudosity-api.js");
+
+        const cfg = {
+          channels: {
+            "kudosity-sms": {
+              apiKey: "test-key",
+              sender: "+61400000000",
+            },
+          },
+        };
+
+        const result = await kudositySmsPlugin.outbound!.sendMedia!({
+          cfg,
+          to: "+61478038915",
+          text: "Check this out!",
+          mediaUrl: "https://example.com/image.png",
+          accountId: "default",
+        } as any);
+
+        expect(result.channel).toBe("kudosity-sms");
+        expect(result.messageId).toBe("sms-response-123");
+
+        // Should send the text, not the media URL
+        expect(mockSendSMS).toHaveBeenCalledWith(
+          expect.objectContaining({
+            apiKey: "test-key",
+          }),
+          expect.objectContaining({
+            message: "Check this out!",
+            recipient: "+61478038915",
+          }),
+        );
+      });
+
+      it("should use fallback text when no caption is provided", async () => {
+        const { sendSMS: mockSendSMS } = await import("./kudosity-api.js");
+
+        const cfg = {
+          channels: {
+            "kudosity-sms": {
+              apiKey: "test-key",
+              sender: "+61400000000",
+            },
+          },
+        };
+
+        await kudositySmsPlugin.outbound!.sendMedia!({
+          cfg,
+          to: "+61478038915",
+          text: "",
+          mediaUrl: "https://example.com/image.png",
+        } as any);
+
+        expect(mockSendSMS).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            message: "(media attachment — not supported via SMS)",
+          }),
+        );
+      });
+
+      it("should warn when media URL is dropped", async () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const cfg = {
+          channels: {
+            "kudosity-sms": {
+              apiKey: "test-key",
+              sender: "+61400000000",
+            },
+          },
+        };
+
+        await kudositySmsPlugin.outbound!.sendMedia!({
+          cfg,
+          to: "+61478038915",
+          text: "caption",
+          mediaUrl: "https://example.com/photo.jpg",
+        } as any);
+
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("media attachments are not supported via SMS"),
+        );
+
+        warnSpy.mockRestore();
+      });
+
+      it("should throw for empty phone number", async () => {
+        const cfg = {
+          channels: {
+            "kudosity-sms": {
+              apiKey: "test-key",
+              sender: "+61400000000",
+            },
+          },
+        };
+
+        await expect(
+          kudositySmsPlugin.outbound!.sendMedia!({
+            cfg,
+            to: "",
+            text: "test",
+          } as any),
+        ).rejects.toThrow("recipient phone number is required");
+      });
     });
   });
 

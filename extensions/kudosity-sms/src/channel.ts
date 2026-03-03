@@ -20,6 +20,33 @@ import { sendSMS, type KudosityConfig } from "./kudosity-api.js";
 import { kudositySmsOnboarding } from "./onboarding.js";
 import { getKudositySmsRuntime } from "./runtime.js";
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** E.164-ish phone number pattern: optional +, then 7–15 digits starting with non-zero. */
+const E164_RE = /^\+?[1-9]\d{6,14}$/;
+
+/**
+ * Clean and validate a phone number for outbound SMS.
+ * Strips whitespace, dashes, parens, and dots, then checks E.164 format.
+ */
+function cleanPhoneNumber(raw: string): string {
+  const cleaned = raw.replace(/[\s\-\(\)\.]/g, "");
+  if (!cleaned) {
+    throw new Error("Kudosity SMS: recipient phone number is required");
+  }
+  if (!E164_RE.test(cleaned)) {
+    throw new Error(
+      `Kudosity SMS: invalid phone number format "${cleaned}" — expected E.164 (e.g. +61400000000)`,
+    );
+  }
+  return cleaned;
+}
+
+/** Generate a unique, collision-resistant message reference. */
+function generateMessageRef(): string {
+  return `openclaw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 // ─── Config Types ────────────────────────────────────────────────────────────
 
 const DEFAULT_ACCOUNT_ID = "default";
@@ -29,7 +56,6 @@ export interface KudositySmsAccount {
   accountId: string;
   apiKey: string;
   sender: string;
-  webhookSecret?: string;
 }
 
 // ─── Config Adapter ──────────────────────────────────────────────────────────
@@ -44,7 +70,6 @@ export interface KudositySmsAccount {
  * or falls back to environment variables:
  * - KUDOSITY_API_KEY
  * - KUDOSITY_SENDER
- * - KUDOSITY_WEBHOOK_SECRET
  */
 const configAdapter: ChannelConfigAdapter<KudositySmsAccount> = {
   /**
@@ -57,16 +82,13 @@ const configAdapter: ChannelConfigAdapter<KudositySmsAccount> = {
 
   /**
    * Resolve a Kudosity SMS account from the config.
-   * Reads API key, sender, and webhook secret from nested config or env vars.
+   * Reads API key and sender from nested config or env vars.
    */
   resolveAccount(cfg, _accountId) {
     const section = (cfg as any).channels?.[CHANNEL_KEY];
     const apiKey = (section?.apiKey as string) || process.env.KUDOSITY_API_KEY || "";
     const sender = (section?.sender as string) || process.env.KUDOSITY_SENDER || "";
-    const webhookSecret =
-      (section?.webhookSecret as string) || process.env.KUDOSITY_WEBHOOK_SECRET || undefined;
-
-    return { accountId: DEFAULT_ACCOUNT_ID, apiKey, sender, webhookSecret };
+    return { accountId: DEFAULT_ACCOUNT_ID, apiKey, sender };
   },
 
   /**
@@ -172,17 +194,13 @@ const outbound: ChannelOutboundAdapter = {
       sender: account.sender,
     };
 
-    // Clean the recipient phone number (strip whitespace, dashes, parens)
-    const cleaned = to.replace(/[\s\-\(\)]/g, "");
-    if (!cleaned) {
-      throw new Error("Kudosity SMS: recipient phone number is required");
-    }
+    const cleaned = cleanPhoneNumber(to);
 
     const result = await sendSMS(kudosityConfig, {
       message: text,
       sender: kudosityConfig.sender,
       recipient: cleaned,
-      message_ref: `openclaw-${Date.now()}`,
+      message_ref: generateMessageRef(),
     });
 
     return {
@@ -202,6 +220,7 @@ const outbound: ChannelOutboundAdapter = {
     cfg,
     to,
     text,
+    mediaUrl,
     accountId,
   }: {
     cfg: OpenClawConfig;
@@ -211,16 +230,20 @@ const outbound: ChannelOutboundAdapter = {
     accountId?: string | null;
     [key: string]: unknown;
   }) {
+    if (mediaUrl) {
+      console.warn(
+        "Kudosity SMS: media attachments are not supported via SMS — sending text only. " +
+          `Dropped media URL: ${mediaUrl}`,
+      );
+    }
+
     const account = configAdapter.resolveAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
     const kudosityConfig: KudosityConfig = {
       apiKey: account.apiKey,
       sender: account.sender,
     };
 
-    const cleaned = to.replace(/[\s\-\(\)]/g, "");
-    if (!cleaned) {
-      throw new Error("Kudosity SMS: recipient phone number is required");
-    }
+    const cleaned = cleanPhoneNumber(to);
 
     // SMS is text-only — send caption text, skip media
     const message = text?.trim() || "(media attachment — not supported via SMS)";
@@ -229,7 +252,7 @@ const outbound: ChannelOutboundAdapter = {
       message,
       sender: kudosityConfig.sender,
       recipient: cleaned,
-      message_ref: `openclaw-${Date.now()}`,
+      message_ref: generateMessageRef(),
     });
 
     return {
