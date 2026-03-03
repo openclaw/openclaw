@@ -44,6 +44,14 @@ async function expectInitialForumSend(
   );
 }
 
+function expectDmMessagePreviewViaSendMessage(
+  api: ReturnType<typeof createMockDraftApi>,
+  text = "Hello",
+): void {
+  expect(api.sendMessage).toHaveBeenCalledWith(123, text, { message_thread_id: 42 });
+  expect(api.editMessageText).not.toHaveBeenCalled();
+}
+
 function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
   const api = createMockDraftApi();
   api.sendMessage
@@ -135,9 +143,8 @@ describe("createTelegramDraftStream", () => {
     stream.update("Hello");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
+    expectDmMessagePreviewViaSendMessage(api);
     expect(api.sendMessageDraft).not.toHaveBeenCalled();
-    expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
   it("falls back to message transport when sendMessageDraft is unavailable", async () => {
@@ -153,8 +160,7 @@ describe("createTelegramDraftStream", () => {
     stream.update("Hello");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
-    expect(api.editMessageText).not.toHaveBeenCalled();
+    expectDmMessagePreviewViaSendMessage(api);
     expect(warn).toHaveBeenCalledWith(
       "telegram stream preview: sendMessageDraft unavailable; falling back to sendMessage/editMessageText",
     );
@@ -392,6 +398,14 @@ describe("draft stream initial message debounce", () => {
     deleteMessage: vi.fn().mockResolvedValue(true),
   });
 
+  function createDebouncedStream(api: ReturnType<typeof createMockApi>, minInitialChars = 30) {
+    return createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      minInitialChars,
+    });
+  }
+
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -403,11 +417,7 @@ describe("draft stream initial message debounce", () => {
   describe("isFinal has highest priority", () => {
     it("sends immediately on stop() even with 1 character", async () => {
       const api = createMockApi();
-      const stream = createTelegramDraftStream({
-        api: api as unknown as Bot["api"],
-        chatId: 123,
-        minInitialChars: 30,
-      });
+      const stream = createDebouncedStream(api);
 
       stream.update("Y");
       await stream.stop();
@@ -418,11 +428,7 @@ describe("draft stream initial message debounce", () => {
 
     it("sends immediately on stop() with short sentence", async () => {
       const api = createMockApi();
-      const stream = createTelegramDraftStream({
-        api: api as unknown as Bot["api"],
-        chatId: 123,
-        minInitialChars: 30,
-      });
+      const stream = createDebouncedStream(api);
 
       stream.update("Ok.");
       await stream.stop();
@@ -435,11 +441,7 @@ describe("draft stream initial message debounce", () => {
   describe("minInitialChars threshold", () => {
     it("does not send first message below threshold", async () => {
       const api = createMockApi();
-      const stream = createTelegramDraftStream({
-        api: api as unknown as Bot["api"],
-        chatId: 123,
-        minInitialChars: 30,
-      });
+      const stream = createDebouncedStream(api);
 
       stream.update("Processing"); // 10 chars, below 30
       await stream.flush();
@@ -449,11 +451,7 @@ describe("draft stream initial message debounce", () => {
 
     it("sends first message when reaching threshold", async () => {
       const api = createMockApi();
-      const stream = createTelegramDraftStream({
-        api: api as unknown as Bot["api"],
-        chatId: 123,
-        minInitialChars: 30,
-      });
+      const stream = createDebouncedStream(api);
 
       // Exactly 30 chars
       stream.update("I am processing your request..");
@@ -464,11 +462,7 @@ describe("draft stream initial message debounce", () => {
 
     it("works with longer text above threshold", async () => {
       const api = createMockApi();
-      const stream = createTelegramDraftStream({
-        api: api as unknown as Bot["api"],
-        chatId: 123,
-        minInitialChars: 30,
-      });
+      const stream = createDebouncedStream(api);
 
       stream.update("I am processing your request, please wait a moment"); // 50 chars
       await stream.flush();
@@ -480,11 +474,7 @@ describe("draft stream initial message debounce", () => {
   describe("subsequent updates after first message", () => {
     it("edits normally after first message is sent", async () => {
       const api = createMockApi();
-      const stream = createTelegramDraftStream({
-        api: api as unknown as Bot["api"],
-        chatId: 123,
-        minInitialChars: 30,
-      });
+      const stream = createDebouncedStream(api);
 
       // First message at threshold (30 chars)
       stream.update("I am processing your request..");
