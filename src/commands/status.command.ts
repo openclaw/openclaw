@@ -18,6 +18,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { VERSION } from "../version.js";
 import { formatHealthChannelLines, type HealthSummary } from "./health.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
 import { statusAllCommand } from "./status-all.js";
@@ -252,12 +253,18 @@ export async function statusCommand(
       gatewayReachable && !remoteUrlMissing
         ? ` · auth ${formatGatewayAuthUsed(resolveGatewayProbeAuth(cfg))}`
         : "";
+    const gatewayVersion = gatewaySelf?.version?.trim();
+    const appVersionLabel = gatewayVersion
+      ? gatewayVersion === VERSION
+        ? `app ${gatewayVersion}`
+        : `app ${gatewayVersion} (cli ${VERSION})`
+      : null;
     const self =
       gatewaySelf?.host || gatewaySelf?.version || gatewaySelf?.platform
         ? [
             gatewaySelf?.host ? gatewaySelf.host : null,
             gatewaySelf?.ip ? `(${gatewaySelf.ip})` : null,
-            gatewaySelf?.version ? `app ${gatewaySelf.version}` : null,
+            appVersionLabel,
             gatewaySelf?.platform ? gatewaySelf.platform : null,
           ]
             .filter(Boolean)

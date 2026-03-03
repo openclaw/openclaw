@@ -1,6 +1,7 @@
 import type { Mock } from "vitest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
+import { VERSION } from "../version.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -479,6 +480,21 @@ describe("statusCommand", () => {
       const logs = await runStatusAndGetLogs();
       expect(logs.some((l: string) => l.includes("auth token"))).toBe(true);
     });
+  });
+
+  it("annotates gateway app version when it differs from CLI version", async () => {
+    mockProbeGatewayResult({
+      ok: true,
+      connectLatencyMs: 30,
+      error: null,
+      health: {},
+      status: {},
+      presence: [{ mode: "gateway", reason: "self", host: "pi-host", version: "2026.2.21" }],
+    });
+
+    const joined = await runStatusAndGetJoinedLogs();
+    expect(joined).toContain("app 2026.2.");
+    expect(joined).toContain(`(cli ${VERSION})`);
   });
 
   it("surfaces channel runtime errors from the gateway", async () => {
