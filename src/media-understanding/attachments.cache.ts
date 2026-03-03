@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { normalizeHostname } from "../infra/net/hostname.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
 import {
@@ -43,6 +45,25 @@ const DEFAULT_LOCAL_PATH_ROOTS = mergeInboundPathRoots(
   getDefaultMediaLocalRoots(),
   DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
 );
+
+const DISCORD_CDN_HOSTNAMES = new Set(["cdn.discordapp.com", "media.discordapp.net"]);
+
+const DISCORD_MEDIA_SSRF_POLICY: SsrFPolicy = {
+  allowedHostnames: ["cdn.discordapp.com", "media.discordapp.net"],
+  allowRfc2544BenchmarkRange: true,
+};
+
+function resolveDiscordMediaSsrFPolicy(url: string): SsrFPolicy | undefined {
+  try {
+    const hostname = normalizeHostname(new URL(url).hostname);
+    if (DISCORD_CDN_HOSTNAMES.has(hostname)) {
+      return DISCORD_MEDIA_SSRF_POLICY;
+    }
+  } catch {
+    // Ignore malformed URLs; downstream fetch path surfaces a proper error.
+  }
+  return undefined;
+}
 
 export type MediaAttachmentCacheOptions = {
   localPathRoots?: readonly string[];
@@ -133,7 +154,12 @@ export class MediaAttachmentCache {
     try {
       const fetchImpl = (input: RequestInfo | URL, init?: RequestInit) =>
         fetchWithTimeout(resolveRequestUrl(input), init ?? {}, params.timeoutMs, fetch);
-      const fetched = await fetchRemoteMedia({ url, fetchImpl, maxBytes: params.maxBytes });
+      const fetched = await fetchRemoteMedia({
+        url,
+        fetchImpl,
+        maxBytes: params.maxBytes,
+        ssrfPolicy: resolveDiscordMediaSsrFPolicy(url),
+      });
       entry.buffer = fetched.buffer;
       entry.bufferMime =
         entry.attachment.mime ??
