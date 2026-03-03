@@ -53,6 +53,7 @@ type MemoryIndexMeta = {
   chunkTokens: number;
   chunkOverlap: number;
   vectorDims?: number;
+  configuredDims?: number | null;
 };
 
 type MemorySyncProgressState = {
@@ -860,7 +861,8 @@ export abstract class MemoryManagerSyncOps {
         label: "Loading vector extension…",
       });
     }
-    const vectorReady = await this.ensureVectorReady();
+    const configuredDims = this.settings.dimensions;
+    const vectorReady = await this.ensureVectorReady(configuredDims);
     const meta = this.readMeta();
     const configuredSources = this.resolveConfiguredSourcesForMeta();
     const needsFullReindex =
@@ -872,7 +874,12 @@ export abstract class MemoryManagerSyncOps {
       this.metaSourcesDiffer(meta, configuredSources) ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
-      (vectorReady && !meta?.vectorDims);
+      (vectorReady && !meta?.vectorDims) ||
+      (vectorReady &&
+        typeof configuredDims === "number" &&
+        typeof meta?.vectorDims === "number" &&
+        meta.vectorDims !== configuredDims) ||
+      (vectorReady && (meta?.configuredDims ?? null) !== (configuredDims ?? null));
     try {
       if (needsFullReindex) {
         if (
@@ -1092,6 +1099,7 @@ export abstract class MemoryManagerSyncOps {
       if (this.vector.available && this.vector.dims) {
         nextMeta.vectorDims = this.vector.dims;
       }
+      nextMeta.configuredDims = this.settings.dimensions ?? null;
 
       this.writeMeta(nextMeta);
       this.pruneEmbeddingCacheIfNeeded?.();
@@ -1159,6 +1167,7 @@ export abstract class MemoryManagerSyncOps {
     if (this.vector.available && this.vector.dims) {
       nextMeta.vectorDims = this.vector.dims;
     }
+    nextMeta.configuredDims = this.settings.dimensions ?? null;
 
     this.writeMeta(nextMeta);
     this.pruneEmbeddingCacheIfNeeded?.();

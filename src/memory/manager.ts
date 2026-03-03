@@ -12,12 +12,9 @@ import {
   type EmbeddingProvider,
   type EmbeddingProviderResult,
   type GeminiEmbeddingClient,
-  type MistralEmbeddingClient,
-  type OllamaEmbeddingClient,
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
-import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
@@ -40,7 +37,6 @@ const BATCH_FAILURE_LIMIT = 2;
 const log = createSubsystemLogger("memory");
 
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
-const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
 
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
@@ -63,8 +59,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
-  protected mistral?: MistralEmbeddingClient;
-  protected ollama?: OllamaEmbeddingClient;
   protected batch: {
     enabled: boolean;
     wait: boolean;
@@ -109,10 +103,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   >();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
-  private readonlyRecoveryAttempts = 0;
-  private readonlyRecoverySuccesses = 0;
-  private readonlyRecoveryFailures = 0;
-  private readonlyRecoveryLastError?: string;
 
   static async get(params: {
     cfg: OpenClawConfig;
@@ -130,44 +120,27 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (existing) {
       return existing;
     }
-    const pending = INDEX_CACHE_PENDING.get(key);
-    if (pending) {
-      return pending;
-    }
-    const createPromise = (async () => {
-      const providerResult = await createEmbeddingProvider({
-        config: cfg,
-        agentDir: resolveAgentDir(cfg, agentId),
-        provider: settings.provider,
-        remote: settings.remote,
-        model: settings.model,
-        fallback: settings.fallback,
-        local: settings.local,
-      });
-      const refreshed = INDEX_CACHE.get(key);
-      if (refreshed) {
-        return refreshed;
-      }
-      const manager = new MemoryIndexManager({
-        cacheKey: key,
-        cfg,
-        agentId,
-        workspaceDir,
-        settings,
-        providerResult,
-        purpose: params.purpose,
-      });
-      INDEX_CACHE.set(key, manager);
-      return manager;
-    })();
-    INDEX_CACHE_PENDING.set(key, createPromise);
-    try {
-      return await createPromise;
-    } finally {
-      if (INDEX_CACHE_PENDING.get(key) === createPromise) {
-        INDEX_CACHE_PENDING.delete(key);
-      }
-    }
+    const providerResult = await createEmbeddingProvider({
+      config: cfg,
+      agentDir: resolveAgentDir(cfg, agentId),
+      provider: settings.provider,
+      remote: settings.remote,
+      model: settings.model,
+      dimensions: settings.dimensions,
+      fallback: settings.fallback,
+      local: settings.local,
+    });
+    const manager = new MemoryIndexManager({
+      cacheKey: key,
+      cfg,
+      agentId,
+      workspaceDir,
+      settings,
+      providerResult,
+      purpose: params.purpose,
+    });
+    INDEX_CACHE.set(key, manager);
+    return manager;
   }
 
   private constructor(params: {
@@ -299,11 +272,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return merged;
     }
 
-    // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
-    const keywordResults =
-      hybrid.enabled && this.fts.enabled && this.fts.available
-        ? await this.searchKeyword(cleaned, candidates).catch(() => [])
-        : [];
+    const keywordResults = hybrid.enabled
+      ? await this.searchKeyword(cleaned, candidates).catch(() => [])
+      : [];
 
     const queryVec = await this.embedQueryWithTimeout(cleaned);
     const hasVector = queryVec.some((v) => v !== 0);
@@ -311,7 +282,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ? await this.searchVector(queryVec, candidates).catch(() => [])
       : [];
 
-    if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
+    if (!hybrid.enabled) {
       return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
     }
 
@@ -323,28 +294,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       mmr: hybrid.mmr,
       temporalDecay: hybrid.temporalDecay,
     });
-    const strict = merged.filter((entry) => entry.score >= minScore);
-    if (strict.length > 0 || keywordResults.length === 0) {
-      return strict.slice(0, maxResults);
-    }
 
-    // Hybrid defaults can produce keyword-only matches with max score equal to
-    // textWeight (for example 0.3). If minScore is higher (for example 0.35),
-    // these exact lexical hits get filtered out even when they are the only
-    // relevant results.
-    const relaxedMinScore = Math.min(minScore, hybrid.textWeight);
-    const keywordKeys = new Set(
-      keywordResults.map(
-        (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
-      ),
-    );
-    return merged
-      .filter(
-        (entry) =>
-          keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`) &&
-          entry.score >= relaxedMinScore,
-      )
-      .slice(0, maxResults);
+    return merged.filter((entry) => entry.score >= minScore).slice(0, maxResults);
   }
 
   private async searchVector(
@@ -437,101 +388,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
-    if (this.closed) {
-      return;
-    }
     if (this.syncing) {
       return this.syncing;
     }
-    this.syncing = this.runSyncWithReadonlyRecovery(params).finally(() => {
+    this.syncing = this.runSync(params).finally(() => {
       this.syncing = null;
     });
     return this.syncing ?? Promise.resolve();
-  }
-
-  private isReadonlyDbError(err: unknown): boolean {
-    const readonlyPattern =
-      /attempt to write a readonly database|database is read-only|SQLITE_READONLY/i;
-    const messages = new Set<string>();
-
-    const pushValue = (value: unknown): void => {
-      if (typeof value !== "string") {
-        return;
-      }
-      const normalized = value.trim();
-      if (!normalized) {
-        return;
-      }
-      messages.add(normalized);
-    };
-
-    pushValue(err instanceof Error ? err.message : String(err));
-    if (err && typeof err === "object") {
-      const record = err as Record<string, unknown>;
-      pushValue(record.message);
-      pushValue(record.code);
-      pushValue(record.name);
-      if (record.cause && typeof record.cause === "object") {
-        const cause = record.cause as Record<string, unknown>;
-        pushValue(cause.message);
-        pushValue(cause.code);
-        pushValue(cause.name);
-      }
-    }
-
-    return [...messages].some((value) => readonlyPattern.test(value));
-  }
-
-  private extractErrorReason(err: unknown): string {
-    if (err instanceof Error && err.message.trim()) {
-      return err.message;
-    }
-    if (err && typeof err === "object") {
-      const record = err as Record<string, unknown>;
-      if (typeof record.message === "string" && record.message.trim()) {
-        return record.message;
-      }
-      if (typeof record.code === "string" && record.code.trim()) {
-        return record.code;
-      }
-    }
-    return String(err);
-  }
-
-  private async runSyncWithReadonlyRecovery(params?: {
-    reason?: string;
-    force?: boolean;
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }): Promise<void> {
-    try {
-      await this.runSync(params);
-      return;
-    } catch (err) {
-      if (!this.isReadonlyDbError(err) || this.closed) {
-        throw err;
-      }
-      const reason = this.extractErrorReason(err);
-      this.readonlyRecoveryAttempts += 1;
-      this.readonlyRecoveryLastError = reason;
-      log.warn(`memory sync readonly handle detected; reopening sqlite connection`, { reason });
-      try {
-        this.db.close();
-      } catch {}
-      this.db = this.openDatabase();
-      this.vectorReady = null;
-      this.vector.available = null;
-      this.vector.loadError = undefined;
-      this.ensureSchema();
-      const meta = this.readMeta();
-      this.vector.dims = meta?.vectorDims;
-      try {
-        await this.runSync(params);
-        this.readonlyRecoverySuccesses += 1;
-      } catch (retryErr) {
-        this.readonlyRecoveryFailures += 1;
-        throw retryErr;
-      }
-    }
   }
 
   async readFile(params: {
@@ -584,19 +447,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!absPath.endsWith(".md")) {
       throw new Error("path required");
     }
-    const statResult = await statRegularFile(absPath);
-    if (statResult.missing) {
-      return { text: "", path: relPath };
+    const stat = await fs.lstat(absPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error("path required");
     }
-    let content: string;
-    try {
-      content = await fs.readFile(absPath, "utf-8");
-    } catch (err) {
-      if (isFileMissingError(err)) {
-        return { text: "", path: relPath };
-      }
-      throw err;
-    }
+    const content = await fs.readFile(absPath, "utf-8");
     if (!params.from && !params.lines) {
       return { text: content, path: relPath };
     }
@@ -711,12 +566,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       custom: {
         searchMode,
         providerUnavailableReason: this.providerUnavailableReason,
-        readonlyRecovery: {
-          attempts: this.readonlyRecoveryAttempts,
-          successes: this.readonlyRecoverySuccesses,
-          failures: this.readonlyRecoveryFailures,
-          lastError: this.readonlyRecoveryLastError,
-        },
       },
     };
   }
@@ -754,7 +603,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return;
     }
     this.closed = true;
-    const pendingSync = this.syncing;
     if (this.watchTimer) {
       clearTimeout(this.watchTimer);
       this.watchTimer = null;
@@ -774,11 +622,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.sessionUnsubscribe) {
       this.sessionUnsubscribe();
       this.sessionUnsubscribe = null;
-    }
-    if (pendingSync) {
-      try {
-        await pendingSync;
-      } catch {}
     }
     this.db.close();
     INDEX_CACHE.delete(this.cacheKey);

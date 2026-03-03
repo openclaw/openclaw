@@ -297,6 +297,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.remote.batch.pollIntervalMs": "Remote Batch Poll Interval (ms)",
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes": "Remote Batch Timeout (min)",
   "agents.defaults.memorySearch.model": "Memory Search Model",
+  "agents.defaults.memorySearch.dimensions": "Embedding Dimensions (Matryoshka)",
   "agents.defaults.memorySearch.fallback": "Memory Search Fallback",
   "agents.defaults.memorySearch.local.modelPath": "Local Embedding Model Path",
   "agents.defaults.memorySearch.store.path": "Memory Search Index Path",
