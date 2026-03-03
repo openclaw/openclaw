@@ -25,6 +25,7 @@ import { resolveUserPath, shortenHomeInString, shortenHomePath } from "../utils.
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import {
+  resolveBuiltinToolInstallHintForNpmFailure,
   resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
 } from "./plugin-install-plan.js";
@@ -325,6 +326,13 @@ async function runPluginInstallCommand(params: {
       findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
     });
     if (!bundledFallbackPlan) {
+      const builtInToolHint = resolveBuiltinToolInstallHintForNpmFailure({
+        rawSpec: raw,
+        code: result.code,
+      });
+      if (builtInToolHint) {
+        defaultRuntime.log(theme.warn(builtInToolHint));
+      }
       defaultRuntime.error(result.error);
       process.exit(1);
     }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import {
+  resolveBuiltinToolInstallHintForNpmFailure,
   resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
 } from "./plugin-install-plan.js";
@@ -63,5 +64,29 @@ describe("plugin install plan helpers", () => {
 
     expect(findBundledSource).not.toHaveBeenCalled();
     expect(result).toBeNull();
+  });
+
+  it("returns built-in tool hint for missing-openclaw-extensions on bare tool-like spec", () => {
+    const hint = resolveBuiltinToolInstallHintForNpmFailure({
+      rawSpec: "exec",
+      code: PLUGIN_INSTALL_ERROR_CODE.MISSING_OPENCLAW_EXTENSIONS,
+    });
+
+    expect(hint).toContain("built-in tool category");
+    expect(hint).toContain("tools.profile coding");
+  });
+
+  it("does not return built-in tool hint for scoped specs or other error codes", () => {
+    const scoped = resolveBuiltinToolInstallHintForNpmFailure({
+      rawSpec: "@openclaw/exec",
+      code: PLUGIN_INSTALL_ERROR_CODE.MISSING_OPENCLAW_EXTENSIONS,
+    });
+    const otherError = resolveBuiltinToolInstallHintForNpmFailure({
+      rawSpec: "exec",
+      code: PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND,
+    });
+
+    expect(scoped).toBeNull();
+    expect(otherError).toBeNull();
   });
 });

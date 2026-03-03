@@ -12,6 +12,19 @@ function isBareNpmPackageName(spec: string): boolean {
   return /^[a-z0-9][a-z0-9-._~]*$/.test(trimmed);
 }
 
+const BUILTIN_TOOL_LIKE_PLUGIN_NAMES = new Set([
+  "exec",
+  "shell",
+  "bash",
+  "terminal",
+  "browser",
+  "web",
+  "playwright",
+  "file",
+  "files",
+  "fs",
+]);
+
 export function resolveBundledInstallPlanBeforeNpm(params: {
   rawSpec: string;
   findBundledSource: BundledLookup;
@@ -51,4 +64,21 @@ export function resolveBundledInstallPlanForNpmFailure(params: {
     bundledSource,
     warning: `npm package unavailable for ${params.rawSpec}; using bundled plugin at ${shortenHomePath(bundledSource.localPath)}.`,
   };
+}
+
+export function resolveBuiltinToolInstallHintForNpmFailure(params: {
+  rawSpec: string;
+  code?: string;
+}): string | null {
+  if (params.code !== PLUGIN_INSTALL_ERROR_CODE.MISSING_OPENCLAW_EXTENSIONS) {
+    return null;
+  }
+  if (!isBareNpmPackageName(params.rawSpec)) {
+    return null;
+  }
+  const normalized = params.rawSpec.trim().toLowerCase();
+  if (!BUILTIN_TOOL_LIKE_PLUGIN_NAMES.has(normalized)) {
+    return null;
+  }
+  return `Hint: "${params.rawSpec}" looks like a built-in tool category, not an OpenClaw plugin. For command/file/browser tools, enable a coding tool profile instead (for example: openclaw config set tools.profile coding), then restart the gateway.`;
 }
