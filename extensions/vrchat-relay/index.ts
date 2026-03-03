@@ -38,7 +38,9 @@ import {
 } from "./src/tools/permissions.js";
 import { rateLimiters } from "./src/tools/rate-limiter.js";
 
-const plugin = {
+import type { OpenClawPluginApi, OpenClawPluginDefinition } from "../../src/plugins/types.js";
+
+const plugin: OpenClawPluginDefinition = {
   id: "vrchat-relay",
   name: "VRChat Relay",
   description:
@@ -59,9 +61,15 @@ const plugin = {
         defaultPermissionLevel: Type.Optional(Type.String({ default: "SAFE" })),
       }),
     ),
+    mirror: Type.Optional(
+      Type.Object({
+        syncAiResponseToChatbox: Type.Optional(Type.Boolean({ default: true })),
+        maxCharacters: Type.Optional(Type.Number({ default: 144 })),
+      }),
+    ),
   }),
 
-  register(api: { registerTool: (tool: unknown) => void }) {
+  register(api: OpenClawPluginApi) {
     console.log("[vrchat-relay] Registering VRChat Relay plugin (Pro Edition)...");
 
     // /chatbox command - Direct access for the Parent
@@ -105,6 +113,30 @@ const plugin = {
         `[vrchat-relay] Failed to auto-start OSC Telemetry Listener: ${listenerResult.error}`,
       );
     }
+
+    // --- Metaverse Voice Sync (SOUL.md) ---
+    api.on("llm_output", (event) => {
+      const cfg = (api.pluginConfig as any)?.mirror;
+      if (cfg?.syncAiResponseToChatbox === false) return;
+
+      const fullText = event.assistantTexts.join("\n").trim();
+      if (!fullText) return;
+
+      // Extract only the final assistant message (ignore intermediate tool call status if possible)
+      // For now, we take the whole text and normalize it
+      const maxChars = cfg?.maxCharacters || 144;
+      let syncText = fullText;
+
+      // Remove markdown for Chatbox readability
+      syncText = syncText.replace(/\[.*?\]\(.*?\)/g, "").replace(/[*_`]/g, "");
+
+      if (syncText.length > maxChars) {
+        syncText = syncText.substring(0, maxChars - 3) + "...";
+      }
+
+      console.log(`[vrchat-relay] Mirroring AI Response to VRChat: ${syncText}`);
+      sendChatboxMessage({ message: syncText, sfx: false }); // sfx: false to avoid double ping
+    });
 
     // vrchat_login - Authenticate with VRChat
     api.registerTool({
@@ -485,38 +517,6 @@ ${paramList}`,
       },
     });
 
-    // vrchat_discover - Discover avatar parameters
-    api.registerTool({
-      name: "vrchat_discover",
-      description:
-        "Discover available OSC parameters for current avatar using OSCQuery and local JSON",
-      parameters: Type.Object({
-        avatarId: Type.String({ description: "Avatar ID (from /avatar/change event)" }),
-      }),
-      async execute(_id: string, params: { avatarId: string }) {
-        const result = await discoverAvatarParameters(params.avatarId);
-
-        const paramList =
-          result.parameters.length > 0
-            ? result.parameters.map((p) => `  - ${p.name} (${p.type})`).join("\n")
-            : "  No parameters discovered";
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Discovery Result:
-- Avatar ID: ${result.avatarId}
-- Source: ${result.source}
-- Parameters Found: ${result.parameters.length}
-- Timestamp: ${result.timestamp.toISOString()}
-
-Parameters:
-${paramList}`,
-            },
-          ],
-        };
-      },
     });
 
     // vrchat_send_osc - Send raw OSC message
