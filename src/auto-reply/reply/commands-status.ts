@@ -25,6 +25,7 @@ import { buildStatusMessage } from "../status.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
+import { resolveDefaultModel } from "./directive-handling.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
 
@@ -75,9 +76,17 @@ export async function buildStatusReply(params: {
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
   const statusAgentDir = resolveAgentDir(cfg, statusAgentId);
+  const { defaultProvider, defaultModel } = resolveDefaultModel({
+    cfg,
+    agentId: statusAgentId,
+  });
+  // /status should reflect the session's configured model selection, not the
+  // transient model used by the current command-processing turn (e.g. heartbeat).
+  const selectedProvider = sessionEntry?.providerOverride?.trim() || defaultProvider || provider;
+  const selectedModel = sessionEntry?.modelOverride?.trim() || defaultModel || model;
   const currentUsageProvider = (() => {
     try {
-      return resolveUsageProviderId(provider);
+      return resolveUsageProviderId(selectedProvider);
     } catch {
       return undefined;
     }
@@ -141,12 +150,12 @@ export async function buildStatusReply(params: {
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
   const modelRefs = resolveSelectedAndActiveModel({
-    selectedProvider: provider,
-    selectedModel: model,
+    selectedProvider,
+    selectedModel,
     sessionEntry,
   });
   const selectedModelAuth = resolveModelAuthLabel({
-    provider,
+    provider: selectedProvider,
     cfg,
     sessionEntry,
     agentDir: statusAgentDir,
@@ -166,7 +175,7 @@ export async function buildStatusReply(params: {
       ...agentDefaults,
       model: {
         ...toAgentModelListLike(agentDefaults.model),
-        primary: `${provider}/${model}`,
+        primary: `${selectedProvider}/${selectedModel}`,
       },
       contextTokens,
       thinkingDefault: agentDefaults.thinkingDefault,
