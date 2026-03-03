@@ -428,6 +428,7 @@ async function deliverMediaReply(params: {
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
   chatId: string;
+  accountId?: string;
   token: string;
   runtime: RuntimeEnv;
   bot: Bot;
@@ -459,9 +460,9 @@ export async function deliverReplies(params: {
   });
   for (const originalReply of params.replies) {
     let reply = originalReply;
-    const mediaList = reply.mediaUrls?.length
+    const mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls
-      : reply.mediaUrl
+      : reply?.mediaUrl
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
@@ -488,6 +489,7 @@ export async function deliverReplies(params: {
         },
         {
           channelId: "telegram",
+          accountId: params.accountId,
           conversationId: params.chatId,
         },
       );
@@ -555,6 +557,7 @@ export async function deliverReplies(params: {
           },
           {
             channelId: "telegram",
+            accountId: params.accountId,
             conversationId: params.chatId,
           },
         );
@@ -570,6 +573,7 @@ export async function deliverReplies(params: {
           },
           {
             channelId: "telegram",
+            accountId: params.accountId,
             conversationId: params.chatId,
           },
         );
