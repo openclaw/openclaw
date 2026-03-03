@@ -56,6 +56,34 @@ export function resolveSilentReplyFallbackText(params: {
   return fallback;
 }
 
+function syncSnapshotIntoTextBuffers(ctx: EmbeddedPiSubscribeContext, snapshot: string) {
+  if (!snapshot || snapshot === ctx.state.deltaBuffer) {
+    return;
+  }
+
+  if (snapshot.startsWith(ctx.state.deltaBuffer)) {
+    const missing = snapshot.slice(ctx.state.deltaBuffer.length);
+    if (!missing) {
+      return;
+    }
+    ctx.state.deltaBuffer += missing;
+    if (ctx.blockChunker) {
+      ctx.blockChunker.append(missing);
+    } else {
+      ctx.state.blockBuffer += missing;
+    }
+    return;
+  }
+
+  ctx.state.deltaBuffer = snapshot;
+  if (ctx.blockChunker) {
+    ctx.blockChunker.reset();
+    ctx.blockChunker.append(snapshot);
+  } else {
+    ctx.state.blockBuffer = snapshot;
+  }
+}
+
 export function handleMessageStart(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -144,19 +172,23 @@ export function handleMessageUpdate(
       const cleanedText = parsedSnapshot.text;
       const mediaUrls = parsedSnapshot.mediaUrls;
       const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
+      const hasAudio = Boolean(parsedSnapshot.audioAsVoice);
       const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
 
       let shouldEmit = false;
       let deltaText = "";
-      if (!cleanedText && !hasMedia) {
+      if (!cleanedText && !hasMedia && !hasAudio) {
         shouldEmit = false;
       } else if (previousCleaned && !cleanedText.startsWith(previousCleaned)) {
         shouldEmit = false;
       } else {
         deltaText = cleanedText.slice(previousCleaned.length);
-        shouldEmit = Boolean(deltaText || hasMedia);
+        shouldEmit = Boolean(deltaText || hasMedia || hasAudio);
       }
 
+      if (shouldEmit && cleanedText) {
+        syncSnapshotIntoTextBuffers(ctx, snapshot);
+      }
       ctx.state.lastStreamedAssistant = snapshot;
       ctx.state.lastStreamedAssistantCleaned = cleanedText;
 
