@@ -108,7 +108,8 @@ preflight() {
   [[ -d ".git/rebase-merge" || -d ".git/rebase-apply" ]] && \
     die "A rebase is in progress. Abort it first."
 
-  if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+  if [[ "$DRY_RUN" == false ]] && \
+     { ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; }; then
     die "Working tree is dirty. Commit or stash your changes first."
   fi
 
