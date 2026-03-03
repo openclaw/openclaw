@@ -185,7 +185,12 @@ async function authorizeSlashInvocation(params: {
   const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
   const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
   const storeAllowFrom = normalizeAllowList(
-    await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
+    await core.channel.pairing
+      .readAllowFromStore({
+        channel: "mattermost",
+        accountId: account.accountId,
+      })
+      .catch(() => []),
   );
   const effectiveAllowFrom = Array.from(new Set([...configAllowFrom, ...storeAllowFrom]));
   const effectiveGroupAllowFrom = Array.from(
@@ -254,6 +259,7 @@ async function authorizeSlashInvocation(params: {
       if (dmPolicy === "pairing") {
         const { code } = await core.channel.pairing.upsertPairingRequest({
           channel: "mattermost",
+          accountId: account.accountId,
           id: senderId,
           meta: { name: senderName },
         });

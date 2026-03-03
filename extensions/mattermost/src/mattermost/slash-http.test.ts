@@ -10,9 +10,10 @@ function createRequest(params: {
   body?: string;
   contentType?: string;
 }): IncomingMessage {
-  const req = new PassThrough() as IncomingMessage;
-  req.method = params.method ?? "POST";
-  req.headers = {
+  const req = new PassThrough();
+  const incoming = req as unknown as IncomingMessage;
+  incoming.method = params.method ?? "POST";
+  incoming.headers = {
     "content-type": params.contentType ?? "application/x-www-form-urlencoded",
   };
   process.nextTick(() => {
@@ -21,7 +22,7 @@ function createRequest(params: {
     }
     req.end();
   });
-  return req;
+  return incoming;
 }
 
 function createResponse(): {
