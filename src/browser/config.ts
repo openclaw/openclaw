@@ -45,7 +45,7 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   color: string;
-  driver: "openclaw" | "extension";
+  driver: "openclaw" | "extension" | "firecrawl";
   attachOnly: boolean;
 };
 
@@ -204,6 +204,7 @@ function ensureDefaultChromeExtensionProfile(
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
   rootConfig?: OpenClawConfig,
+  opts?: { firecrawlApiKey?: string },
 ): ResolvedBrowserConfig {
   const enabled = cfg?.enabled ?? DEFAULT_OPENCLAW_BROWSER_ENABLED;
   const evaluateEnabled = cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
@@ -264,13 +265,21 @@ export function resolveBrowserConfig(
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
 
+  // Auto-create a "firecrawl" profile when an API key is available and no explicit one exists.
+  if (opts?.firecrawlApiKey && !profiles.firecrawl) {
+    profiles.firecrawl = { driver: "firecrawl", color: "#FF4500" };
+  }
+
   const defaultProfile =
     defaultProfileFromConfig ??
-    (profiles[DEFAULT_BROWSER_DEFAULT_PROFILE_NAME]
-      ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
-      : profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
-        ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
-        : "chrome");
+    // When a firecrawl profile exists (auto-created or explicit), prefer it as default.
+    (profiles.firecrawl
+      ? "firecrawl"
+      : profiles[DEFAULT_BROWSER_DEFAULT_PROFILE_NAME]
+        ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
+        : profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
+          ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
+          : "chrome");
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
@@ -311,6 +320,19 @@ export function resolveProfile(
   const profile = resolved.profiles[profileName];
   if (!profile) {
     return null;
+  }
+
+  if (profile.driver === "firecrawl") {
+    return {
+      name: profileName,
+      cdpPort: 0,
+      cdpUrl: "",
+      cdpHost: "",
+      cdpIsLoopback: false,
+      color: profile.color,
+      driver: "firecrawl",
+      attachOnly: true,
+    };
   }
 
   const rawProfileUrl = profile.cdpUrl?.trim() ?? "";

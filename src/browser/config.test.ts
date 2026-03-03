@@ -243,6 +243,149 @@ describe("browser config", () => {
     expect(resolved.ssrfPolicy).toEqual({});
   });
 
+  describe("firecrawl profile resolution", () => {
+    it("resolves firecrawl profile with driver=firecrawl, empty cdpUrl, attachOnly=true", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          firecrawl: { driver: "firecrawl", color: "#FF4500" },
+        },
+      });
+      const profile = resolveProfile(resolved, "firecrawl");
+      expect(profile).not.toBeNull();
+      expect(profile?.driver).toBe("firecrawl");
+      expect(profile?.cdpPort).toBe(0);
+      expect(profile?.cdpUrl).toBe("");
+      expect(profile?.cdpHost).toBe("");
+      expect(profile?.cdpIsLoopback).toBe(false);
+      expect(profile?.attachOnly).toBe(true);
+      expect(profile?.color).toBe("#FF4500");
+      expect(profile?.name).toBe("firecrawl");
+    });
+
+    it("firecrawl profile always has attachOnly=true regardless of global config", () => {
+      const resolved = resolveBrowserConfig({
+        attachOnly: false,
+        profiles: {
+          firecrawl: { driver: "firecrawl", color: "#00FF00" },
+        },
+      });
+      const profile = resolveProfile(resolved, "firecrawl");
+      expect(profile?.attachOnly).toBe(true);
+    });
+
+    it("firecrawl profile does not require cdpPort or cdpUrl", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          firecrawl: { driver: "firecrawl", color: "#0000FF" },
+        },
+      });
+      // should not throw — firecrawl profiles bypass the cdpPort/cdpUrl requirement
+      const profile = resolveProfile(resolved, "firecrawl");
+      expect(profile).not.toBeNull();
+    });
+
+    it("firecrawl profile preserves custom color", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          firecrawl: { driver: "firecrawl", color: "#AABBCC" },
+        },
+      });
+      const profile = resolveProfile(resolved, "firecrawl");
+      expect(profile?.color).toBe("#AABBCC");
+    });
+  });
+
+  describe("firecrawl auto-enablement", () => {
+    it("auto-creates firecrawl profile when firecrawlApiKey is provided", () => {
+      const resolved = resolveBrowserConfig(undefined, undefined, {
+        firecrawlApiKey: "fc-test-key",
+      });
+      expect(resolved.profiles.firecrawl).toBeDefined();
+      expect(resolved.profiles.firecrawl?.driver).toBe("firecrawl");
+      expect(resolved.profiles.firecrawl?.color).toBe("#FF4500");
+    });
+
+    it("does not create firecrawl profile when no API key is provided", () => {
+      const resolved = resolveBrowserConfig(undefined);
+      expect(resolved.profiles.firecrawl).toBeUndefined();
+    });
+
+    it("does not create firecrawl profile when API key is empty string", () => {
+      const resolved = resolveBrowserConfig(undefined, undefined, {
+        firecrawlApiKey: "",
+      });
+      expect(resolved.profiles.firecrawl).toBeUndefined();
+    });
+
+    it("does not overwrite an explicitly configured firecrawl profile", () => {
+      const resolved = resolveBrowserConfig(
+        {
+          profiles: {
+            firecrawl: { driver: "firecrawl", color: "#CUSTOM0" },
+          },
+        },
+        undefined,
+        { firecrawlApiKey: "fc-test-key" },
+      );
+      // Should keep the user's custom color, not overwrite with #FF4500
+      expect(resolved.profiles.firecrawl?.color).toBe("#CUSTOM0");
+    });
+
+    it("sets firecrawl as default profile when auto-created", () => {
+      const resolved = resolveBrowserConfig(undefined, undefined, {
+        firecrawlApiKey: "fc-test-key",
+      });
+      expect(resolved.defaultProfile).toBe("firecrawl");
+    });
+
+    it("sets firecrawl as default when explicitly configured", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          firecrawl: { driver: "firecrawl", color: "#FF4500" },
+        },
+      });
+      expect(resolved.defaultProfile).toBe("firecrawl");
+    });
+
+    it("explicit defaultProfile overrides firecrawl auto-default", () => {
+      const resolved = resolveBrowserConfig(
+        { defaultProfile: "openclaw" },
+        undefined,
+        { firecrawlApiKey: "fc-test-key" },
+      );
+      expect(resolved.defaultProfile).toBe("openclaw");
+      // But firecrawl profile should still be created
+      expect(resolved.profiles.firecrawl).toBeDefined();
+    });
+
+    it("auto-created firecrawl profile resolves correctly", () => {
+      const resolved = resolveBrowserConfig(undefined, undefined, {
+        firecrawlApiKey: "fc-test-key",
+      });
+      const profile = resolveProfile(resolved, "firecrawl");
+      expect(profile).not.toBeNull();
+      expect(profile?.driver).toBe("firecrawl");
+      expect(profile?.cdpPort).toBe(0);
+      expect(profile?.cdpUrl).toBe("");
+      expect(profile?.attachOnly).toBe(true);
+    });
+
+    it("openclaw and chrome profiles still exist alongside auto-created firecrawl", () => {
+      const resolved = resolveBrowserConfig(undefined, undefined, {
+        firecrawlApiKey: "fc-test-key",
+      });
+      const openclaw = resolveProfile(resolved, "openclaw");
+      const chrome = resolveProfile(resolved, "chrome");
+      const firecrawl = resolveProfile(resolved, "firecrawl");
+      expect(openclaw).not.toBeNull();
+      expect(chrome).not.toBeNull();
+      expect(firecrawl).not.toBeNull();
+      expect(openclaw?.driver).toBe("openclaw");
+      expect(chrome?.driver).toBe("extension");
+      expect(firecrawl?.driver).toBe("firecrawl");
+    });
+  });
+
   describe("default profile preference", () => {
     it("defaults to openclaw profile when defaultProfile is not configured", () => {
       const resolved = resolveBrowserConfig({
