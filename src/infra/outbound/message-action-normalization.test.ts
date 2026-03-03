@@ -72,7 +72,7 @@ describe("normalizeMessageActionInput", () => {
     expect(normalized.messageId).toBe("1710000000.123456");
   });
 
-  it("infers react messageId from toolContext.currentMessageId", () => {
+  it("does not infer react messageId from generic currentMessageId", () => {
     const normalized = normalizeMessageActionInput({
       action: "react",
       args: {
@@ -84,7 +84,7 @@ describe("normalizeMessageActionInput", () => {
       },
     });
 
-    expect(normalized.messageId).toBe("12345");
+    expect(normalized.messageId).toBeUndefined();
   });
 
   it("throws when required target remains unresolved", () => {

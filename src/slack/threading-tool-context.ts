@@ -5,6 +5,10 @@ import type {
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSlackAccount, resolveSlackReplyToMode } from "./accounts.js";
 
+function looksLikeSlackTs(value: string): boolean {
+  return /^\d+\.\d+$/.test(value);
+}
+
 export function buildSlackThreadingToolContext(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -25,7 +29,10 @@ export function buildSlackThreadingToolContext(params: {
       : undefined,
     currentThreadTs: threadId != null ? String(threadId) : undefined,
     currentMessageTs:
-      params.context.CurrentMessageId != null ? String(params.context.CurrentMessageId) : undefined,
+      params.context.CurrentMessageId != null &&
+      looksLikeSlackTs(String(params.context.CurrentMessageId))
+        ? String(params.context.CurrentMessageId)
+        : undefined,
     replyToMode: effectiveReplyToMode,
     hasRepliedRef: params.hasRepliedRef,
   };
