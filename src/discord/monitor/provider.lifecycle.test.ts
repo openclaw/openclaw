@@ -408,4 +408,40 @@ describe("runDiscordGatewayLifecycle", () => {
       vi.useRealTimers();
     }
   });
+
+  it("does not push connected: true when abortSignal is already aborted", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const emitter = new EventEmitter();
+    const gateway = {
+      isConnected: true,
+      options: { reconnect: { maxAttempts: 3 } },
+      disconnect: vi.fn(),
+      connect: vi.fn(),
+      emitter,
+    };
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    const abortController = new AbortController();
+    abortController.abort();
+
+    const statusUpdates: Array<Record<string, unknown>> = [];
+    const statusSink = (patch: Record<string, unknown>) => {
+      statusUpdates.push({ ...patch });
+    };
+
+    const { lifecycleParams } = createLifecycleHarness({ gateway });
+    lifecycleParams.abortSignal = abortController.signal;
+    (lifecycleParams as Record<string, unknown>).statusSink = statusSink;
+
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+    // onAbort should have pushed connected: false
+    const connectedFalse = statusUpdates.find((s) => s.connected === false);
+    expect(connectedFalse).toBeDefined();
+
+    // No connected: true should appear — the isConnected check must be
+    // guarded by !lifecycleStopping to avoid contradicting the abort.
+    const connectedTrue = statusUpdates.find((s) => s.connected === true);
+    expect(connectedTrue).toBeUndefined();
+  });
 });
