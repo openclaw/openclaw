@@ -449,9 +449,14 @@ export default function register(api: OpenClawPluginApi) {
                   `Gateway: ${payload.url}`,
                   `Auth: ${authLabel}`,
                   "",
-                  "After scanning, come back here and run `/pair approve` to complete pairing.",
+                  autoNotifyArmed
+                    ? "After scanning, wait here for the pairing request ping."
+                    : "After scanning, come back here and run `/pair approve` to complete pairing.",
                   ...(autoNotifyArmed
-                    ? ["I’ll auto-ping here when the pairing request arrives, then auto-disable."]
+                    ? [
+                        "I’ll auto-ping here when the pairing request arrives, then auto-disable.",
+                        "If the ping does not arrive, run `/pair approve latest` manually.",
+                      ]
                     : []),
                 ].join("\n"),
               };
@@ -471,9 +476,14 @@ export default function register(api: OpenClawPluginApi) {
           `Gateway: ${payload.url}`,
           `Auth: ${authLabel}`,
           "",
-          "After scanning, run `/pair approve` to complete pairing.",
+          autoNotifyArmed
+            ? "After scanning, wait here for the pairing request ping."
+            : "After scanning, run `/pair approve` to complete pairing.",
           ...(autoNotifyArmed
-            ? ["I’ll auto-ping here when the pairing request arrives, then auto-disable."]
+            ? [
+                "I’ll auto-ping here when the pairing request arrives, then auto-disable.",
+                "If the ping does not arrive, run `/pair approve latest` manually.",
+              ]
             : []),
         ];
 
