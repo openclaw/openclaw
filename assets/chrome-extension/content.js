@@ -492,11 +492,11 @@ if (window.__openclawContentLoaded) {
           el.dispatchEvent(new Event('click', { bubbles: true }))
         }
       } else {
-        // Text input — character-by-character with native setter for React compat
-        const nativeSetter = Object.getOwnPropertyDescriptor(
-          window.HTMLInputElement.prototype,
-          'value',
-        )?.set
+        // Text input/textarea — character-by-character with native setter for React compat.
+        // Use element-specific setter: HTMLInputElement for inputs, HTMLTextAreaElement for textareas.
+        const proto =
+          el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype
+        const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
         el.focus()
         // Clear existing value
         if (nativeSetter) nativeSetter.call(el, '')
@@ -586,7 +586,7 @@ if (window.__openclawContentLoaded) {
           el.getAttribute('aria-label') ||
           ''
         ).toLowerCase()
-        if (elText.includes(lowerText) || lowerText.includes(elText)) {
+        if (elText && (elText.includes(lowerText) || lowerText.includes(elText))) {
           const rect = el.getBoundingClientRect()
           if (rect.width === 0 && rect.height === 0) continue
           el.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -712,10 +712,9 @@ if (window.__openclawContentLoaded) {
             el.value = value
           }
         } else {
-          const nativeSetter = Object.getOwnPropertyDescriptor(
-            window.HTMLInputElement.prototype,
-            'value',
-          )?.set
+          const proto =
+            el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype
+          const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
           if (nativeSetter) nativeSetter.call(el, value)
           else el.value = value
           el.dispatchEvent(new Event('input', { bubbles: true }))

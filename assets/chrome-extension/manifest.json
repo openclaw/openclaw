@@ -12,20 +12,6 @@
   "permissions": ["debugger", "tabs", "activeTab", "storage", "alarms", "webNavigation", "scripting"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
   "background": { "service_worker": "background.js", "type": "module" },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["kill-beforeunload.js"],
-      "run_at": "document_start",
-      "world": "MAIN"
-    },
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "run_at": "document_idle",
-      "all_frames": true
-    }
-  ],
   "action": {
     "default_title": "OpenClaw Browser Relay (click to attach/detach)",
     "default_icon": {

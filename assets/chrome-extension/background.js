@@ -514,7 +514,54 @@ async function attachTab(tabId, opts = {}) {
   setBadge(tabId, 'on')
   await persistState()
 
+  // Inject content scripts into the newly attached tab. These are injected
+  // dynamically (not via static content_scripts in manifest.json) so they
+  // only affect relay-attached tabs, not the user's entire browser session.
+  await injectContentScripts(tabId, debuggee)
+
   return { sessionId, targetId }
+}
+
+// Inject content scripts into a relay-attached tab:
+// 1. kill-beforeunload.js via CDP Page.addScriptToEvaluateOnNewDocument
+//    (runs at document_start in MAIN world, scoped to this debugger session,
+//    persists across navigations within the session)
+// 2. kill-beforeunload.js via chrome.scripting.executeScript for the current page
+//    (the CDP method only fires on future navigations, not the current page)
+// 3. content.js via chrome.scripting.executeScript (all frames)
+async function injectContentScripts(tabId, debuggee) {
+  // Load kill-beforeunload source for CDP injection.
+  try {
+    const resp = await fetch(chrome.runtime.getURL('kill-beforeunload.js'))
+    const source = await resp.text()
+    await chrome.debugger.sendCommand(debuggee, 'Page.addScriptToEvaluateOnNewDocument', {
+      source,
+      worldName: '', // empty string = main world
+    })
+  } catch {
+    // Best-effort: debugger may have been detached or file may be missing.
+  }
+
+  // Inject kill-beforeunload into the current page (MAIN world).
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['kill-beforeunload.js'],
+      world: 'MAIN',
+    })
+  } catch {
+    // Ignore — chrome:// pages or CSP restrictions.
+  }
+
+  // Inject content.js (ISOLATED world, all frames).
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['content.js'],
+    })
+  } catch {
+    // Ignore — chrome:// pages or CSP restrictions.
+  }
 }
 
 async function detachTab(tabId, reason) {
@@ -957,18 +1004,18 @@ chrome.debugger.onDetach.addListener((...args) => void whenReady(() => onDebugge
 
 chrome.action.onClicked.addListener(() => void whenReady(() => connectOrToggleForActiveTab()))
 
-// Refresh badge and re-inject content scripts after navigation completes.
+// Refresh badge and re-inject content script after navigation completes.
 // Service worker may have restarted during navigation, losing ephemeral badge
-// state. Content scripts need re-injection because navigation resets the page.
+// state. Content script needs re-injection because navigation resets the page.
+// (kill-beforeunload.js is automatically re-injected by CDP's
+// Page.addScriptToEvaluateOnNewDocument, which persists across navigations.)
 chrome.webNavigation.onCompleted.addListener(({ tabId, frameId }) => void whenReady(() => {
   if (frameId !== 0) return
   const tab = tabs.get(tabId)
   if (tab?.state === 'connected') {
     setBadge(tabId, relayWs && relayWs.readyState === WebSocket.OPEN ? 'on' : 'connecting')
 
-    // Re-inject content script (declarative content_scripts handle most cases,
-    // but this covers tabs that were attached before the extension was installed
-    // or edge cases where the declarative injection didn't fire).
+    // Re-inject content.js into the attached tab (all frames).
     chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       files: ['content.js'],

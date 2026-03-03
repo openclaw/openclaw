@@ -19,8 +19,10 @@ EventTarget.prototype.addEventListener = function (type, fn, opts) {
   return _addEventListener.call(this, type, fn, opts)
 }
 
-// Kill any already-registered listeners via returnValue
-window.addEventListener(
+// Kill any already-registered listeners via returnValue.
+// Must use _addEventListener directly to bypass the patch above.
+_addEventListener.call(
+  window,
   'beforeunload',
   (e) => {
     e.stopImmediatePropagation()
