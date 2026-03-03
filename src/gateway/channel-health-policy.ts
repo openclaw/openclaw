@@ -55,19 +55,33 @@ export function evaluateChannelHealth(
       ? Math.max(0, Math.trunc(snapshot.activeRuns))
       : 0;
   const isBusy = snapshot.busy === true || activeRuns > 0;
+  const lastStartAt =
+    typeof snapshot.lastStartAt === "number" && Number.isFinite(snapshot.lastStartAt)
+      ? snapshot.lastStartAt
+      : null;
+  const lastRunActivityAt =
+    typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
+      ? snapshot.lastRunActivityAt
+      : null;
+  const busyStateInitializedForLifecycle =
+    lastStartAt == null || (lastRunActivityAt != null && lastRunActivityAt >= lastStartAt);
+
+  // Runtime snapshots are patch-merged, so a restarted lifecycle can temporarily
+  // inherit stale busy fields from the previous instance. Ignore busy short-circuit
+  // until run activity is known to belong to the current lifecycle.
   if (isBusy) {
-    const lastRunActivityAt =
-      typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
-        ? snapshot.lastRunActivityAt
-        : null;
-    const runActivityAge =
-      lastRunActivityAt == null
-        ? Number.POSITIVE_INFINITY
-        : Math.max(0, policy.now - lastRunActivityAt);
-    if (runActivityAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
-      return { healthy: true, reason: "busy" };
+    if (!busyStateInitializedForLifecycle) {
+      // Fall through to normal startup/disconnect checks below.
+    } else {
+      const runActivityAge =
+        lastRunActivityAt == null
+          ? Number.POSITIVE_INFINITY
+          : Math.max(0, policy.now - lastRunActivityAt);
+      if (runActivityAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
+        return { healthy: true, reason: "busy" };
+      }
+      return { healthy: false, reason: "stuck" };
     }
-    return { healthy: false, reason: "stuck" };
   }
   if (snapshot.lastStartAt != null) {
     const upDuration = policy.now - snapshot.lastStartAt;
