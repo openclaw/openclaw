@@ -37,6 +37,7 @@ import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions } from "./mentions.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
+import { shouldForceMatrixRoomRouting } from "./routing.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadTarget } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType, RelationType } from "./types.js";
@@ -52,6 +53,7 @@ export type MatrixMonitorHandlerParams = {
   roomsConfig: Record<string, MatrixRoomConfig> | undefined;
   mentionRegexes: ReturnType<PluginRuntime["channel"]["mentions"]["buildMentionRegexes"]>;
   groupPolicy: "open" | "allowlist" | "disabled";
+  forceRoomRouting: boolean;
   replyToMode: ReplyToMode;
   threadReplies: "off" | "inbound" | "always";
   dmEnabled: boolean;
@@ -86,6 +88,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     roomsConfig,
     mentionRegexes,
     groupPolicy,
+    forceRoomRouting,
     replyToMode,
     threadReplies,
     dmEnabled,
@@ -185,31 +188,41 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       }
 
-      const isDirectMessage = await directTracker.isDirectMessage({
+      const roomConfigResolved = resolveMatrixRoomConfig({
+        rooms: roomsConfig,
         roomId,
-        senderId,
-        selfUserId,
+        aliases: roomAliases,
+        name: roomName,
       });
+      const roomConfigResolvedEntry = roomConfigResolved.config;
+      const roomMatchMetaResolved = `matchKey=${roomConfigResolved.matchKey ?? "none"} matchSource=${
+        roomConfigResolved.matchSource ?? "none"
+      }`;
+      const forceRoom = shouldForceMatrixRoomRouting({
+        forceRoomRouting,
+        roomConfigResolved,
+      });
+      const isDirectMessage = forceRoom
+        ? false
+        : await directTracker.isDirectMessage({
+            roomId,
+            senderId,
+            selfUserId,
+          });
+      if (forceRoom) {
+        logVerboseMessage(
+          `matrix: dm override via room allowlist room=${roomId} (${roomMatchMetaResolved})`,
+        );
+      }
       const isRoom = !isDirectMessage;
 
-      if (isRoom && groupPolicy === "disabled") {
+      if (isRoom && !forceRoom && groupPolicy === "disabled") {
         return;
       }
 
-      const roomConfigInfo = isRoom
-        ? resolveMatrixRoomConfig({
-            rooms: roomsConfig,
-            roomId,
-            aliases: roomAliases,
-            name: roomName,
-          })
-        : undefined;
-      const roomConfig = roomConfigInfo?.config;
-      const roomMatchMeta = roomConfigInfo
-        ? `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
-            roomConfigInfo.matchSource ?? "none"
-          }`
-        : "matchKey=none matchSource=none";
+      const roomConfigInfo = isRoom ? roomConfigResolved : undefined;
+      const roomConfig = isRoom ? roomConfigResolvedEntry : undefined;
+      const roomMatchMeta = isRoom ? roomMatchMetaResolved : "matchKey=none matchSource=none";
 
       if (isRoom && roomConfig && !roomConfigInfo?.allowed) {
         logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
