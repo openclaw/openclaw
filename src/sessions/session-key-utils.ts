@@ -63,7 +63,26 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
   if (!parsed) {
     return false;
   }
-  return /^cron:[^:]+:run:[^:]+$/.test(parsed.rest);
+  const parts = parsed.rest.split(":").filter(Boolean);
+  // agent:<id>:cron:<jobId>:run:<runId>
+  return (
+    parts.length === 4 &&
+    parts[0] === "cron" &&
+    parts[2] === "run" &&
+    Boolean(parts[1]) &&
+    Boolean(parts[3])
+  );
+}
+
+/** Cron job definition key (not an individual run). */
+export function isCronJobSessionKey(sessionKey: string | undefined | null): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return false;
+  }
+  const parts = parsed.rest.split(":").filter(Boolean);
+  // agent:<id>:cron:<jobId>
+  return parts.length === 2 && parts[0] === "cron" && Boolean(parts[1]);
 }
 
 export function isCronSessionKey(sessionKey: string | undefined | null): boolean {

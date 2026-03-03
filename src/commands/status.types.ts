@@ -1,9 +1,22 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 
+export type SessionKind = "direct" | "group" | "global" | "unknown";
+
+/**
+ * Session type classification for better UX in status output.
+ * - main: Primary interactive session (agent:main:main, etc.)
+ * - cronJob: Cron job definition (agent:main:cron:xxx)
+ * - cronRun: Individual cron execution (agent:main:cron:xxx:run:yyy)
+ * - other: Everything else
+ */
+export type SessionType = "main" | "cronJob" | "cronRun" | "other";
+
 export type SessionStatus = {
   agentId?: string;
   key: string;
-  kind: "direct" | "group" | "global" | "unknown";
+  kind: SessionKind;
+  /** Classified session type for grouping */
+  sessionType: SessionType;
   sessionId?: string;
   updatedAt: number | null;
   age: number | null;
@@ -33,6 +46,31 @@ export type HeartbeatStatus = {
   everyMs: number | null;
 };
 
+export type SessionGroup = {
+  /** Group label for display */
+  label: string;
+  /** Number of sessions in this group */
+  count: number;
+  /** Sessions in this group (may be truncated) */
+  sessions: SessionStatus[];
+  /** Whether this group is collapsed by default */
+  collapsed: boolean;
+};
+
+/**
+ * Grouped sessions by type for improved status output.
+ */
+export type SessionGroups = {
+  /** Primary interactive sessions */
+  active: SessionGroup;
+  /** Cron job definitions */
+  cronJobs: SessionGroup;
+  /** Individual cron run history */
+  cronRuns: SessionGroup;
+  /** All other sessions */
+  other: SessionGroup;
+};
+
 export type StatusSummary = {
   linkChannel?: {
     id: ChannelId;
@@ -57,5 +95,7 @@ export type StatusSummary = {
       count: number;
       recent: SessionStatus[];
     }>;
+    /** Grouped sessions for better UX (new) */
+    grouped?: SessionGroups;
   };
 };
