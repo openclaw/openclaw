@@ -26,7 +26,16 @@ import {
   normalizeTrustedSafeBinDirs,
 } from "../infra/exec-safe-bin-trust.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import {
+  formatChannelAccountsDefaultPath,
+  formatSetExplicitDefaultInstruction,
+  formatSetExplicitDefaultToConfiguredInstruction,
+} from "../routing/default-account-warnings.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "../routing/session-key.js";
 import {
   isDiscordMutableAllowEntry,
   isGoogleChatMutableAllowEntry,
@@ -215,15 +224,21 @@ function normalizeBindingChannelKey(raw?: string | null): string {
   return (raw ?? "").trim().toLowerCase();
 }
 
-export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig): string[] {
+type ChannelMissingDefaultAccountContext = {
+  channelKey: string;
+  channel: Record<string, unknown>;
+  normalizedAccountIds: string[];
+};
+
+function collectChannelsMissingDefaultAccount(
+  cfg: OpenClawConfig,
+): ChannelMissingDefaultAccountContext[] {
   const channels = asObjectRecord(cfg.channels);
   if (!channels) {
     return [];
   }
 
-  const bindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
-  const warnings: string[] = [];
-
+  const contexts: ChannelMissingDefaultAccountContext[] = [];
   for (const [channelKey, rawChannel] of Object.entries(channels)) {
     const channel = asObjectRecord(rawChannel);
     if (!channel) {
@@ -240,10 +255,20 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
           .map((accountId) => normalizeAccountId(accountId))
           .filter(Boolean),
       ),
-    );
+    ).toSorted((a, b) => a.localeCompare(b));
     if (normalizedAccountIds.length === 0 || normalizedAccountIds.includes(DEFAULT_ACCOUNT_ID)) {
       continue;
     }
+    contexts.push({ channelKey, channel, normalizedAccountIds });
+  }
+  return contexts;
+}
+
+export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig): string[] {
+  const bindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
+  const warnings: string[] = [];
+
+  for (const { channelKey, normalizedAccountIds } of collectChannelsMissingDefaultAccount(cfg)) {
     const accountIdSet = new Set(normalizedAccountIds);
     const channelPattern = normalizeBindingChannelKey(channelKey);
 
@@ -291,13 +316,43 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
     }
     if (coveredAccountIds.size > 0) {
       warnings.push(
-        `- channels.${channelKey}: accounts.default is missing and account bindings only cover a subset of configured accounts. Uncovered accounts: ${uncoveredAccountIds.join(", ")}. Add bindings[].match.accountId for uncovered accounts (or "*"), or add channels.${channelKey}.accounts.default.`,
+        `- channels.${channelKey}: accounts.default is missing and account bindings only cover a subset of configured accounts. Uncovered accounts: ${uncoveredAccountIds.join(", ")}. Add bindings[].match.accountId for uncovered accounts (or "*"), or add ${formatChannelAccountsDefaultPath(channelKey)}.`,
       );
       continue;
     }
 
     warnings.push(
-      `- channels.${channelKey}: accounts.default is missing and no valid account-scoped binding exists for configured accounts (${normalizedAccountIds.join(", ")}). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add channels.${channelKey}.accounts.default.`,
+      `- channels.${channelKey}: accounts.default is missing and no valid account-scoped binding exists for configured accounts (${normalizedAccountIds.join(", ")}). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add ${formatChannelAccountsDefaultPath(channelKey)}.`,
+    );
+  }
+
+  return warnings;
+}
+
+export function collectMissingExplicitDefaultAccountWarnings(cfg: OpenClawConfig): string[] {
+  const warnings: string[] = [];
+  for (const { channelKey, channel, normalizedAccountIds } of collectChannelsMissingDefaultAccount(
+    cfg,
+  )) {
+    if (normalizedAccountIds.length < 2) {
+      continue;
+    }
+
+    const preferredDefault = normalizeOptionalAccountId(
+      typeof channel.defaultAccount === "string" ? channel.defaultAccount : undefined,
+    );
+    if (preferredDefault) {
+      if (normalizedAccountIds.includes(preferredDefault)) {
+        continue;
+      }
+      warnings.push(
+        `- channels.${channelKey}: defaultAccount is set to "${preferredDefault}" but does not match configured accounts (${normalizedAccountIds.join(", ")}). ${formatSetExplicitDefaultToConfiguredInstruction({ channelKey })} to avoid fallback routing.`,
+      );
+      continue;
+    }
+
+    warnings.push(
+      `- channels.${channelKey}: multiple accounts are configured but no explicit default is set. ${formatSetExplicitDefaultInstruction(channelKey)} to avoid fallback routing.`,
     );
   }
 
@@ -1811,6 +1866,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     collectMissingDefaultAccountBindingWarnings(candidate);
   if (missingDefaultAccountBindingWarnings.length > 0) {
     note(missingDefaultAccountBindingWarnings.join("\n"), "Doctor warnings");
+  }
+  const missingExplicitDefaultWarnings = collectMissingExplicitDefaultAccountWarnings(candidate);
+  if (missingExplicitDefaultWarnings.length > 0) {
+    note(missingExplicitDefaultWarnings.join("\n"), "Doctor warnings");
   }
 
   if (shouldRepair) {
