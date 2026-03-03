@@ -33,7 +33,10 @@ import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
 import { isNotFoundPathError } from "../../infra/path-guards.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveGatewayAgentModelState } from "../agent-model-blocking.js";
+import {
+  isStrictModelResolutionEnabled,
+  resolveGatewayAgentModelState,
+} from "../agent-model-blocking.js";
 import {
   ErrorCodes,
   errorShape,
@@ -472,6 +475,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const cfg = loadConfig();
     const result = listAgentsForGateway(cfg);
+    if (!isStrictModelResolutionEnabled(cfg)) {
+      respond(true, result, undefined);
+      return;
+    }
     const agents = await Promise.all(
       result.agents.map(async (agent) => {
         const state = await resolveGatewayAgentModelState({

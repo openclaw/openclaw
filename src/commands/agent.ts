@@ -29,6 +29,7 @@ import {
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
+  resolveAgentModelResolutionState,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
@@ -230,6 +231,17 @@ function createAcpVisibleTextAccumulator() {
       return visibleText.trim();
     },
   };
+}
+
+function createStrictModelResolutionBlockedError(params: {
+  agentId: string;
+  reason: string;
+}): Error & { code: "AGENT_MODEL_BLOCKED" } {
+  const error = new Error(`agent "${params.agentId}" is blocked: ${params.reason}`) as Error & {
+    code: "AGENT_MODEL_BLOCKED";
+  };
+  error.code = "AGENT_MODEL_BLOCKED";
+  return error;
 }
 
 function runAgentAttempt(params: {
@@ -534,6 +546,24 @@ async function agentCommandInternal(
       sessionKey: sessionKey ?? opts.sessionKey?.trim(),
       config: cfg,
     });
+  let strictReadyRef: { provider: string; model: string } | undefined;
+  if (cfg.agents?.strictModelResolution === true) {
+    const catalog = await loadModelCatalog({ config: cfg });
+    const strictState = resolveAgentModelResolutionState({
+      cfg,
+      agentId: sessionAgentId,
+      defaultProvider: DEFAULT_PROVIDER,
+      strictModelResolution: true,
+      catalog,
+    });
+    if (strictState.status === "blocked") {
+      throw createStrictModelResolutionBlockedError({
+        agentId: sessionAgentId,
+        reason: strictState.reason,
+      });
+    }
+    strictReadyRef = strictState.ref;
+  }
   const outboundSession = buildOutboundSessionContext({
     cfg,
     agentId: sessionAgentId,
@@ -751,10 +781,12 @@ async function agentCommandInternal(
       sessionEntry = next;
     }
 
-    const configuredDefaultRef = resolveDefaultModelForAgent({
-      cfg,
-      agentId: sessionAgentId,
-    });
+    const configuredDefaultRef =
+      strictReadyRef ??
+      resolveDefaultModelForAgent({
+        cfg,
+        agentId: sessionAgentId,
+      });
     const { provider: defaultProvider, model: defaultModel } = normalizeModelRef(
       configuredDefaultRef.provider,
       configuredDefaultRef.model,

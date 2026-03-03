@@ -513,14 +513,7 @@ export function resolveAgentModelResolutionState(params: {
     };
   }
 
-  if (params.catalog) {
-    if (!providerKnownByCatalog) {
-      return {
-        status: "blocked",
-        code: "provider_offline",
-        reason: `Provider "${resolved.provider}" is unavailable/offline.`,
-      };
-    }
+  if (params.catalog && providerKnownByCatalog) {
     const modelExistsInCatalog = params.catalog.some(
       (entry) =>
         normalizeProviderId(entry.provider) === resolved.provider &&

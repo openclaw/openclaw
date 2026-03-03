@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
@@ -29,7 +29,6 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { resolveGatewayAgentModelState } from "../agent-model-blocking.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
@@ -576,29 +575,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         errorShape(
           ErrorCodes.INVALID_REQUEST,
           "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
-        ),
-      );
-      return;
-    }
-
-    const effectiveCfg = cfgForAgent ?? cfg;
-    const effectiveAgentId = agentId
-      ? normalizeAgentId(agentId)
-      : resolvedSessionKey
-        ? resolveAgentIdFromSessionKey(resolvedSessionKey)
-        : normalizeAgentId(resolveDefaultAgentId(effectiveCfg));
-    const modelState = await resolveGatewayAgentModelState({
-      cfg: effectiveCfg,
-      agentId: effectiveAgentId,
-      loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-    });
-    if (modelState.status === "blocked") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `agent "${effectiveAgentId}" is blocked: ${modelState.reason}`,
         ),
       );
       return;

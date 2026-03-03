@@ -743,6 +743,40 @@ describe("strict model resolution", () => {
     });
   });
 
+  it("does not mark config-known providers offline when catalog does not include that provider", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [strictTestModelDefinition("claude-opus-4-6")],
+          },
+        },
+      },
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [{ provider: "ollama", id: "llama3.2:3b", name: "llama3.2:3b" }],
+    });
+
+    expect(state).toEqual({
+      status: "ready",
+      ref: { provider: "anthropic", model: "claude-opus-4-6" },
+    });
+  });
+
   it("keeps resolution isolated across multiple agents", () => {
     const cfg = {
       models: {
