@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage, ToolResultMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   estimateMessagesTokens,
@@ -16,6 +17,44 @@ function makeMessage(id: number, size: number): AgentMessage {
 
 function makeMessages(count: number, size: number): AgentMessage[] {
   return Array.from({ length: count }, (_, index) => makeMessage(index + 1, size));
+}
+
+function makeAssistantToolCall(
+  timestamp: number,
+  toolCallId: string,
+  text = "x".repeat(4000),
+): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [
+      { type: "text", text },
+      { type: "toolCall", id: toolCallId, name: "test_tool", arguments: {} },
+    ],
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-5.2",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp,
+  };
+}
+
+function makeToolResult(timestamp: number, toolCallId: string, text: string): ToolResultMessage {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName: "test_tool",
+    content: [{ type: "text", text }],
+    isError: false,
+    timestamp,
+  };
 }
 
 function pruneLargeSimpleHistory() {
@@ -130,22 +169,9 @@ describe("pruneHistoryForContextShare", () => {
     // to prevent "unexpected tool_use_id" errors from Anthropic's API
     const messages: AgentMessage[] = [
       // Chunk 1 (will be dropped) - contains tool_use
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "x".repeat(4000) },
-          { type: "toolCall", id: "call_123", name: "test_tool", arguments: {} },
-        ],
-        timestamp: 1,
-      } as unknown as AgentMessage,
+      makeAssistantToolCall(1, "call_123"),
       // Chunk 2 (will be kept) - contains orphaned tool_result
-      {
-        role: "toolResult",
-        toolCallId: "call_123",
-        toolName: "test_tool",
-        content: [{ type: "text", text: "result".repeat(500) }],
-        timestamp: 2,
-      } as unknown as AgentMessage,
+      makeToolResult(2, "call_123", "result".repeat(500)),
       {
         role: "user",
         content: "x".repeat(500),
@@ -181,21 +207,8 @@ describe("pruneHistoryForContextShare", () => {
         timestamp: 1,
       },
       // Chunk 2 (will be kept) - contains both tool_use and tool_result
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "y".repeat(500) },
-          { type: "toolCall", id: "call_456", name: "kept_tool", arguments: {} },
-        ],
-        timestamp: 2,
-      } as unknown as AgentMessage,
-      {
-        role: "toolResult",
-        toolCallId: "call_456",
-        toolName: "kept_tool",
-        content: [{ type: "text", text: "result" }],
-        timestamp: 3,
-      } as unknown as AgentMessage,
+      makeAssistantToolCall(2, "call_456", "y".repeat(500)),
+      makeToolResult(3, "call_456", "result"),
     ];
 
     const pruned = pruneHistoryForContextShare({
@@ -223,23 +236,23 @@ describe("pruneHistoryForContextShare", () => {
           { type: "toolCall", id: "call_a", name: "tool_a", arguments: {} },
           { type: "toolCall", id: "call_b", name: "tool_b", arguments: {} },
         ],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
         timestamp: 1,
-      } as unknown as AgentMessage,
+      },
       // Chunk 2 (will be kept) - contains orphaned tool_results
-      {
-        role: "toolResult",
-        toolCallId: "call_a",
-        toolName: "tool_a",
-        content: [{ type: "text", text: "result_a" }],
-        timestamp: 2,
-      } as unknown as AgentMessage,
-      {
-        role: "toolResult",
-        toolCallId: "call_b",
-        toolName: "tool_b",
-        content: [{ type: "text", text: "result_b" }],
-        timestamp: 3,
-      } as unknown as AgentMessage,
+      makeToolResult(2, "call_a", "result_a"),
+      makeToolResult(3, "call_b", "result_b"),
       {
         role: "user",
         content: "x".repeat(500),
