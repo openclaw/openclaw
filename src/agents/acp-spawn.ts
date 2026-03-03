@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { bridgeAgentPersonaToClaudeMd } from "./acp-persona-bridge.js";
 import {
   cleanupFailedAcpSpawn,
   type AcpSpawnRuntimeCloseHandle,
@@ -333,6 +334,18 @@ export async function spawnAcpDirect(
       runtime: initialized.runtime,
       handle: initialized.handle,
     };
+
+    // Phase 1: Bridge fleet agent persona (SOUL.md/AGENTS.md) into the ACP session
+    // working directory as CLAUDE.md so CLI backends pick up the agent's identity.
+    // See RFC: https://github.com/openclaw/openclaw/issues/33584
+    const sessionCwd = resolveAcpSessionCwd(initialized.meta) || params.cwd || process.cwd();
+    await bridgeAgentPersonaToClaudeMd({
+      cfg,
+      agentId: targetAgentId,
+      sessionCwd,
+    }).catch(() => {
+      // Best-effort: persona bridge failure should not block ACP session creation.
+    });
 
     if (preparedBinding) {
       binding = await bindingService.bind({
