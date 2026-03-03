@@ -27,6 +27,8 @@ type DiscordMessageHandlerParams = Omit<
   setStatus?: DiscordMonitorStatusSink;
 };
 
+const RUN_ACTIVITY_HEARTBEAT_MS = 60_000;
+
 function resolveDiscordRunQueueKey(ctx: DiscordMessagePreflightContext): string {
   const sessionKey = ctx.route.sessionKey?.trim();
   if (sessionKey) {
@@ -53,6 +55,7 @@ export function createDiscordMessageHandler(
     "group-mentions";
   const runQueue = new KeyedAsyncQueue();
   let activeRuns = 0;
+  let runActivityHeartbeat: ReturnType<typeof setInterval> | null = null;
 
   const publishRunStatus = () => {
     params.setStatus?.({
@@ -62,16 +65,48 @@ export function createDiscordMessageHandler(
     });
   };
 
+  const clearRunActivityHeartbeat = () => {
+    if (!runActivityHeartbeat) {
+      return;
+    }
+    clearInterval(runActivityHeartbeat);
+    runActivityHeartbeat = null;
+  };
+
+  const ensureRunActivityHeartbeat = () => {
+    if (runActivityHeartbeat || activeRuns <= 0) {
+      return;
+    }
+    runActivityHeartbeat = setInterval(() => {
+      if (activeRuns <= 0) {
+        clearRunActivityHeartbeat();
+        return;
+      }
+      publishRunStatus();
+    }, RUN_ACTIVITY_HEARTBEAT_MS);
+    runActivityHeartbeat.unref?.();
+  };
+
+  // Reset stale busy counters inherited from previous runtime snapshots.
+  params.setStatus?.({
+    activeRuns: 0,
+    busy: false,
+  });
+
   const enqueueDiscordRun = (ctx: DiscordMessagePreflightContext) => {
     const queueKey = resolveDiscordRunQueueKey(ctx);
     void runQueue
       .enqueue(queueKey, async () => {
         activeRuns += 1;
         publishRunStatus();
+        ensureRunActivityHeartbeat();
         try {
           await processDiscordMessage(ctx);
         } finally {
           activeRuns = Math.max(0, activeRuns - 1);
+          if (activeRuns <= 0) {
+            clearRunActivityHeartbeat();
+          }
           publishRunStatus();
         }
       })

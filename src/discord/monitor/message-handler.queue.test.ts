@@ -88,6 +88,21 @@ function createPreflightContext(channelId = "ch-1") {
 }
 
 describe("createDiscordMessageHandler queue behavior", () => {
+  it("resets busy counters when the handler is created", () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const setStatus = vi.fn();
+    createDiscordMessageHandler(createHandlerParams({ setStatus }));
+
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeRuns: 0,
+        busy: false,
+      }),
+    );
+  });
+
   it("returns immediately and tracks busy status while queued runs execute", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
@@ -146,6 +161,65 @@ describe("createDiscordMessageHandler queue behavior", () => {
         }),
       );
     });
+  });
+
+  it("refreshes run activity while active runs are in progress", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const runInFlight = createDeferred();
+    processDiscordMessageMock.mockImplementation(async () => {
+      await runInFlight.promise;
+    });
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: { channel_id: string } }) =>
+        createPreflightContext(params.data.channel_id),
+    );
+
+    let heartbeatTick: (() => void) | null = null;
+    const setIntervalSpy = vi
+      .spyOn(globalThis, "setInterval")
+      .mockImplementation((callback: TimerHandler) => {
+        if (typeof callback === "function") {
+          heartbeatTick = callback;
+        }
+        return 1 as unknown as ReturnType<typeof setInterval>;
+      });
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+
+    try {
+      const setStatus = vi.fn();
+      const handler = createDiscordMessageHandler(createHandlerParams({ setStatus }));
+      await expect(
+        handler(createMessageData("m-1") as never, {} as never),
+      ).resolves.toBeUndefined();
+
+      await vi.waitFor(() => {
+        expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+      });
+
+      expect(heartbeatTick).toBeTypeOf("function");
+      const busyCallsBefore = setStatus.mock.calls.filter(
+        ([patch]) => (patch as { busy?: boolean }).busy === true,
+      ).length;
+
+      heartbeatTick?.();
+
+      const busyCallsAfter = setStatus.mock.calls.filter(
+        ([patch]) => (patch as { busy?: boolean }).busy === true,
+      ).length;
+      expect(busyCallsAfter).toBeGreaterThan(busyCallsBefore);
+
+      runInFlight.resolve();
+      await runInFlight.promise;
+
+      await vi.waitFor(() => {
+        expect(clearIntervalSpy).toHaveBeenCalled();
+      });
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
   });
 
   it("preserves non-debounced message ordering by awaiting debouncer enqueue", async () => {
