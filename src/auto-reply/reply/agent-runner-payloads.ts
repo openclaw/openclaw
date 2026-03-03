@@ -1,3 +1,4 @@
+import type { ErrorPolicy } from "../../config/types.channels.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -40,11 +41,35 @@ export function buildReplyPayloads(params: {
   originatingChannel?: OriginatingChannelType;
   originatingTo?: string;
   accountId?: string;
-}): { replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean } {
+  /** How to handle error payloads (reply | silent | react-only). */
+  errorPolicy?: ErrorPolicy;
+}): {
+  replyPayloads: ReplyPayload[];
+  didLogHeartbeatStrip: boolean;
+  errorReactionRequested?: boolean;
+} {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
+  let errorReactionRequested = false;
+
+  // Apply errorPolicy filtering
+  const errorFilteredPayloads =
+    params.errorPolicy === "silent"
+      ? params.payloads.filter((payload) => !payload.isError)
+      : params.errorPolicy === "react-only"
+        ? params.payloads
+            .map((payload) => {
+              if (payload.isError) {
+                errorReactionRequested = true;
+                return null;
+              }
+              return payload;
+            })
+            .filter((p): p is ReplyPayload => p !== null)
+        : params.payloads;
+
   const sanitizedPayloads = params.isHeartbeat
-    ? params.payloads
-    : params.payloads.flatMap((payload) => {
+    ? errorFilteredPayloads
+    : errorFilteredPayloads.flatMap((payload) => {
         let text = payload.text;
 
         if (payload.isError && text && isBunFetchSocketError(text)) {
@@ -139,5 +164,6 @@ export function buildReplyPayloads(params: {
   return {
     replyPayloads,
     didLogHeartbeatStrip,
+    errorReactionRequested,
   };
 }
