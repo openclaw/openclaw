@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -677,14 +678,16 @@ export function createHostWorkspaceWriteTool(root: string, options?: { workspace
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  return wrapAbortAfterCommitRecovery(normalized, { kind: "write", cwd: root });
 }
 
 export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  return wrapAbortAfterCommitRecovery(normalized, { kind: "edit", cwd: root });
 }
 
 export function createOpenClawReadTool(
@@ -767,6 +770,83 @@ async function writeHostFile(absolutePath: string, content: string) {
   const resolved = path.resolve(absolutePath);
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   await fs.writeFile(resolved, content, "utf-8");
+}
+
+function expandHomePath(filePath: string): string {
+  if (filePath === "~") {
+    return os.homedir();
+  }
+  if (filePath.startsWith("~/")) {
+    return path.join(os.homedir(), filePath.slice(2));
+  }
+  return filePath;
+}
+
+function resolveToolPathForVerification(filePath: string, cwd: string): string {
+  const expanded = expandHomePath(filePath);
+  if (path.isAbsolute(expanded)) {
+    return expanded;
+  }
+  return path.resolve(cwd, expanded);
+}
+
+function isOperationAbortedError(error: unknown): boolean {
+  return error instanceof Error && error.message.trim() === "Operation aborted";
+}
+
+function wrapAbortAfterCommitRecovery(
+  tool: AnyAgentTool,
+  options: { kind: "write" | "edit"; cwd: string },
+): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      try {
+        return await tool.execute(toolCallId, params, signal, onUpdate);
+      } catch (error) {
+        if (!isOperationAbortedError(error)) {
+          throw error;
+        }
+        const normalized = normalizeToolParams(params);
+        const record =
+          normalized ??
+          (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
+        const rawPath = typeof record?.path === "string" ? record.path.trim() : "";
+        if (!rawPath) {
+          throw error;
+        }
+        const resolvedPath = resolveToolPathForVerification(rawPath, options.cwd);
+        let current = "";
+        try {
+          current = await fs.readFile(resolvedPath, "utf8");
+        } catch {
+          throw error;
+        }
+
+        if (options.kind === "write") {
+          const content = typeof record?.content === "string" ? record.content : undefined;
+          if (content !== undefined && current === content) {
+            return {
+              content: [
+                { type: "text", text: `Successfully wrote ${content.length} bytes to ${rawPath}` },
+              ],
+              details: undefined,
+            };
+          }
+          throw error;
+        }
+
+        const newText = typeof record?.newText === "string" ? record.newText : undefined;
+        if (newText !== undefined && current.includes(newText)) {
+          return {
+            content: [{ type: "text", text: `Successfully replaced text in ${rawPath}.` }],
+            details: undefined,
+          };
+        }
+        throw error;
+      }
+    },
+  };
 }
 
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
