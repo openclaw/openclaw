@@ -6,7 +6,6 @@ import {
   modelKey,
   resolveModelRefFromString,
   resolveDefaultModelForAgent,
-  resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -76,10 +75,6 @@ export async function applySessionsPatchToStore(params: {
   const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
   const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
-  const subagentModelHint = isSubagentSessionKey(storeKey)
-    ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
-    : undefined;
-
   const existing = store[storeKey];
   const next: SessionEntry = existing
     ? {
@@ -307,7 +302,6 @@ export async function applySessionsPatchToStore(params: {
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,
         aliasIndex,
-        defaultModel: subagentModelHint ?? resolvedDefault.model,
       });
       if (!resolved) {
         return invalid(`invalid model: ${trimmed}`);

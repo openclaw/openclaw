@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { __testing, loadOpenClawPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
@@ -295,6 +296,36 @@ describe("loadOpenClawPlugins", () => {
     expect(Object.keys(registry.gatewayHandlers)).toContain("allowed.ping");
   });
 
+  it("re-initializes global hook runner when serving registry from cache", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "cache-hook-runner",
+      body: `export default { id: "cache-hook-runner", register() {} };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cache-hook-runner"],
+        },
+      },
+    };
+
+    const first = loadOpenClawPlugins(options);
+    expect(getGlobalHookRunner()).not.toBeNull();
+
+    resetGlobalHookRunner();
+    expect(getGlobalHookRunner()).toBeNull();
+
+    const second = loadOpenClawPlugins(options);
+    expect(second).toBe(first);
+    expect(getGlobalHookRunner()).not.toBeNull();
+
+    resetGlobalHookRunner();
+  });
+
   it("loads plugins when source and root differ only by realpath alias", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
@@ -569,6 +600,49 @@ describe("loadOpenClawPlugins", () => {
     expect(loaded?.origin).toBe("config");
     expect(overridden?.origin).toBe("bundled");
   });
+
+  it("prefers bundled plugin over auto-discovered global duplicate ids", () => {
+    const bundledDir = makeTempDir();
+    writePlugin({
+      id: "feishu",
+      body: `export default { id: "feishu", register() {} };`,
+      dir: bundledDir,
+      filename: "index.js",
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const stateDir = makeTempDir();
+    withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+      const globalDir = path.join(stateDir, "extensions", "feishu");
+      fs.mkdirSync(globalDir, { recursive: true });
+      writePlugin({
+        id: "feishu",
+        body: `export default { id: "feishu", register() {} };`,
+        dir: globalDir,
+        filename: "index.js",
+      });
+
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            allow: ["feishu"],
+            entries: {
+              feishu: { enabled: true },
+            },
+          },
+        },
+      });
+
+      const entries = registry.plugins.filter((entry) => entry.id === "feishu");
+      const loaded = entries.find((entry) => entry.status === "loaded");
+      const overridden = entries.find((entry) => entry.status === "disabled");
+      expect(loaded?.origin).toBe("bundled");
+      expect(overridden?.origin).toBe("global");
+      expect(overridden?.error).toContain("overridden by bundled plugin");
+    });
+  });
+
   it("warns when plugins.allow is empty and non-bundled plugins are discoverable", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({

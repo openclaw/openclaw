@@ -303,7 +303,7 @@ async function resolveSherpaOnnxEntry(): Promise<MediaUnderstandingModelConfig |
   };
 }
 
-async function resolveLocalAudioEntry(): Promise<MediaUnderstandingModelConfig | null> {
+export async function resolveLocalAudioEntry(): Promise<MediaUnderstandingModelConfig | null> {
   const sherpa = await resolveSherpaOnnxEntry();
   if (sherpa) {
     return sherpa;
@@ -450,7 +450,7 @@ function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstan
   return entries;
 }
 
-async function resolveAutoEntries(params: {
+export async function resolveAutoEntries(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   providerRegistry: ProviderRegistry;

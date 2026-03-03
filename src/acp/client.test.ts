@@ -1,6 +1,6 @@
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
-import { resolvePermissionRequest } from "./client.js";
+import { resolveAcpClientSpawnEnv, resolvePermissionRequest } from "./client.js";
 import { extractAttachmentsFromPrompt, extractTextFromPrompt } from "./event-mapper.js";
 
 function makePermissionRequest(
@@ -27,6 +27,26 @@ function makePermissionRequest(
     options: optionsOverride ?? base.options,
   };
 }
+
+describe("resolveAcpClientSpawnEnv", () => {
+  it("sets OPENCLAW_SHELL marker and preserves existing env values", () => {
+    const env = resolveAcpClientSpawnEnv({
+      PATH: "/usr/bin",
+      USER: "openclaw",
+    });
+
+    expect(env.OPENCLAW_SHELL).toBe("acp-client");
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.USER).toBe("openclaw");
+  });
+
+  it("overrides pre-existing OPENCLAW_SHELL to acp-client", () => {
+    const env = resolveAcpClientSpawnEnv({
+      OPENCLAW_SHELL: "wrong",
+    });
+    expect(env.OPENCLAW_SHELL).toBe("acp-client");
+  });
+});
 
 describe("resolvePermissionRequest", () => {
   it("auto-approves safe tools without prompting", async () => {
