@@ -2,9 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { registerSlackInteractionEvents } from "./interactions.js";
 
 const enqueueSystemEventMock = vi.fn();
+const requestHeartbeatNowMock = vi.fn();
 
 vi.mock("../../../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+}));
+
+vi.mock("../../../infra/heartbeat-wake.js", () => ({
+  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
 }));
 
 type RegisteredHandler = (args: {
@@ -153,6 +158,8 @@ function createContext(overrides?: {
 describe("registerSlackInteractionEvents", () => {
   it("enqueues structured events and updates button rows", async () => {
     enqueueSystemEventMock.mockClear();
+    enqueueSystemEventMock.mockReturnValue(true);
+    requestHeartbeatNowMock.mockClear();
     const { ctx, app, getHandler, resolveSessionKey } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
 
@@ -223,6 +230,10 @@ describe("registerSlackInteractionEvents", () => {
     expect(resolveSessionKey).toHaveBeenCalledWith({
       channelId: "C1",
       channelType: "channel",
+    });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "slack-interaction",
+      sessionKey: "agent:ops:slack:channel:C1",
     });
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
   });
