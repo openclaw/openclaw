@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { writeJsonAtomic } from "../../infra/json-files.js";
-import { acquireSessionWriteLock } from "../session-write-lock.js";
+import { resolveProcessScopedMap } from "../../shared/process-scoped-map.js";
 import { SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_REGISTRY_PATH } from "./constants.js";
 
 export type SandboxRegistryEntry = {
@@ -64,12 +64,38 @@ function isRegistryFile<T extends RegistryEntry>(value: unknown): value is Regis
   return Array.isArray(maybeEntries) && maybeEntries.every(isRegistryEntry);
 }
 
+// In-process async mutex per registry path. Replaces the file-level lock which
+// serialised every sandbox operation (create/status/destroy) through a single
+// flock(), causing O(N) queue build-up at 60+ concurrent containers.
+// The gateway is a single Node.js process, so an in-process promise queue
+// gives the same mutual exclusion with zero filesystem overhead.
+const REGISTRY_MUTEXES_KEY = Symbol.for("openclaw.sandboxRegistryMutexes");
+type MutexState = { tail: Promise<void> };
+
+function getRegistryMutex(registryPath: string): MutexState {
+  const map = resolveProcessScopedMap<MutexState>(REGISTRY_MUTEXES_KEY);
+  let state = map.get(registryPath);
+  if (!state) {
+    state = { tail: Promise.resolve() };
+    map.set(registryPath, state);
+  }
+  return state;
+}
+
 async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
-  const lock = await acquireSessionWriteLock({ sessionFile: registryPath, allowReentrant: false });
+  const mutex = getRegistryMutex(registryPath);
+  let release!: () => void;
+  const prev = mutex.tail;
+  // Chain the next waiter onto the mutex tail before awaiting so concurrent
+  // callers always queue in arrival order rather than racing on Promise.resolve.
+  mutex.tail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await prev;
   try {
     return await fn();
   } finally {
-    await lock.release();
+    release();
   }
 }
 
