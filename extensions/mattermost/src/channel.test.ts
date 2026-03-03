@@ -275,6 +275,29 @@ describe("mattermostPlugin", () => {
       );
     });
 
+    it("prefers replyToId over threadId on sendText", async () => {
+      const sendText = mattermostPlugin.outbound?.sendText;
+      if (!sendText) {
+        return;
+      }
+
+      await sendText({
+        to: "channel:CHAN1",
+        text: "threaded text",
+        accountId: "default",
+        replyToId: "post-explicit",
+        threadId: "post-thread-ignored",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "threaded text",
+        expect.objectContaining({
+          replyToId: "post-explicit",
+        }),
+      );
+    });
+
     it("uses threadId as replyToId fallback on sendMedia", async () => {
       const sendMedia = mattermostPlugin.outbound?.sendMedia;
       if (!sendMedia) {
