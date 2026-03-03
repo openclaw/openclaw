@@ -125,6 +125,27 @@ describe("bootstrap prompt warnings", () => {
     expect(resolveBootstrapWarningSignaturesSeen(undefined)).toEqual([]);
   });
 
+  it("ignores single-signature fallback when warning mode is off", () => {
+    expect(
+      resolveBootstrapWarningSignaturesSeen({
+        bootstrapTruncation: {
+          warningMode: "off",
+          promptWarningSignature: "off-mode-signature",
+        },
+      }),
+    ).toEqual([]);
+
+    expect(
+      resolveBootstrapWarningSignaturesSeen({
+        bootstrapTruncation: {
+          warningMode: "off",
+          warningSignaturesSeen: ["prior-once-signature"],
+          promptWarningSignature: "off-mode-signature",
+        },
+      }),
+    ).toEqual(["prior-once-signature"]);
+  });
+
   it("dedupes warnings in once mode by signature", () => {
     const analysis = analyzeBootstrapBudget({
       files: [

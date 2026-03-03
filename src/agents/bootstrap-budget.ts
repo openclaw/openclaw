@@ -100,6 +100,7 @@ function appendSeenSignature(signatures: string[], signature: string): string[] 
 
 export function resolveBootstrapWarningSignaturesSeen(report?: {
   bootstrapTruncation?: {
+    warningMode?: BootstrapPromptWarningMode;
     warningSignaturesSeen?: string[];
     promptWarningSignature?: string;
   };
@@ -108,6 +109,10 @@ export function resolveBootstrapWarningSignaturesSeen(report?: {
   const seenFromReport = normalizeSeenSignatures(truncation?.warningSignaturesSeen);
   if (seenFromReport.length > 0) {
     return seenFromReport;
+  }
+  // In off mode, signature metadata should not seed once-mode dedupe state.
+  if (truncation?.warningMode === "off") {
+    return [];
   }
   const single =
     typeof truncation?.promptWarningSignature === "string"
