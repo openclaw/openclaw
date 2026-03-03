@@ -759,6 +759,16 @@ export async function runHeartbeatOnce(opts: {
       return { status: "skipped", reason: "delivery-circuit-open" };
     }
   }
+  if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "alerts-disabled",
+      durationMs: Date.now() - startedAt,
+      channel: delivery.channel !== "none" ? delivery.channel : undefined,
+      accountId: delivery.accountId,
+    });
+    return { status: "skipped", reason: "alerts-disabled" };
+  }
   const deliveryAccountId = delivery.accountId;
   const heartbeatPlugin = delivery.channel !== "none" ? getChannelPlugin(delivery.channel) : null;
   if (delivery.channel !== "none" && heartbeatPlugin?.heartbeat?.checkReady) {
@@ -850,16 +860,6 @@ export async function runHeartbeatOnce(opts: {
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: sessionKey,
   };
-  if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
-    emitHeartbeatEvent({
-      status: "skipped",
-      reason: "alerts-disabled",
-      durationMs: Date.now() - startedAt,
-      channel: delivery.channel !== "none" ? delivery.channel : undefined,
-      accountId: delivery.accountId,
-    });
-    return { status: "skipped", reason: "alerts-disabled" };
-  }
 
   const heartbeatOkText = responsePrefix ? `${responsePrefix} ${HEARTBEAT_TOKEN}` : HEARTBEAT_TOKEN;
   const outboundSession = buildOutboundSessionContext({

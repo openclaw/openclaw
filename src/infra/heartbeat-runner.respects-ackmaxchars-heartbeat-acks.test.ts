@@ -247,7 +247,7 @@ describe("runHeartbeatOnce ack handling", () => {
     });
   });
 
-  it("skips heartbeat LLM calls when visibility disables all output", async () => {
+  it("skips readiness and LLM calls when visibility disables all output", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createWhatsAppHeartbeatConfig({
         tmpDir,
@@ -262,14 +262,26 @@ describe("runHeartbeatOnce ack handling", () => {
       });
 
       const sendWhatsApp = createMessageSendSpy();
+      const webAuthExists = vi.fn(async () => {
+        throw new Error("should-not-run-readiness");
+      });
+      const hasActiveWebListener = vi.fn(() => {
+        throw new Error("should-not-run-listener-check");
+      });
 
       const result = await runHeartbeatOnce({
         cfg,
-        deps: makeWhatsAppDeps({ sendWhatsApp }),
+        deps: makeWhatsAppDeps({
+          sendWhatsApp,
+          webAuthExists,
+          hasActiveWebListener,
+        }),
       });
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(sendWhatsApp).not.toHaveBeenCalled();
+      expect(webAuthExists).not.toHaveBeenCalled();
+      expect(hasActiveWebListener).not.toHaveBeenCalled();
       expect(result).toEqual({ status: "skipped", reason: "alerts-disabled" });
     });
   });
