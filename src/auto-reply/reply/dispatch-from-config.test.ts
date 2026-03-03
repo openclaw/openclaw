@@ -563,6 +563,43 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("stops waiting for block queue drain when block reply abort signal is aborted", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      ChatType: "direct",
+    });
+    (dispatcher.waitForIdle as ReturnType<typeof vi.fn>).mockImplementation(
+      async () => await new Promise<void>(() => {}),
+    );
+    const blockAbort = new AbortController();
+
+    const run = dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver: async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await opts?.onBlockReply?.({ text: "partial block" }, { abortSignal: blockAbort.signal });
+        await opts?.onToolResult?.({ text: "tool result" });
+        return { text: "done" } satisfies ReplyPayload;
+      },
+    });
+
+    await vi.waitFor(() => expect(dispatcher.waitForIdle).toHaveBeenCalledTimes(1));
+    blockAbort.abort();
+    await run;
+
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "tool result" }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "done" }),
+    );
+  });
+
   it("suppresses native tool summaries but still forwards tool media", async () => {
     setNoAbort();
     const cfg = emptyConfig;

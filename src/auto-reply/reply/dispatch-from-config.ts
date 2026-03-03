@@ -257,6 +257,41 @@ export async function dispatchReplyFromConfig(params: {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
     }
   };
+  const waitForDispatcherIdle = async (abortSignal?: AbortSignal): Promise<void> => {
+    if (abortSignal?.aborted) {
+      return;
+    }
+    if (!abortSignal) {
+      await dispatcher.waitForIdle();
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        abortSignal.removeEventListener("abort", onAbort);
+      };
+      const settle = (callback: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        callback();
+      };
+      const onAbort = () => {
+        settle(resolve);
+      };
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+      void dispatcher
+        .waitForIdle()
+        .then(() => {
+          settle(resolve);
+        })
+        .catch((err) => {
+          settle(() => reject(err));
+        });
+    });
+  };
 
   markProcessing();
 
@@ -427,7 +462,7 @@ export async function dispatchReplyFromConfig(params: {
             } else {
               const queued = dispatcher.sendBlockReply(ttsPayload);
               if (queued) {
-                await dispatcher.waitForIdle();
+                await waitForDispatcherIdle(context?.abortSignal);
               }
             }
           };
