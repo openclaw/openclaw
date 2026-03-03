@@ -258,11 +258,23 @@ function detectVerificationGate(params: {
     };
   }
 
-  const looksLikeGenericVerify =
+  const titleMatch = params.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const lowerTitle = (titleMatch?.[1] ?? "").toLowerCase();
+
+  const hasChallengeScript =
+    lowerHtml.includes("cf-chl") ||
+    lowerHtml.includes("g-recaptcha") ||
+    lowerHtml.includes("hcaptcha") ||
+    lowerHtml.includes("turnstile");
+
+  const hasHumanCheckCopy =
     lowerHtml.includes("verify you are human") ||
     lowerHtml.includes("captcha") ||
-    lowerHtml.includes("cf-chl") ||
-    lowerHtml.includes("attention required");
+    lowerHtml.includes("security check") ||
+    lowerHtml.includes("access denied") ||
+    lowerTitle.includes("attention required");
+
+  const looksLikeGenericVerify = hasChallengeScript && hasHumanCheckCopy;
 
   if (looksLikeGenericVerify) {
     return {
