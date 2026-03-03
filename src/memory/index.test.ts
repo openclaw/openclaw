@@ -38,6 +38,26 @@ describe("memory index", () => {
   let indexVectorPath = "";
   let indexMainPath = "";
   let indexExtraPath = "";
+  let indexStatusPath = "";
+  let indexSourceChangePath = "";
+  let indexModelPath = "";
+  let sourceChangeStateDir = "";
+  const sourceChangeSessionLogLines = [
+    JSON.stringify({
+      type: "message",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "session change test user line" }],
+      },
+    }),
+    JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "session change test assistant line" }],
+      },
+    }),
+  ].join("\n");
 
   // Perf: keep managers open across tests, but only reset the one a test uses.
   const managersByStorePath = new Map<string, MemoryIndexManager>();
@@ -51,6 +71,10 @@ describe("memory index", () => {
     indexMainPath = path.join(workspaceDir, "index-main.sqlite");
     indexVectorPath = path.join(workspaceDir, "index-vector.sqlite");
     indexExtraPath = path.join(workspaceDir, "index-extra.sqlite");
+    indexStatusPath = path.join(workspaceDir, "index-status.sqlite");
+    indexSourceChangePath = path.join(workspaceDir, "index-source-change.sqlite");
+    indexModelPath = path.join(workspaceDir, "index-model-change.sqlite");
+    sourceChangeStateDir = path.join(fixtureRoot, "state-source-change");
 
     await fs.mkdir(memoryDir, { recursive: true });
     await fs.writeFile(
@@ -194,7 +218,6 @@ describe("memory index", () => {
   });
 
   it("keeps dirty false in status-only manager after prior indexing", async () => {
-    const indexStatusPath = path.join(workspaceDir, `index-status-${Date.now()}.sqlite`);
     const cfg = createCfg({ storePath: indexStatusPath });
 
     const first = await getMemorySearchManager({ cfg, agentId: "main" });
@@ -214,31 +237,13 @@ describe("memory index", () => {
   });
 
   it("reindexes sessions when source config adds sessions to an existing index", async () => {
-    const indexSourceChangePath = path.join(
-      workspaceDir,
-      `index-source-change-${Date.now()}.sqlite`,
-    );
-    const stateDir = path.join(fixtureRoot, `state-source-change-${Date.now()}`);
+    const stateDir = sourceChangeStateDir;
     const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.rm(stateDir, { recursive: true, force: true });
     await fs.mkdir(sessionDir, { recursive: true });
     await fs.writeFile(
       path.join(sessionDir, "session-source-change.jsonl"),
-      [
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "session change test user line" }],
-          },
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "session change test assistant line" }],
-          },
-        }),
-      ].join("\n") + "\n",
+      `${sourceChangeSessionLogLines}\n`,
     );
 
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -287,7 +292,6 @@ describe("memory index", () => {
   });
 
   it("reindexes when the embedding model changes", async () => {
-    const indexModelPath = path.join(workspaceDir, `index-model-change-${Date.now()}.sqlite`);
     const base = createCfg({ storePath: indexModelPath });
     const baseAgents = base.agents!;
     const baseDefaults = baseAgents.defaults!;
