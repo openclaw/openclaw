@@ -380,7 +380,7 @@ See:
 5. Target agent's monitor → Handler path (responds via LLM)
 6. Sender agent's monitor → Observer path (records to history)
 
-**Architecture doc:** `prontolab/custom/AGENT-COLLABORATION-V2.md`
+**Architecture doc:** `custom-docs/AGENT-COLLABORATION-V2.md`
 
 ---
 
@@ -1003,13 +1003,13 @@ type TaskOutcome =
 | Orchestration 지침 없음                | 부모 AGENTS.md에만 삽입       |
 | task 도구 = sub-agent도 사용 가능      | sub-agent에서 차단            |
 
-**상세 설계 문서:** [`prontolab/`](./prontolab/) 디렉토리 참조
+**상세 설계 문서:** [`custom-docs/`](./custom-docs/) 디렉토리 참조
 
-| 문서                                                                     | 내용                                                                 |
-| ------------------------------------------------------------------------ | -------------------------------------------------------------------- |
-| [prontolab/SISYPHUS-DESIGN.md](./prontolab/SISYPHUS-DESIGN.md)           | 전체 설계 (배경, As-Is/To-Be, 서브에이전트 정의, Orchestration 패턴) |
-| [prontolab/IMPLEMENTATION-GUIDE.md](./prontolab/IMPLEMENTATION-GUIDE.md) | 단계별 구현 가이드 (Phase 1-4)                                       |
-| [prontolab/REFERENCES.md](./prontolab/REFERENCES.md)                     | 소스 코드 참조, 설정 스냅샷                                          |
+| 문서                                                                         | 내용                                                                 |
+| ---------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| [custom-docs/SISYPHUS-DESIGN.md](./custom-docs/SISYPHUS-DESIGN.md)           | 전체 설계 (배경, As-Is/To-Be, 서브에이전트 정의, Orchestration 패턴) |
+| [custom-docs/IMPLEMENTATION-GUIDE.md](./custom-docs/IMPLEMENTATION-GUIDE.md) | 단계별 구현 가이드 (Phase 1-4)                                       |
+| [custom-docs/REFERENCES.md](./custom-docs/REFERENCES.md)                     | 소스 코드 참조, 설정 스냅샷                                          |
 
 **운영 반영 근거:**
 
@@ -1060,7 +1060,7 @@ type TaskOutcome =
 - Task Monitoring Server: 구현 완료
 - Task Hub: 별도 저장소 연동 항목 (확장 트랙)
 
-**상세 설계 문서:** [prontolab/TASK-STEPS-DESIGN.md](./prontolab/TASK-STEPS-DESIGN.md)
+**상세 설계 문서:** [custom-docs/TASK-STEPS-DESIGN.md](./custom-docs/TASK-STEPS-DESIGN.md)
 
 ---
 
