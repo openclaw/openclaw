@@ -344,6 +344,19 @@ async function ensureGatewayPort(
   });
 }
 
+async function ensureDefaultWorkspacePath(
+  openclawCommand: string,
+  profile: string,
+  workspaceDir: string,
+): Promise<void> {
+  await runOpenClawOrThrow({
+    openclawCommand,
+    args: ["--profile", profile, "config", "set", "agents.defaults.workspace", workspaceDir],
+    timeoutMs: 10_000,
+    errorMessage: `Failed to set agents.defaults.workspace=${workspaceDir}.`,
+  });
+}
+
 async function probeForWebApp(port: number): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1_500);
@@ -946,7 +959,7 @@ function readBootstrapConfig(stateDir: string): Record<string, unknown> | undefi
 }
 
 function resolveBootstrapWorkspaceDir(stateDir: string): string {
-  return path.join(stateDir, `workspace-${DEFAULT_IRONCLAW_PROFILE}`);
+  return path.join(stateDir, "workspace");
 }
 
 /**
@@ -1304,6 +1317,7 @@ export async function bootstrapCommand(
   }
 
   const stateDir = resolveProfileStateDir(profile);
+  const workspaceDir = resolveBootstrapWorkspaceDir(stateDir);
 
   if (portAutoAssigned && !opts.json) {
     runtime.log(
@@ -1312,6 +1326,10 @@ export async function bootstrapCommand(
       ),
     );
   }
+
+  // Pin OpenClaw to the managed default workspace before onboarding so bootstrap
+  // never drifts into creating/using legacy workspace-* paths.
+  await ensureDefaultWorkspacePath(openclawCommand, profile, workspaceDir);
 
   const onboardArgv = [
     "--profile",
@@ -1348,7 +1366,6 @@ export async function bootstrapCommand(
     });
   }
 
-  const workspaceDir = resolveBootstrapWorkspaceDir(stateDir);
   const denchInstall = syncBundledDenchSkill(workspaceDir);
   const workspaceSeed = seedWorkspaceFromAssets({
     workspaceDir,
