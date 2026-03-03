@@ -71,18 +71,48 @@ function hasRateLimitTpmHint(raw: string): boolean {
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
 }
 
+function resolveContextOverflowCandidate(errorMessage: string): {
+  text: string;
+  type?: string;
+} {
+  const parsed = parseApiErrorInfo(errorMessage);
+  const candidate = parsed?.message?.trim();
+  return {
+    text: candidate && candidate.length > 0 ? candidate : errorMessage,
+    type: parsed?.type,
+  };
+}
+
+function isExplicitContextOverflowType(type?: string): boolean {
+  if (!type) {
+    return false;
+  }
+  const lower = type.toLowerCase();
+  return (
+    lower.includes("request_too_large") ||
+    lower.includes("context_length_exceeded") ||
+    lower.includes("context_window_exceeded") ||
+    lower.includes("context_overflow")
+  );
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
-  const lower = errorMessage.toLowerCase();
+  const candidate = resolveContextOverflowCandidate(errorMessage);
+  if (isExplicitContextOverflowType(candidate.type)) {
+    return true;
+  }
+
+  const lower = candidate.text.toLowerCase();
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  if (hasRateLimitTpmHint(errorMessage)) {
+  if (hasRateLimitTpmHint(candidate.text)) {
     return false;
   }
 
-  if (isReasoningConstraintErrorMessage(errorMessage)) {
+  if (isReasoningConstraintErrorMessage(candidate.text)) {
     return false;
   }
 
@@ -110,11 +140,11 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     // when the context window is exceeded. pi-ai surfaces it as "Unhandled stop reason: model_context_window_exceeded".
     lower.includes("context_window_exceeded") ||
     // Chinese proxy error messages for context overflow
-    errorMessage.includes("上下文过长") ||
-    errorMessage.includes("上下文超出") ||
-    errorMessage.includes("上下文长度超") ||
-    errorMessage.includes("超出最大上下文") ||
-    errorMessage.includes("请压缩上下文")
+    candidate.text.includes("上下文过长") ||
+    candidate.text.includes("上下文超出") ||
+    candidate.text.includes("上下文长度超") ||
+    candidate.text.includes("超出最大上下文") ||
+    candidate.text.includes("请压缩上下文")
   );
 }
 
@@ -128,13 +158,14 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
+  const candidate = resolveContextOverflowCandidate(errorMessage);
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  if (hasRateLimitTpmHint(errorMessage)) {
+  if (hasRateLimitTpmHint(candidate.text)) {
     return false;
   }
 
-  if (isReasoningConstraintErrorMessage(errorMessage)) {
+  if (isReasoningConstraintErrorMessage(candidate.text)) {
     return false;
   }
 
@@ -145,22 +176,22 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
     return false;
   }
 
-  if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) {
+  if (CONTEXT_WINDOW_TOO_SMALL_RE.test(candidate.text)) {
     return false;
   }
   // Rate limit errors can match the broad CONTEXT_OVERFLOW_HINT_RE pattern
   // (e.g., "request reached organization TPD rate limit" matches request.*limit).
   // Exclude them before checking context overflow heuristics.
-  if (isRateLimitErrorMessage(errorMessage)) {
+  if (isRateLimitErrorMessage(candidate.text)) {
     return false;
   }
   if (isContextOverflowError(errorMessage)) {
     return true;
   }
-  if (RATE_LIMIT_HINT_RE.test(errorMessage)) {
+  if (RATE_LIMIT_HINT_RE.test(candidate.text)) {
     return false;
   }
-  return CONTEXT_OVERFLOW_HINT_RE.test(errorMessage);
+  return CONTEXT_OVERFLOW_HINT_RE.test(candidate.text);
 }
 
 export function isCompactionFailureError(errorMessage?: string): boolean {
