@@ -5,6 +5,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardRuntime,
@@ -218,11 +219,11 @@ describe("computeAdaptiveChunkRatio", () => {
     // Small messages: 1000 tokens each, well under 10% of context
     const messages: AgentMessage[] = [
       { role: "user", content: "x".repeat(1000), timestamp: Date.now() },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(1000) }],
         timestamp: Date.now(),
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
@@ -233,11 +234,11 @@ describe("computeAdaptiveChunkRatio", () => {
     // Large messages: ~50K tokens each (25% of context)
     const messages: AgentMessage[] = [
       { role: "user", content: "x".repeat(50_000 * 4), timestamp: Date.now() },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(50_000 * 4) }],
         timestamp: Date.now(),
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
@@ -482,40 +483,39 @@ describe("compaction-safeguard double-compaction guard", () => {
   });
 });
 
+async function expectWorkspaceSummaryEmptyForAgentsAlias(
+  createAlias: (outsidePath: string, agentsPath: string) => void,
+) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
+  const prevCwd = process.cwd();
+  try {
+    const outside = path.join(root, "outside-secret.txt");
+    fs.writeFileSync(outside, "secret");
+    createAlias(outside, path.join(root, "AGENTS.md"));
+    process.chdir(root);
+    await expect(readWorkspaceContextForSummary()).resolves.toBe("");
+  } finally {
+    process.chdir(prevCwd);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe("readWorkspaceContextForSummary", () => {
   it.runIf(process.platform !== "win32")(
     "returns empty when AGENTS.md is a symlink escape",
     async () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-      const prevCwd = process.cwd();
-      try {
-        const outside = path.join(root, "outside-secret.txt");
-        fs.writeFileSync(outside, "secret");
-        fs.symlinkSync(outside, path.join(root, "AGENTS.md"));
-        process.chdir(root);
-        await expect(readWorkspaceContextForSummary()).resolves.toBe("");
-      } finally {
-        process.chdir(prevCwd);
-        fs.rmSync(root, { recursive: true, force: true });
-      }
+      await expectWorkspaceSummaryEmptyForAgentsAlias((outside, agentsPath) => {
+        fs.symlinkSync(outside, agentsPath);
+      });
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "returns empty when AGENTS.md is a hardlink alias",
     async () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-      const prevCwd = process.cwd();
-      try {
-        const outside = path.join(root, "outside-secret.txt");
-        fs.writeFileSync(outside, "secret");
-        fs.linkSync(outside, path.join(root, "AGENTS.md"));
-        process.chdir(root);
-        await expect(readWorkspaceContextForSummary()).resolves.toBe("");
-      } finally {
-        process.chdir(prevCwd);
-        fs.rmSync(root, { recursive: true, force: true });
-      }
+      await expectWorkspaceSummaryEmptyForAgentsAlias((outside, agentsPath) => {
+        fs.linkSync(outside, agentsPath);
+      });
     },
   );
 });

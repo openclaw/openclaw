@@ -994,6 +994,7 @@
                   "brave-search",
                   "perplexity",
                   "tools/diffs",
+                  "tools/pdf",
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
@@ -1321,6 +1322,7 @@
                 "pages": [
                   "reference/wizard",
                   "reference/token-use",
+                  "reference/secretref-credential-surface",
                   "reference/prompt-caching",
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",

@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -22,6 +23,31 @@ function appendToolResultText(sm: SessionManager, text: string) {
       content: [{ type: "text", text }],
       isError: false,
       timestamp: Date.now(),
+    }),
+  );
+}
+
+function appendAssistantToolCall(
+  sm: SessionManager,
+  params: { id: string; name: string; withArguments?: boolean },
+) {
+  const toolCall: {
+    type: "toolCall";
+    id: string;
+    name: string;
+    arguments?: Record<string, never>;
+  } = {
+    type: "toolCall",
+    id: params.id,
+    name: params.name,
+  };
+  if (params.withArguments !== false) {
+    toolCall.arguments = {};
+  }
+  sm.appendMessage(
+    asAppendMessage({
+      role: "assistant",
+      content: [toolCall],
     }),
   );
 }
@@ -273,19 +299,8 @@ describe("installSessionToolResultGuard", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
 
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      }),
-    );
-
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_2", name: "read" }],
-      }),
-    );
+    appendAssistantToolCall(sm, { id: "call_1", name: "read" });
+    appendAssistantToolCall(sm, { id: "call_2", name: "read", withArguments: false });
 
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
@@ -297,19 +312,8 @@ describe("installSessionToolResultGuard", () => {
       allowedToolNames: ["read"],
     });
 
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      }),
-    );
-
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_2", name: "write", arguments: {} }],
-      }),
-    );
+    appendAssistantToolCall(sm, { id: "call_1", name: "read" });
+    appendAssistantToolCall(sm, { id: "call_2", name: "write" });
 
     expectPersistedRoles(sm, ["assistant"]);
     expect(guard.getPendingIds()).toEqual([]);
@@ -385,10 +389,10 @@ describe("installSessionToolResultGuard", () => {
           return undefined;
         }
         return {
-          message: {
+          message: castAgentMessage({
             ...(message as unknown as Record<string, unknown>),
             content: [{ type: "text", text: "rewritten by hook" }],
-          } as unknown as AgentMessage,
+          }),
         };
       },
     });
@@ -422,10 +426,10 @@ describe("installSessionToolResultGuard", () => {
     installSessionToolResultGuard(sm, {
       transformMessageForPersistence: (message) =>
         (message as { role?: string }).role === "user"
-          ? ({
+          ? castAgentMessage({
               ...(message as unknown as Record<string, unknown>),
               provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-            } as unknown as AgentMessage)
+            })
           : message,
     });
 

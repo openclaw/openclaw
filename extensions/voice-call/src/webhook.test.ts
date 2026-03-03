@@ -14,6 +14,7 @@ const provider: VoiceCallProvider = {
   playTts: async () => {},
   startListening: async () => {},
   stopListening: async () => {},
+  getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
 };
 
 const createConfig = (overrides: Partial<VoiceCallConfig> = {}): VoiceCallConfig => {
@@ -270,5 +271,52 @@ describe("VoiceCallWebhookServer replay handling", () => {
     } finally {
       await server.stop();
     }
+  });
+});
+
+describe("VoiceCallWebhookServer start idempotency", () => {
+  it("returns existing URL when start() is called twice without stop()", async () => {
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+
+    try {
+      const firstUrl = await server.start();
+      // Second call should return immediately without EADDRINUSE
+      const secondUrl = await server.start();
+
+      // Dynamic port allocations should resolve to a real listening port.
+      expect(firstUrl).toContain("/voice/webhook");
+      expect(firstUrl).not.toContain(":0/");
+      // Idempotent re-start should return the same already-bound URL.
+      expect(secondUrl).toBe(firstUrl);
+      expect(secondUrl).toContain("/voice/webhook");
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("can start again after stop()", async () => {
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+
+    const firstUrl = await server.start();
+    expect(firstUrl).toContain("/voice/webhook");
+    await server.stop();
+
+    // After stopping, a new start should succeed
+    const secondUrl = await server.start();
+    expect(secondUrl).toContain("/voice/webhook");
+    await server.stop();
+  });
+
+  it("stop() is safe to call when server was never started", async () => {
+    const { manager } = createManager([]);
+    const config = createConfig();
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+
+    // Should not throw
+    await server.stop();
   });
 });

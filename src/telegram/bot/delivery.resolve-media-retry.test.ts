@@ -31,7 +31,7 @@ const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";
 
 function makeCtx(
-  mediaField: "voice" | "audio" | "photo" | "video" | "document" | "animation",
+  mediaField: "voice" | "audio" | "photo" | "video" | "document" | "animation" | "sticker",
   getFile: TelegramContext["getFile"],
   opts?: { file_name?: string },
 ): TelegramContext {
@@ -79,6 +79,17 @@ function makeCtx(
       ...(opts?.file_name && { file_name: opts.file_name }),
     };
   }
+  if (mediaField === "sticker") {
+    msg.sticker = {
+      file_id: "stk1",
+      file_unique_id: "ustk1",
+      type: "regular",
+      width: 512,
+      height: 512,
+      is_animated: false,
+      is_video: false,
+    };
+  }
   return {
     message: msg as unknown as Message,
     me: {
@@ -108,6 +119,18 @@ function setupTransientGetFileRetry() {
   });
 
   return getFile;
+}
+
+function mockPdfFetchAndSave(fileName: string | undefined) {
+  fetchRemoteMedia.mockResolvedValueOnce({
+    buffer: Buffer.from("pdf-data"),
+    contentType: "application/pdf",
+    fileName,
+  });
+  saveMediaBuffer.mockResolvedValueOnce({
+    path: "/tmp/file_42---uuid.pdf",
+    contentType: "application/pdf",
+  });
 }
 
 function createFileTooBigError(): Error {
@@ -231,6 +254,45 @@ describe("resolveMedia getFile retry", () => {
     // Should retry transient errors.
     expect(result).not.toBeNull();
   });
+
+  it("retries getFile for stickers on transient failure", async () => {
+    const getFile = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Network request for 'getFile' failed!"))
+      .mockResolvedValueOnce({ file_path: "stickers/file_0.webp" });
+
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker-data"),
+      contentType: "image/webp",
+      fileName: "file_0.webp",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_0.webp",
+      contentType: "image/webp",
+    });
+
+    const ctx = makeCtx("sticker", getFile);
+    const promise = resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    await flushRetryTimers();
+    const result = await promise;
+
+    expect(getFile).toHaveBeenCalledTimes(2);
+    expect(result).toEqual(
+      expect.objectContaining({ path: "/tmp/file_0.webp", placeholder: "<media:sticker>" }),
+    );
+  });
+
+  it("returns null for sticker when getFile exhausts retries", async () => {
+    const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
+
+    const ctx = makeCtx("sticker", getFile);
+    const promise = resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    await flushRetryTimers();
+    const result = await promise;
+
+    expect(getFile).toHaveBeenCalledTimes(3);
+    expect(result).toBeNull();
+  });
 });
 
 describe("resolveMedia original filename preservation", () => {
@@ -321,15 +383,7 @@ describe("resolveMedia original filename preservation", () => {
 
   it("falls back to fetched.fileName when telegram file_name is absent", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
-    fetchRemoteMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("pdf-data"),
-      contentType: "application/pdf",
-      fileName: "file_42.pdf",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/file_42---uuid.pdf",
-      contentType: "application/pdf",
-    });
+    mockPdfFetchAndSave("file_42.pdf");
 
     const ctx = makeCtx("document", getFile);
     const result = await resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
@@ -346,15 +400,7 @@ describe("resolveMedia original filename preservation", () => {
 
   it("falls back to filePath when neither telegram nor fetched fileName is available", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
-    fetchRemoteMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("pdf-data"),
-      contentType: "application/pdf",
-      fileName: undefined,
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/file_42---uuid.pdf",
-      contentType: "application/pdf",
-    });
+    mockPdfFetchAndSave(undefined);
 
     const ctx = makeCtx("document", getFile);
     const result = await resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
