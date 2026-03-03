@@ -1172,6 +1172,7 @@ export async function handleFeishuMessage(params: {
         id: peerId,
       },
       parentPeer,
+      guildId: isGroup ? ctx.chatId : undefined,
     });
 
     // Dynamic agent creation for DM users
