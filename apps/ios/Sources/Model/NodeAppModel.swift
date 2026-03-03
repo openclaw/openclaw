@@ -90,7 +90,9 @@ final class NodeAppModel {
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
+    private var queuedAgentDeepLinkPrompt: AgentDeepLinkPrompt?
     private var lastAgentDeepLinkPromptAt: Date = .distantPast
+    @ObservationIgnored private var queuedAgentDeepLinkPromptTask: Task<Void, Never>?
 
     // Primary "node" connection: used for device capabilities and node.invoke requests.
     private let nodeGateway = GatewayNodeSession()
@@ -2591,19 +2593,31 @@ extension NodeAppModel {
                     "agent deep link rejected: unkeyed message too long chars=\(message.count, privacy: .public)")
                 return
             }
-            if Date().timeIntervalSince(self.lastAgentDeepLinkPromptAt) < 1.0 {
-                self.deepLinkLogger.debug("agent deep link prompt throttled")
-                return
-            }
-            self.lastAgentDeepLinkPromptAt = Date()
-
             let urlText = originalURL.absoluteString
             let prompt = AgentDeepLinkPrompt(
                 id: UUID().uuidString,
                 messagePreview: message,
                 urlPreview: urlText.count > 500 ? "\(urlText.prefix(500))…" : urlText,
                 request: self.effectiveAgentDeepLinkForPrompt(link))
-            self.pendingAgentDeepLinkPrompt = prompt
+
+            let promptIntervalSeconds = 5.0
+            let elapsed = Date().timeIntervalSince(self.lastAgentDeepLinkPromptAt)
+            if elapsed < promptIntervalSeconds {
+                if self.pendingAgentDeepLinkPrompt != nil {
+                    self.pendingAgentDeepLinkPrompt = prompt
+                    self.recordShareEvent("Updated local confirmation request (\(message.count) chars).")
+                    self.deepLinkLogger.debug("agent deep link prompt coalesced into active confirmation")
+                    return
+                }
+
+                let remaining = max(0, promptIntervalSeconds - elapsed)
+                self.queueAgentDeepLinkPrompt(prompt, initialDelaySeconds: remaining)
+                self.recordShareEvent("Queued local confirmation (\(message.count) chars).")
+                self.deepLinkLogger.debug("agent deep link prompt queued due to rate limit")
+                return
+            }
+
+            self.presentAgentDeepLinkPrompt(prompt)
             self.recordShareEvent("Awaiting local confirmation (\(message.count) chars).")
             self.deepLinkLogger.info("agent deep link requires local confirmation")
             return
@@ -2670,6 +2684,60 @@ extension NodeAppModel {
         self.screen.errorText = "Deep link cancelled."
         self.recordShareEvent("Cancelled: deep link confirmation declined.")
         self.deepLinkLogger.info("agent deep link cancelled by local user")
+    }
+
+    private func presentAgentDeepLinkPrompt(_ prompt: AgentDeepLinkPrompt) {
+        self.lastAgentDeepLinkPromptAt = Date()
+        self.pendingAgentDeepLinkPrompt = prompt
+    }
+
+    private func queueAgentDeepLinkPrompt(_ prompt: AgentDeepLinkPrompt, initialDelaySeconds: TimeInterval) {
+        self.queuedAgentDeepLinkPrompt = prompt
+        guard self.queuedAgentDeepLinkPromptTask == nil else { return }
+
+        self.queuedAgentDeepLinkPromptTask = Task { [weak self] in
+            guard let self else { return }
+            let delayNs = UInt64(max(0, initialDelaySeconds) * 1_000_000_000)
+            if delayNs > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: delayNs)
+                } catch {
+                    return
+                }
+            }
+            await self.deliverQueuedAgentDeepLinkPrompt()
+        }
+    }
+
+    private func deliverQueuedAgentDeepLinkPrompt() async {
+        defer { self.queuedAgentDeepLinkPromptTask = nil }
+        let promptIntervalSeconds = 5.0
+        while let prompt = self.queuedAgentDeepLinkPrompt {
+            if self.pendingAgentDeepLinkPrompt != nil {
+                do {
+                    try await Task.sleep(nanoseconds: 200_000_000)
+                } catch {
+                    return
+                }
+                continue
+            }
+
+            let elapsed = Date().timeIntervalSince(self.lastAgentDeepLinkPromptAt)
+            if elapsed < promptIntervalSeconds {
+                let remaining = max(0, promptIntervalSeconds - elapsed)
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                } catch {
+                    return
+                }
+                continue
+            }
+
+            self.queuedAgentDeepLinkPrompt = nil
+            self.presentAgentDeepLinkPrompt(prompt)
+            self.recordShareEvent("Awaiting local confirmation (\(prompt.messagePreview.count) chars).")
+            self.deepLinkLogger.info("agent deep link queued prompt delivered")
+        }
     }
 
     private func submitAgentDeepLink(_ link: AgentDeepLink, messageCharCount: Int) async {

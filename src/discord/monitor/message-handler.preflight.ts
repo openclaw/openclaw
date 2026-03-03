@@ -66,6 +66,23 @@ export type {
   DiscordMessagePreflightParams,
 } from "./message-handler.preflight.types.js";
 
+const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
+
+function isBoundThreadBotSystemMessage(params: {
+  isBoundThreadSession: boolean;
+  isBotAuthor: boolean;
+  text?: string;
+}): boolean {
+  if (!params.isBoundThreadSession || !params.isBotAuthor) {
+    return false;
+  }
+  const text = params.text?.trim();
+  if (!text) {
+    return false;
+  }
+  return DISCORD_BOUND_THREAD_SYSTEM_PREFIXES.some((prefix) => text.startsWith(prefix));
+}
+
 export function resolvePreflightMentionRequirement(params: {
   shouldRequireMention: boolean;
   isBoundThreadSession: boolean;
@@ -246,6 +263,14 @@ export async function preflightDiscordMessage(
   const messageText = resolveDiscordMessageText(message, {
     includeForwarded: true,
   });
+
+  // Intercept text-only slash commands (e.g. user typing "/reset" instead of using Discord's slash command picker)
+  // These should not be forwarded to the agent; proper slash command interactions are handled elsewhere
+  if (!isDirectMessage && baseText && hasControlCommand(baseText, params.cfg)) {
+    logVerbose(`discord: drop text-based slash command ${message.id} (intercepted at gateway)`);
+    return null;
+  }
+
   recordChannelActivity({
     channel: "discord",
     accountId: params.accountId,
@@ -324,15 +349,30 @@ export async function preflightDiscordMessage(
         agentId: boundAgentId ?? route.agentId,
       }
     : route;
+  const isBoundThreadSession = Boolean(boundSessionKey && earlyThreadChannel);
+  if (
+    isBoundThreadBotSystemMessage({
+      isBoundThreadSession,
+      isBotAuthor: Boolean(author.bot),
+      text: messageText,
+    })
+  ) {
+    logVerbose(`discord: drop bound-thread bot system message ${message.id}`);
+    return null;
+  }
   const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
   const explicitlyMentioned = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
   );
   const hasAnyMention = Boolean(
     !isDirectMessage &&
-    (message.mentionedEveryone ||
-      (message.mentionedUsers?.length ?? 0) > 0 ||
-      (message.mentionedRoles?.length ?? 0) > 0),
+    ((message.mentionedUsers?.length ?? 0) > 0 ||
+      (message.mentionedRoles?.length ?? 0) > 0 ||
+      (message.mentionedEveryone && (!author.bot || sender.isPluralKit))),
+  );
+  const hasUserOrRoleMention = Boolean(
+    !isDirectMessage &&
+    ((message.mentionedUsers?.length ?? 0) > 0 || (message.mentionedRoles?.length ?? 0) > 0),
   );
 
   if (
@@ -401,7 +441,7 @@ export async function preflightDiscordMessage(
   const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
   if (shouldLogVerbose()) {
     const channelConfigSummary = channelConfig
-      ? `allowed=${channelConfig.allowed} enabled=${channelConfig.enabled ?? "unset"} requireMention=${channelConfig.requireMention ?? "unset"} matchKey=${channelConfig.matchKey ?? "none"} matchSource=${channelConfig.matchSource ?? "none"} users=${channelConfig.users?.length ?? 0} roles=${channelConfig.roles?.length ?? 0} skills=${channelConfig.skills?.length ?? 0}`
+      ? `allowed=${channelConfig.allowed} enabled=${channelConfig.enabled ?? "unset"} requireMention=${channelConfig.requireMention ?? "unset"} ignoreOtherMentions=${channelConfig.ignoreOtherMentions ?? "unset"} matchKey=${channelConfig.matchKey ?? "none"} matchSource=${channelConfig.matchSource ?? "none"} users=${channelConfig.users?.length ?? 0} roles=${channelConfig.roles?.length ?? 0} skills=${channelConfig.skills?.length ?? 0}`
       : "none";
     logDebug(
       `[discord-preflight] channelConfig=${channelConfigSummary} channelMatchMeta=${channelMatchMeta} channelId=${messageChannelId}`,
@@ -492,7 +532,6 @@ export async function preflightDiscordMessage(
     channelConfig,
     guildInfo,
   });
-  const isBoundThreadSession = Boolean(boundSessionKey && threadChannel);
   const shouldRequireMention = resolvePreflightMentionRequirement({
     shouldRequireMention: shouldRequireMentionByConfig,
     isBoundThreadSession,
@@ -615,6 +654,28 @@ export async function preflightDiscordMessage(
       });
       return null;
     }
+  }
+
+  const ignoreOtherMentions =
+    channelConfig?.ignoreOtherMentions ?? guildInfo?.ignoreOtherMentions ?? false;
+  if (
+    isGuildMessage &&
+    ignoreOtherMentions &&
+    hasUserOrRoleMention &&
+    !wasMentioned &&
+    !implicitMention
+  ) {
+    logDebug(`[discord-preflight] drop: other-mention`);
+    logVerbose(
+      `discord: drop guild message (another user/role mentioned, ignoreOtherMentions=true, botId=${botId})`,
+    );
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: params.guildHistories,
+      historyKey: messageChannelId,
+      limit: params.historyLimit,
+      entry: historyEntry ?? null,
+    });
+    return null;
   }
 
   if (isGuildMessage && hasAccessRestrictions && !memberAllowed) {

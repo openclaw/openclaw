@@ -84,7 +84,9 @@ export function createDiscordMessageHandler(
         if (!ctx) {
           return;
         }
-        await processDiscordMessage(ctx);
+        void processDiscordMessage(ctx).catch((err) => {
+          params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
+        });
         return;
       }
       const combinedBaseText = entries
@@ -128,7 +130,9 @@ export function createDiscordMessageHandler(
           ctxBatch.MessageSidLast = ids[ids.length - 1];
         }
       }
-      await processDiscordMessage(ctx);
+      void processDiscordMessage(ctx).catch((err) => {
+        params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
+      });
     },
     onError: (err) => {
       params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));
@@ -137,6 +141,16 @@ export function createDiscordMessageHandler(
 
   return async (data, client) => {
     try {
+      // Filter bot-own messages before they enter the debounce queue.
+      // The same check exists in preflightDiscordMessage(), but by that point
+      // the message has already consumed debounce capacity and blocked
+      // legitimate user messages. On active servers this causes cumulative
+      // slowdown (see #15874).
+      const msgAuthorId = data.message?.author?.id ?? data.author?.id;
+      if (params.botUserId && msgAuthorId === params.botUserId) {
+        return;
+      }
+
       await debouncer.enqueue({ data, client });
     } catch (err) {
       params.runtime.error?.(danger(`handler failed: ${String(err)}`));

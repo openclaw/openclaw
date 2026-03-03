@@ -725,6 +725,13 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.pluralkit.token": "Discord PluralKit Token",
   "channels.discord.activity": "Discord Presence Activity",
   "channels.discord.status": "Discord Presence Status",
+  "channels.discord.autoPresence.enabled": "Discord Auto Presence Enabled",
+  "channels.discord.autoPresence.intervalMs": "Discord Auto Presence Check Interval (ms)",
+  "channels.discord.autoPresence.minUpdateIntervalMs":
+    "Discord Auto Presence Min Update Interval (ms)",
+  "channels.discord.autoPresence.healthyText": "Discord Auto Presence Healthy Text",
+  "channels.discord.autoPresence.degradedText": "Discord Auto Presence Degraded Text",
+  "channels.discord.autoPresence.exhaustedText": "Discord Auto Presence Exhausted Text",
   "channels.discord.activityType": "Discord Presence Activity Type",
   "channels.discord.activityUrl": "Discord Presence Activity URL",
   "channels.slack.dm.policy": "Slack DM Policy",
