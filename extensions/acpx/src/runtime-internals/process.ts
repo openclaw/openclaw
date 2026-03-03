@@ -119,6 +119,7 @@ export function spawnWithResolvedCommand(
     command: string;
     args: string[];
     cwd: string;
+    env?: NodeJS.ProcessEnv;
   },
   options?: SpawnCommandOptions,
 ): ChildProcessWithoutNullStreams {
@@ -132,7 +133,7 @@ export function spawnWithResolvedCommand(
 
   return spawn(resolved.command, resolved.args, {
     cwd: params.cwd,
-    env: { ...process.env, OPENCLAW_SHELL: "acp" },
+    env: { ...(params.env ?? process.env), OPENCLAW_SHELL: "acp" },
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
     windowsHide: resolved.windowsHide,
@@ -165,6 +166,7 @@ export async function spawnAndCollect(
     command: string;
     args: string[];
     cwd: string;
+    env?: NodeJS.ProcessEnv;
   },
   options?: SpawnCommandOptions,
 ): Promise<{

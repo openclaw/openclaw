@@ -41,6 +41,7 @@ const ROUTABLE_TEST_CHANNELS = new Set([
 ]);
 
 beforeEach(() => {
+  runEmbeddedPiAgentMock.mockReset();
   routeReplyMock.mockReset();
   routeReplyMock.mockResolvedValue({ ok: true });
   isRoutableChannelMock.mockReset();
@@ -80,7 +81,9 @@ const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
   }) as FollowupRun;
 
 function createQueuedRun(
-  overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
+  overrides: Partial<Omit<FollowupRun, "run">> & {
+    run?: Partial<FollowupRun["run"]>;
+  } = {},
 ): FollowupRun {
   const base = baseQueuedRun();
   return {
@@ -185,6 +188,43 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     });
   }
 
+  it("preserves Slack thread tool context for followup runs", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+    const base = baseQueuedRun("slack");
+    const queued = {
+      ...base,
+      originatingChannel: "slack" as const,
+      originatingChatType: "channel",
+      originatingAccountId: "primary",
+      originatingTo: "channel:C1",
+      originatingThreadId: "1770432765.123469",
+      run: {
+        ...base.run,
+        config: {
+          channels: {
+            slack: {
+              // Even when explicit reply threading is off, followups should keep tool sends
+              // attached to the inbound Slack thread.
+              replyToMode: "off",
+            },
+          },
+        },
+      },
+    } as FollowupRun;
+
+    await runner(queued);
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call.currentChannelId).toBe("C1");
+    expect(call.currentThreadTs).toBe("1770432765.123469");
+    expect(call.replyToMode).toBe("all");
+    expect(call.hasRepliedRef).toMatchObject({ value: false });
+  });
+
   async function runMessagingCase(params: {
     agentResult: Record<string, unknown>;
     queued?: FollowupRun;
@@ -265,7 +305,12 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       agentResult: {
         ...makeTextReplyDedupeResult(),
         messagingToolSentTargets: [
-          { tool: "telegram", provider: "telegram", to: "268300329", accountId: "work" },
+          {
+            tool: "telegram",
+            provider: "telegram",
+            to: "268300329",
+            accountId: "work",
+          },
         ],
       },
       queued: {
@@ -315,8 +360,13 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       "sessions.json",
     );
     const sessionKey = "main";
-    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: sessionEntry,
+    };
     await saveSessionStore(storePath, sessionStore);
 
     const { onBlockReply } = await runMessagingCase({
@@ -510,7 +560,9 @@ describe("createFollowupRunner agentDir forwarding", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { agentDir?: string };
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+      agentDir?: string;
+    };
     expect(call?.agentDir).toBe(agentDir);
   });
 });

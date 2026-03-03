@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { estimateTokens } from "@mariozechner/pi-coding-agent";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -135,6 +136,17 @@ export function buildSystemPromptReport(params: {
   tools: AgentTool[];
 }): SessionSystemPromptReport {
   const systemPrompt = params.systemPrompt.trim();
+  const systemPromptTokens = (() => {
+    try {
+      return estimateTokens({
+        role: "user",
+        content: systemPrompt,
+        timestamp: params.generatedAt,
+      });
+    } catch {
+      return undefined;
+    }
+  })();
   const projectContext = extractBetween(
     systemPrompt,
     "\n# Project Context\n",
@@ -160,6 +172,7 @@ export function buildSystemPromptReport(params: {
     sandbox: params.sandbox,
     systemPrompt: {
       chars: systemPrompt.length,
+      tokens: systemPromptTokens,
       projectContextChars,
       nonProjectContextChars: Math.max(0, systemPrompt.length - projectContextChars),
     },
