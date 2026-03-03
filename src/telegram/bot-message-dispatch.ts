@@ -282,8 +282,10 @@ export const dispatchTelegramMessage = async ({
       didForceNewMessage = true;
     }
     resetDraftLaneState(answerLane);
-    // New assistant message boundary: this lane now tracks a fresh preview lifecycle.
-    finalizedPreviewByLane.answer = false;
+    if (didForceNewMessage) {
+      // New assistant message boundary: this lane now tracks a fresh preview lifecycle.
+      finalizedPreviewByLane.answer = false;
+    }
     return didForceNewMessage;
   };
   const updateDraftFromPartial = (lane: DraftLaneState, text: string | undefined) => {

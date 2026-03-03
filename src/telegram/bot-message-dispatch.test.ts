@@ -489,7 +489,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("does not skip message-start rotation when pre-rotation did not force a new message", async () => {
-    const answerDraftStream = createDraftStream(1001);
+    const answerDraftStream = createSequencedDraftStream(1002);
+    answerDraftStream.setMessageId(1001);
     const reasoningDraftStream = createDraftStream();
     createTelegramDraftStream
       .mockImplementationOnce(() => answerDraftStream)
@@ -509,8 +510,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     deliverReplies.mockResolvedValue({ delivered: true });
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+    const bot = createBot();
 
-    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+    await dispatchWithContext({ context: createContext(), streamMode: "partial", bot });
 
     // Early pre-rotation could not force (no streamed partials yet), so the
     // real assistant message_start must still rotate once.
@@ -522,6 +524,21 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const secondUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
     expect(earlyUpdateOrder).toBeLessThan(boundaryRotationOrder);
     expect(boundaryRotationOrder).toBeLessThan(secondUpdateOrder);
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      1,
+      123,
+      1001,
+      "Message A final",
+      expect.any(Object),
+    );
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      2,
+      123,
+      1002,
+      "Message B final",
+      expect.any(Object),
+    );
+    expect((bot.api.deleteMessage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 
   it("finalizes multi-message assistant stream to matching preview messages in order", async () => {
