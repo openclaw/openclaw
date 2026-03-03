@@ -169,7 +169,7 @@ describe("applyJobPatch", () => {
     }
   });
 
-  it("merges payload.paths updates for existing agentTurn jobs", () => {
+  it("replaces payload.paths on patch for existing agentTurn jobs", () => {
     const job = createIsolatedAgentTurnJob("job-path-policy", {
       mode: "announce",
     });
