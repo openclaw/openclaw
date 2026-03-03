@@ -75,4 +75,30 @@ describe("deliverReplies identity passthrough", () => {
       deliveredContent: "hello",
     });
   });
+
+  it("keeps first caption as deliveredContent for multi-media payloads", async () => {
+    sendMock
+      .mockResolvedValueOnce({ messageId: "slack-media-1", channelId: "C123" })
+      .mockResolvedValueOnce({ messageId: "slack-media-2", channelId: "C123" });
+
+    const result = await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            text: "primary caption",
+            mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+          },
+        ],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock.mock.calls[0]?.[1]).toBe("primary caption");
+    expect(sendMock.mock.calls[1]?.[1]).toBe("");
+    expect(result).toEqual({
+      delivered: true,
+      messageId: "slack-media-2",
+      deliveredContent: "primary caption",
+    });
+  });
 });

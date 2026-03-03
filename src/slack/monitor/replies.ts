@@ -53,6 +53,7 @@ export async function deliverReplies(params: {
       let first = true;
       for (const mediaUrl of mediaList) {
         const caption = first ? text : "";
+        const isFirstCaption = first;
         first = false;
         const sent = await sendMessageSlack(params.target, caption, {
           token: params.token,
@@ -62,7 +63,10 @@ export async function deliverReplies(params: {
           ...(params.identity ? { identity: params.identity } : {}),
         });
         delivered = true;
-        lastDeliveredContent = caption;
+        if (isFirstCaption) {
+          // Keep the primary caption text; later media messages intentionally use empty captions.
+          lastDeliveredContent = caption;
+        }
         if (sent.messageId && sent.messageId !== "unknown" && sent.messageId !== "suppressed") {
           lastMessageId = sent.messageId;
         }
