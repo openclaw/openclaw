@@ -410,6 +410,39 @@ export async function spawnAcpDirect(
     ? `channel:${boundThreadId}`
     : requesterOrigin?.to?.trim() || (deliveryThreadId ? `channel:${deliveryThreadId}` : undefined);
   const hasDeliveryTarget = Boolean(requesterOrigin?.channel && inferredDeliveryTo);
+  const finalDeliveryContext = hasDeliveryTarget
+    ? normalizeDeliveryContext({
+        channel: requesterOrigin?.channel,
+        to: inferredDeliveryTo,
+        accountId: requesterOrigin?.accountId ?? undefined,
+        threadId: deliveryThreadId,
+      })
+    : undefined;
+  if (finalDeliveryContext) {
+    try {
+      await callGateway({
+        method: "sessions.patch",
+        params: {
+          key: sessionKey,
+          deliveryContext: finalDeliveryContext,
+        },
+        timeoutMs: 10_000,
+      });
+    } catch (err) {
+      await cleanupFailedAcpSpawn({
+        cfg,
+        sessionKey,
+        shouldDeleteSession: true,
+        deleteTranscript: true,
+        runtimeCloseHandle: initializedRuntime,
+      });
+      return {
+        status: "error",
+        error: summarizeError(err),
+        childSessionKey: sessionKey,
+      };
+    }
+  }
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   try {

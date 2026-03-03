@@ -302,6 +302,64 @@ describe("gateway sessions patch", () => {
     expectPatchError(result, "invalid groupActivation");
   });
 
+  test("normalizes and persists deliveryContext patch fields", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: {
+          key: MAIN_SESSION_KEY,
+          deliveryContext: {
+            channel: " Telegram ",
+            to: " telegram:-100123 ",
+            accountId: " work ",
+            threadId: " 42 ",
+          },
+        },
+      }),
+    );
+    expect(entry.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "telegram:-100123",
+      accountId: "work",
+      threadId: "42",
+    });
+    expect(entry.lastChannel).toBe("telegram");
+    expect(entry.lastTo).toBe("telegram:-100123");
+    expect(entry.lastAccountId).toBe("work");
+    expect(entry.lastThreadId).toBe("42");
+  });
+
+  test("clears deliveryContext and legacy last-route fields when set to null", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        store: {
+          [MAIN_SESSION_KEY]: {
+            sessionId: "sess",
+            updatedAt: 1,
+            deliveryContext: {
+              channel: "telegram",
+              to: "telegram:-100123",
+              accountId: "work",
+              threadId: "42",
+            },
+            lastChannel: "telegram",
+            lastTo: "telegram:-100123",
+            lastAccountId: "work",
+            lastThreadId: "42",
+          } as SessionEntry,
+        },
+        patch: {
+          key: MAIN_SESSION_KEY,
+          deliveryContext: null,
+        },
+      }),
+    );
+    expect(entry.deliveryContext).toBeUndefined();
+    expect(entry.lastChannel).toBeUndefined();
+    expect(entry.lastTo).toBeUndefined();
+    expect(entry.lastAccountId).toBeUndefined();
+    expect(entry.lastThreadId).toBeUndefined();
+  });
+
   test("allows target agent own model for subagent session even when missing from global allowlist", async () => {
     const cfg = makeKimiSubagentCfg({
       agentPrimaryModel: "synthetic/hf:moonshotai/Kimi-K2.5",

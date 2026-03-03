@@ -78,6 +78,20 @@ export const SessionsPatchParamsSchema = Type.Object(
     groupActivation: Type.Optional(
       Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
     ),
+    deliveryContext: Type.Optional(
+      Type.Union([
+        Type.Object(
+          {
+            channel: Type.Optional(NonEmptyString),
+            to: Type.Optional(NonEmptyString),
+            accountId: Type.Optional(NonEmptyString),
+            threadId: Type.Optional(Type.Union([NonEmptyString, Type.Integer()])),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Null(),
+      ]),
+    ),
   },
   { additionalProperties: false },
 );

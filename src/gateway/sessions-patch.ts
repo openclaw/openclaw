@@ -27,6 +27,7 @@ import { applyVerboseOverride, parseVerboseOverride } from "../sessions/level-ov
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
+import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -356,6 +357,37 @@ export async function applySessionsPatchToStore(params: {
         return invalid('invalid groupActivation (use "mention"|"always")');
       }
       next.groupActivation = normalized;
+    }
+  }
+
+  if ("deliveryContext" in patch) {
+    const raw = patch.deliveryContext;
+    if (raw === null) {
+      delete next.deliveryContext;
+      delete next.lastChannel;
+      delete next.lastTo;
+      delete next.lastAccountId;
+      delete next.lastThreadId;
+    } else if (raw !== undefined) {
+      if (!raw || typeof raw !== "object") {
+        return invalid("invalid deliveryContext (use an object or null)");
+      }
+      const deliveryFields = normalizeSessionDeliveryFields({
+        deliveryContext: raw as {
+          channel?: string;
+          to?: string;
+          accountId?: string;
+          threadId?: string | number;
+        },
+      });
+      if (!deliveryFields.deliveryContext) {
+        return invalid("invalid deliveryContext (must include at least one non-empty field)");
+      }
+      next.deliveryContext = deliveryFields.deliveryContext;
+      next.lastChannel = deliveryFields.lastChannel;
+      next.lastTo = deliveryFields.lastTo;
+      next.lastAccountId = deliveryFields.lastAccountId;
+      next.lastThreadId = deliveryFields.lastThreadId;
     }
   }
 
