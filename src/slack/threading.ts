@@ -53,6 +53,8 @@ export function resolveSlackThreadTargets(params: {
     : params.replyToMode === "all"
       ? messageTs
       : undefined;
-  const statusThreadTs = replyThreadTs;
+  // Status indicator should always fire — even for main-channel messages
+  // where we don't reply in a thread — so use the message ts as fallback.
+  const statusThreadTs = replyThreadTs ?? messageTs;
   return { replyThreadTs, statusThreadTs, isThreadReply };
 }

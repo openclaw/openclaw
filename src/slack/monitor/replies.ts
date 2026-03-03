@@ -1,7 +1,7 @@
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import { chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -32,7 +32,11 @@ export async function deliverReplies(params: {
 
     if (mediaList.length === 0) {
       const trimmed = text.trim();
-      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+      if (
+        !trimmed ||
+        isSilentReplyText(trimmed, SILENT_REPLY_TOKEN) ||
+        isSilentReplyPrefixText(trimmed, SILENT_REPLY_TOKEN)
+      ) {
         continue;
       }
       await sendMessageSlack(params.target, trimmed, {

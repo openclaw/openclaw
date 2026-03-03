@@ -4,7 +4,7 @@ import {
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "../auto-reply/chunk.js";
-import { isSilentReplyText } from "../auto-reply/tokens.js";
+import { isSilentReplyPrefixText, isSilentReplyText } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
@@ -254,8 +254,12 @@ export async function sendMessageSlack(
   opts: SlackSendOpts = {},
 ): Promise<SlackSendResult> {
   const trimmedMessage = message?.trim() ?? "";
-  if (isSilentReplyText(trimmedMessage) && !opts.mediaUrl && !opts.blocks) {
-    logVerbose("slack send: suppressed NO_REPLY token before API call");
+  if (
+    (isSilentReplyText(trimmedMessage) || isSilentReplyPrefixText(trimmedMessage)) &&
+    !opts.mediaUrl &&
+    !opts.blocks
+  ) {
+    logVerbose("slack send: suppressed NO_REPLY token (or prefix) before API call");
     return { messageId: "suppressed", channelId: "" };
   }
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);

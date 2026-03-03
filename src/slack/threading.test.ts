@@ -15,7 +15,8 @@ describe("resolveSlackThreadTargets", () => {
 
     expect(isThreadReply).toBe(false);
     expect(replyThreadTs).toBeUndefined();
-    expect(statusThreadTs).toBeUndefined();
+    // Status indicator still fires using the message ts as fallback
+    expect(statusThreadTs).toBe("123");
   }
 
   it("threads replies when message is already threaded", () => {
@@ -47,7 +48,7 @@ describe("resolveSlackThreadTargets", () => {
     expect(statusThreadTs).toBe("123");
   });
 
-  it("does not thread status indicator when reply threading is off", () => {
+  it("shows status indicator on message ts even when reply threading is off", () => {
     const { replyThreadTs, statusThreadTs } = resolveSlackThreadTargets({
       replyToMode: "off",
       message: {
@@ -58,7 +59,8 @@ describe("resolveSlackThreadTargets", () => {
     });
 
     expect(replyThreadTs).toBeUndefined();
-    expect(statusThreadTs).toBeUndefined();
+    // Status indicator uses message ts as fallback so it fires in main channels
+    expect(statusThreadTs).toBe("123");
   });
 
   it("does not treat auto-created top-level thread_ts as a real thread when mode is off", () => {

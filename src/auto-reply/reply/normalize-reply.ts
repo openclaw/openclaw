@@ -57,6 +57,22 @@ export function normalizeReplyPayload(
       opts.onSkip?.("silent");
       return null;
     }
+    // After stripping, the remaining text may itself be a bare prefix of the
+    // silent token (e.g. "NO" left over from "NO NO_REPLY").  We only check
+    // here — inside the stripping block — so that legitimate replies like "No"
+    // are never suppressed.
+    const afterStrip = text?.trim().toUpperCase() ?? "";
+    if (
+      afterStrip &&
+      /^[A-Z]+$/.test(afterStrip) &&
+      silentToken.toUpperCase().startsWith(afterStrip)
+    ) {
+      if (!hasMedia && !hasChannelData) {
+        opts.onSkip?.("silent");
+        return null;
+      }
+      text = "";
+    }
   }
   if (text && !trimmed) {
     // Keep empty text when media exists so media-only replies still send.
