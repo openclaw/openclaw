@@ -28,7 +28,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     //
     // This migration runs on every gateway start via migrateLegacyConfig → applyLegacyMigrations
     // and writes the seeded origins to disk before startup checks run.
-    id: "gateway.controlUi.allowedOrigins-seed-for-non-loopback",
+    id: "gateway.controlUi.allowedOrigins-seed-for-existing-binds",
     describe: "Seed gateway.controlUi.allowedOrigins for existing gateway installs",
     apply: (raw, changes) => {
       const gateway = getRecord(raw.gateway);
