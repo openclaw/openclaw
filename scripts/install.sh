@@ -1262,6 +1262,35 @@ node_major_version() {
     return 1
 }
 
+node_is_at_least_22_12() {
+    if ! command -v node &> /dev/null; then
+        return 1
+    fi
+
+    local version major minor
+    version="$(node -v 2>/dev/null || true)"
+    major="${version#v}"
+    major="${major%%.*}"
+    minor="${version#v}"
+    minor="${minor#*.}"
+    minor="${minor%%.*}"
+
+    if [[ ! "$major" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    if [[ ! "$minor" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+
+    if [[ "$major" -gt 22 ]]; then
+        return 0
+    fi
+    if [[ "$major" -eq 22 && "$minor" -ge 12 ]]; then
+        return 0
+    fi
+    return 1
+}
+
 print_active_node_paths() {
     if ! command -v node &> /dev/null; then
         return 1
@@ -1314,9 +1343,7 @@ ensure_macos_node22_active() {
 }
 
 ensure_node22_active_shell() {
-    local major
-    major="$(node_major_version || true)"
-    if [[ -n "$major" && "$major" -ge 22 ]]; then
+    if node_is_at_least_22_12; then
         return 0
     fi
 
@@ -1324,7 +1351,7 @@ ensure_node22_active_shell() {
     active_path="$(command -v node 2>/dev/null || echo "not found")"
     active_version="$(node -v 2>/dev/null || echo "missing")"
 
-    ui_error "Active Node.js must be v22+ but this shell is using ${active_version} (${active_path})"
+    ui_error "Active Node.js must be v22.12+ but this shell is using ${active_version} (${active_path})"
     print_active_node_paths || true
 
     local nvm_detected=0
@@ -1353,15 +1380,15 @@ ensure_node22_active_shell() {
 check_node() {
     if command -v node &> /dev/null; then
         NODE_VERSION="$(node_major_version || true)"
-        if [[ -n "$NODE_VERSION" && "$NODE_VERSION" -ge 22 ]]; then
+        if node_is_at_least_22_12; then
             ui_success "Node.js v$(node -v | cut -d'v' -f2) found"
             print_active_node_paths || true
             return 0
         else
             if [[ -n "$NODE_VERSION" ]]; then
-                ui_info "Node.js $(node -v) found, upgrading to v22+"
+                ui_info "Node.js $(node -v) found, upgrading to v22.12+"
             else
-                ui_info "Node.js found but version could not be parsed; reinstalling v22+"
+                ui_info "Node.js found but version could not be parsed; reinstalling v22.12+"
             fi
             return 1
         fi
