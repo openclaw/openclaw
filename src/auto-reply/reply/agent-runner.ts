@@ -501,10 +501,12 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     // Handle react-only mode: send ⚠️ emoji reaction instead of error text
+    // Skip for slash commands (CommandSource: "native") - their MessageSid is interaction id, not message id
     if (
       errorReactionRequested &&
       sessionCtx.MessageSid &&
-      sessionCtx.OriginatingChannel === "discord"
+      sessionCtx.OriginatingChannel === "discord" &&
+      sessionCtx.CommandSource !== "native"
     ) {
       try {
         const { reactMessageDiscord } = await import("../../discord/send.js");
