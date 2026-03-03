@@ -1,29 +1,18 @@
 import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
+import {
+  consumeRootOptionToken,
+  FLAG_TERMINATOR,
+  isValueToken,
+} from "../infra/cli-root-options.js";
 
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
-const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
-const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
-const FLAG_TERMINATOR = "--";
 
 export function hasHelpOrVersion(argv: string[]): boolean {
   return (
     argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) || hasRootVersionAlias(argv)
   );
-}
-
-function isValueToken(arg: string | undefined): boolean {
-  if (!arg) {
-    return false;
-  }
-  if (arg === FLAG_TERMINATOR) {
-    return false;
-  }
-  if (!arg.startsWith("-")) {
-    return true;
-  }
-  return /^-\d+(?:\.\d+)?$/.test(arg);
 }
 
 function parsePositiveInt(value: string): number | undefined {
@@ -62,17 +51,9 @@ export function hasRootVersionAlias(argv: string[]): boolean {
       hasAlias = true;
       continue;
     }
-    if (ROOT_BOOLEAN_FLAGS.has(arg)) {
-      continue;
-    }
-    if (arg.startsWith("--profile=")) {
-      continue;
-    }
-    if (ROOT_VALUE_FLAGS.has(arg)) {
-      const next = args[i + 1];
-      if (isValueToken(next)) {
-        i += 1;
-      }
+    const consumed = consumeRootOptionToken(args, i);
+    if (consumed > 0) {
+      i += consumed - 1;
       continue;
     }
     if (arg.startsWith("-")) {
@@ -109,17 +90,9 @@ function isRootInvocationForFlags(
       hasTarget = true;
       continue;
     }
-    if (ROOT_BOOLEAN_FLAGS.has(arg)) {
-      continue;
-    }
-    if (arg.startsWith("--profile=") || arg.startsWith("--log-level=")) {
-      continue;
-    }
-    if (ROOT_VALUE_FLAGS.has(arg)) {
-      const next = args[i + 1];
-      if (isValueToken(next)) {
-        i += 1;
-      }
+    const consumed = consumeRootOptionToken(args, i);
+    if (consumed > 0) {
+      i += consumed - 1;
       continue;
     }
     // Unknown flags and subcommand-scoped help/version should fall back to Commander.
@@ -170,6 +143,18 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
 }
 
 export function getCommandPath(argv: string[], depth = 2): string[] {
+  return getCommandPathInternal(argv, depth, { skipRootOptions: false });
+}
+
+export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {
+  return getCommandPathInternal(argv, depth, { skipRootOptions: true });
+}
+
+function getCommandPathInternal(
+  argv: string[],
+  depth: number,
+  opts: { skipRootOptions: boolean },
+): string[] {
   const args = argv.slice(2);
   const path: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
@@ -179,6 +164,13 @@ export function getCommandPath(argv: string[], depth = 2): string[] {
     }
     if (arg === "--") {
       break;
+    }
+    if (opts.skipRootOptions) {
+      const consumed = consumeRootOptionToken(args, i);
+      if (consumed > 0) {
+        i += consumed - 1;
+        continue;
+      }
     }
     if (arg.startsWith("-")) {
       continue;
@@ -192,7 +184,7 @@ export function getCommandPath(argv: string[], depth = 2): string[] {
 }
 
 export function getPrimaryCommand(argv: string[]): string | null {
-  const [primary] = getCommandPath(argv, 1);
+  const [primary] = getCommandPathWithRootOptions(argv, 1);
   return primary ?? null;
 }
 

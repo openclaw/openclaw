@@ -18,6 +18,7 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
@@ -237,9 +238,7 @@ export async function startGatewayServer(
   if (configSnapshot.exists && !configSnapshot.valid) {
     const issues =
       configSnapshot.issues.length > 0
-        ? configSnapshot.issues
-            .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
-            .join("\n")
+        ? formatConfigIssueLines(configSnapshot.issues, "", { normalizeRoot: true }).join("\n")
         : "Unknown validation issue.";
     throw new Error(
       `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
@@ -332,9 +331,7 @@ export async function startGatewayServer(
     if (!freshSnapshot.valid) {
       const issues =
         freshSnapshot.issues.length > 0
-          ? freshSnapshot.issues
-              .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
-              .join("\n")
+          ? formatConfigIssueLines(freshSnapshot.issues, "", { normalizeRoot: true }).join("\n")
           : "Unknown validation issue.";
       throw new Error(`Invalid config at ${freshSnapshot.path}.\n${issues}`);
     }

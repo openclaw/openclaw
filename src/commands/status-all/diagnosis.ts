@@ -1,4 +1,5 @@
 import type { ProgressReporter } from "../../cli/progress.js";
+import { formatConfigIssueLine } from "../../config/issue-format.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { formatPortDiagnostics } from "../../infra/ports.js";
 import {
@@ -88,7 +89,7 @@ export async function appendStatusAllDiagnosis(params: {
         issues.findIndex((x) => x.path === issue.path && x.message === issue.message) === index,
     );
     for (const issue of uniqueIssues.slice(0, 12)) {
-      lines.push(`  - ${issue.path}: ${issue.message}`);
+      lines.push(`  ${formatConfigIssueLine(issue, "-")}`);
     }
     if (uniqueIssues.length > 12) {
       lines.push(`  ${muted(`… +${uniqueIssues.length - 12} more`)}`);

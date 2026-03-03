@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
+import { getCommandPathWithRootOptions } from "../cli/argv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig } from "./config.js";
@@ -42,6 +43,11 @@ export type LogTransport = (logObj: LogTransportRecord) => void;
 
 const externalTransports = new Set<LogTransport>();
 
+function shouldSkipLoadConfigFallback(argv: string[] = process.argv): boolean {
+  const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
+  return primary === "config" && secondary === "validate";
+}
+
 function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
   logger.attachTransport((logObj: LogObj) => {
     if (!externalTransports.has(transport)) {
@@ -78,7 +84,7 @@ function resolveSettings(): ResolvedSettings {
 
   let cfg: OpenClawConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
-  if (!cfg) {
+  if (!cfg && !shouldSkipLoadConfigFallback()) {
     try {
       const loaded = requireConfig?.("../config/config.js") as
         | {
@@ -288,6 +294,10 @@ export function registerLogTransport(transport: LogTransport): () => void {
     externalTransports.delete(transport);
   };
 }
+
+export const __test__ = {
+  shouldSkipLoadConfigFallback,
+};
 
 function formatLocalDate(date: Date): string {
   const year = date.getFullYear();

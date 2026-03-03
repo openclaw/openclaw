@@ -69,4 +69,16 @@ describe("tryRouteCli", () => {
       commandPath: ["status"],
     });
   });
+
+  it("routes status when root options precede the command", async () => {
+    await expect(tryRouteCli(["node", "openclaw", "--log-level", "debug", "status"])).resolves.toBe(
+      true,
+    );
+
+    expect(findRoutedCommandMock).toHaveBeenCalledWith(["status"]);
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: expect.any(Object),
+      commandPath: ["status"],
+    });
+  });
 });

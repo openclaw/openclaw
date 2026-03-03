@@ -1,5 +1,6 @@
 import { loadAndMaybeMigrateDoctorConfig } from "../../commands/doctor-config-flow.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { formatConfigIssueLines } from "../../config/issue-format.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
@@ -26,10 +27,6 @@ let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnaps
 function resetConfigGuardStateForTests() {
   didRunDoctorConfigFlow = false;
   configSnapshotPromise = null;
-}
-
-function formatConfigIssues(issues: Array<{ path: string; message: string }>): string[] {
-  return issues.map((issue) => `- ${issue.path || "<root>"}: ${issue.message}`);
 }
 
 async function getConfigSnapshot() {
@@ -83,11 +80,12 @@ export async function ensureConfigReady(params: {
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  const issues = snapshot.exists && !snapshot.valid ? formatConfigIssues(snapshot.issues) : [];
-  const legacyIssues =
-    snapshot.legacyIssues.length > 0
-      ? snapshot.legacyIssues.map((issue) => `- ${issue.path}: ${issue.message}`)
+  const issues =
+    snapshot.exists && !snapshot.valid
+      ? formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })
       : [];
+  const legacyIssues =
+    snapshot.legacyIssues.length > 0 ? formatConfigIssueLines(snapshot.legacyIssues, "-") : [];
 
   const invalid = snapshot.exists && !snapshot.valid;
   if (!invalid) {

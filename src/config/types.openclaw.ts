@@ -119,6 +119,8 @@ export type OpenClawConfig = {
 export type ConfigValidationIssue = {
   path: string;
   message: string;
+  allowedValues?: string[];
+  allowedValuesHiddenCount?: number;
 };
 
 export type LegacyConfigIssue = {

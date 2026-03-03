@@ -252,6 +252,55 @@ describe("config cli", () => {
       expect(mockError).not.toHaveBeenCalled();
     });
 
+    it("preserves allowed-values metadata in --json output", async () => {
+      setSnapshotOnce({
+        path: "/tmp/custom-openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        resolved: {},
+        valid: false,
+        config: {},
+        issues: [
+          {
+            path: "update.channel",
+            message: 'Invalid input (allowed: "stable", "beta", "dev")',
+            allowedValues: ["stable", "beta", "dev"],
+            allowedValuesHiddenCount: 0,
+          },
+        ],
+        warnings: [],
+        legacyIssues: [],
+      });
+
+      await expect(runConfigCommand(["config", "validate", "--json"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      const raw = mockLog.mock.calls.at(0)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as {
+        valid: boolean;
+        path: string;
+        issues: Array<{
+          path: string;
+          message: string;
+          allowedValues?: string[];
+          allowedValuesHiddenCount?: number;
+        }>;
+      };
+      expect(payload.valid).toBe(false);
+      expect(payload.path).toBe("/tmp/custom-openclaw.json");
+      expect(payload.issues).toEqual([
+        {
+          path: "update.channel",
+          message: 'Invalid input (allowed: "stable", "beta", "dev")',
+          allowedValues: ["stable", "beta", "dev"],
+        },
+      ]);
+      expect(mockError).not.toHaveBeenCalled();
+    });
+
     it("prints file-not-found and exits 1 when config file is missing", async () => {
       setSnapshotOnce({
         path: "/tmp/openclaw.json",
