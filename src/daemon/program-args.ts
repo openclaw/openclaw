@@ -70,16 +70,18 @@ async function resolveRealpathSafe(inputPath: string): Promise<string> {
 
 /**
  * Derive working directory from a dist entrypoint path.
- * E.g., /path/to/moltbot/dist/entry.js -> /path/to/moltbot
+ * Only matches when "dist" is the **immediate** parent directory of the
+ * entry file (e.g. `/path/to/moltbot/dist/entry.js` → `/path/to/moltbot`).
+ * Paths where "dist" appears elsewhere (e.g. `/mnt/distcache/...`) are
+ * correctly ignored.
  */
 function resolveWorkingDirectoryFromEntrypoint(entrypointPath: string): string | undefined {
   const dir = path.dirname(entrypointPath);
-  const parts = dir.split(path.sep);
-  const distIndex = parts.lastIndexOf("dist");
-  if (distIndex > 0) {
-    return parts.slice(0, distIndex).join(path.sep);
+  if (path.basename(dir) !== "dist") {
+    return undefined;
   }
-  return undefined;
+  const parent = path.dirname(dir);
+  return parent && parent !== dir ? parent : undefined;
 }
 
 function buildDistCandidates(...inputs: string[]): string[] {

@@ -63,6 +63,10 @@ describe("resolveGatewayProgramArguments", () => {
     // Should use the symlinked path, not the realpath-resolved versioned path
     expect(result.programArguments[1]).toBe(symlinkPath);
     expect(result.programArguments[1]).not.toContain("@2026.1.21-2");
+    // workingDirectory should point to the symlinked package root
+    expect(result.workingDirectory).toBe(
+      path.resolve("/Users/test/Library/pnpm/global/5/node_modules/moltbot"),
+    );
   });
 
   it("falls back to node_modules package dist when .bin path is not resolved", async () => {
@@ -86,5 +90,41 @@ describe("resolveGatewayProgramArguments", () => {
       "--port",
       "18789",
     ]);
+  });
+
+  it("sets workingDirectory to parent of dist for standard entrypoint", async () => {
+    const entryPath = path.resolve("/opt/moltbot/dist/entry.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveGatewayProgramArguments({ port: 18789 });
+
+    expect(result.workingDirectory).toBe(path.resolve("/opt/moltbot"));
+  });
+
+  it("sets correct workingDirectory when 'dist' appears earlier in path", async () => {
+    // e.g. /mnt/distcache/apps/moltbot/dist/entry.js — "dist" in the path
+    // but only the immediate parent "dist" segment should be used
+    const entryPath = path.resolve("/mnt/distcache/apps/moltbot/dist/entry.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveGatewayProgramArguments({ port: 18789 });
+
+    expect(result.workingDirectory).toBe(path.resolve("/mnt/distcache/apps/moltbot"));
+  });
+
+  it("returns undefined workingDirectory when entry is not directly under dist/", async () => {
+    // e.g. /opt/moltbot/dist/subdir/entry.js — dist is not the immediate parent
+    const entryPath = path.resolve("/opt/moltbot/dist/subdir/entry.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveGatewayProgramArguments({ port: 18789 });
+
+    expect(result.workingDirectory).toBeUndefined();
   });
 });
