@@ -648,7 +648,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(
-          ErrorCodes.INTERNAL_ERROR,
+          ErrorCodes.AGENT_TIMEOUT,
           `agent "${agentId}" created but not yet resolvable after ${resolveAgentCreateReadyTimeoutMs()}ms`,
         ),
       );
