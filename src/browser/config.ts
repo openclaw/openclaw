@@ -162,12 +162,17 @@ function ensureDefaultProfile(
   defaultColor: string,
   legacyCdpPort?: number,
   derivedDefaultCdpPort?: number,
+  legacyCdpUrl?: string,
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
   if (!result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]) {
     result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME] = {
       cdpPort: legacyCdpPort ?? derivedDefaultCdpPort ?? CDP_PORT_RANGE_START,
       color: defaultColor,
+      // Preserve the full cdpUrl for ws/wss endpoints so resolveProfile()
+      // doesn't reconstruct from cdpProtocol/cdpHost/cdpPort (which drops
+      // the WebSocket protocol and query params like API keys).
+      ...(legacyCdpUrl ? { cdpUrl: legacyCdpUrl } : {}),
     };
   }
   return result;
@@ -260,8 +265,11 @@ export function resolveBrowserConfig(
   const defaultProfileFromConfig = cfg?.defaultProfile?.trim() || undefined;
   // Use legacy cdpUrl port for backward compatibility when no profiles configured
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
+  const isWsUrl =
+    cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
+  const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
   const profiles = ensureDefaultChromeExtensionProfile(
-    ensureDefaultProfile(cfg?.profiles, defaultColor, legacyCdpPort, cdpPortRangeStart),
+    ensureDefaultProfile(cfg?.profiles, defaultColor, legacyCdpPort, cdpPortRangeStart, legacyCdpUrl),
     controlPort,
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
