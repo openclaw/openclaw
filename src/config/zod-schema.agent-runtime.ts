@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
 import {
   GroupChatSchema,
   HumanDelaySchema,
   IdentitySchema,
+  SecretInputSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
@@ -25,11 +27,13 @@ export const HeartbeatSchema = z
     session: z.string().optional(),
     includeReasoning: z.boolean().optional(),
     target: z.string().optional(),
+    directPolicy: z.union([z.literal("allow"), z.literal("block")]).optional(),
     to: z.string().optional(),
     accountId: z.string().optional(),
     prompt: z.string().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),
+    lightContext: z.boolean().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -99,7 +103,10 @@ export const SandboxDockerSchema = z
     user: z.string().optional(),
     capDrop: z.array(z.string()).optional(),
     env: z.record(z.string(), z.string()).optional(),
-    setupCommand: z.string().optional(),
+    setupCommand: z
+      .union([z.string(), z.array(z.string())])
+      .transform((value) => (Array.isArray(value) ? value.join("\n") : value))
+      .optional(),
     pidsLimit: z.number().int().positive().optional(),
     memory: z.union([z.string(), z.number()]).optional(),
     memorySwap: z.union([z.string(), z.number()]).optional(),
@@ -126,6 +133,7 @@ export const SandboxDockerSchema = z
     binds: z.array(z.string()).optional(),
     dangerouslyAllowReservedContainerTargets: z.boolean().optional(),
     dangerouslyAllowExternalBindSources: z.boolean().optional(),
+    dangerouslyAllowContainerNamespaceJoin: z.boolean().optional(),
   })
   .strict()
   .superRefine((data, ctx) => {
@@ -153,12 +161,25 @@ export const SandboxDockerSchema = z
         }
       }
     }
-    if (data.network?.trim().toLowerCase() === "host") {
+    const blockedNetworkReason = getBlockedNetworkModeReason({
+      network: data.network,
+      allowContainerNamespaceJoin: data.dangerouslyAllowContainerNamespaceJoin === true,
+    });
+    if (blockedNetworkReason === "host") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["network"],
         message:
           'Sandbox security: network mode "host" is blocked. Use "bridge" or "none" instead.',
+      });
+    }
+    if (blockedNetworkReason === "container_namespace_join") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["network"],
+        message:
+          'Sandbox security: network mode "container:*" is blocked by default. ' +
+          "Use a custom bridge network, or set dangerouslyAllowContainerNamespaceJoin=true only when you fully trust this runtime.",
       });
     }
     if (data.seccompProfile?.trim().toLowerCase() === "unconfined") {
@@ -250,13 +271,13 @@ export const ToolsWebSearchSchema = z
         z.literal("kimi"),
       ])
       .optional(),
-    apiKey: z.string().optional().register(sensitive),
+    apiKey: SecretInputSchema.optional().register(sensitive),
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     perplexity: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -264,7 +285,7 @@ export const ToolsWebSearchSchema = z
       .optional(),
     grok: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         model: z.string().optional(),
         inlineCitations: z.boolean().optional(),
       })
@@ -272,14 +293,14 @@ export const ToolsWebSearchSchema = z
       .optional(),
     gemini: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         model: z.string().optional(),
       })
       .strict()
       .optional(),
     kimi: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -464,6 +485,21 @@ export const AgentSandboxSchema = z
     prune: SandboxPruneSchema,
   })
   .strict()
+  .superRefine((data, ctx) => {
+    const blockedBrowserNetworkReason = getBlockedNetworkModeReason({
+      network: data.browser?.network,
+      allowContainerNamespaceJoin: data.docker?.dangerouslyAllowContainerNamespaceJoin === true,
+    });
+    if (blockedBrowserNetworkReason === "container_namespace_join") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["browser", "network"],
+        message:
+          'Sandbox security: browser network mode "container:*" is blocked by default. ' +
+          "Set sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true only when you fully trust this runtime.",
+      });
+    }
+  })
   .optional();
 
 const CommonToolPolicyFields = {
@@ -523,12 +559,13 @@ export const MemorySearchSchema = z
         z.literal("voyage"),
         z.literal("mistral"),
         z.literal("jina"),
+        z.literal("ollama"),
       ])
       .optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         headers: z.record(z.string(), z.string()).optional(),
         batch: z
           .object({
@@ -551,6 +588,7 @@ export const MemorySearchSchema = z
         z.literal("voyage"),
         z.literal("mistral"),
         z.literal("jina"),
+        z.literal("ollama"),
         z.literal("none"),
       ])
       .optional(),
@@ -743,6 +781,21 @@ export const ToolsSchema = z
     sandbox: z
       .object({
         tools: ToolPolicySchema,
+      })
+      .strict()
+      .optional(),
+    sessions_spawn: z
+      .object({
+        attachments: z
+          .object({
+            enabled: z.boolean().optional(),
+            maxTotalBytes: z.number().optional(),
+            maxFiles: z.number().optional(),
+            maxFileBytes: z.number().optional(),
+            retainOnSessionKeep: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

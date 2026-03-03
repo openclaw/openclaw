@@ -69,6 +69,7 @@ Semantic memory search uses **embedding APIs** when configured for remote provid
 - `memorySearch.provider = "voyage"` → Voyage embeddings
 - `memorySearch.provider = "mistral"` → Mistral embeddings
 - `memorySearch.provider = "jina"` → Jina embeddings
+- `memorySearch.provider = "ollama"` → Ollama embeddings (local/self-hosted; typically no hosted API billing)
 - Optional fallback to a remote provider if local embeddings fail
 
 You can keep it local with `memorySearch.provider = "local"` (no API usage).
@@ -81,12 +82,6 @@ See [Memory](/concepts/memory).
 
 - **Brave Search API**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
 - **Perplexity** (via OpenRouter): `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
-
-**Brave free tier (generous):**
-
-- **2,000 requests/month**
-- **1 request/second**
-- **Credit card required** for verification (no charge unless you upgrade)
 
 See [Web tools](/tools/web).
 
