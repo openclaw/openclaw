@@ -185,6 +185,57 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
   });
 
+  it("inherits defaults heartbeat model when per-agent heartbeat omits model", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "30m",
+              model: "openai/gpt-4o-mini",
+            },
+          },
+          list: [
+            { id: "main", default: true },
+            {
+              id: "ops",
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "whatsapp",
+              },
+            },
+          ],
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
+      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
+
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        agentId: "ops",
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          isHeartbeat: true,
+          heartbeatModelOverride: "openai/gpt-4o-mini",
+        }),
+        cfg,
+      );
+    });
+  });
+
   it("does not pass heartbeatModelOverride when no heartbeat model is configured", async () => {
     const replyOpts = await runDefaultsHeartbeat({ model: undefined });
     expect(replyOpts).toEqual(
