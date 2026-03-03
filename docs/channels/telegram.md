@@ -72,6 +72,11 @@ openclaw pairing approve telegram <CODE>
 Token resolution order is account-aware. In practice, config values win over env fallback, and `TELEGRAM_BOT_TOKEN` only applies to the default account.
 </Note>
 
+<Warning>
+For multi-account Telegram setups, set `channels.telegram.defaultAccount` explicitly.
+If omitted, OpenClaw falls back to `default` when present, otherwise the first account id (alphabetical order), which can cause unexpected inbound/outbound routing.
+</Warning>
+
 ## Telegram side settings
 
 <AccordionGroup>
@@ -739,6 +744,7 @@ Primary reference:
 - `channels.telegram.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `channels.telegram.groupAllowFrom`: group sender allowlist (numeric Telegram user IDs). `openclaw doctor --fix` can resolve legacy `@username` entries to IDs. Non-numeric entries are ignored at auth time. Group auth does not use DM pairing-store fallback (`2026.2.25+`).
 - Multi-account precedence:
+  - `channels.telegram.defaultAccount` should be set explicitly in multi-account setups to avoid fallback-to-first-account behavior.
   - `channels.telegram.accounts.default.allowFrom` and `channels.telegram.accounts.default.groupAllowFrom` apply only to the `default` account.
   - Named accounts inherit `channels.telegram.allowFrom` and `channels.telegram.groupAllowFrom` when account-level values are unset.
   - Named accounts do not inherit `channels.telegram.accounts.default.allowFrom` / `groupAllowFrom`.
