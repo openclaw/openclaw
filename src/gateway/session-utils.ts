@@ -310,29 +310,24 @@ function listExistingAgentIdsFromDisk(): string[] {
 }
 
 function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
-  const agents = cfg.agents?.list ?? [];
-  if (agents.length > 0) {
-    const ids = new Set<string>();
-    for (const entry of agents) {
-      if (entry?.id) {
-        ids.add(normalizeAgentId(entry.id));
-      }
-    }
-    const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    ids.add(defaultId);
-    const sorted = Array.from(ids).filter(Boolean);
-    sorted.sort((a, b) => a.localeCompare(b));
-    return sorted.includes(defaultId)
-      ? [defaultId, ...sorted.filter((id) => id !== defaultId)]
-      : sorted;
-  }
-
   const ids = new Set<string>();
   const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
   ids.add(defaultId);
+
+  // Always include agents from the config list.
+  const agents = cfg.agents?.list ?? [];
+  for (const entry of agents) {
+    if (entry?.id) {
+      ids.add(normalizeAgentId(entry.id));
+    }
+  }
+
+  // Always merge disk-scanned agent directories so dynamically-created
+  // ACP agent directories are visible even when agents.list is configured.
   for (const id of listExistingAgentIdsFromDisk()) {
     ids.add(id);
   }
+
   const sorted = Array.from(ids).filter(Boolean);
   sorted.sort((a, b) => a.localeCompare(b));
   if (sorted.includes(defaultId)) {

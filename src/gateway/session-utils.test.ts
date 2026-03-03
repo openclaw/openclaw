@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -10,6 +10,7 @@ import {
   deriveSessionTitle,
   listAgentsForGateway,
   listSessionsFromStore,
+  loadCombinedSessionStoreForGateway,
   parseGroupKey,
   pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -815,5 +816,86 @@ describe("listSessionsFromStore search", () => {
     expect(stale?.totalTokensFresh).toBe(false);
     expect(missing?.totalTokens).toBeUndefined();
     expect(missing?.totalTokensFresh).toBe(false);
+  });
+});
+
+describe("loadCombinedSessionStoreForGateway includes disk-scanned ACP agents", () => {
+  let tempStateDir: string;
+  let savedStateDir: string | undefined;
+
+  beforeEach(() => {
+    tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acp-visibility-"));
+    savedStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+  });
+
+  afterEach(() => {
+    if (savedStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = savedStateDir;
+    }
+    fs.rmSync(tempStateDir, { recursive: true, force: true });
+  });
+
+  test("sessions from disk-only ACP agent dirs are visible when agents.list is configured", () => {
+    // Set up disk structure: configured agent "ops" + ACP-spawned agent "acp-codex-123"
+    const agentsDir = path.join(tempStateDir, "agents");
+    for (const agentId of ["ops", "acp-codex-123"]) {
+      const sessionsDir = path.join(agentsDir, agentId, "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sessionsDir, "sessions.json"),
+        JSON.stringify({
+          [`agent:${agentId}:main`]: { sessionId: `sid-${agentId}`, updatedAt: Date.now() },
+        }),
+        "utf8",
+      );
+    }
+
+    // Config only lists "ops" -- ACP agent "acp-codex-123" is NOT in the config list.
+    const cfg = {
+      session: {
+        mainKey: "main",
+        store: path.join(tempStateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+
+    const { store } = loadCombinedSessionStoreForGateway(cfg);
+
+    // The configured agent's session must be present.
+    expect(store["agent:ops:main"]).toBeDefined();
+    expect(store["agent:ops:main"].sessionId).toBe("sid-ops");
+
+    // The dynamically-created ACP agent's session must also be visible.
+    expect(store["agent:acp-codex-123:main"]).toBeDefined();
+    expect(store["agent:acp-codex-123:main"].sessionId).toBe("sid-acp-codex-123");
+  });
+
+  test("disk-only agents are included even when agents.list is empty", () => {
+    const agentsDir = path.join(tempStateDir, "agents");
+    const sessionsDir = path.join(agentsDir, "dynamic-agent", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:dynamic-agent:main": { sessionId: "sid-dynamic", updatedAt: Date.now() },
+      }),
+      "utf8",
+    );
+
+    // No agents.list configured at all.
+    const cfg = {
+      session: {
+        mainKey: "main",
+        store: path.join(tempStateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    } as OpenClawConfig;
+
+    const { store } = loadCombinedSessionStoreForGateway(cfg);
+
+    expect(store["agent:dynamic-agent:main"]).toBeDefined();
+    expect(store["agent:dynamic-agent:main"].sessionId).toBe("sid-dynamic");
   });
 });
