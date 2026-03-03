@@ -32,6 +32,7 @@ import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
   fetchMattermostChannel,
+  fetchMattermostPost,
   fetchMattermostMe,
   fetchMattermostUser,
   normalizeMattermostBaseUrl,
@@ -613,7 +614,25 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       contextKey: `mattermost:message:${channelId}:${post.id ?? "unknown"}`,
     });
 
-    const textWithId = `${bodyText}\n[mattermost message id: ${post.id ?? "unknown"} channel: ${channelId}]`;
+    // Resolve thread root post context when this message is part of a thread
+    let threadRootContext = "";
+    if (threadRootId) {
+      try {
+        const rootPost = await fetchMattermostPost(client, threadRootId);
+        const rootBody = rootPost.message?.trim() ?? "";
+        if (rootBody) {
+          const rootUserId = rootPost.user_id?.trim();
+          const rootSenderName = rootUserId
+            ? (await resolveUserInfo(rootUserId))?.username?.trim() || `user:${rootUserId}`
+            : "unknown";
+          threadRootContext = `\n\n[Thread started by @${rootSenderName}]\n${rootBody}\n[/Thread]`;
+        }
+      } catch {
+        // Non-critical: if we can't fetch the root post, proceed without context
+      }
+    }
+
+    const textWithId = `${bodyText}${threadRootContext}\n[mattermost message id: ${post.id ?? "unknown"} channel: ${channelId}]`;
     const body = core.channel.reply.formatInboundEnvelope({
       channel: "Mattermost",
       from: fromLabel,
