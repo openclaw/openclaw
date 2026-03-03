@@ -284,6 +284,24 @@ describe("extractAssistantText", () => {
     );
   });
 
+  it("does not strip invoke examples when no Minimax marker is present", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Use `<tool_call>exec tool="exec" command="ls -la /tmp" />` and <invoke name="Bash">pwd</invoke> in the docs.',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe(
+      'Use `<tool_call>exec tool="exec" command="ls -la /tmp" />` and <invoke name="Bash">pwd</invoke> in the docs.',
+    );
+  });
+
   it("handles multiple invoke blocks in one message", () => {
     const msg = makeAssistantMessage({
       role: "assistant",

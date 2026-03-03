@@ -27,11 +27,14 @@ export function stripMinimaxToolCallXml(text: string): string {
     return text;
   }
 
-  // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
-  let cleaned = text.replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "");
+  let cleaned = text;
+  if (hasMinimaxMarkers) {
+    // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
+    cleaned = cleaned.replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "");
 
-  // Remove stray minimax tool tags.
-  cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
+    // Remove stray minimax tool tags.
+    cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
+  }
   // Remove legacy self-closing tool call snippets that can leak into user text.
   cleaned = cleaned.replace(/```[\s\S]*?```|`[^`\n]+`|<tool_call\b[^>]*>[^<]*\/>/gi, (match) =>
     match.startsWith("`") ? match : "",
