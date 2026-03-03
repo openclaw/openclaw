@@ -1,3 +1,5 @@
+import fsp from "node:fs/promises";
+import path from "node:path";
 import type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
@@ -7,22 +9,67 @@ import type {
 import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
+  formatResolvedUnresolvedNote,
+  mergeAllowFromEntries,
   normalizeAccountId,
   promptAccountId,
   promptChannelAccessConfig,
+  resolvePreferredBotTmpDir,
 } from "bot/plugin-sdk";
-import fsp from "node:fs/promises";
-import path from "node:path";
-import type { ZcaFriend, ZcaGroup } from "./types.js";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
   resolveZalouserAccountSync,
   checkZcaAuthenticated,
 } from "./accounts.js";
-import { runZca, runZcaInteractive, checkZcaInstalled, parseJsonOutput } from "./zca.js";
+import {
+  logoutZaloProfile,
+  resolveZaloAllowFromEntries,
+  resolveZaloGroupsByEntries,
+  startZaloQrLogin,
+  waitForZaloQrLogin,
+} from "./zalo-js.js";
 
 const channel = "zalouser" as const;
+
+function setZalouserAccountScopedConfig(
+  cfg: BotConfig,
+  accountId: string,
+  defaultPatch: Record<string, unknown>,
+  accountPatch: Record<string, unknown> = defaultPatch,
+): BotConfig {
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        zalouser: {
+          ...cfg.channels?.zalouser,
+          enabled: true,
+          ...defaultPatch,
+        },
+      },
+    } as BotConfig;
+  }
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      zalouser: {
+        ...cfg.channels?.zalouser,
+        enabled: true,
+        accounts: {
+          ...cfg.channels?.zalouser?.accounts,
+          [accountId]: {
+            ...cfg.channels?.zalouser?.accounts?.[accountId],
+            enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
+            ...accountPatch,
+          },
+        },
+      },
+    },
+  } as BotConfig;
+}
 
 function setZalouserDmPolicy(
   cfg: BotConfig,
@@ -67,7 +114,10 @@ async function writeQrDataUrlToTempFile(
     return null;
   }
   const safeProfile = profile.replace(/[^a-zA-Z0-9_-]+/g, "-") || "default";
-  const filePath = path.join(resolvePreferredBotTmpDir(), `bot-zalouser-qr-${safeProfile}.png`);
+  const filePath = path.join(
+    resolvePreferredBotTmpDir(),
+    `bot-zalouser-qr-${safeProfile}.png`,
+  );
   await fsp.writeFile(filePath, Buffer.from(base64, "base64"));
   return filePath;
 }
@@ -107,45 +157,23 @@ async function promptZalouserAllowFrom(params: {
       );
       continue;
     }
-    const merged = [
-      ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
-      ...(results.filter(Boolean) as string[]),
-    ];
-    const unique = [...new Set(merged)];
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          zalouser: {
-            ...cfg.channels?.zalouser,
-            enabled: true,
-            dmPolicy: "allowlist",
-            allowFrom: unique,
-          },
-        },
-      } as BotConfig;
+
+    const resolvedIds = resolvedEntries
+      .filter((item) => item.resolved && item.id)
+      .map((item) => item.id as string);
+    const unique = mergeAllowFromEntries(existingAllowFrom, resolvedIds);
+
+    const notes = resolvedEntries
+      .filter((item) => item.note)
+      .map((item) => `${item.input} -> ${item.id} (${item.note})`);
+    if (notes.length > 0) {
+      await prompter.note(notes.join("\n"), "Zalo Personal allowlist");
     }
 
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        zalouser: {
-          ...cfg.channels?.zalouser,
-          enabled: true,
-          accounts: {
-            ...cfg.channels?.zalouser?.accounts,
-            [accountId]: {
-              ...cfg.channels?.zalouser?.accounts?.[accountId],
-              enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
-              dmPolicy: "allowlist",
-              allowFrom: unique,
-            },
-          },
-        },
-      },
-    } as BotConfig;
+    return setZalouserAccountScopedConfig(cfg, accountId, {
+      dmPolicy: "allowlist",
+      allowFrom: unique,
+    });
   }
 }
 
@@ -154,37 +182,9 @@ function setZalouserGroupPolicy(
   accountId: string,
   groupPolicy: "open" | "allowlist" | "disabled",
 ): BotConfig {
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        zalouser: {
-          ...cfg.channels?.zalouser,
-          enabled: true,
-          groupPolicy,
-        },
-      },
-    } as BotConfig;
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      zalouser: {
-        ...cfg.channels?.zalouser,
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.zalouser?.accounts,
-          [accountId]: {
-            ...cfg.channels?.zalouser?.accounts?.[accountId],
-            enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
-            groupPolicy,
-          },
-        },
-      },
-    },
-  } as BotConfig;
+  return setZalouserAccountScopedConfig(cfg, accountId, {
+    groupPolicy,
+  });
 }
 
 function setZalouserGroupAllowlist(
@@ -193,79 +193,8 @@ function setZalouserGroupAllowlist(
   groupKeys: string[],
 ): BotConfig {
   const groups = Object.fromEntries(groupKeys.map((key) => [key, { allow: true }]));
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        zalouser: {
-          ...cfg.channels?.zalouser,
-          enabled: true,
-          groups,
-        },
-      },
-    } as BotConfig;
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      zalouser: {
-        ...cfg.channels?.zalouser,
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.zalouser?.accounts,
-          [accountId]: {
-            ...cfg.channels?.zalouser?.accounts?.[accountId],
-            enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
-            groups,
-          },
-        },
-      },
-    },
-  } as BotConfig;
-}
-
-async function resolveZalouserGroups(params: {
-  cfg: BotConfig;
-  accountId: string;
-  entries: string[];
-}): Promise<Array<{ input: string; resolved: boolean; id?: string }>> {
-  const account = resolveZalouserAccountSync({ cfg: params.cfg, accountId: params.accountId });
-  const result = await runZca(["group", "list", "-j"], {
-    profile: account.profile,
-    timeout: 15000,
-  });
-  if (!result.ok) {
-    throw new Error(result.stderr || "Failed to list groups");
-  }
-  const groups = (parseJsonOutput<ZcaGroup[]>(result.stdout) ?? []).filter((group) =>
-    Boolean(group.groupId),
-  );
-  const byName = new Map<string, ZcaGroup[]>();
-  for (const group of groups) {
-    const name = group.name?.trim().toLowerCase();
-    if (!name) {
-      continue;
-    }
-    const list = byName.get(name) ?? [];
-    list.push(group);
-    byName.set(name, list);
-  }
-
-  return params.entries.map((input) => {
-    const trimmed = input.trim();
-    if (!trimmed) {
-      return { input, resolved: false };
-    }
-    if (/^\d+$/.test(trimmed)) {
-      return { input, resolved: true, id: trimmed };
-    }
-    const matches = byName.get(trimmed.toLowerCase()) ?? [];
-    const match = matches[0];
-    return match?.groupId
-      ? { input, resolved: true, id: String(match.groupId) }
-      : { input, resolved: false };
+  return setZalouserAccountScopedConfig(cfg, accountId, {
+    groups,
   });
 }
 
@@ -318,21 +247,6 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
     shouldPromptAccountIds,
     forceAllowFrom,
   }) => {
-    // Check zca is installed
-    const zcaInstalled = await checkZcaInstalled();
-    if (!zcaInstalled) {
-      await prompter.note(
-        [
-          "The `zca` binary was not found in PATH.",
-          "",
-          "Install zca-cli, then re-run onboarding:",
-          "Docs: https://docs.hanzo.bot/channels/zalouser",
-        ].join("\n"),
-        "Missing Dependency",
-      );
-      return { cfg, accountId: DEFAULT_ACCOUNT_ID };
-    }
-
     const zalouserOverride = accountOverrides.zalouser?.trim();
     const defaultAccountId = resolveDefaultZalouserAccountId(cfg);
     let accountId = zalouserOverride ? normalizeAccountId(zalouserOverride) : defaultAccountId;
@@ -415,39 +329,12 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
       }
     }
 
-    // Enable the channel
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      next = {
-        ...next,
-        channels: {
-          ...next.channels,
-          zalouser: {
-            ...next.channels?.zalouser,
-            enabled: true,
-            profile: account.profile !== "default" ? account.profile : undefined,
-          },
-        },
-      } as BotConfig;
-    } else {
-      next = {
-        ...next,
-        channels: {
-          ...next.channels,
-          zalouser: {
-            ...next.channels?.zalouser,
-            enabled: true,
-            accounts: {
-              ...next.channels?.zalouser?.accounts,
-              [accountId]: {
-                ...next.channels?.zalouser?.accounts?.[accountId],
-                enabled: true,
-                profile: account.profile,
-              },
-            },
-          },
-        },
-      } as BotConfig;
-    }
+    next = setZalouserAccountScopedConfig(
+      next,
+      accountId,
+      { profile: account.profile !== "default" ? account.profile : undefined },
+      { profile: account.profile, enabled: true },
+    );
 
     if (forceAllowFrom) {
       next = await promptZalouserAllowFrom({
@@ -461,8 +348,8 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
     const accessConfig = await promptChannelAccessConfig({
       prompter,
       label: "Zalo groups",
-      currentPolicy: account.config.groupPolicy ?? "open",
-      currentEntries: Object.keys(account.config.groups ?? {}),
+      currentPolicy: updatedAccount.config.groupPolicy ?? "allowlist",
+      currentEntries: Object.keys(updatedAccount.config.groups ?? {}),
       placeholder: "Family, Work, 123456789",
       updatePrompt: Boolean(updatedAccount.config.groups),
     });

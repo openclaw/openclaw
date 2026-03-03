@@ -32,15 +32,11 @@ export function ensureMatrixSdkLoggingConfigured(): void {
   matrixSdkLoggingConfigured = true;
 
   LogService.setLogger({
-    trace: (module: string, ...messageOrObject: unknown[]) =>
-      matrixSdkBaseLogger.trace(module, ...messageOrObject),
-    debug: (module: string, ...messageOrObject: unknown[]) =>
-      matrixSdkBaseLogger.debug(module, ...messageOrObject),
-    info: (module: string, ...messageOrObject: unknown[]) =>
-      matrixSdkBaseLogger.info(module, ...messageOrObject),
-    warn: (module: string, ...messageOrObject: unknown[]) =>
-      matrixSdkBaseLogger.warn(module, ...messageOrObject),
-    error: (module: string, ...messageOrObject: unknown[]) => {
+    trace: (module, ...messageOrObject) => matrixSdkBaseLogger?.trace(module, ...messageOrObject),
+    debug: (module, ...messageOrObject) => matrixSdkBaseLogger?.debug(module, ...messageOrObject),
+    info: (module, ...messageOrObject) => matrixSdkBaseLogger?.info(module, ...messageOrObject),
+    warn: (module, ...messageOrObject) => matrixSdkBaseLogger?.warn(module, ...messageOrObject),
+    error: (module, ...messageOrObject) => {
       if (shouldSuppressMatrixHttpNotFound(module, messageOrObject)) {
         return;
       }

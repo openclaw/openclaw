@@ -1,15 +1,29 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ImageSanitizationLimits } from "./image-sanitization.js";
-import type { AnyAgentTool } from "./pi-tools.types.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { SafeOpenError, openFileWithinRoot, writeFileWithinRoot } from "../infra/fs-safe.js";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import {
+  SafeOpenError,
+  openFileWithinRoot,
+  readFileWithinRoot,
+  writeFileWithinRoot,
+} from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import { toRelativeWorkspacePath } from "./path-policy.js";
+import { wrapHostEditToolWithPostWriteRecovery } from "./pi-tools.host-edit.js";
+import {
+  CLAUDE_PARAM_GROUPS,
+  assertRequiredParams,
+  normalizeToolParams,
+  patchToolSchemaForClaudeCompatibility,
+  wrapToolParamNormalization,
+} from "./pi-tools.params.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -466,7 +480,10 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
   return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
 }
 
-export function createBotReadTool(base: AnyAgentTool, options?: BotReadToolOptions): AnyAgentTool {
+export function createBotReadTool(
+  base: AnyAgentTool,
+  options?: BotReadToolOptions,
+): AnyAgentTool {
   const patched = patchToolSchemaForClaudeCompatibility(base);
   return {
     ...patched,
@@ -539,8 +556,14 @@ function createSandboxEditOperations(params: SandboxToolParams) {
   } as const;
 }
 
+async function writeHostFile(absolutePath: string, content: string) {
+  const resolved = path.resolve(absolutePath);
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await fs.writeFile(resolved, content, "utf-8");
+}
+
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
-  const workspaceOnly = options?.workspaceOnly !== false;
+  const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow writes anywhere on the host
@@ -549,16 +572,11 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         const resolved = path.resolve(dir);
         await fs.mkdir(resolved, { recursive: true });
       },
-      writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
-        const dir = path.dirname(resolved);
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(resolved, content, "utf-8");
-      },
+      writeFile: writeHostFile,
     } as const;
   }
 
-  // When workspaceOnly is true (default), enforce workspace boundary
+  // When workspaceOnly is true, enforce workspace boundary
   return {
     mkdir: async (dir: string) => {
       const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
@@ -579,7 +597,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
 }
 
 function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
-  const workspaceOnly = options?.workspaceOnly !== false;
+  const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow edits anywhere on the host
@@ -588,12 +606,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         const resolved = path.resolve(absolutePath);
         return await fs.readFile(resolved);
       },
-      writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
-        const dir = path.dirname(resolved);
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(resolved, content, "utf-8");
-      },
+      writeFile: writeHostFile,
       access: async (absolutePath: string) => {
         const resolved = path.resolve(absolutePath);
         await fs.access(resolved);
@@ -601,7 +614,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     } as const;
   }
 
-  // When workspaceOnly is true (default), enforce workspace boundary
+  // When workspaceOnly is true, enforce workspace boundary
   return {
     readFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
@@ -643,7 +656,9 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
           throw createFsAccessError("ENOENT", absolutePath);
         }
         if (error instanceof SafeOpenError && error.code === "outside-workspace") {
-          throw createFsAccessError("EACCES", absolutePath);
+          // Don't throw here – see the comment above about the upstream
+          // library swallowing access errors as "File not found".
+          return;
         }
         throw error;
       }

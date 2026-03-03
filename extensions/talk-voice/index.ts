@@ -73,6 +73,10 @@ function findVoice(voices: ElevenLabsVoice[], query: string): ElevenLabsVoice | 
   return partial ?? null;
 }
 
+function asTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 export default function register(api: BotPluginApi) {
   api.registerCommand({
     name: "voice",

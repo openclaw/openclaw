@@ -1,5 +1,5 @@
 import type { BotConfig } from "bot/plugin-sdk";
-import { loadWebMedia, resolveChannelMediaMaxBytes } from "bot/plugin-sdk";
+import { loadOutboundMediaFromUrl } from "bot/plugin-sdk";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
   classifyMSTeamsSendError,

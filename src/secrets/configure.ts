@@ -1,9 +1,12 @@
-import { confirm, select, text } from "@clack/prompts";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { confirm, select, text } from "@clack/prompts";
+import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import type { BotConfig } from "../config/config.js";
 import type { SecretProviderConfig, SecretRef, SecretRefSource } from "../config/types.secrets.js";
-import type { SecretsApplyPlan } from "./plan.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { runSecretsApply, type SecretsApplyResult } from "./apply.js";
@@ -15,6 +18,7 @@ import {
   hasConfigurePlanChanges,
   type ConfigureCandidate,
 } from "./configure-plan.js";
+import type { SecretsApplyPlan } from "./plan.js";
 import { PROVIDER_ENV_VARS } from "./provider-env-vars.js";
 import { isValidSecretProviderAlias, resolveDefaultSecretProviderAlias } from "./ref-contract.js";
 import { resolveSecretRefValue } from "./resolve.js";
@@ -123,71 +127,7 @@ function providerHint(provider: SecretProviderConfig): string {
   if (provider.source === "file") {
     return `file (${provider.mode ?? "json"})`;
   }
-  if (provider.source === "kms") {
-    return "kms";
-  }
-  return `exec (${(provider as { jsonOnly?: boolean }).jsonOnly === false ? "json+text" : "json"})`;
-}
-
-function buildCandidates(config: BotConfig): ConfigureCandidate[] {
-  const out: ConfigureCandidate[] = [];
-  const providers = config.models?.providers as Record<string, unknown> | undefined;
-  if (providers) {
-    for (const [providerId, providerValue] of Object.entries(providers)) {
-      if (!isRecord(providerValue)) {
-        continue;
-      }
-      out.push({
-        type: "models.providers.apiKey",
-        path: `models.providers.${providerId}.apiKey`,
-        pathSegments: ["models", "providers", providerId, "apiKey"],
-        label: `Provider API key: ${providerId}`,
-        providerId,
-      });
-    }
-  }
-
-  const entries = config.skills?.entries as Record<string, unknown> | undefined;
-  if (entries) {
-    for (const [entryId, entryValue] of Object.entries(entries)) {
-      if (!isRecord(entryValue)) {
-        continue;
-      }
-      out.push({
-        type: "skills.entries.apiKey",
-        path: `skills.entries.${entryId}.apiKey`,
-        pathSegments: ["skills", "entries", entryId, "apiKey"],
-        label: `Skill API key: ${entryId}`,
-      });
-    }
-  }
-
-  const googlechat = config.channels?.googlechat;
-  if (isRecord(googlechat)) {
-    out.push({
-      type: "channels.googlechat.serviceAccount",
-      path: "channels.googlechat.serviceAccount",
-      pathSegments: ["channels", "googlechat", "serviceAccount"],
-      label: "Google Chat serviceAccount (default)",
-    });
-    const accounts = googlechat.accounts;
-    if (isRecord(accounts)) {
-      for (const [accountId, value] of Object.entries(accounts)) {
-        if (!isRecord(value)) {
-          continue;
-        }
-        out.push({
-          type: "channels.googlechat.serviceAccount",
-          path: `channels.googlechat.accounts.${accountId}.serviceAccount`,
-          pathSegments: ["channels", "googlechat", "accounts", accountId, "serviceAccount"],
-          label: `Google Chat serviceAccount (${accountId})`,
-          accountId,
-        });
-      }
-    }
-  }
-
-  return out;
+  return `exec (${provider.jsonOnly === false ? "json+text" : "json"})`;
 }
 
 function toSourceChoices(config: BotConfig): Array<{ value: SecretRefSource; label: string }> {
@@ -797,36 +737,6 @@ async function configureProvidersInteractive(config: BotConfig): Promise<void> {
   }
 }
 
-function collectProviderPlanChanges(params: { original: BotConfig; next: BotConfig }): {
-  upserts: Record<string, SecretProviderConfig>;
-  deletes: string[];
-} {
-  const originalProviders = getSecretProviders(params.original);
-  const nextProviders = getSecretProviders(params.next);
-
-  const upserts: Record<string, SecretProviderConfig> = {};
-  const deletes: string[] = [];
-
-  for (const [providerAlias, nextProviderConfig] of Object.entries(nextProviders)) {
-    const current = originalProviders[providerAlias];
-    if (isDeepStrictEqual(current, nextProviderConfig)) {
-      continue;
-    }
-    upserts[providerAlias] = structuredClone(nextProviderConfig);
-  }
-
-  for (const providerAlias of Object.keys(originalProviders)) {
-    if (!Object.prototype.hasOwnProperty.call(nextProviders, providerAlias)) {
-      deletes.push(providerAlias);
-    }
-  }
-
-  return {
-    upserts,
-    deletes: deletes.toSorted(),
-  };
-}
-
 export async function runSecretsConfigureInteractive(
   params: {
     env?: NodeJS.ProcessEnv;
@@ -875,7 +785,7 @@ export async function runSecretsConfigureInteractive(
       },
     });
     if (candidates.length === 0) {
-      throw new Error("No configurable secret-bearing fields found in bot.json.");
+      throw new Error("No configurable secret-bearing fields found for this agent scope.");
     }
 
     const sourceChoices = toSourceChoices(stagedConfig);
@@ -1052,29 +962,10 @@ export async function runSecretsConfigureInteractive(
     throw new Error("No secrets changes were selected.");
   }
 
-  const plan: SecretsApplyPlan = {
-    version: 1,
-    protocolVersion: 1,
-    generatedAt: new Date().toISOString(),
-    generatedBy: "bot secrets configure",
-    targets: [...selectedByPath.values()].map((entry) => ({
-      type: entry.type,
-      path: entry.path,
-      pathSegments: [...entry.pathSegments],
-      ref: entry.ref,
-      ...(entry.providerId ? { providerId: entry.providerId } : {}),
-      ...(entry.accountId ? { accountId: entry.accountId } : {}),
-    })),
-    ...(Object.keys(providerChanges.upserts).length > 0
-      ? { providerUpserts: providerChanges.upserts }
-      : {}),
-    ...(providerChanges.deletes.length > 0 ? { providerDeletes: providerChanges.deletes } : {}),
-    options: {
-      scrubEnv: true,
-      scrubAuthProfilesForProviderTargets: true,
-      scrubLegacyAuthJson: true,
-    },
-  };
+  const plan = buildSecretsConfigurePlan({
+    selectedTargets: selectedByPath,
+    providerChanges,
+  });
 
   const preflight = await runSecretsApply({
     plan,

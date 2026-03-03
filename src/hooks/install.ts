@@ -1,18 +1,28 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { fileExists, readJsonFile, resolveArchiveKind } from "../infra/archive.js";
+import { resolveExistingInstallPath, withExtractedArchiveRoot } from "../infra/install-flow.js";
+import { installFromValidatedNpmSpecArchive } from "../infra/install-from-npm-spec.js";
 import {
-  extractArchive,
-  fileExists,
-  readJsonFile,
-  resolveArchiveKind,
-  resolvePackedRootDir,
-} from "../infra/archive.js";
-import { installPackageDir } from "../infra/install-package-dir.js";
+  resolveInstallModeOptions,
+  resolveTimedInstallModeOptions,
+} from "../infra/install-mode-options.js";
+import {
+  installPackageDir,
+  installPackageDirWithManifestDeps,
+} from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
-import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import {
+  type NpmIntegrityDrift,
+  type NpmSpecResolution,
+  resolveArchiveSourcePath,
+} from "../infra/install-source-utils.js";
+import {
+  ensureInstallTargetAvailable,
+  resolveCanonicalInstallTarget,
+} from "../infra/install-target.js";
+import { isPathInside, isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
@@ -34,8 +44,17 @@ export type InstallHooksResult =
       hooks: string[];
       targetDir: string;
       version?: string;
+      npmResolution?: NpmSpecResolution;
+      integrityDrift?: NpmIntegrityDrift;
     }
   | { ok: false; error: string };
+
+export type HookNpmIntegrityDriftParams = {
+  spec: string;
+  expectedIntegrity: string;
+  actualIntegrity: string;
+  resolution: NpmSpecResolution;
+};
 
 const defaultLogger: HookInstallLogger = {};
 
@@ -103,39 +122,6 @@ async function ensureBotHooks(manifest: HookPackageManifest) {
     throw new Error("package.json bot.hooks is empty");
   }
   return list;
-}
-
-function resolveHookInstallModeOptions(params: {
-  logger?: HookInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-}): { logger: HookInstallLogger; mode: "install" | "update"; dryRun: boolean } {
-  return {
-    logger: params.logger ?? defaultLogger,
-    mode: params.mode ?? "install",
-    dryRun: params.dryRun ?? false,
-  };
-}
-
-function resolveTimedHookInstallModeOptions(params: {
-  logger?: HookInstallLogger;
-  timeoutMs?: number;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-}): { logger: HookInstallLogger; timeoutMs: number; mode: "install" | "update"; dryRun: boolean } {
-  return {
-    ...resolveHookInstallModeOptions(params),
-    timeoutMs: params.timeoutMs ?? 120_000,
-  };
-}
-
-async function withTempDir<T>(prefix: string, fn: (tmpDir: string) => Promise<T>): Promise<T> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    return await fn(tmpDir);
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-  }
 }
 
 async function resolveInstallTargetDir(
@@ -225,16 +211,10 @@ async function validateHookDir(hookDir: string): Promise<void> {
   }
 }
 
-async function installHookPackageFromDir(params: {
-  packageDir: string;
-  hooksDir?: string;
-  timeoutMs?: number;
-  logger?: HookInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedHookPackId?: string;
-}): Promise<InstallHooksResult> {
-  const { logger, timeoutMs, mode, dryRun } = resolveTimedHookInstallModeOptions(params);
+async function installHookPackageFromDir(
+  params: HookPackageInstallParams,
+): Promise<InstallHooksResult> {
+  const { logger, timeoutMs, mode, dryRun } = resolveTimedInstallModeOptions(params, defaultLogger);
 
   const manifestPath = path.join(params.packageDir, "package.json");
   if (!(await fileExists(manifestPath))) {
@@ -282,7 +262,23 @@ async function installHookPackageFromDir(params: {
   const resolvedHooks = [] as string[];
   for (const entry of hookEntries) {
     const hookDir = path.resolve(params.packageDir, entry);
+    if (!isPathInside(params.packageDir, hookDir)) {
+      return {
+        ok: false,
+        error: `bot.hooks entry escapes package directory: ${entry}`,
+      };
+    }
     await validateHookDir(hookDir);
+    if (
+      !isPathInsideWithRealpath(params.packageDir, hookDir, {
+        requireRealpath: true,
+      })
+    ) {
+      return {
+        ok: false,
+        error: `bot.hooks entry resolves outside package directory: ${entry}`,
+      };
+    }
     const hookName = await resolveHookNameFromDir(hookDir);
     resolvedHooks.push(hookName);
   }
@@ -328,7 +324,7 @@ async function installHookFromDir(params: {
   dryRun?: boolean;
   expectedHookPackId?: string;
 }): Promise<InstallHooksResult> {
-  const { logger, mode, dryRun } = resolveHookInstallModeOptions(params);
+  const { logger, mode, dryRun } = resolveInstallModeOptions(params, defaultLogger);
 
   await validateHookDir(params.hookDir);
   const hookName = await resolveHookNameFromDir(params.hookDir);
@@ -381,55 +377,29 @@ export async function installHooksFromArchive(
 ): Promise<InstallHooksResult> {
   const logger = params.logger ?? defaultLogger;
   const timeoutMs = params.timeoutMs ?? 120_000;
-
-  const archivePath = resolveUserPath(params.archivePath);
-  if (!(await fileExists(archivePath))) {
-    return { ok: false, error: `archive not found: ${archivePath}` };
+  const archivePathResult = await resolveArchiveSourcePath(params.archivePath);
+  if (!archivePathResult.ok) {
+    return archivePathResult;
   }
+  const archivePath = archivePathResult.path;
 
-  if (!resolveArchiveKind(archivePath)) {
-    return { ok: false, error: `unsupported archive: ${archivePath}` };
-  }
-
-  return await withTempDir("bot-hook-", async (tmpDir) => {
-    const extractDir = path.join(tmpDir, "extract");
-    await fs.mkdir(extractDir, { recursive: true });
-
-    logger.info?.(`Extracting ${archivePath}…`);
-    try {
-      await extractArchive({ archivePath, destDir: extractDir, timeoutMs, logger });
-    } catch (err) {
-      return { ok: false, error: `failed to extract archive: ${String(err)}` };
-    }
-
-    let rootDir = "";
-    try {
-      rootDir = await resolvePackedRootDir(extractDir);
-    } catch (err) {
-      return { ok: false, error: String(err) };
-    }
-
-    const manifestPath = path.join(rootDir, "package.json");
-    if (await fileExists(manifestPath)) {
-      return await installHookPackageFromDir({
-        packageDir: rootDir,
-        hooksDir: params.hooksDir,
-        timeoutMs,
-        logger,
-        mode: params.mode,
-        dryRun: params.dryRun,
-        expectedHookPackId: params.expectedHookPackId,
-      });
-    }
-
-    return await installHookFromDir({
-      hookDir: rootDir,
-      hooksDir: params.hooksDir,
-      logger,
-      mode: params.mode,
-      dryRun: params.dryRun,
-      expectedHookPackId: params.expectedHookPackId,
-    });
+  return await withExtractedArchiveRoot({
+    archivePath,
+    tempDirPrefix: "bot-hook-",
+    timeoutMs,
+    logger,
+    onExtracted: async (rootDir) =>
+      await installFromResolvedHookDir(
+        rootDir,
+        buildHookInstallForwardParams({
+          hooksDir: params.hooksDir,
+          timeoutMs,
+          logger,
+          mode: params.mode,
+          dryRun: params.dryRun,
+          expectedHookPackId: params.expectedHookPackId,
+        }),
+      ),
   });
 }
 
@@ -441,62 +411,52 @@ export async function installHooksFromNpmSpec(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedHookPackId?: string;
+  expectedIntegrity?: string;
+  onIntegrityDrift?: (params: HookNpmIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<InstallHooksResult> {
-  const { logger, timeoutMs, mode, dryRun } = resolveTimedHookInstallModeOptions(params);
+  const { logger, timeoutMs, mode, dryRun } = resolveTimedInstallModeOptions(params, defaultLogger);
   const expectedHookPackId = params.expectedHookPackId;
   const spec = params.spec;
 
-  return await withTempDir("bot-hook-pack-", async (tmpDir) => {
-    logger.info?.(`Downloading ${spec}…`);
-    const res = await runCommandWithTimeout(["npm", "pack", spec, "--ignore-scripts"], {
-      timeoutMs: Math.max(timeoutMs, 300_000),
-      cwd: tmpDir,
-      env: {
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      },
-    });
-    if (res.code !== 0) {
-      return { ok: false, error: `npm pack failed: ${res.stderr.trim() || res.stdout.trim()}` };
-    }
-
-    const packed = (res.stdout || "")
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .pop();
-    if (!packed) {
-      return { ok: false, error: "npm pack produced no archive" };
-    }
-
-    const archivePath = path.join(tmpDir, packed);
-    return await installHooksFromArchive({
-      archivePath,
+  logger.info?.(`Downloading ${spec.trim()}…`);
+  return await installFromValidatedNpmSpecArchive({
+    tempDirPrefix: "bot-hook-pack-",
+    spec,
+    timeoutMs,
+    expectedIntegrity: params.expectedIntegrity,
+    onIntegrityDrift: params.onIntegrityDrift,
+    warn: (message) => {
+      logger.warn?.(message);
+    },
+    installFromArchive: installHooksFromArchive,
+    archiveInstallParams: buildHookInstallForwardParams({
       hooksDir: params.hooksDir,
       timeoutMs,
       logger,
       mode,
       dryRun,
       expectedHookPackId,
-    });
+    }),
   });
 }
 
-export async function installHooksFromPath(params: {
-  path: string;
-  hooksDir?: string;
-  timeoutMs?: number;
-  logger?: HookInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedHookPackId?: string;
-}): Promise<InstallHooksResult> {
-  const resolved = resolveUserPath(params.path);
-  if (!(await fileExists(resolved))) {
-    return { ok: false, error: `path not found: ${resolved}` };
+export async function installHooksFromPath(
+  params: HookPathInstallParams,
+): Promise<InstallHooksResult> {
+  const pathResult = await resolveExistingInstallPath(params.path);
+  if (!pathResult.ok) {
+    return pathResult;
   }
+  const { resolvedPath: resolved, stat } = pathResult;
+  const forwardParams = buildHookInstallForwardParams({
+    hooksDir: params.hooksDir,
+    timeoutMs: params.timeoutMs,
+    logger: params.logger,
+    mode: params.mode,
+    dryRun: params.dryRun,
+    expectedHookPackId: params.expectedHookPackId,
+  });
 
-  const stat = await fs.stat(resolved);
   if (stat.isDirectory()) {
     return await installFromResolvedHookDir(resolved, forwardParams);
   }

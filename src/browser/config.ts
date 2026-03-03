@@ -1,5 +1,4 @@
 import type { BrowserConfig, BrowserProfileConfig, BotConfig } from "../config/config.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import {
   deriveDefaultBrowserCdpPortRange,
@@ -7,6 +6,7 @@ import {
   DEFAULT_BROWSER_CONTROL_PORT,
 } from "../config/port-defaults.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   DEFAULT_BOT_BROWSER_COLOR,
   DEFAULT_BOT_BROWSER_ENABLED,
@@ -34,8 +34,8 @@ export type ResolvedBrowserConfig = {
   attachOnly: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
-  extraArgs: string[];
   ssrfPolicy?: SsrFPolicy;
+  extraArgs: string[];
 };
 
 export type ResolvedBrowserProfile = {
@@ -45,7 +45,8 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   color: string;
-  driver: "bot" | "extension";
+  driver: "@hanzo/bot" | "extension";
+  attachOnly: boolean;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -63,6 +64,66 @@ function normalizeHexColor(raw: string | undefined) {
 function normalizeTimeoutMs(raw: number | undefined, fallback: number) {
   const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
   return value < 0 ? fallback : value;
+}
+
+function resolveCdpPortRangeStart(
+  rawStart: number | undefined,
+  fallbackStart: number,
+  rangeSpan: number,
+) {
+  const start =
+    typeof rawStart === "number" && Number.isFinite(rawStart)
+      ? Math.floor(rawStart)
+      : fallbackStart;
+  if (start < 1 || start > 65535) {
+    throw new Error(`browser.cdpPortRangeStart must be between 1 and 65535, got: ${start}`);
+  }
+  const maxStart = 65535 - rangeSpan;
+  if (start > maxStart) {
+    throw new Error(
+      `browser.cdpPortRangeStart (${start}) is too high for a ${rangeSpan + 1}-port range; max is ${maxStart}.`,
+    );
+  }
+  return start;
+}
+
+function normalizeStringList(raw: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const values = raw
+    .map((value) => value.trim())
+    .filter((value): value is string => value.length > 0);
+  return values.length > 0 ? values : undefined;
+}
+
+function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
+  const allowPrivateNetwork = cfg?.ssrfPolicy?.allowPrivateNetwork;
+  const dangerouslyAllowPrivateNetwork = cfg?.ssrfPolicy?.dangerouslyAllowPrivateNetwork;
+  const allowedHostnames = normalizeStringList(cfg?.ssrfPolicy?.allowedHostnames);
+  const hostnameAllowlist = normalizeStringList(cfg?.ssrfPolicy?.hostnameAllowlist);
+  const hasExplicitPrivateSetting =
+    allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
+  // Browser defaults to trusted-network mode unless explicitly disabled by policy.
+  const resolvedAllowPrivateNetwork =
+    dangerouslyAllowPrivateNetwork === true ||
+    allowPrivateNetwork === true ||
+    !hasExplicitPrivateSetting;
+
+  if (
+    !resolvedAllowPrivateNetwork &&
+    !hasExplicitPrivateSetting &&
+    !allowedHostnames &&
+    !hostnameAllowlist
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...(resolvedAllowPrivateNetwork ? { dangerouslyAllowPrivateNetwork: true } : {}),
+    ...(allowedHostnames ? { allowedHostnames } : {}),
+    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
+  };
 }
 
 export function parseHttpUrl(raw: string, label: string) {
@@ -91,7 +152,7 @@ export function parseHttpUrl(raw: string, label: string) {
 }
 
 /**
- * Ensure the default "bot" profile exists in the profiles map.
+ * Ensure the default "@hanzo/bot" profile exists in the profiles map.
  * Auto-creates it with the legacy CDP port (from browser.cdpUrl) or first port if missing.
  */
 function ensureDefaultProfile(
@@ -113,7 +174,7 @@ function ensureDefaultProfile(
 /**
  * Ensure a built-in "chrome" profile exists for the Chrome extension relay.
  *
- * Note: this is an Hanzo Bot browser profile (routing config), not a Chrome user profile.
+ * Note: this is an Bot browser profile (routing config), not a Chrome user profile.
  * It points at the local relay CDP endpoint (controlPort + 1).
  */
 function ensureDefaultChromeExtensionProfile(
@@ -129,7 +190,7 @@ function ensureDefaultChromeExtensionProfile(
     return result;
   }
   // Avoid adding the built-in profile if the derived relay port is already used by another profile
-  // (legacy single-profile configs may use controlPort+1 for bot/hanzo-bot CDP).
+  // (legacy single-profile configs may use controlPort+1 for hanzoai/bot CDP).
   if (getUsedPorts(result).has(relayPort)) {
     return result;
   }
@@ -207,11 +268,14 @@ export function resolveBrowserConfig(
     defaultProfileFromConfig ??
     (profiles[DEFAULT_BROWSER_DEFAULT_PROFILE_NAME]
       ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
-      : DEFAULT_BOT_BROWSER_PROFILE_NAME);
+      : profiles[DEFAULT_BOT_BROWSER_PROFILE_NAME]
+        ? DEFAULT_BOT_BROWSER_PROFILE_NAME
+        : "chrome");
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
     : [];
+  const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
 
   return {
     enabled,
@@ -231,8 +295,8 @@ export function resolveBrowserConfig(
     attachOnly,
     defaultProfile,
     profiles,
+    ssrfPolicy,
     extraArgs,
-    ssrfPolicy: cfg?.ssrfPolicy,
   };
 }
 
@@ -253,7 +317,7 @@ export function resolveProfile(
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
-  const driver = profile.driver === "extension" ? "extension" : "bot";
+  const driver = profile.driver === "extension" ? "extension" : "@hanzo/bot";
 
   if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);

@@ -1,11 +1,14 @@
+import util from "node:util";
+import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 import type { BotConfig } from "../config/config.js";
-import type { TelegramAccountConfig } from "../config/types.js";
-import type { TelegramActionConfig } from "../config/types.telegram.js";
-import {
-  createAccountActionGate,
-  type ActionGate,
-} from "../channels/plugins/account-action-gate.js";
+import type { TelegramAccountConfig, TelegramActionConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  listConfiguredAccountIds as listConfiguredAccountIdsFromSection,
+  resolveAccountWithDefaultFallback,
+} from "../plugin-sdk/account-resolution.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../routing/bindings.js";
 import { formatSetExplicitDefaultInstruction } from "../routing/default-account-warnings.js";
 import {
@@ -15,9 +18,22 @@ import {
 } from "../routing/session-key.js";
 import { resolveTelegramToken } from "./token.js";
 
+const log = createSubsystemLogger("telegram/accounts");
+
+function formatDebugArg(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value instanceof Error) {
+    return value.stack ?? value.message;
+  }
+  return util.inspect(value, { colors: false, depth: null, compact: true, breakLength: Infinity });
+}
+
 const debugAccounts = (...args: unknown[]) => {
   if (isTruthyEnvValue(process.env.BOT_DEBUG_TELEGRAM_ACCOUNTS)) {
-    console.warn("[telegram:accounts]", ...args);
+    const parts = args.map((arg) => formatDebugArg(arg));
+    log.warn(parts.join(" ").trim());
   }
 };
 
@@ -31,18 +47,10 @@ export type ResolvedTelegramAccount = {
 };
 
 function listConfiguredAccountIds(cfg: BotConfig): string[] {
-  const accounts = cfg.channels?.telegram?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return [];
-  }
-  const ids = new Set<string>();
-  for (const key of Object.keys(accounts)) {
-    if (!key) {
-      continue;
-    }
-    ids.add(normalizeAccountId(key));
-  }
-  return [...ids];
+  return listConfiguredAccountIdsFromSection({
+    accounts: cfg.channels?.telegram?.accounts,
+    normalizeAccountId,
+  });
 }
 
 export function listTelegramAccountIds(cfg: BotConfig): string[] {
@@ -54,6 +62,13 @@ export function listTelegramAccountIds(cfg: BotConfig): string[] {
     return [DEFAULT_ACCOUNT_ID];
   }
   return ids.toSorted((a, b) => a.localeCompare(b));
+}
+
+let emittedMissingDefaultWarn = false;
+
+/** @internal Reset the once-per-process warning flag. Exported for tests only. */
+export function resetMissingDefaultWarnFlag(): void {
+  emittedMissingDefaultWarn = false;
 }
 
 export function resolveDefaultTelegramAccountId(cfg: BotConfig): string {
@@ -86,22 +101,20 @@ function resolveAccountConfig(
   cfg: BotConfig,
   accountId: string,
 ): TelegramAccountConfig | undefined {
-  const accounts = cfg.channels?.telegram?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  const direct = accounts[accountId] as TelegramAccountConfig | undefined;
-  if (direct) {
-    return direct;
-  }
   const normalized = normalizeAccountId(accountId);
-  const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
-  return matchKey ? (accounts[matchKey] as TelegramAccountConfig | undefined) : undefined;
+  return resolveAccountEntry(cfg.channels?.telegram?.accounts, normalized);
 }
 
 function mergeTelegramAccountConfig(cfg: BotConfig, accountId: string): TelegramAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.telegram ??
-    {}) as TelegramAccountConfig & { accounts?: unknown };
+  const {
+    accounts: _ignored,
+    defaultAccount: _ignoredDefaultAccount,
+    groups: channelGroups,
+    ...base
+  } = (cfg.channels?.telegram ?? {}) as TelegramAccountConfig & {
+    accounts?: unknown;
+    defaultAccount?: unknown;
+  };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
 
   // In multi-account setups, channel-level `groups` must NOT be inherited by
@@ -116,6 +129,17 @@ function mergeTelegramAccountConfig(cfg: BotConfig, accountId: string): Telegram
   const groups = account.groups ?? (isMultiAccount ? undefined : channelGroups);
 
   return { ...base, ...account, groups };
+}
+
+export function createTelegramActionGate(params: {
+  cfg: BotConfig;
+  accountId?: string | null;
+}): (key: keyof TelegramActionConfig, defaultValue?: boolean) => boolean {
+  const accountId = normalizeAccountId(params.accountId);
+  return createAccountActionGate({
+    baseActions: params.cfg.channels?.telegram?.actions,
+    accountActions: resolveAccountConfig(params.cfg, accountId)?.actions,
+  });
 }
 
 export function resolveTelegramAccount(params: {
@@ -160,17 +184,4 @@ export function listEnabledTelegramAccounts(cfg: BotConfig): ResolvedTelegramAcc
   return listTelegramAccountIds(cfg)
     .map((accountId) => resolveTelegramAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
-}
-
-/** Build an action gate for Telegram that merges base + account action configs. */
-export function createTelegramActionGate(params: {
-  cfg: BotConfig;
-  accountId?: string | null;
-}): ActionGate<TelegramActionConfig> {
-  const baseActions = (params.cfg.channels?.telegram as TelegramAccountConfig | undefined)?.actions;
-  const account = resolveTelegramAccount(params);
-  return createAccountActionGate({
-    baseActions,
-    accountActions: account.config.actions,
-  });
 }

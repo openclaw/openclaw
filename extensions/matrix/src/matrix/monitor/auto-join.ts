@@ -1,8 +1,8 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import type { RuntimeEnv } from "bot/plugin-sdk";
-import { AutojoinRoomsMixin } from "@vector-im/matrix-bot-sdk";
-import type { CoreConfig } from "../../types.js";
 import { getMatrixRuntime } from "../../runtime.js";
+import type { CoreConfig } from "../../types.js";
+import { loadMatrixSdk } from "../sdk-runtime.js";
 
 export function registerMatrixAutoJoin(params: {
   client: MatrixClient;

@@ -7,24 +7,6 @@ type OriginCheckResult =
     }
   | { ok: false; reason: string };
 
-/**
- * Runtime-added origins (e.g. from tunnel startup).
- * These supplement the config-based allowedOrigins without modifying the config file.
- */
-const runtimeAllowedOrigins = new Set<string>();
-
-export function addRuntimeAllowedOrigin(origin: string): void {
-  runtimeAllowedOrigins.add(origin.trim().toLowerCase());
-}
-
-export function removeRuntimeAllowedOrigin(origin: string): void {
-  runtimeAllowedOrigins.delete(origin.trim().toLowerCase());
-}
-
-export function clearRuntimeAllowedOrigins(): void {
-  runtimeAllowedOrigins.clear();
-}
-
 function parseOrigin(
   originRaw?: string,
 ): { origin: string; host: string; hostname: string } | null {
@@ -63,17 +45,13 @@ export function checkBrowserOrigin(params: {
     return { ok: true, matchedBy: "allowlist" };
   }
 
-  // Check runtime-added origins (e.g. from tunnel or cloud playground)
-  if (runtimeAllowedOrigins.has(parsedOrigin.origin)) {
-    return { ok: true };
-  }
-
   const requestHost = normalizeHostHeader(params.requestHost);
-  // Same-origin check: accept when the origin host matches the request Host header.
-  // Gated behind allowHostHeaderOriginFallback to avoid trusting spoofable Host headers
-  // in environments that haven't opted in. Covers tailscale serve (.ts.net) etc.
-  if (params.allowHostHeaderOriginFallback && requestHost && parsedOrigin.host === requestHost) {
-    return { ok: true };
+  if (
+    params.allowHostHeaderOriginFallback === true &&
+    requestHost &&
+    parsedOrigin.host === requestHost
+  ) {
+    return { ok: true, matchedBy: "host-header-fallback" };
   }
 
   // Dev fallback only for genuinely local socket clients, not Host-header claims.

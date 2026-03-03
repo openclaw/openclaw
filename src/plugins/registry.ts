@@ -6,15 +6,21 @@ import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
 } from "../gateway/server-methods/types.js";
+import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import { resolveUserPath } from "../utils.js";
+import { registerPluginCommand } from "./commands.js";
+import { normalizePluginHttpPath } from "./http-path.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   BotPluginApi,
   BotPluginChannelRegistration,
   BotPluginCliRegistrar,
   BotPluginCommandDefinition,
-  BotPluginHttpHandler,
+  BotPluginHttpRouteAuth,
+  BotPluginHttpRouteMatch,
   BotPluginHttpRouteHandler,
+  BotPluginHttpRouteParams,
   BotPluginHookOptions,
   ProviderPlugin,
   BotPluginService,
@@ -29,10 +35,6 @@ import type {
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
-import { registerInternalHook } from "../hooks/internal-hooks.js";
-import { resolveUserPath } from "../utils.js";
-import { registerPluginCommand } from "./commands.js";
-import { normalizePluginHttpPath } from "./http-path.js";
 
 export type PluginToolRegistration = {
   pluginId: string;
@@ -49,16 +51,12 @@ export type PluginCliRegistration = {
   source: string;
 };
 
-export type PluginHttpRegistration = {
-  pluginId: string;
-  handler: BotPluginHttpHandler;
-  source: string;
-};
-
 export type PluginHttpRouteRegistration = {
   pluginId?: string;
   path: string;
   handler: BotPluginHttpRouteHandler;
+  auth: BotPluginHttpRouteAuth;
+  match: BotPluginHttpRouteMatch;
   source?: string;
 };
 
@@ -286,19 +284,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.gatewayMethods.push(trimmed);
   };
 
-  const registerHttpHandler = (record: PluginRecord, handler: BotPluginHttpHandler) => {
-    record.httpHandlers += 1;
-    registry.httpHandlers.push({
-      pluginId: record.id,
-      handler,
-      source: record.source,
-    });
+  const describeHttpRouteOwner = (entry: PluginHttpRouteRegistration): string => {
+    const plugin = entry.pluginId?.trim() || "unknown-plugin";
+    const source = entry.source?.trim() || "unknown-source";
+    return `${plugin} (${source})`;
   };
 
-  const registerHttpRoute = (
-    record: PluginRecord,
-    params: { path: string; handler: BotPluginHttpRouteHandler },
-  ) => {
+  const registerHttpRoute = (record: PluginRecord, params: BotPluginHttpRouteParams) => {
     const normalizedPath = normalizePluginHttpPath(params.path);
     if (!normalizedPath) {
       pushDiagnostic({

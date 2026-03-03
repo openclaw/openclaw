@@ -1,7 +1,7 @@
-import type { ChatType } from "../channels/chat-type.js";
-import type { BotConfig } from "../config/config.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import type { BotConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
@@ -10,6 +10,7 @@ import {
   buildAgentPeerSessionKey,
   DEFAULT_ACCOUNT_ID,
   DEFAULT_MAIN_KEY,
+  normalizeAccountId,
   normalizeAgentId,
   sanitizeAgentId,
 } from "./session-key.js";
@@ -71,11 +72,6 @@ function normalizeId(value: unknown): string {
   return "";
 }
 
-function normalizeAccountId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  return trimmed ? trimmed : DEFAULT_ACCOUNT_ID;
-}
-
 function matchesAccountId(match: string | undefined, actual: string): boolean {
   const trimmed = (match ?? "").trim();
   if (!trimmed) {
@@ -84,7 +80,7 @@ function matchesAccountId(match: string | undefined, actual: string): boolean {
   if (trimmed === "*") {
     return true;
   }
-  return trimmed === actual;
+  return normalizeAccountId(trimmed) === actual;
 }
 
 export function buildAgentSessionKey(params: {
@@ -115,7 +111,40 @@ function listAgents(cfg: BotConfig) {
   return Array.isArray(agents) ? agents : [];
 }
 
+type AgentLookupCache = {
+  agentsRef: BotConfig["agents"] | undefined;
+  byNormalizedId: Map<string, string>;
+  fallbackDefaultAgentId: string;
+};
+
+const agentLookupCacheByCfg = new WeakMap<BotConfig, AgentLookupCache>();
+
+function resolveAgentLookupCache(cfg: BotConfig): AgentLookupCache {
+  const agentsRef = cfg.agents;
+  const existing = agentLookupCacheByCfg.get(cfg);
+  if (existing && existing.agentsRef === agentsRef) {
+    return existing;
+  }
+
+  const byNormalizedId = new Map<string, string>();
+  for (const agent of listAgents(cfg)) {
+    const rawId = agent.id?.trim();
+    if (!rawId) {
+      continue;
+    }
+    byNormalizedId.set(normalizeAgentId(rawId), sanitizeAgentId(rawId));
+  }
+  const next: AgentLookupCache = {
+    agentsRef,
+    byNormalizedId,
+    fallbackDefaultAgentId: sanitizeAgentId(resolveDefaultAgentId(cfg)),
+  };
+  agentLookupCacheByCfg.set(cfg, next);
+  return next;
+}
+
 function pickFirstExistingAgentId(cfg: BotConfig, agentId: string): string {
+  const lookup = resolveAgentLookupCache(cfg);
   const trimmed = (agentId ?? "").trim();
   if (!trimmed) {
     return lookup.fallbackDefaultAgentId;
@@ -501,7 +530,12 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
-  const peer = input.peer ? { kind: input.peer.kind, id: normalizeId(input.peer.id) } : null;
+  const peer = input.peer
+    ? {
+        kind: normalizeChatType(input.peer.kind) ?? input.peer.kind,
+        id: normalizeId(input.peer.id),
+      }
+    : null;
   const guildId = normalizeId(input.guildId);
   const teamId = normalizeId(input.teamId);
   const memberRoleIds = input.memberRoleIds ?? [];
@@ -595,9 +629,6 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
   }
   // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding
-  const parentPeer = input.parentPeer
-    ? { kind: input.parentPeer.kind, id: normalizeId(input.parentPeer.id) }
-    : null;
   const baseScope = {
     guildId,
     teamId,

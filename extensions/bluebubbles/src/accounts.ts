@@ -1,5 +1,10 @@
 import type { BotConfig } from "bot/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "bot/plugin-sdk/account-id";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "bot/plugin-sdk/account-id";
+import { hasConfiguredSecretInput, normalizeSecretInputString } from "./secret-input.js";
 import { normalizeBlueBubblesServerUrl, type BlueBubblesAccountConfig } from "./types.js";
 
 export type ResolvedBlueBubblesAccount = {
@@ -28,6 +33,13 @@ export function listBlueBubblesAccountIds(cfg: BotConfig): string[] {
 }
 
 export function resolveDefaultBlueBubblesAccountId(cfg: BotConfig): string {
+  const preferred = normalizeOptionalAccountId(cfg.channels?.bluebubbles?.defaultAccount);
+  if (
+    preferred &&
+    listBlueBubblesAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
+  ) {
+    return preferred;
+  }
   const ids = listBlueBubblesAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;

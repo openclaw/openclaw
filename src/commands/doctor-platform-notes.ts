@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { BotConfig } from "../config/config.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -75,21 +76,26 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
 
   const getenv = deps?.getenv ?? launchctlGetenv;
   const deprecatedLaunchctlEntries = [
-    ["BOT_GATEWAY_TOKEN", await getenv("BOT_GATEWAY_TOKEN")],
-    ["BOT_GATEWAY_PASSWORD", await getenv("BOT_GATEWAY_PASSWORD")],
+    ["CLAWDBOT_GATEWAY_TOKEN", await getenv("CLAWDBOT_GATEWAY_TOKEN")],
+    ["CLAWDBOT_GATEWAY_PASSWORD", await getenv("CLAWDBOT_GATEWAY_PASSWORD")],
   ].filter((entry): entry is [string, string] => Boolean(entry[1]?.trim()));
   if (deprecatedLaunchctlEntries.length > 0) {
     const lines = [
       "- Deprecated launchctl environment variables detected (ignored).",
       ...deprecatedLaunchctlEntries.map(
-        ([key]) => `- \`${key}\` is set; use \`BOT_${key.slice(key.indexOf("_") + 1)}\` instead.`,
+        ([key]) =>
+          `- \`${key}\` is set; use \`BOT_${key.slice(key.indexOf("_") + 1)}\` instead.`,
       ),
     ];
     (deps?.noteFn ?? note)(lines.join("\n"), "Gateway (macOS)");
   }
 
-  const tokenEntries = [["BOT_GATEWAY_TOKEN", await getenv("BOT_GATEWAY_TOKEN")]] as const;
-  const passwordEntries = [["BOT_GATEWAY_PASSWORD", await getenv("BOT_GATEWAY_PASSWORD")]] as const;
+  const tokenEntries = [
+    ["BOT_GATEWAY_TOKEN", await getenv("BOT_GATEWAY_TOKEN")],
+  ] as const;
+  const passwordEntries = [
+    ["BOT_GATEWAY_PASSWORD", await getenv("BOT_GATEWAY_PASSWORD")],
+  ] as const;
   const tokenEntry = tokenEntries.find(([, value]) => value?.trim());
   const passwordEntry = passwordEntries.find(([, value]) => value?.trim());
   const envToken = tokenEntry?.[1]?.trim() ?? "";
@@ -121,7 +127,7 @@ export function noteDeprecatedLegacyEnvVars(
   deps?: { noteFn?: typeof note },
 ) {
   const entries = Object.entries(env)
-    .filter(([key, value]) => key.startsWith("BOT_") && value?.trim())
+    .filter(([key, value]) => key.startsWith("CLAWDBOT_") && value?.trim())
     .map(([key]) => key);
   if (entries.length === 0) {
     return;

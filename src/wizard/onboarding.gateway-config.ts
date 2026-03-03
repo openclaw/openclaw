@@ -1,24 +1,32 @@
-import type { GatewayAuthChoice } from "../commands/onboard-types.js";
+import {
+  promptSecretRefForOnboarding,
+  resolveSecretInputModeForEnvSelection,
+} from "../commands/auth-choice.apply-helpers.js";
+import {
+  normalizeGatewayTokenInput,
+  randomToken,
+  validateGatewayPasswordInput,
+} from "../commands/onboard-helpers.js";
+import type { GatewayAuthChoice, SecretInputMode } from "../commands/onboard-types.js";
 import type { GatewayBindMode, GatewayTailscaleMode, BotConfig } from "../config/config.js";
+import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
+import type { SecretInput } from "../config/types.secrets.js";
+import {
+  maybeAddTailnetOriginToControlUiAllowedOrigins,
+  TAILSCALE_DOCS_LINES,
+  TAILSCALE_EXPOSURE_OPTIONS,
+  TAILSCALE_MISSING_BIN_NOTE_LINES,
+} from "../gateway/gateway-config-prompts.shared.js";
+import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
+import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import type {
   GatewayWizardSettings,
   QuickstartGatewayDefaults,
   WizardFlow,
 } from "./onboarding.types.js";
 import type { WizardPrompter } from "./prompts.js";
-import {
-  normalizeGatewayTokenInput,
-  randomToken,
-  validateGatewayPasswordInput,
-} from "../commands/onboard-helpers.js";
-import {
-  TAILSCALE_DOCS_LINES,
-  TAILSCALE_EXPOSURE_OPTIONS,
-  TAILSCALE_MISSING_BIN_NOTE_LINES,
-} from "../gateway/gateway-config-prompts.shared.js";
-import { findTailscaleBinary } from "../infra/tailscale.js";
-import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 
 type ConfigureGatewayOptions = {
   flow: WizardFlow;
@@ -147,7 +155,8 @@ export async function configureGatewayForOnboarding(
   if (authMode === "token") {
     if (flow === "quickstart") {
       gatewayToken =
-        (quickstartGateway.token ?? normalizeGatewayTokenInput(process.env.BOT_GATEWAY_TOKEN)) ||
+        (quickstartGateway.token ??
+          normalizeGatewayTokenInput(process.env.BOT_GATEWAY_TOKEN)) ||
         randomToken();
     } else {
       const tokenInput = await prompter.text({
@@ -235,6 +244,15 @@ export async function configureGatewayForOnboarding(
       },
     },
   };
+
+  nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
+    requireControlUiEnabled: true,
+  }).config;
+  nextConfig = await maybeAddTailnetOriginToControlUiAllowedOrigins({
+    config: nextConfig,
+    tailscaleMode,
+    tailscaleBin,
+  });
 
   // If this is a new gateway setup (no existing gateway settings), start with a
   // denylist for high-risk node commands. Users can arm these temporarily via

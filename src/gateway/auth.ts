@@ -1,52 +1,46 @@
 import type { IncomingMessage } from "node:http";
 import type {
   GatewayAuthConfig,
-  GatewayIamConfig,
   GatewayTailscaleMode,
   GatewayTrustedProxyConfig,
 } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import { validateIamToken, type GatewayIamAuthResult } from "./auth-iam.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
+import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 import {
+  isLocalishHost,
   isLoopbackAddress,
   isTrustedProxyAddress,
-  resolveHostName,
-  parseForwardedForClientIp,
-  resolveGatewayClientIp,
+  resolveClientIp,
 } from "./net.js";
 
-export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy" | "iam";
+export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+export type ResolvedGatewayAuthModeSource =
+  | "override"
+  | "config"
+  | "password"
+  | "token"
+  | "default";
 
 export type ResolvedGatewayAuth = {
   mode: ResolvedGatewayAuthMode;
+  modeSource?: ResolvedGatewayAuthModeSource;
   token?: string;
   password?: string;
   allowTailscale: boolean;
   trustedProxy?: GatewayTrustedProxyConfig;
-  iam?: GatewayIamConfig;
 };
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?: "none" | "token" | "password" | "tailscale" | "device-token" | "trusted-proxy" | "iam";
+  method?: "none" | "token" | "password" | "tailscale" | "device-token" | "trusted-proxy";
   user?: string;
   reason?: string;
-  /** IAM-specific: user ID from JWT sub claim. */
-  userId?: string;
-  /** IAM-specific: user email from JWT claims. */
-  email?: string;
-  /** IAM-specific: org IDs the user belongs to. */
-  orgIds?: string[];
-  /** IAM-specific: full IAM auth result for downstream use. */
-  iamResult?: GatewayIamAuthResult;
-  /** The raw JWT/bearer token from the Authorization header (for downstream forwarding). */
-  rawToken?: string;
   /** Present when the request was blocked by the rate limiter. */
   rateLimited?: boolean;
   /** Milliseconds the client should wait before retrying (when rate-limited). */
@@ -56,6 +50,29 @@ export type GatewayAuthResult = {
 type ConnectAuth = {
   token?: string;
   password?: string;
+};
+
+export type GatewayAuthSurface = "http" | "ws-control-ui";
+
+export type AuthorizeGatewayConnectParams = {
+  auth: ResolvedGatewayAuth;
+  connectAuth?: ConnectAuth | null;
+  req?: IncomingMessage;
+  trustedProxies?: string[];
+  tailscaleWhois?: TailscaleWhoisLookup;
+  /**
+   * Explicit auth surface. HTTP keeps Tailscale forwarded-header auth disabled.
+   * WS Control UI enables it intentionally for tokenless trusted-host login.
+   */
+  authSurface?: GatewayAuthSurface;
+  /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
+  rateLimiter?: AuthRateLimiter;
+  /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
+  clientIp?: string;
+  /** Optional limiter scope; defaults to shared-secret auth scope. */
+  rateLimitScope?: string;
+  /** Trust X-Real-IP only when explicitly enabled. */
+  allowRealIpFallback?: boolean;
 };
 
 type TailscaleUser = {
@@ -74,41 +91,48 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+const TAILSCALE_TRUSTED_PROXIES = ["127.0.0.1", "::1"] as const;
+
 function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
   if (!req) {
     return undefined;
   }
-  const forwardedFor = headerValue(req.headers?.["x-forwarded-for"]);
-  return forwardedFor ? parseForwardedForClientIp(forwardedFor) : undefined;
+  return resolveClientIp({
+    remoteAddr: req.socket?.remoteAddress ?? "",
+    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
+    trustedProxies: [...TAILSCALE_TRUSTED_PROXIES],
+  });
 }
 
 function resolveRequestClientIp(
   req?: IncomingMessage,
   trustedProxies?: string[],
+  allowRealIpFallback = false,
 ): string | undefined {
   if (!req) {
     return undefined;
   }
-  return resolveGatewayClientIp({
+  return resolveClientIp({
     remoteAddr: req.socket?.remoteAddress ?? "",
     forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
     realIp: headerValue(req.headers?.["x-real-ip"]),
     trustedProxies,
+    allowRealIpFallback,
   });
 }
 
-export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: string[]): boolean {
+export function isLocalDirectRequest(
+  req?: IncomingMessage,
+  trustedProxies?: string[],
+  allowRealIpFallback = false,
+): boolean {
   if (!req) {
     return false;
   }
-  const clientIp = resolveRequestClientIp(req, trustedProxies) ?? "";
+  const clientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback) ?? "";
   if (!isLoopbackAddress(clientIp)) {
     return false;
   }
-
-  const host = resolveHostName(req.headers?.host);
-  const hostIsLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
-  const hostIsTailscaleServe = host.endsWith(".ts.net");
 
   const hasForwarded = Boolean(
     req.headers?.["x-forwarded-for"] ||
@@ -117,7 +141,7 @@ export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: str
   );
 
   const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
-  return (hostIsLocal || hostIsTailscaleServe) && (!hasForwarded || remoteIsTrustedProxy);
+  return isLocalishHost(req.headers?.host) && (!hasForwarded || remoteIsTrustedProxy);
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
@@ -191,59 +215,76 @@ async function resolveVerifiedTailscaleUser(params: {
 
 export function resolveGatewayAuth(params: {
   authConfig?: GatewayAuthConfig | null;
+  authOverride?: GatewayAuthConfig | null;
   env?: NodeJS.ProcessEnv;
   tailscaleMode?: GatewayTailscaleMode;
-  /** Accepted for caller convenience; not used internally. */
-  cfg?: unknown;
 }): ResolvedGatewayAuth {
-  const authConfig = params.authConfig ?? {};
+  const baseAuthConfig = params.authConfig ?? {};
+  const authOverride = params.authOverride ?? undefined;
+  const authConfig: GatewayAuthConfig = { ...baseAuthConfig };
+  if (authOverride) {
+    if (authOverride.mode !== undefined) {
+      authConfig.mode = authOverride.mode;
+    }
+    if (authOverride.token !== undefined) {
+      authConfig.token = authOverride.token;
+    }
+    if (authOverride.password !== undefined) {
+      authConfig.password = authOverride.password;
+    }
+    if (authOverride.allowTailscale !== undefined) {
+      authConfig.allowTailscale = authOverride.allowTailscale;
+    }
+    if (authOverride.rateLimit !== undefined) {
+      authConfig.rateLimit = authOverride.rateLimit;
+    }
+    if (authOverride.trustedProxy !== undefined) {
+      authConfig.trustedProxy = authOverride.trustedProxy;
+    }
+  }
   const env = params.env ?? process.env;
-  const token = authConfig.token ?? env.BOT_GATEWAY_TOKEN ?? undefined;
-  const password = authConfig.password ?? env.BOT_GATEWAY_PASSWORD ?? undefined;
+  const resolvedCredentials = resolveGatewayCredentialsFromValues({
+    configToken: authConfig.token,
+    configPassword: authConfig.password,
+    env,
+    includeLegacyEnv: false,
+    tokenPrecedence: "config-first",
+    passwordPrecedence: "config-first",
+  });
+  const token = resolvedCredentials.token;
+  const password = resolvedCredentials.password;
   const trustedProxy = authConfig.trustedProxy;
-  const iam = authConfig.iam;
-
-  // Cloud playground agents run inside the K8s cluster behind the playground
-  // service mesh — resolve to IAM mode so the gateway starts without requiring
-  // a shared secret.
-  const isPlaygroundCloud =
-    env.HANZO_PLAYGROUND_CLOUD_NODE === "true" || env.BOT_GATEWAY_AUTH_MODE === "iam";
 
   let mode: ResolvedGatewayAuth["mode"];
-  if (authConfig.mode) {
+  let modeSource: ResolvedGatewayAuth["modeSource"];
+  if (authOverride?.mode !== undefined) {
+    mode = authOverride.mode;
+    modeSource = "override";
+  } else if (authConfig.mode) {
     mode = authConfig.mode;
-  } else if (
-    env.BOT_GATEWAY_AUTH_MODE &&
-    env.BOT_GATEWAY_AUTH_MODE !== "iam" &&
-    ["token", "password", "none", "trusted-proxy"].includes(env.BOT_GATEWAY_AUTH_MODE)
-  ) {
-    // Explicit env-var mode override takes precedence over cloud auto-detection.
-    // This lets cloud pods use token auth without requiring an IAM config file.
-    mode = env.BOT_GATEWAY_AUTH_MODE as ResolvedGatewayAuth["mode"];
-  } else if (isPlaygroundCloud || iam?.serverUrl) {
-    mode = "iam";
+    modeSource = "config";
   } else if (password) {
     mode = "password";
+    modeSource = "password";
   } else if (token) {
     mode = "token";
+    modeSource = "token";
   } else {
-    mode = "none";
+    mode = "token";
+    modeSource = "default";
   }
 
   const allowTailscale =
     authConfig.allowTailscale ??
-    (params.tailscaleMode === "serve" &&
-      mode !== "password" &&
-      mode !== "trusted-proxy" &&
-      mode !== "iam");
+    (params.tailscaleMode === "serve" && mode !== "password" && mode !== "trusted-proxy");
 
   return {
     mode,
+    modeSource,
     token,
     password,
     allowTailscale,
     trustedProxy,
-    iam,
   };
 }
 
@@ -268,23 +309,6 @@ export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
     if (!auth.trustedProxy.userHeader || auth.trustedProxy.userHeader.trim() === "") {
       throw new Error(
         "gateway auth mode is trusted-proxy, but trustedProxy.userHeader is empty (set gateway.auth.trustedProxy.userHeader)",
-      );
-    }
-  }
-  if (auth.mode === "iam") {
-    if (!auth.iam) {
-      throw new Error(
-        "gateway auth mode is iam, but no IAM config was provided (set gateway.auth.iam)",
-      );
-    }
-    if (!auth.iam.serverUrl) {
-      throw new Error(
-        "gateway auth mode is iam, but iam.serverUrl is missing (set gateway.auth.iam.serverUrl)",
-      );
-    }
-    if (!auth.iam.clientId) {
-      throw new Error(
-        "gateway auth mode is iam, but iam.clientId is missing (set gateway.auth.iam.clientId)",
       );
     }
   }
@@ -333,22 +357,22 @@ function authorizeTrustedProxy(params: {
   return { user };
 }
 
-export async function authorizeGatewayConnect(params: {
-  auth: ResolvedGatewayAuth;
-  connectAuth?: ConnectAuth | null;
-  req?: IncomingMessage;
-  trustedProxies?: string[];
-  tailscaleWhois?: TailscaleWhoisLookup;
-  /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
-  rateLimiter?: AuthRateLimiter;
-  /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
-  clientIp?: string;
-  /** Optional limiter scope; defaults to shared-secret auth scope. */
-  rateLimitScope?: string;
-}): Promise<GatewayAuthResult> {
+function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolean {
+  return authSurface === "ws-control-ui";
+}
+
+export async function authorizeGatewayConnect(
+  params: AuthorizeGatewayConnectParams,
+): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
-  const localDirect = isLocalDirectRequest(req, trustedProxies);
+  const authSurface = params.authSurface ?? "http";
+  const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
+  const localDirect = isLocalDirectRequest(
+    req,
+    trustedProxies,
+    params.allowRealIpFallback === true,
+  );
 
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
@@ -370,52 +394,15 @@ export async function authorizeGatewayConnect(params: {
     return { ok: false, reason: result.reason };
   }
 
-  // IAM (OIDC/JWT) auth — validate token from connect params against IAM JWKS.
-  // Falls back to shared-secret token if JWT validation fails (e.g. cloud pods
-  // authenticate with the gateway's BOT_GATEWAY_TOKEN, not an IAM JWT).
-  if (auth.mode === "iam") {
-    if (!auth.iam) {
-      return { ok: false, reason: "iam_config_missing" };
-    }
-    const jwtToken = connectAuth?.token;
-    if (!jwtToken) {
-      return { ok: false, reason: "iam_token_missing" };
-    }
-    let iamResult: GatewayIamAuthResult;
-    try {
-      iamResult = await validateIamToken(jwtToken, auth.iam);
-    } catch {
-      // Token is not a valid JWT (e.g. hex gateway token) — the IAM SDK throws
-      // on malformed tokens.  Treat as failed IAM auth so the token fallback
-      // below can still match the gateway shared secret.
-      iamResult = { ok: false, reason: "iam_token_malformed" };
-    }
-    if (!iamResult.ok) {
-      // Fallback: accept the gateway's shared token for internal nodes (cloud pods).
-      if (auth.token && safeEqualSecret(jwtToken, auth.token)) {
-        return { ok: true, method: "token" };
-      }
-      return { ok: false, reason: iamResult.reason };
-    }
-    return {
-      ok: true,
-      method: "iam",
-      user: iamResult.name ?? iamResult.email ?? iamResult.userId,
-      userId: iamResult.userId,
-      email: iamResult.email,
-      orgIds: iamResult.orgIds,
-      iamResult,
-    };
-  }
-
-  // No-auth mode: all connections are accepted without any shared secret.
   if (auth.mode === "none") {
     return { ok: true, method: "none" };
   }
 
   const limiter = params.rateLimiter;
   const ip =
-    params.clientIp ?? resolveRequestClientIp(req, trustedProxies) ?? req?.socket?.remoteAddress;
+    params.clientIp ??
+    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
+    req?.socket?.remoteAddress;
   const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
   if (limiter) {
     const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
@@ -429,7 +416,7 @@ export async function authorizeGatewayConnect(params: {
     }
   }
 
-  if (auth.allowTailscale && !localDirect) {
+  if (allowTailscaleHeaderAuth && auth.allowTailscale && !localDirect) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
       req,
       tailscaleWhois,
@@ -479,4 +466,22 @@ export async function authorizeGatewayConnect(params: {
 
   limiter?.recordFailure(ip, rateLimitScope);
   return { ok: false, reason: "unauthorized" };
+}
+
+export async function authorizeHttpGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "http",
+  });
+}
+
+export async function authorizeWsControlUiGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "ws-control-ui",
+  });
 }

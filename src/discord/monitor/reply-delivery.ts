@@ -1,11 +1,14 @@
 import type { RequestClient } from "@buape/carbon";
+import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
 import { loadConfig } from "../../config/config.js";
+import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
+import { createDiscordRetryRunner, type RetryRunner } from "../../infra/retry-policy.js";
+import { resolveRetryConfig, retryAsync, type RetryConfig } from "../../infra/retry.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { resolveDiscordAccount } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { sendDiscordText } from "../send.shared.js";
@@ -249,6 +252,15 @@ export async function deliverDiscordReply(params: {
     target: params.target,
   });
   const persona = resolveBindingPersona(binding);
+  // Pre-resolve channel ID and retry runner once to avoid per-chunk overhead.
+  // This eliminates redundant channel-type GET requests and client creation that
+  // can cause ordering issues when multiple chunks share the RequestClient queue.
+  const channelId = resolveTargetChannelId(params.target);
+  const account = resolveDiscordAccount({ cfg: loadConfig(), accountId: params.accountId });
+  const retryConfig = resolveDeliveryRetryConfig(account.config.retry);
+  const request: RetryRunner | undefined = channelId
+    ? createDiscordRetryRunner({ configRetry: account.config.retry })
+    : undefined;
   let deliveredAny = false;
   for (const payload of params.replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);

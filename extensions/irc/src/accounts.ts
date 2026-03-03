@@ -1,5 +1,10 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "bot/plugin-sdk/account-id";
 import { readFileSync } from "node:fs";
+import { normalizeResolvedSecretInputString } from "bot/plugin-sdk";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "bot/plugin-sdk/account-id";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
@@ -222,7 +227,7 @@ export function resolveIrcAccount(params: {
       merged.username?.trim() ||
       (accountId === DEFAULT_ACCOUNT_ID ? process.env.IRC_USERNAME?.trim() : "") ||
       nick ||
-      "bot"
+      "@hanzo/bot"
     ).trim();
     const realname = (
       merged.realname?.trim() ||

@@ -1,5 +1,5 @@
-import type { MarkdownTableMode, BotConfig, OutboundReplyPayload } from "bot/plugin-sdk";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { MarkdownTableMode, BotConfig, OutboundReplyPayload } from "bot/plugin-sdk";
 import {
   createScopedPairingAccess,
   createReplyPrefixOptions,

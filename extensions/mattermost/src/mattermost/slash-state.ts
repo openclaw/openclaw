@@ -9,8 +9,8 @@
  * overwrite each other's tokens, registered commands, or handlers.
  */
 
-import type { BotPluginApi } from "bot/plugin-sdk";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { BotPluginApi } from "bot/plugin-sdk";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import { resolveSlashCommandConfig, type MattermostRegisteredCommand } from "./slash-commands.js";
 import { createSlashCommandHttpHandler } from "./slash-http.js";

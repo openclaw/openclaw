@@ -1,15 +1,43 @@
-import type { BotConfig, MarkdownTableMode, RuntimeEnv } from "bot/plugin-sdk";
-import type { ChildProcess } from "node:child_process";
-import {
-  createReplyPrefixOptions,
-  mergeAllowlist,
-  resolveSenderCommandAuthorization,
-  summarizeMapping,
+import type {
+  MarkdownTableMode,
+  BotConfig,
+  OutboundReplyPayload,
+  RuntimeEnv,
 } from "bot/plugin-sdk";
-import type { ResolvedZalouserAccount, ZcaFriend, ZcaGroup, ZcaMessage } from "./types.js";
+import {
+  createTypingCallbacks,
+  createScopedPairingAccess,
+  createReplyPrefixOptions,
+  resolveOutboundMediaUrls,
+  mergeAllowlist,
+  resolveMentionGatingWithBypass,
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  resolveSenderCommandAuthorization,
+  sendMediaWithLeadingCaption,
+  summarizeMapping,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "bot/plugin-sdk";
+import {
+  buildZalouserGroupCandidates,
+  findZalouserGroupEntry,
+  isZalouserGroupEntryAllowed,
+} from "./group-policy.js";
+import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
 import { getZalouserRuntime } from "./runtime.js";
-import { sendMessageZalouser } from "./send.js";
-import { parseJsonOutput, runZca, runZcaStreaming } from "./zca.js";
+import {
+  sendDeliveredZalouser,
+  sendMessageZalouser,
+  sendSeenZalouser,
+  sendTypingZalouser,
+} from "./send.js";
+import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+import {
+  listZaloFriends,
+  listZaloGroups,
+  resolveZaloGroupContext,
+  startZaloListener,
+} from "./zalo-js.js";
 
 export type ZalouserMonitorOptions = {
   account: ResolvedZalouserAccount;
@@ -133,8 +161,14 @@ async function processMessage(
   runtime: RuntimeEnv,
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void,
 ): Promise<void> {
-  const { threadId, content, timestamp, metadata } = message;
-  if (!content?.trim()) {
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "zalouser",
+    accountId: account.accountId,
+  });
+
+  const rawBody = message.content?.trim();
+  if (!rawBody) {
     return;
   }
 
@@ -173,8 +207,19 @@ async function processMessage(
     }
   }
 
-  const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "open";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
+  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: config.channels?.zalouser !== undefined,
+    groupPolicy: account.config.groupPolicy,
+    defaultGroupPolicy,
+  });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "zalouser",
+    accountId: account.accountId,
+    log: (entry) => logVerbose(core, runtime, entry),
+  });
+
   const groups = account.config.groups ?? {};
   if (isGroup) {
     if (groupPolicy === "disabled") {
@@ -200,11 +245,7 @@ async function processMessage(
     configuredAllowFrom: configAllowFrom,
     senderId,
     isSenderAllowed,
-    readAllowFromStore: () =>
-      core.channel.pairing.readAllowFromStore({
-        channel: "zalouser",
-        accountId: account.accountId,
-      }),
+    readAllowFromStore: pairing.readAllowFromStore,
     shouldComputeCommandAuthorized: (body, cfg) =>
       core.channel.commands.shouldComputeCommandAuthorized(body, cfg),
     resolveCommandAuthorizedFromAuthorizers: (params) =>
@@ -221,10 +262,8 @@ async function processMessage(
       const allowed = senderAllowedForCommands;
       if (!allowed) {
         if (dmPolicy === "pairing") {
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: "zalouser",
+          const { code, created } = await pairing.upsertPairingRequest({
             id: senderId,
-            accountId: account.accountId,
             meta: { name: senderName || undefined },
           });
 
@@ -438,7 +477,7 @@ async function processMessage(
 }
 
 async function deliverZalouserReply(params: {
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string };
+  payload: OutboundReplyPayload;
   profile: string;
   chatId: string;
   isGroup: boolean;
@@ -454,29 +493,23 @@ async function deliverZalouserReply(params: {
   const tableMode = params.tableMode ?? "code";
   const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
 
-  const mediaList = payload.mediaUrls?.length
-    ? payload.mediaUrls
-    : payload.mediaUrl
-      ? [payload.mediaUrl]
-      : [];
-
-  if (mediaList.length > 0) {
-    let first = true;
-    for (const mediaUrl of mediaList) {
-      const caption = first ? text : undefined;
-      first = false;
-      try {
-        logVerbose(core, runtime, `Sending media to ${chatId}`);
-        await sendMessageZalouser(chatId, caption ?? "", {
-          profile,
-          mediaUrl,
-          isGroup,
-        });
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error(`Zalouser media send failed: ${String(err)}`);
-      }
-    }
+  const sentMedia = await sendMediaWithLeadingCaption({
+    mediaUrls: resolveOutboundMediaUrls(payload),
+    caption: text,
+    send: async ({ mediaUrl, caption }) => {
+      logVerbose(core, runtime, `Sending media to ${chatId}`);
+      await sendMessageZalouser(chatId, caption ?? "", {
+        profile,
+        mediaUrl,
+        isGroup,
+      });
+      statusSink?.({ lastOutboundAt: Date.now() });
+    },
+    onError: (error) => {
+      runtime.error(`Zalouser media send failed: ${String(error)}`);
+    },
+  });
+  if (sentMedia) {
     return;
   }
 

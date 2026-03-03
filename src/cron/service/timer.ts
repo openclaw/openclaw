@@ -1,5 +1,10 @@
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
+import { isCronSystemEvent } from "../../infra/heartbeat-events-filter.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { resolveCronDeliveryPlan } from "../delivery.js";
+import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
+import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
   CronJob,
@@ -8,10 +13,6 @@ import type {
   CronRunStatus,
   CronRunTelemetry,
 } from "../types.js";
-import type { CronEvent, CronServiceState } from "./state.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
-import { resolveCronDeliveryPlan } from "../delivery.js";
-import { sweepCronRunSessions } from "../session-reaper.js";
 import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
@@ -20,6 +21,7 @@ import {
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
+import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
 
@@ -119,7 +121,7 @@ const TRANSIENT_PATTERNS: Record<string, RegExp> = {
   rate_limit: /(rate[_ ]limit|too many requests|429|resource has been exhausted|cloudflare)/i,
   network: /(network|econnreset|econnrefused|fetch failed|socket)/i,
   timeout: /(timeout|etimedout)/i,
-  server_error: /5\d{2}/,
+  server_error: /\b5\d{2}\b/,
 };
 
 function isTransientCronError(error: string | undefined, retryOn?: CronRetryOn[]): boolean {
@@ -188,7 +190,14 @@ function clampNonNegativeInt(value: unknown, fallback: number): number {
 function resolveFailureAlert(
   state: CronServiceState,
   job: CronJob,
-): { after: number; cooldownMs: number; channel: CronMessageChannel; to?: string } | null {
+): {
+  after: number;
+  cooldownMs: number;
+  channel: CronMessageChannel;
+  to?: string;
+  mode?: "announce" | "webhook";
+  accountId?: string;
+} | null {
   const globalConfig = state.deps.cronConfig?.failureAlert;
   const jobConfig = job.failureAlert === false ? undefined : job.failureAlert;
 
@@ -198,6 +207,9 @@ function resolveFailureAlert(
   if (!jobConfig && globalConfig?.enabled !== true) {
     return null;
   }
+
+  const mode = jobConfig?.mode ?? globalConfig?.mode;
+  const explicitTo = normalizeTo(jobConfig?.to);
 
   return {
     after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
@@ -209,7 +221,9 @@ function resolveFailureAlert(
       normalizeCronMessageChannel(jobConfig?.channel) ??
       normalizeCronMessageChannel(job.delivery?.channel) ??
       "last",
-    to: normalizeTo(jobConfig?.to) ?? normalizeTo(job.delivery?.to),
+    to: mode === "webhook" ? explicitTo : (explicitTo ?? normalizeTo(job.delivery?.to)),
+    mode,
+    accountId: jobConfig?.accountId ?? globalConfig?.accountId,
   };
 }
 
@@ -221,6 +235,8 @@ function emitFailureAlert(
     consecutiveErrors: number;
     channel: CronMessageChannel;
     to?: string;
+    mode?: "announce" | "webhook";
+    accountId?: string;
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
@@ -237,6 +253,8 @@ function emitFailureAlert(
         text,
         channel: params.channel,
         to: params.to,
+        mode: params.mode,
+        accountId: params.accountId,
       })
       .catch((err) => {
         state.deps.log.warn(
@@ -287,19 +305,26 @@ export function applyJobResult(
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     const alertConfig = resolveFailureAlert(state, job);
     if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
-      const now = state.deps.nowMs();
-      const lastAlert = job.state.lastFailureAlertAtMs;
-      const inCooldown =
-        typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
-      if (!inCooldown) {
-        emitFailureAlert(state, {
-          job,
-          error: result.error,
-          consecutiveErrors: job.state.consecutiveErrors,
-          channel: alertConfig.channel,
-          to: alertConfig.to,
-        });
-        job.state.lastFailureAlertAtMs = now;
+      const isBestEffort =
+        job.delivery?.bestEffort === true ||
+        (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
+      if (!isBestEffort) {
+        const now = state.deps.nowMs();
+        const lastAlert = job.state.lastFailureAlertAtMs;
+        const inCooldown =
+          typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
+        if (!inCooldown) {
+          emitFailureAlert(state, {
+            job,
+            error: result.error,
+            consecutiveErrors: job.state.consecutiveErrors,
+            channel: alertConfig.channel,
+            to: alertConfig.to,
+            mode: alertConfig.mode,
+            accountId: alertConfig.accountId,
+          });
+          job.state.lastFailureAlertAtMs = now;
+        }
       }
     }
   } else {
@@ -962,6 +987,10 @@ export async function executeJobCore(
   // ran. If delivery was attempted but final ack is uncertain, suppress the
   // main summary to avoid duplicate user-facing sends.
   // See: https://github.com/hanzoai/bot/issues/15692
+  //
+  // Also suppress heartbeat-only summaries (e.g. "HEARTBEAT_OK") — these
+  // are internal ack tokens that should never leak into user conversations.
+  // See: https://github.com/hanzoai/bot/issues/32013
   const summaryText = res.summary?.trim();
   const deliveryPlan = resolveCronDeliveryPlan(job);
   const suppressMainSummary =

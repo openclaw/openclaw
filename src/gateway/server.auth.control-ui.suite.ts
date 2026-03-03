@@ -711,8 +711,9 @@ export function registerControlUiAndPairingSuite(): void {
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
       await import("../infra/device-pairing.js");
-    const { identityPath, identity } =
-      await createOperatorIdentityFixture("bot-device-legacy-meta-");
+    const { identityPath, identity } = await createOperatorIdentityFixture(
+      "bot-device-legacy-meta-",
+    );
     const deviceId = identity.deviceId;
     const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
     const pending = await requestDevicePairing({

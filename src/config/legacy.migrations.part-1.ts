@@ -61,6 +61,10 @@ function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(target, key);
 }
 
+function escapeControlForLog(value: string): string {
+  return value.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
+}
+
 function migrateThreadBindingsTtlHoursForPath(params: {
   owner: Record<string, unknown>;
   pathPrefix: string;

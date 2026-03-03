@@ -1,11 +1,5 @@
 import type { Skill } from "@mariozechner/pi-coding-agent";
-import type {
-  BotSkillMetadata,
-  ParsedSkillFrontmatter,
-  SkillEntry,
-  SkillInstallSpec,
-  SkillInvocationPolicy,
-} from "./types.js";
+import { validateRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { parseFrontmatterBlock } from "../../markdown/frontmatter.js";
 import {
   getFrontmatterString,
@@ -17,6 +11,13 @@ import {
   resolveBotManifestOs,
   resolveBotManifestRequires,
 } from "../../shared/frontmatter.js";
+import type {
+  BotSkillMetadata,
+  ParsedSkillFrontmatter,
+  SkillEntry,
+  SkillInstallSpec,
+  SkillInvocationPolicy,
+} from "./types.js";
 
 export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
   return parseFrontmatterBlock(content);
@@ -129,8 +130,13 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   if (osList.length > 0) {
     spec.os = osList;
   }
-  if (typeof raw.formula === "string") {
-    spec.formula = raw.formula;
+  const formula = normalizeSafeBrewFormula(raw.formula);
+  if (formula) {
+    spec.formula = formula;
+  }
+  const cask = normalizeSafeBrewFormula(raw.cask);
+  if (!spec.formula && cask) {
+    spec.formula = cask;
   }
   if (spec.kind === "node") {
     const pkg = normalizeSafeNpmSpec(raw.package);

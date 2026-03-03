@@ -1,10 +1,14 @@
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { BotConfig } from "../config/config.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAudioAttachment } from "./attachments.js";
 import { runAudioTranscription } from "./audio-transcription-runner.js";
-import { type ActiveMediaModel, normalizeMediaAttachments, runCapability } from "./runner.js";
+import {
+  type ActiveMediaModel,
+  normalizeMediaAttachments,
+  resolveMediaAttachmentLocalRoots,
+} from "./runner.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 /**
  * Transcribes the first audio attachment BEFORE mention checking.
@@ -43,9 +47,6 @@ export async function transcribeFirstAudio(params: {
   if (shouldLogVerbose()) {
     logVerbose(`audio-preflight: transcribing attachment ${firstAudio.index} for mention check`);
   }
-
-  const providerRegistry = buildProviderRegistry(params.providers);
-  const cache = createMediaAttachmentCache(attachments);
 
   try {
     const { transcript } = await runAudioTranscription({

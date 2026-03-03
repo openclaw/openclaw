@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { type BotConfig, loadConfig } from "../config/config.js";
+import { applyConfigEnvVars } from "../config/env-vars.js";
 import { isRecord } from "../utils.js";
 import { resolveBotAgentDir } from "./agent-paths.js";
 import {
@@ -59,7 +60,7 @@ function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig)
     // box without requiring every user to configure it.
     return {
       ...explicitModel,
-      input: "input" in explicitModel ? explicitModel.input : implicitModel.input,
+      input: implicitModel.input,
       reasoning: "reasoning" in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       contextWindow: resolvePreferredTokenLimit(
         explicitModel.contextWindow,
@@ -110,13 +111,11 @@ async function readJson(pathname: string): Promise<unknown> {
   }
 }
 
-export async function ensureBotModelsJson(
-  config?: BotConfig,
-  agentDirOverride?: string,
-): Promise<{ agentDir: string; wrote: boolean }> {
-  const cfg = config ?? loadConfig();
-  const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveBotAgentDir();
-
+async function resolveProvidersForModelsJson(params: {
+  cfg: BotConfig;
+  agentDir: string;
+}): Promise<Record<string, ProviderConfig>> {
+  const { cfg, agentDir } = params;
   const explicitProviders = cfg.models?.providers ?? {};
   const implicitProviders = await resolveImplicitProviders({ agentDir, explicitProviders });
   const providers: Record<string, ProviderConfig> = mergeProviders({

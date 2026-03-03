@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { BaseTokenResolution } from "../channels/plugins/types.js";
 import type { BotConfig } from "../config/config.js";
+import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import type { TelegramAccountConfig } from "../config/types.telegram.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 

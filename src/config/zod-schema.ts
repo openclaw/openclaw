@@ -128,6 +128,31 @@ const HttpUrlSchema = z
     return protocol === "http:" || protocol === "https:";
   }, "Expected http:// or https:// URL");
 
+const ResponsesEndpointUrlFetchShape = {
+  allowUrl: z.boolean().optional(),
+  urlAllowlist: z.array(z.string()).optional(),
+  allowedMimes: z.array(z.string()).optional(),
+  maxBytes: z.number().int().positive().optional(),
+  maxRedirects: z.number().int().nonnegative().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+};
+
+const SkillEntrySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    env: z.record(z.string(), z.string()).optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
+const PluginEntrySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
 export const BotSchema = z
   .object({
     $schema: z.string().optional(),
@@ -430,6 +455,17 @@ export const BotSchema = z
             enabled: z.boolean().optional(),
             after: z.number().int().min(1).optional(),
             cooldownMs: z.number().int().min(0).optional(),
+            mode: z.enum(["announce", "webhook"]).optional(),
+            accountId: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        failureDestination: z
+          .object({
+            channel: z.string().optional(),
+            to: z.string().optional(),
+            accountId: z.string().optional(),
+            mode: z.enum(["announce", "webhook"]).optional(),
           })
           .strict()
           .optional(),
@@ -582,7 +618,6 @@ export const BotSchema = z
                 z.literal("token"),
                 z.literal("password"),
                 z.literal("trusted-proxy"),
-                z.literal("iam"),
               ])
               .optional(),
             token: z.string().optional().register(sensitive),
@@ -602,18 +637,6 @@ export const BotSchema = z
                 userHeader: z.string().min(1, "userHeader is required for trusted-proxy mode"),
                 requiredHeaders: z.array(z.string()).optional(),
                 allowUsers: z.array(z.string()).optional(),
-              })
-              .strict()
-              .optional(),
-            iam: z
-              .object({
-                serverUrl: z.string(),
-                clientId: z.string(),
-                clientSecret: z.string().optional().register(sensitive),
-                orgName: z.string().optional(),
-                appName: z.string().optional(),
-                scopes: z.array(z.string()).optional(),
-                superAdmins: z.array(z.string()).optional(),
               })
               .strict()
               .optional(),
@@ -736,17 +759,6 @@ export const BotSchema = z
               .optional(),
             allowCommands: z.array(z.string()).optional(),
             denyCommands: z.array(z.string()).optional(),
-          })
-          .strict()
-          .optional(),
-        marketplace: z
-          .object({
-            enabled: z.boolean().optional(),
-            comingSoon: z.boolean().optional(),
-            platformFeePct: z.number().min(0).max(100).optional(),
-            priceFraction: z.number().min(0).max(1).optional(),
-            minPayoutCents: z.number().int().min(0).optional(),
-            aiTokenBonusPct: z.number().min(0).max(100).optional(),
           })
           .strict()
           .optional(),

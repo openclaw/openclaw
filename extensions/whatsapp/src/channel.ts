@@ -115,9 +115,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       dmPolicy: account.dmPolicy,
       allowFrom: account.allowFrom,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      resolveWhatsAppAccount({ cfg, accountId }).allowFrom ?? [],
-    formatAllowFrom: ({ allowFrom }) => normalizeWhatsAppAllowFromEntries(allowFrom),
+    resolveAllowFrom: ({ cfg, accountId }) => resolveWhatsAppConfigAllowFrom({ cfg, accountId }),
+    formatAllowFrom: ({ allowFrom }) => formatWhatsAppConfigAllowFromEntries(allowFrom),
+    resolveDefaultTo: ({ cfg, accountId }) => resolveWhatsAppConfigDefaultTo({ cfg, accountId }),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {

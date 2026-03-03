@@ -1,6 +1,10 @@
-import type { IStorageProvider, ICryptoStorageProvider } from "@vector-im/matrix-bot-sdk";
-import { LogService, MatrixClient } from "@vector-im/matrix-bot-sdk";
 import fs from "node:fs";
+import type {
+  IStorageProvider,
+  ICryptoStorageProvider,
+  MatrixClient,
+} from "@vector-im/matrix-bot-sdk";
+import { loadMatrixSdk } from "../sdk-runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import {
   maybeMigrateLegacyStorage,
@@ -86,19 +90,19 @@ export async function createMatrixClient(params: {
   if (client.crypto) {
     const originalUpdateSyncData = client.crypto.updateSyncData.bind(client.crypto);
     client.crypto.updateSyncData = async (
-      toDeviceMessages: unknown[],
-      otkCounts: Record<string, number>,
-      unusedFallbackKeyAlgs: string[],
-      changedDeviceLists: string[],
-      leftDeviceLists: string[],
+      toDeviceMessages,
+      otkCounts,
+      unusedFallbackKeyAlgs,
+      changedDeviceLists,
+      leftDeviceLists,
     ) => {
       const safeChanged = sanitizeUserIdList(changedDeviceLists, "changed device list");
       const safeLeft = sanitizeUserIdList(leftDeviceLists, "left device list");
       try {
         return await originalUpdateSyncData(
-          toDeviceMessages as never,
+          toDeviceMessages,
           otkCounts,
-          unusedFallbackKeyAlgs as never,
+          unusedFallbackKeyAlgs,
           safeChanged,
           safeLeft,
         );

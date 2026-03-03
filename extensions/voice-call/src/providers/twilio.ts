@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import type { TwilioConfig, WebhookSecurityConfig } from "../config.js";
+import { getHeader } from "../http-headers.js";
 import type { MediaStreamHandler } from "../media-stream.js";
+import { chunkAudio } from "../telephony-audio.js";
 import type { TelephonyTtsProvider } from "../telephony-tts.js";
 import type {
   GetCallStatusInput,
@@ -17,10 +19,14 @@ import type {
   WebhookParseOptions,
   WebhookVerificationResult,
 } from "../types.js";
-import type { VoiceCallProvider } from "./base.js";
-import { getHeader } from "../http-headers.js";
-import { chunkAudio } from "../telephony-audio.js";
 import { escapeXml, mapVoiceToPolly } from "../voice-mapping.js";
+import type { VoiceCallProvider } from "./base.js";
+import {
+  isProviderStatusTerminal,
+  mapProviderStatusToEndReason,
+  normalizeProviderStatus,
+} from "./shared/call-status.js";
+import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 import { twilioApiRequest } from "./twilio/api.js";
 import { decideTwimlResponse, readTwimlRequestView } from "./twilio/twiml-policy.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
@@ -661,17 +667,31 @@ export class TwilioProvider implements VoiceCallProvider {
     // No explicit action needed
   }
 
-  /**
-   * Return pre-generated greeting audio buffer, if available.
-   * Used for instant greeting playback on inbound calls to avoid TTS latency.
-   * Returns null when no cached greeting has been pre-generated.
-   */
-  getCachedGreetingAudio(): Buffer | null {
-    return this.cachedGreetingAudio;
-  }
+  async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
+    try {
+      const data = await guardedJsonApiRequest<{ status?: string }>({
+        url: `${this.baseUrl}/Calls/${input.providerCallId}.json`,
+        method: "GET",
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString("base64")}`,
+        },
+        allowNotFound: true,
+        allowedHostnames: ["api.twilio.com"],
+        auditContext: "twilio-get-call-status",
+        errorPrefix: "Twilio get call status error",
+      });
 
-  /** Pre-generated greeting audio for inbound calls. */
-  private cachedGreetingAudio: Buffer | null = null;
+      if (!data) {
+        return { status: "not-found", isTerminal: true };
+      }
+
+      const status = normalizeProviderStatus(data.status);
+      return { status, isTerminal: isProviderStatusTerminal(status) };
+    } catch {
+      // Transient error — keep the call and rely on timer fallback
+      return { status: "error", isTerminal: false, isUnknown: true };
+    }
+  }
 }
 
 // -----------------------------------------------------------------------------

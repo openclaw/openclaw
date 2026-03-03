@@ -675,3 +675,17 @@ export { loadWebMedia, type WebMediaResult } from "../web/media.js";
 
 // Security utilities
 export { redactSensitiveText } from "../logging/redact.js";
+
+// Windows spawn helpers
+export {
+  applyWindowsSpawnProgramPolicy,
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgramCandidate,
+} from "./windows-spawn.js";
+export type {
+  WindowsSpawnCandidateResolution,
+  WindowsSpawnInvocation,
+  WindowsSpawnProgram,
+  WindowsSpawnProgramCandidate,
+  WindowsSpawnResolution,
+} from "./windows-spawn.js";

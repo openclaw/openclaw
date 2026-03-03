@@ -1,17 +1,21 @@
-import type { GatewayBindMode, GatewayControlUiConfig } from "../../config/types.js";
-import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
-import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
-import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
-import type { GatewayRpcOpts } from "./types.js";
 import {
   createConfigIO,
   resolveConfigPath,
   resolveGatewayPort,
   resolveStateDir,
 } from "../../config/config.js";
+import type {
+  BotConfig,
+  GatewayBindMode,
+  GatewayControlUiConfig,
+} from "../../config/types.js";
+import { normalizeSecretInputString, resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
+import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import { findExtraGatewayServices } from "../../daemon/inspect.js";
+import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { auditGatewayServiceConfig } from "../../daemon/service-audit.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { resolveGatewayBindHost } from "../../gateway/net.js";
 import {
@@ -21,8 +25,12 @@ import {
   type PortUsageStatus,
 } from "../../infra/ports.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
+import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
+import { secretRefKey } from "../../secrets/ref-contract.js";
+import { resolveSecretRefValues } from "../../secrets/resolve.js";
 import { probeGatewayStatus } from "./probe.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
+import type { GatewayRpcOpts } from "./types.js";
 
 type ConfigSummary = {
   path: string;
@@ -230,7 +238,8 @@ export async function gatherDaemonStatus(
   const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost);
   const probeUrlOverride =
     typeof opts.rpc.url === "string" && opts.rpc.url.trim().length > 0 ? opts.rpc.url.trim() : null;
-  const probeUrl = probeUrlOverride ?? `ws://${probeHost}:${daemonPort}`;
+  const scheme = daemonCfg.gateway?.tls?.enabled === true ? "wss" : "ws";
+  const probeUrl = probeUrlOverride ?? `${scheme}://${probeHost}:${daemonPort}`;
   const probeNote =
     !probeUrlOverride && bindMode === "lan"
       ? `bind=lan listens on 0.0.0.0 (all interfaces); probing via ${probeHost}.`
@@ -268,15 +277,32 @@ export async function gatherDaemonStatus(
   const timeoutMsRaw = Number.parseInt(String(opts.rpc.timeout ?? "10000"), 10);
   const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0 ? timeoutMsRaw : 10_000;
 
+  const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
+  const shouldUseLocalTlsRuntime = opts.probe && !probeUrlOverride && tlsEnabled;
+  const tlsRuntime = shouldUseLocalTlsRuntime
+    ? await loadGatewayTlsRuntime(daemonCfg.gateway?.tls)
+    : undefined;
+  const daemonProbePassword = opts.probe
+    ? await resolveDaemonProbePassword({
+        daemonCfg,
+        mergedDaemonEnv,
+        explicitToken: opts.rpc.token,
+        explicitPassword: opts.rpc.password,
+      })
+    : undefined;
+
   const rpc = opts.probe
     ? await probeGatewayStatus({
         url: probeUrl,
         token:
-          opts.rpc.token || mergedDaemonEnv.BOT_GATEWAY_TOKEN || daemonCfg.gateway?.auth?.token,
-        password:
-          opts.rpc.password ||
-          mergedDaemonEnv.BOT_GATEWAY_PASSWORD ||
-          daemonCfg.gateway?.auth?.password,
+          opts.rpc.token ||
+          mergedDaemonEnv.BOT_GATEWAY_TOKEN ||
+          daemonCfg.gateway?.auth?.token,
+        password: daemonProbePassword,
+        tlsFingerprint:
+          shouldUseLocalTlsRuntime && tlsRuntime?.enabled
+            ? tlsRuntime.fingerprintSha256
+            : undefined,
         timeoutMs,
         json: opts.rpc.json,
         configPath: daemonConfigSummary.path,

@@ -1,5 +1,5 @@
-import type { MemoryProviderStatus } from "../memory/types.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
@@ -9,7 +9,9 @@ import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { getMemorySearchManager } from "../memory/index.js";
+import type { MemoryProviderStatus } from "../memory/types.js";
 import { runExec } from "../process/exec.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { buildChannelsTable } from "./status-all/channels.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
 import { pickGatewaySelfPresence, resolveGatewayProbeAuth } from "./status.gateway-probe.js";
@@ -27,6 +29,13 @@ type MemoryPluginStatus = {
 };
 
 type DeferredResult<T> = { ok: true; value: T } | { ok: false; error: unknown };
+
+type GatewayProbeSnapshot = {
+  gatewayConnection: ReturnType<typeof buildGatewayConnectionDetails>;
+  remoteUrlMissing: boolean;
+  gatewayMode: "local" | "remote";
+  gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
+};
 
 function deferResult<T>(promise: Promise<T>): Promise<DeferredResult<T>> {
   return promise.then(
@@ -141,7 +150,12 @@ async function scanStatusJsonFast(opts: {
   timeoutMs?: number;
   all?: boolean;
 }): Promise<StatusScanResult> {
-  const cfg = loadConfig();
+  const loadedRaw = loadConfig();
+  const { resolvedConfig: cfg } = await resolveCommandSecretRefsViaGateway({
+    config: loadedRaw,
+    commandName: "status --json",
+    targetIds: getStatusCommandSecretTargetIds(),
+  });
   const osSummary = resolveOsSummary();
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const updateTimeoutMs = opts.all ? 6500 : 2500;
@@ -151,7 +165,7 @@ async function scanStatusJsonFast(opts: {
     includeRegistry: true,
   });
   const agentStatusPromise = getAgentLocalStatuses();
-  const summaryPromise = getStatusSummary();
+  const summaryPromise = getStatusSummary({ config: cfg });
 
   const tailscaleDnsPromise =
     tailscaleMode === "off"
@@ -160,20 +174,9 @@ async function scanStatusJsonFast(opts: {
           runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
         ).catch(() => null);
 
-  const gatewayConnection = buildGatewayConnectionDetails();
-  const isRemoteMode = cfg.gateway?.mode === "remote";
-  const remoteUrlRaw = typeof cfg.gateway?.remote?.url === "string" ? cfg.gateway.remote.url : "";
-  const remoteUrlMissing = isRemoteMode && !remoteUrlRaw.trim();
-  const gatewayMode = isRemoteMode ? "remote" : "local";
-  const gatewayProbePromise = remoteUrlMissing
-    ? Promise.resolve<Awaited<ReturnType<typeof probeGateway>> | null>(null)
-    : probeGateway({
-        url: gatewayConnection.url,
-        auth: resolveGatewayProbeAuth(cfg),
-        timeoutMs: Math.min(opts.all ? 5000 : 2500, opts.timeoutMs ?? 10_000),
-      }).catch(() => null);
+  const gatewayProbePromise = resolveGatewayProbeSnapshot({ cfg, opts });
 
-  const [tailscaleDns, update, agentStatus, gatewayProbe, summary] = await Promise.all([
+  const [tailscaleDns, update, agentStatus, gatewaySnapshot, summary] = await Promise.all([
     tailscaleDnsPromise,
     updatePromise,
     agentStatusPromise,
@@ -185,20 +188,12 @@ async function scanStatusJsonFast(opts: {
       ? `https://${tailscaleDns}${normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath)}`
       : null;
 
+  const { gatewayConnection, remoteUrlMissing, gatewayMode, gatewayProbe } = gatewaySnapshot;
   const gatewayReachable = gatewayProbe?.ok === true;
   const gatewaySelf = gatewayProbe?.presence
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;
-  const channelsStatusPromise = gatewayReachable
-    ? callGateway({
-        method: "channels.status",
-        params: {
-          probe: false,
-          timeoutMs: Math.min(8000, opts.timeoutMs ?? 10_000),
-        },
-        timeoutMs: Math.min(opts.all ? 5000 : 2500, opts.timeoutMs ?? 10_000),
-      }).catch(() => null)
-    : Promise.resolve(null);
+  const channelsStatusPromise = resolveChannelsStatus({ gatewayReachable, opts });
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
   const memoryPromise = resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
   const [channelsStatus, memory] = await Promise.all([channelsStatusPromise, memoryPromise]);
@@ -268,7 +263,7 @@ export async function scanStatus(
         }),
       );
       const agentStatusPromise = deferResult(getAgentLocalStatuses());
-      const summaryPromise = deferResult(getStatusSummary());
+      const summaryPromise = deferResult(getStatusSummary({ config: cfg }));
       progress.tick();
 
       progress.setLabel("Checking Tailscale…");

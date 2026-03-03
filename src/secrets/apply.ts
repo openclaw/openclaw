@@ -2,14 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import type { ConfigWriteOptions } from "../config/io.js";
-import type { SecretProviderConfig } from "../config/types.secrets.js";
-import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type BotConfig } from "../config/config.js";
+import type { ConfigWriteOptions } from "../config/io.js";
+import type { SecretProviderConfig } from "../config/types.secrets.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
@@ -80,65 +81,10 @@ export type SecretsApplyResult = {
   warnings: string[];
 };
 
-function getByPathSegments(root: unknown, segments: string[]): unknown {
-  if (segments.length === 0) {
-    return undefined;
-  }
-  let cursor: unknown = root;
-  for (const segment of segments) {
-    if (!isRecord(cursor)) {
-      return undefined;
-    }
-    cursor = cursor[segment];
-  }
-  return cursor;
-}
-
-function setByPathSegments(root: BotConfig, segments: string[], value: unknown): boolean {
-  if (segments.length === 0) {
-    throw new Error("Target path is empty.");
-  }
-  let cursor: Record<string, unknown> = root as unknown as Record<string, unknown>;
-  let changed = false;
-  for (const segment of segments.slice(0, -1)) {
-    const existing = cursor[segment];
-    if (!isRecord(existing)) {
-      cursor[segment] = {};
-      changed = true;
-    }
-    cursor = cursor[segment] as Record<string, unknown>;
-  }
-  const leaf = segments[segments.length - 1] ?? "";
-  const previous = cursor[leaf];
-  if (!isDeepStrictEqual(previous, value)) {
-    cursor[leaf] = value;
-    changed = true;
-  }
-  return changed;
-}
-
-function deleteByPathSegments(root: BotConfig, segments: string[]): boolean {
-  if (segments.length === 0) {
-    return false;
-  }
-  let cursor: Record<string, unknown> = root as unknown as Record<string, unknown>;
-  for (const segment of segments.slice(0, -1)) {
-    const existing = cursor[segment];
-    if (!isRecord(existing)) {
-      return false;
-    }
-    cursor = existing;
-  }
-  const leaf = segments[segments.length - 1] ?? "";
-  if (!Object.prototype.hasOwnProperty.call(cursor, leaf)) {
-    return false;
-  }
-  delete cursor[leaf];
-  return true;
-}
-
-function resolveTargetPathSegments(target: SecretsPlanTarget): string[] {
-  const resolved = resolveValidatedTargetPathSegments(target);
+function resolveTarget(
+  target: SecretsPlanTarget,
+): NonNullable<ReturnType<typeof resolveValidatedPlanTarget>> {
+  const resolved = resolveValidatedPlanTarget(target);
   if (!resolved) {
     throw new Error(`Invalid plan target path for ${target.type}: ${target.path}`);
   }
@@ -186,63 +132,6 @@ function scrubEnvRaw(
         : joined,
     removed,
   };
-}
-
-function collectAuthStorePaths(config: BotConfig, stateDir: string): string[] {
-  const paths = new Set<string>();
-  // Scope default auth store discovery to the provided stateDir instead of
-  // ambient process env, so apply does not touch unrelated host-global stores.
-  paths.add(path.join(resolveUserPath(stateDir), "agents", "main", "agent", "auth-profiles.json"));
-
-  const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
-  if (fs.existsSync(agentsRoot)) {
-    for (const entry of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      paths.add(path.join(agentsRoot, entry.name, "agent", "auth-profiles.json"));
-    }
-  }
-
-  for (const agentId of listAgentIds(config)) {
-    if (agentId === "main") {
-      paths.add(
-        path.join(resolveUserPath(stateDir), "agents", "main", "agent", "auth-profiles.json"),
-      );
-      continue;
-    }
-    const agentDir = resolveAgentDir(config, agentId);
-    paths.add(resolveUserPath(resolveAuthStorePath(agentDir)));
-  }
-
-  return [...paths];
-}
-
-function collectAuthJsonPaths(stateDir: string): string[] {
-  const out: string[] = [];
-  const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
-  if (!fs.existsSync(agentsRoot)) {
-    return out;
-  }
-  for (const entry of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const candidate = path.join(agentsRoot, entry.name, "agent", "auth.json");
-    if (fs.existsSync(candidate)) {
-      out.push(candidate);
-    }
-  }
-  return out;
-}
-
-function resolveGoogleChatRefPathSegments(pathSegments: string[]): string[] {
-  if (pathSegments.at(-1) === "serviceAccount") {
-    return [...pathSegments.slice(0, -1), "serviceAccountRef"];
-  }
-  throw new Error(
-    `Google Chat target path must end with "serviceAccount": ${pathSegments.join(".")}`,
-  );
 }
 
 function applyProviderPlanMutations(params: {

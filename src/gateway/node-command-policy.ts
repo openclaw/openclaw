@@ -1,4 +1,10 @@
 import type { BotConfig } from "../config/config.js";
+import {
+  NODE_BROWSER_PROXY_COMMAND,
+  NODE_SYSTEM_NOTIFY_COMMAND,
+  NODE_SYSTEM_RUN_COMMANDS,
+} from "../infra/node-commands.js";
+import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
 const CANVAS_COMMANDS = [
@@ -18,11 +24,11 @@ const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 
 const LOCATION_COMMANDS = ["location.get"];
+const NOTIFICATION_COMMANDS = ["notifications.list"];
+const ANDROID_NOTIFICATION_COMMANDS = [...NOTIFICATION_COMMANDS, "notifications.actions"];
 
 const DEVICE_COMMANDS = ["device.info", "device.status"];
-const DEVICE_DIAGNOSTICS_COMMANDS = ["device.permissions", "device.health"];
-
-const ANDROID_NOTIFICATION_COMMANDS = ["notifications.list", "notifications.actions"];
+const ANDROID_DEVICE_COMMANDS = [...DEVICE_COMMANDS, "device.permissions", "device.health"];
 
 const CONTACTS_COMMANDS = ["contacts.search"];
 const CONTACTS_DANGEROUS_COMMANDS = ["contacts.add"];
@@ -40,14 +46,12 @@ const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 const SMS_DANGEROUS_COMMANDS = ["sms.send"];
 
 // iOS nodes don't implement system.run/which, but they do support notifications.
-const IOS_SYSTEM_COMMANDS = ["system.notify", "shutdown"];
+const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 
 const SYSTEM_COMMANDS = [
-  "system.run",
-  "system.which",
-  "system.notify",
-  "browser.proxy",
-  "shutdown",
+  ...NODE_SYSTEM_RUN_COMMANDS,
+  NODE_SYSTEM_NOTIFY_COMMAND,
+  NODE_BROWSER_PROXY_COMMAND,
 ];
 const UNKNOWN_PLATFORM_COMMANDS = [
   ...CANVAS_COMMANDS,
@@ -84,10 +88,9 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
     ...LOCATION_COMMANDS,
-    ...DEVICE_COMMANDS,
-    ...DEVICE_DIAGNOSTICS_COMMANDS,
     ...ANDROID_NOTIFICATION_COMMANDS,
-    "system.notify",
+    NODE_SYSTEM_NOTIFY_COMMAND,
+    ...ANDROID_DEVICE_COMMANDS,
     ...CONTACTS_COMMANDS,
     ...CALENDAR_COMMANDS,
     ...REMINDERS_COMMANDS,

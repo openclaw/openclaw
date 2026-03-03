@@ -238,7 +238,7 @@ export function repairToolCallInputs(
 
     const nextContent: typeof msg.content = [];
     let droppedInMessage = 0;
-    let trimmedInMessage = 0;
+    let messageChanged = false;
 
     for (const block of msg.content) {
       if (
@@ -253,20 +253,46 @@ export function repairToolCallInputs(
         messageChanged = true;
         continue;
       }
-      // Normalize tool call names by trimming whitespace so that downstream
-      // lookup (toolsByName map) matches correctly even when the model emits
-      // names with leading/trailing spaces (e.g. " read" → "read").
-      if (isToolCallBlock(block) && typeof (block as ToolCallBlock).name === "string") {
-        const rawName = (block as ToolCallBlock).name as string;
-        if (rawName !== rawName.trim()) {
-          const normalized = { ...block, name: rawName.trim() } as typeof block;
-          nextContent.push(normalized);
-          trimmedInMessage += 1;
-          changed = true;
+      if (isRawToolCallBlock(block)) {
+        if (
+          (block as { type?: unknown }).type === "toolCall" ||
+          (block as { type?: unknown }).type === "toolUse" ||
+          (block as { type?: unknown }).type === "functionCall"
+        ) {
+          // Only sanitize (redact) sessions_spawn blocks; all others are passed through
+          // unchanged to preserve provider-specific shapes (e.g. toolUse.input for Anthropic).
+          const blockName =
+            typeof (block as { name?: unknown }).name === "string"
+              ? (block as { name: string }).name.trim()
+              : undefined;
+          if (blockName?.toLowerCase() === "sessions_spawn") {
+            const sanitized = sanitizeToolCallBlock(block);
+            if (sanitized !== block) {
+              changed = true;
+              messageChanged = true;
+            }
+            nextContent.push(sanitized as typeof block);
+          } else {
+            if (typeof (block as { name?: unknown }).name === "string") {
+              const rawName = (block as { name: string }).name;
+              const trimmedName = rawName.trim();
+              if (rawName !== trimmedName && trimmedName) {
+                const renamed = { ...(block as object), name: trimmedName } as typeof block;
+                nextContent.push(renamed);
+                changed = true;
+                messageChanged = true;
+              } else {
+                nextContent.push(block);
+              }
+            } else {
+              nextContent.push(block);
+            }
+          }
           continue;
         }
+      } else {
+        nextContent.push(block);
       }
-      nextContent.push(block);
     }
 
     if (droppedInMessage > 0) {
@@ -279,9 +305,7 @@ export function repairToolCallInputs(
       continue;
     }
 
-    // When tool names were trimmed but nothing was dropped,
-    // we still need to emit the message with the normalized content.
-    if (trimmedInMessage > 0) {
+    if (messageChanged) {
       out.push({ ...msg, content: nextContent });
       continue;
     }

@@ -1,8 +1,5 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
-import type { GatewayIamConfig } from "../config/config.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
@@ -13,19 +10,18 @@ import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
 } from "./agent-prompt.js";
-import { checkBillingAllowance } from "./billing/billing-gate.js";
-import { reportUsage } from "./billing/usage-reporter.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
-import { resolveTenantContext, type TenantContext } from "./tenant-context.js";
+import { resolveGatewayRequestContext } from "./http-utils.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
   trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
-  iamConfig?: GatewayIamConfig;
 };
 
 type OpenAiChatMessage = {
@@ -43,6 +39,54 @@ type OpenAiChatCompletionRequest = {
 
 function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function buildAgentCommandInput(params: {
+  prompt: { message: string; extraSystemPrompt?: string };
+  sessionKey: string;
+  runId: string;
+  messageChannel: string;
+}) {
+  return {
+    message: params.prompt.message,
+    extraSystemPrompt: params.prompt.extraSystemPrompt,
+    sessionKey: params.sessionKey,
+    runId: params.runId,
+    deliver: false as const,
+    messageChannel: params.messageChannel,
+    bestEffortDeliver: false as const,
+    // HTTP API callers are authenticated operator clients for this gateway context.
+    senderIsOwner: true as const,
+  };
+}
+
+function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; model: string }) {
+  writeSse(res, {
+    id: params.runId,
+    object: "chat.completion.chunk",
+    created: Math.floor(Date.now() / 1000),
+    model: params.model,
+    choices: [{ index: 0, delta: { role: "assistant" } }],
+  });
+}
+
+function writeAssistantContentChunk(
+  res: ServerResponse,
+  params: { runId: string; model: string; content: string; finishReason: "stop" | null },
+) {
+  writeSse(res, {
+    id: params.runId,
+    object: "chat.completion.chunk",
+    created: Math.floor(Date.now() / 1000),
+    model: params.model,
+    choices: [
+      {
+        index: 0,
+        delta: { content: params.content },
+        finish_reason: params.finishReason,
+      },
+    ],
+  });
 }
 
 function asMessages(val: unknown): OpenAiChatMessage[] {
@@ -138,6 +182,18 @@ function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
   return val as OpenAiChatCompletionRequest;
 }
 
+function resolveAgentResponseText(result: unknown): string {
+  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+  if (!Array.isArray(payloads) || payloads.length === 0) {
+    return "No response from Bot.";
+  }
+  const content = payloads
+    .map((p) => (typeof p.text === "string" ? p.text : ""))
+    .filter(Boolean)
+    .join("\n\n");
+  return content || "No response from Bot.";
+}
+
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -147,6 +203,7 @@ export async function handleOpenAiHttpRequest(
     pathname: "/v1/chat/completions",
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
     maxBodyBytes: opts.maxBodyBytes ?? 1024 * 1024,
   });
@@ -159,33 +216,17 @@ export async function handleOpenAiHttpRequest(
 
   const payload = coerceRequest(handled.body);
   const stream = Boolean(payload.stream);
-  const model = typeof payload.model === "string" ? payload.model : "bot";
+  const model = typeof payload.model === "string" ? payload.model : "@hanzo/bot";
   const user = typeof payload.user === "string" ? payload.user : undefined;
 
-  // Resolve tenant context from IAM auth result (for billing & scoping)
-  let tenant: TenantContext | undefined;
-  if (handled.authResult?.iamResult && handled.authResult.iamResult.ok) {
-    tenant = resolveTenantContext({ iamResult: handled.authResult.iamResult }) ?? undefined;
-  }
-
-  // Billing gate: check subscription before dispatching LLM call
-  const billing = await checkBillingAllowance({
-    iamConfig: opts.iamConfig,
-    tenant,
-    token: handled.authResult?.rawToken,
+  const { sessionKey, messageChannel } = resolveGatewayRequestContext({
+    req,
+    model,
+    user,
+    sessionPrefix: "openai",
+    defaultMessageChannel: "webchat",
+    useMessageChannelHeader: true,
   });
-  if (!billing.allowed) {
-    sendJson(res, 402, {
-      error: {
-        message: billing.reason,
-        type: "billing_error",
-      },
-    });
-    return true;
-  }
-
-  const agentId = resolveAgentIdForRequest({ req, model });
-  const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });
   const prompt = buildAgentPrompt(payload.messages);
   if (!prompt.message) {
     sendJson(res, 400, {
@@ -199,55 +240,18 @@ export async function handleOpenAiHttpRequest(
 
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
-  const requestStartMs = Date.now();
+  const commandInput = buildAgentCommandInput({
+    prompt,
+    sessionKey,
+    runId,
+    messageChannel,
+  });
 
   if (!stream) {
     try {
-      const result = await agentCommand(
-        {
-          message: prompt.message,
-          extraSystemPrompt: prompt.extraSystemPrompt,
-          sessionKey,
-          runId,
-          deliver: false,
-          messageChannel: "webchat",
-          bestEffortDeliver: false,
-        },
-        defaultRuntime,
-        deps,
-      );
+      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
 
-      const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
-      const content =
-        Array.isArray(payloads) && payloads.length > 0
-          ? payloads
-              .map((p) => (typeof p.text === "string" ? p.text : ""))
-              .filter(Boolean)
-              .join("\n\n")
-          : "No response from Hanzo Bot.";
-
-      // Extract usage from agent result metadata
-      const meta = (result as { meta?: Record<string, unknown> } | null)?.meta;
-      const agentUsage = (meta?.agentMeta as { usage?: Record<string, number> } | undefined)?.usage;
-      const inputTokens = agentUsage?.input ?? 0;
-      const outputTokens = agentUsage?.output ?? 0;
-      const totalTokens = agentUsage?.total ?? inputTokens + outputTokens;
-
-      // Report usage to IAM billing (async, non-blocking)
-      if (tenant && (inputTokens > 0 || outputTokens > 0)) {
-        reportUsage({
-          tenant,
-          model,
-          provider: (meta?.agentMeta as { provider?: string } | undefined)?.provider ?? "unknown",
-          inputTokens,
-          outputTokens,
-          cacheReadTokens: agentUsage?.cacheRead,
-          cacheWriteTokens: agentUsage?.cacheWrite,
-          totalTokens,
-          durationMs: Date.now() - requestStartMs,
-          timestamp: Date.now(),
-        });
-      }
+      const content = resolveAgentResponseText(result);
 
       sendJson(res, 200, {
         id: runId,
@@ -261,11 +265,7 @@ export async function handleOpenAiHttpRequest(
             finish_reason: "stop",
           },
         ],
-        usage: {
-          prompt_tokens: inputTokens,
-          completion_tokens: outputTokens,
-          total_tokens: totalTokens,
-        },
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       });
     } catch (err) {
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
@@ -298,28 +298,15 @@ export async function handleOpenAiHttpRequest(
 
       if (!wroteRole) {
         wroteRole = true;
-        writeSse(res, {
-          id: runId,
-          object: "chat.completion.chunk",
-          created: Math.floor(Date.now() / 1000),
-          model,
-          choices: [{ index: 0, delta: { role: "assistant" } }],
-        });
+        writeAssistantRoleChunk(res, { runId, model });
       }
 
       sawAssistantDelta = true;
-      writeSse(res, {
-        id: runId,
-        object: "chat.completion.chunk",
-        created: Math.floor(Date.now() / 1000),
+      writeAssistantContentChunk(res, {
+        runId,
         model,
-        choices: [
-          {
-            index: 0,
-            delta: { content },
-            finish_reason: null,
-          },
-        ],
+        content,
+        finishReason: null,
       });
       return;
     }
@@ -342,81 +329,26 @@ export async function handleOpenAiHttpRequest(
 
   void (async () => {
     try {
-      const result = await agentCommand(
-        {
-          message: prompt.message,
-          extraSystemPrompt: prompt.extraSystemPrompt,
-          sessionKey,
-          runId,
-          deliver: false,
-          messageChannel: "webchat",
-          bestEffortDeliver: false,
-        },
-        defaultRuntime,
-        deps,
-      );
+      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
 
       if (closed) {
         return;
       }
 
-      // Report usage to IAM billing (streaming path)
-      const sMeta = (result as { meta?: Record<string, unknown> } | null)?.meta;
-      const sAgentUsage = (sMeta?.agentMeta as { usage?: Record<string, number> } | undefined)
-        ?.usage;
-      if (
-        tenant &&
-        sAgentUsage &&
-        ((sAgentUsage.input ?? 0) > 0 || (sAgentUsage.output ?? 0) > 0)
-      ) {
-        reportUsage({
-          tenant,
-          model,
-          provider: (sMeta?.agentMeta as { provider?: string } | undefined)?.provider ?? "unknown",
-          inputTokens: sAgentUsage.input ?? 0,
-          outputTokens: sAgentUsage.output ?? 0,
-          cacheReadTokens: sAgentUsage.cacheRead,
-          cacheWriteTokens: sAgentUsage.cacheWrite,
-          totalTokens: sAgentUsage.total ?? (sAgentUsage.input ?? 0) + (sAgentUsage.output ?? 0),
-          durationMs: Date.now() - requestStartMs,
-          timestamp: Date.now(),
-        });
-      }
-
       if (!sawAssistantDelta) {
         if (!wroteRole) {
           wroteRole = true;
-          writeSse(res, {
-            id: runId,
-            object: "chat.completion.chunk",
-            created: Math.floor(Date.now() / 1000),
-            model,
-            choices: [{ index: 0, delta: { role: "assistant" } }],
-          });
+          writeAssistantRoleChunk(res, { runId, model });
         }
 
-        const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
-        const content =
-          Array.isArray(payloads) && payloads.length > 0
-            ? payloads
-                .map((p) => (typeof p.text === "string" ? p.text : ""))
-                .filter(Boolean)
-                .join("\n\n")
-            : "No response from Hanzo Bot.";
+        const content = resolveAgentResponseText(result);
 
         sawAssistantDelta = true;
-        writeSse(res, {
-          id: runId,
-          object: "chat.completion.chunk",
-          created: Math.floor(Date.now() / 1000),
+        writeAssistantContentChunk(res, {
+          runId,
           model,
-          choices: [
-            {
-              index: 0,
-              delta: { content },
-              finish_reason: null,
-            },
-          ],
+          content,
+          finishReason: null,
         });
       }
     } catch (err) {
@@ -424,18 +356,11 @@ export async function handleOpenAiHttpRequest(
       if (closed) {
         return;
       }
-      writeSse(res, {
-        id: runId,
-        object: "chat.completion.chunk",
-        created: Math.floor(Date.now() / 1000),
+      writeAssistantContentChunk(res, {
+        runId,
         model,
-        choices: [
-          {
-            index: 0,
-            delta: { content: "Error: internal error" },
-            finish_reason: "stop",
-          },
-        ],
+        content: "Error: internal error",
+        finishReason: "stop",
       });
       emitAgentEvent({
         runId,

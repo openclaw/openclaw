@@ -1,13 +1,16 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import fs from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { BotConfig } from "../config/config.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
+import { isWithinDir } from "../infra/path-safety.js";
+import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
+import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
-  type ControlUiBootstrapIamConfig,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader } from "./control-ui-csp.js";
 import {
@@ -32,8 +35,6 @@ export type ControlUiRequestOptions = {
   config?: BotConfig;
   agentId?: string;
   root?: ControlUiRootState;
-  /** Pre-authenticated token from HTTP Bearer to forward to the SPA. */
-  bearerToken?: string;
 };
 
 export type ControlUiRootState =
@@ -72,6 +73,28 @@ function contentTypeForExt(ext: string): string {
   }
 }
 
+/**
+ * Extensions recognised as static assets.  Missing files with these extensions
+ * return 404 instead of the SPA index.html fallback.  `.html` is intentionally
+ * excluded — actual HTML files on disk are served earlier, and missing `.html`
+ * paths should fall through to the SPA router (client-side routers may use
+ * `.html`-suffixed routes).
+ */
+const STATIC_ASSET_EXTENSIONS = new Set([
+  ".js",
+  ".css",
+  ".json",
+  ".map",
+  ".svg",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".ico",
+  ".txt",
+]);
+
 export type ControlUiAvatarResolution =
   | { kind: "none"; reason: string }
   | { kind: "local"; filePath: string }
@@ -82,9 +105,9 @@ type ControlUiAvatarMeta = {
   avatarUrl: string | null;
 };
 
-function applyControlUiSecurityHeaders(res: ServerResponse, iamServerUrl?: string) {
-  res.setHeader("Content-Security-Policy", buildControlUiCspHeader(iamServerUrl));
-  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+function applyControlUiSecurityHeaders(res: ServerResponse) {
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
 }
@@ -175,76 +198,78 @@ export function handleControlUiAvatarRequest(
     return true;
   }
 
-  // Reject avatar symlinks: the filePath must not be a symlink (prevents
-  // path traversal via crafted avatar file references).
+  const safeAvatar = resolveSafeAvatarFile(resolved.filePath);
+  if (!safeAvatar) {
+    respondControlUiNotFound(res);
+    return true;
+  }
   try {
-    const stat = fs.lstatSync(resolved.filePath);
-    if (stat.isSymbolicLink()) {
-      respondNotFound(res);
+    if (respondHeadForFile(req, res, safeAvatar.path)) {
       return true;
     }
-  } catch {
-    respondNotFound(res);
-    return true;
-  }
 
-  if (req.method === "HEAD") {
-    res.statusCode = 200;
-    res.setHeader("Content-Type", contentTypeForExt(path.extname(resolved.filePath).toLowerCase()));
-    res.setHeader("Cache-Control", "no-cache");
-    res.end();
+    serveResolvedFile(res, safeAvatar.path, fs.readFileSync(safeAvatar.fd));
     return true;
+  } finally {
+    fs.closeSync(safeAvatar.fd);
   }
-
-  serveFile(res, resolved.filePath);
-  return true;
 }
 
-function respondNotFound(res: ServerResponse) {
-  res.statusCode = 404;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.end("Not Found");
-}
-
-function serveFile(res: ServerResponse, filePath: string) {
+function setStaticFileHeaders(res: ServerResponse, filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", contentTypeForExt(ext));
   // Static UI should never be cached aggressively while iterating; allow the
   // browser to revalidate.
   res.setHeader("Cache-Control", "no-cache");
-  res.end(fs.readFileSync(filePath));
 }
 
-function serveIndexHtml(res: ServerResponse, indexPath: string) {
+function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) {
+  setStaticFileHeaders(res, filePath);
+  res.end(body);
+}
+
+function serveResolvedIndexHtml(res: ServerResponse, body: string) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(fs.readFileSync(indexPath, "utf8"));
+  res.end(body);
 }
 
-const STATIC_ASSET_EXTENSIONS = new Set([
-  ".svg",
-  ".js",
-  ".mjs",
-  ".css",
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".webp",
-  ".ico",
-  ".json",
-  ".map",
-  ".txt",
-  ".woff",
-  ".woff2",
-  ".ttf",
-  ".eot",
-  ".xml",
-  ".webmanifest",
-]);
+function isExpectedSafePathError(error: unknown): boolean {
+  const code =
+    typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+  return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
+}
 
-function isStaticAssetExtension(ext: string): boolean {
-  return STATIC_ASSET_EXTENSIONS.has(ext);
+function resolveSafeAvatarFile(filePath: string): { path: string; fd: number } | null {
+  const opened = openVerifiedFileSync({
+    filePath,
+    rejectPathSymlink: true,
+    maxBytes: AVATAR_MAX_BYTES,
+  });
+  if (!opened.ok) {
+    return null;
+  }
+  return { path: opened.path, fd: opened.fd };
+}
+
+function resolveSafeControlUiFile(
+  rootReal: string,
+  filePath: string,
+): { path: string; fd: number } | null {
+  const opened = openBoundaryFileSync({
+    absolutePath: filePath,
+    rootPath: rootReal,
+    rootRealPath: rootReal,
+    boundaryLabel: "control ui root",
+    skipLexicalRootCheck: true,
+  });
+  if (!opened.ok) {
+    if (opened.reason === "io") {
+      throw opened.error;
+    }
+    return null;
+  }
+  return { path: opened.path, fd: opened.fd };
 }
 
 function isSafeRelativePath(relPath: string) {
@@ -252,34 +277,16 @@ function isSafeRelativePath(relPath: string) {
     return false;
   }
   const normalized = path.posix.normalize(relPath);
-  if (normalized.startsWith("../") || normalized === "..") {
+  if (path.posix.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) {
     return false;
   }
-  // Reject absolute paths (e.g. "/etc/passwd" embedded in URL after basePath)
-  if (normalized.startsWith("/")) {
+  if (normalized.startsWith("../") || normalized === "..") {
     return false;
   }
   if (normalized.includes("\0")) {
     return false;
   }
   return true;
-}
-
-/**
- * Verify that a resolved file path stays within the root directory after
- * symlink resolution. Returns false if the real path escapes root, or if
- * the file does not exist.
- */
-function isFileWithinRoot(filePath: string, root: string): boolean {
-  try {
-    const realFilePath = fs.realpathSync(filePath);
-    const realRoot = fs.realpathSync(root);
-    // Allow exact match (root/index.html) or nested path (root/assets/foo)
-    return realFilePath === realRoot || realFilePath.startsWith(`${realRoot}${path.sep}`);
-  } catch {
-    // File does not exist or cannot be resolved
-    return false;
-  }
 }
 
 export function handleControlUiHttpRequest(
@@ -316,8 +323,7 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const iamServerUrl = opts?.config?.gateway?.auth?.iam?.serverUrl;
-  applyControlUiSecurityHeaders(res, iamServerUrl);
+  applyControlUiSecurityHeaders(res);
 
   const bootstrapConfigPath = basePath
     ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
@@ -339,29 +345,11 @@ export function handleControlUiHttpRequest(
       res.end();
       return true;
     }
-    const authMode = config?.gateway?.auth?.mode ?? "none";
-    const iamCfg = config?.gateway?.auth?.iam;
-    const iamBootstrap: ControlUiBootstrapIamConfig | undefined =
-      authMode === "iam" && iamCfg
-        ? {
-            serverUrl: iamCfg.serverUrl,
-            clientId: iamCfg.clientId,
-            appName: iamCfg.appName,
-            orgName: iamCfg.orgName,
-            scopes: iamCfg.scopes,
-          }
-        : undefined;
-
-    const marketplaceEnabled = config?.gateway?.marketplace?.enabled === true;
     sendJson(res, 200, {
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
       assistantAgentId: identity.agentId,
-      authMode,
-      iam: iamBootstrap,
-      token: opts?.bearerToken,
-      marketplaceEnabled,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
@@ -389,6 +377,21 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
+  const rootReal = (() => {
+    try {
+      return fs.realpathSync(root);
+    } catch (error) {
+      if (isExpectedSafePathError(error)) {
+        return null;
+      }
+      throw error;
+    }
+  })();
+  if (!rootReal) {
+    respondControlUiAssetsUnavailable(res);
+    return true;
+  }
+
   const uiPath =
     basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
   const rel = (() => {
@@ -408,52 +411,52 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const filePath = path.join(root, fileRel);
-  if (!filePath.startsWith(root)) {
-    respondNotFound(res);
+  const filePath = path.resolve(root, fileRel);
+  if (!isWithinDir(root, filePath)) {
+    respondControlUiNotFound(res);
     return true;
   }
 
-  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-    // Reject symlinks that escape the control-ui root directory
-    if (!isFileWithinRoot(filePath, root)) {
-      respondNotFound(res);
+  const safeFile = resolveSafeControlUiFile(rootReal, filePath);
+  if (safeFile) {
+    try {
+      if (respondHeadForFile(req, res, safeFile.path)) {
+        return true;
+      }
+      if (path.basename(safeFile.path) === "index.html") {
+        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"));
+        return true;
+      }
+      serveResolvedFile(res, safeFile.path, fs.readFileSync(safeFile.fd));
       return true;
+    } finally {
+      fs.closeSync(safeFile.fd);
     }
-    if (path.basename(filePath) === "index.html") {
-      serveIndexHtml(res, filePath);
-      return true;
-    }
-    if (req.method === "HEAD") {
-      res.statusCode = 200;
-      res.setHeader("Content-Type", contentTypeForExt(path.extname(filePath).toLowerCase()));
-      res.setHeader("Cache-Control", "no-cache");
-      res.end();
-      return true;
-    }
-    serveFile(res, filePath);
-    return true;
   }
 
-  // Return 404 for missing static assets (known file extensions) instead of
-  // serving the SPA fallback.  This prevents browsers from loading index.html
-  // in place of e.g. a missing favicon.svg and triggering parse errors.
-  const requestedExt = path.extname(fileRel).toLowerCase();
-  if (requestedExt && isStaticAssetExtension(requestedExt)) {
-    respondNotFound(res);
+  // If the requested path looks like a static asset (known extension), return
+  // 404 rather than falling through to the SPA index.html fallback.  We check
+  // against the same set of extensions that contentTypeForExt() recognises so
+  // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
+  // client-side router fallback.
+  if (STATIC_ASSET_EXTENSIONS.has(path.extname(fileRel).toLowerCase())) {
+    respondControlUiNotFound(res);
     return true;
   }
 
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
-  if (fs.existsSync(indexPath)) {
-    // Reject index.html symlinks that escape the control-ui root directory
-    if (!isFileWithinRoot(indexPath, root)) {
-      respondNotFound(res);
+  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath);
+  if (safeIndex) {
+    try {
+      if (respondHeadForFile(req, res, safeIndex.path)) {
+        return true;
+      }
+      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
       return true;
+    } finally {
+      fs.closeSync(safeIndex.fd);
     }
-    serveIndexHtml(res, indexPath);
-    return true;
   }
 
   respondControlUiNotFound(res);

@@ -1,4 +1,5 @@
 import type { BaseProbeResult } from "bot/plugin-sdk";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { buildBlueBubblesApiUrl, blueBubblesFetchWithTimeout } from "./types.js";
 
 export type BlueBubblesProbe = BaseProbeResult & {

@@ -1,20 +1,20 @@
+import http from "node:http";
+import { URL } from "node:url";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "bot/plugin-sdk";
-import { spawn } from "node:child_process";
-import http from "node:http";
-import { URL } from "node:url";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
+import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
-import { MediaStreamHandler } from "./media-stream.js";
-import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
+import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
@@ -35,7 +35,7 @@ export class VoiceCallWebhookServer {
   private manager: CallManager;
   private provider: VoiceCallProvider;
   private coreConfig: CoreConfig | null;
-  private staleCallReaperInterval: ReturnType<typeof setInterval> | null = null;
+  private stopStaleCallReaper: (() => void) | null = null;
 
   /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
@@ -84,6 +84,10 @@ export class VoiceCallWebhookServer {
 
     const streamConfig: MediaStreamConfig = {
       sttProvider,
+      preStartTimeoutMs: this.config.streaming?.preStartTimeoutMs,
+      maxPendingConnections: this.config.streaming?.maxPendingConnections,
+      maxPendingConnectionsPerIp: this.config.streaming?.maxPendingConnectionsPerIp,
+      maxConnections: this.config.streaming?.maxConnections,
       shouldAcceptStream: ({ callId, token }) => {
         const call = this.manager.getCallByProviderCallId(callId);
         if (!call) {
@@ -149,45 +153,27 @@ export class VoiceCallWebhookServer {
           (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
         }
 
-        // Try instant cached greeting for inbound calls (pre-generated at startup)
-        const cachedAudio =
-          this.provider.name === "twilio"
-            ? (this.provider as TwilioProvider).getCachedGreetingAudio()
-            : null;
-        const call = this.manager.getCallByProviderCallId(callId);
-        if (cachedAudio && call?.metadata?.initialMessage && call.direction === "inbound") {
-          console.log(`[voice-call] Playing cached greeting (${cachedAudio.length} bytes)`);
-          // Clear initialMessage to prevent re-speaking via the fallback path.
-          // Note: this in-memory mutation is not persisted to disk, which is acceptable
-          // because a gateway restart would also sever the media stream, making replay moot.
-          delete call.metadata.initialMessage;
-          const handler = this.mediaStreamHandler!;
-          const CHUNK_SIZE = 160;
-          const CHUNK_DELAY_MS = 20;
-          void (async () => {
-            const { chunkAudio } = await import("./telephony-audio.js");
-            await handler.queueTts(streamSid, async (signal) => {
-              for (const chunk of chunkAudio(cachedAudio, CHUNK_SIZE)) {
-                if (signal.aborted) break;
-                handler.sendAudio(streamSid, chunk);
-                await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
-              }
-              if (!signal.aborted) {
-                handler.sendMark(streamSid, `greeting-${Date.now()}`);
-              }
-            });
-          })().catch((err) => console.warn("[voice-call] Cached greeting playback failed:", err));
-        } else {
-          // Fallback: original path with reduced delay
-          setTimeout(() => {
-            this.manager.speakInitialMessage(callId).catch((err) => {
-              console.warn(`[voice-call] Failed to speak initial message:`, err);
-            });
-          }, 100);
-        }
+        // Speak initial message if one was provided when call was initiated
+        // Use setTimeout to allow stream setup to complete
+        setTimeout(() => {
+          this.manager.speakInitialMessage(callId).catch((err) => {
+            console.warn(`[voice-call] Failed to speak initial message:`, err);
+          });
+        }, 500);
       },
       onDisconnect: (callId) => {
         console.log(`[voice-call] Media stream disconnected: ${callId}`);
+        // Auto-end call when media stream disconnects to prevent stuck calls.
+        // Without this, calls can remain active indefinitely after the stream closes.
+        const disconnectedCall = this.manager.getCallByProviderCallId(callId);
+        if (disconnectedCall) {
+          console.log(
+            `[voice-call] Auto-ending call ${disconnectedCall.callId} on stream disconnect`,
+          );
+          void this.manager.endCall(disconnectedCall.callId).catch((err) => {
+            console.warn(`[voice-call] Failed to auto-end call ${disconnectedCall.callId}:`, err);
+          });
+        }
         if (this.provider.name === "twilio") {
           (this.provider as TwilioProvider).unregisterCallStream(callId);
         }
@@ -225,9 +211,8 @@ export class VoiceCallWebhookServer {
       // Handle WebSocket upgrades for media streams
       if (this.mediaStreamHandler) {
         this.server.on("upgrade", (request, socket, head) => {
-          const url = new URL(request.url || "/", `http://${request.headers.host}`);
-
-          if (url.pathname === streamPath) {
+          const path = this.getUpgradePathname(request);
+          if (path === streamPath) {
             console.log("[voice-call] WebSocket upgrade for media stream");
             this.mediaStreamHandler?.handleUpgrade(request, socket, head);
           } else {
@@ -253,48 +238,21 @@ export class VoiceCallWebhookServer {
         resolve(url);
 
         // Start the stale call reaper if configured
-        this.startStaleCallReaper();
+        this.stopStaleCallReaper = startStaleCallReaper({
+          manager: this.manager,
+          staleCallReaperSeconds: this.config.staleCallReaperSeconds,
+        });
       });
     });
-  }
-
-  /**
-   * Start a periodic reaper that ends calls older than the configured threshold.
-   * Catches calls stuck in unexpected states (e.g., notify-mode calls that never
-   * receive a terminal webhook from the provider).
-   */
-  private startStaleCallReaper(): void {
-    const maxAgeSeconds = this.config.staleCallReaperSeconds;
-    if (!maxAgeSeconds || maxAgeSeconds <= 0) {
-      return;
-    }
-
-    const CHECK_INTERVAL_MS = 30_000; // Check every 30 seconds
-    const maxAgeMs = maxAgeSeconds * 1000;
-
-    this.staleCallReaperInterval = setInterval(() => {
-      const now = Date.now();
-      for (const call of this.manager.getActiveCalls()) {
-        const age = now - call.startedAt;
-        if (age > maxAgeMs) {
-          console.log(
-            `[voice-call] Reaping stale call ${call.callId} (age: ${Math.round(age / 1000)}s, state: ${call.state})`,
-          );
-          void this.manager.endCall(call.callId).catch((err) => {
-            console.warn(`[voice-call] Reaper failed to end call ${call.callId}:`, err);
-          });
-        }
-      }
-    }, CHECK_INTERVAL_MS);
   }
 
   /**
    * Stop the webhook server.
    */
   async stop(): Promise<void> {
-    if (this.staleCallReaperInterval) {
-      clearInterval(this.staleCallReaperInterval);
-      this.staleCallReaperInterval = null;
+    if (this.stopStaleCallReaper) {
+      this.stopStaleCallReaper();
+      this.stopStaleCallReaper = null;
     }
     return new Promise((resolve) => {
       if (this.server) {
@@ -308,6 +266,44 @@ export class VoiceCallWebhookServer {
         resolve();
       }
     });
+  }
+
+  private resolveListeningUrl(bind: string, webhookPath: string): string {
+    const address = this.server?.address();
+    if (address && typeof address === "object") {
+      const host = address.address && address.address.length > 0 ? address.address : bind;
+      const normalizedHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+      return `http://${normalizedHost}:${address.port}${webhookPath}`;
+    }
+    return `http://${bind}:${this.config.serve.port}${webhookPath}`;
+  }
+
+  private getUpgradePathname(request: http.IncomingMessage): string | null {
+    try {
+      const host = request.headers.host || "localhost";
+      return new URL(request.url || "/", `http://${host}`).pathname;
+    } catch {
+      return null;
+    }
+  }
+
+  private normalizeWebhookPathForMatch(pathname: string): string {
+    const trimmed = pathname.trim();
+    if (!trimmed) {
+      return "/";
+    }
+    const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+    if (prefixed === "/") {
+      return prefixed;
+    }
+    return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
+  }
+
+  private isWebhookPathMatch(requestPath: string, configuredPath: string): boolean {
+    return (
+      this.normalizeWebhookPathForMatch(requestPath) ===
+      this.normalizeWebhookPathForMatch(configuredPath)
+    );
   }
 
   /**
@@ -375,35 +371,19 @@ export class VoiceCallWebhookServer {
       console.warn(`[voice-call] Webhook verification failed: ${verification.reason}`);
       return { statusCode: 401, body: "Unauthorized" };
     }
-
-    // Reject requests where verification succeeded but no request key was produced
     if (!verification.verifiedRequestKey) {
-      console.warn("[voice-call] Webhook verification succeeded but no request key produced");
-      res.statusCode = 401;
-      res.end("Unauthorized");
-      return;
+      console.warn("[voice-call] Webhook verification succeeded without request identity key");
+      return { statusCode: 401, body: "Unauthorized" };
     }
 
-    // Acknowledge replayed requests without side-effects
-    if (verification.isReplay) {
-      console.log("[voice-call] Acknowledged replayed webhook request, skipping event processing");
-      res.statusCode = 200;
-      res.end("OK");
-      return;
-    }
-
-    // Parse events, forwarding the verified request key
-    const result = this.provider.parseWebhookEvent(ctx, {
+    const parsed = this.provider.parseWebhookEvent(ctx, {
       verifiedRequestKey: verification.verifiedRequestKey,
     });
 
-    // Process each event
-    for (const event of result.events) {
-      try {
-        this.manager.processEvent(event);
-      } catch (err) {
-        console.error(`[voice-call] Error processing event ${event.type}:`, err);
-      }
+    if (verification.isReplay) {
+      console.warn("[voice-call] Replay detected; skipping event side effects");
+    } else {
+      this.processParsedEvents(parsed.events);
     }
 
     return {

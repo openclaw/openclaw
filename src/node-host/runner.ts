@@ -3,13 +3,20 @@ import { loadConfig, type BotConfig } from "../config/config.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { GatewayClient } from "../gateway/client.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { type SkillBinTrustEntry } from "../infra/exec-approvals.js";
+import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
+import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import {
+  NODE_BROWSER_PROXY_COMMAND,
+  NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_SYSTEM_RUN_COMMANDS,
+} from "../infra/node-commands.js";
 import { ensureBotCliOnPath } from "../infra/path-env.js";
+import { secretRefKey } from "../secrets/ref-contract.js";
+import { resolveSecretRefValues } from "../secrets/resolve.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
-import { IdleDetector } from "./idle-detector.js";
 import {
   coerceNodeInvokePayload,
   handleInvoke,
@@ -20,7 +27,7 @@ import {
 export { buildNodeInvokeResultParams };
 
 type NodeHostRunOptions = {
-  gatewayHost?: string;
+  gatewayHost: string;
   gatewayPort: number;
   gatewayTls?: boolean;
   gatewayTlsFingerprint?: string;
@@ -30,27 +37,36 @@ type NodeHostRunOptions = {
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-function resolveSkillBinPath(name: string): string | null {
-  if (name.includes("/") || name.includes("\\")) {
+function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
+  if (bin.includes("/") || bin.includes("\\")) {
     return null;
   }
-  const extensions =
-    process.platform === "win32"
-      ? (process.env.PATHEXT ?? process.env.PathExt ?? ".EXE;.CMD;.BAT;.COM")
-          .split(";")
-          .map((ext) => ext.toLowerCase())
-      : [""];
-  const pathEnv = process.env.PATH ?? "";
-  const dirs = pathEnv.split(path.delimiter).filter(Boolean);
-  for (const dir of dirs) {
-    for (const ext of extensions) {
-      const candidate = path.join(dir, name + ext);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
+  return resolveExecutableFromPathEnv(bin, pathEnv) ?? null;
+}
+
+function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinTrustEntry[] {
+  const trustEntries: SkillBinTrustEntry[] = [];
+  const seen = new Set<string>();
+  for (const bin of bins) {
+    const name = bin.trim();
+    if (!name) {
+      continue;
     }
+    const resolvedPath = resolveExecutablePathFromEnv(name, pathEnv);
+    if (!resolvedPath) {
+      continue;
+    }
+    const key = `${name}\u0000${resolvedPath}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    trustEntries.push({ name, resolvedPath });
   }
-  return null;
+  return trustEntries.toSorted(
+    (left, right) =>
+      left.name.localeCompare(right.name) || left.resolvedPath.localeCompare(right.resolvedPath),
+  );
 }
 
 class SkillBinsCache implements SkillBinsProvider {
@@ -58,9 +74,11 @@ class SkillBinsCache implements SkillBinsProvider {
   private lastRefresh = 0;
   private readonly ttlMs = 90_000;
   private readonly fetch: () => Promise<string[]>;
+  private readonly pathEnv: string;
 
-  constructor(fetch: () => Promise<string[]>) {
+  constructor(fetch: () => Promise<string[]>, pathEnv: string) {
     this.fetch = fetch;
+    this.pathEnv = pathEnv;
   }
 
   async current(force = false): Promise<SkillBinTrustEntry[]> {
@@ -72,15 +90,8 @@ class SkillBinsCache implements SkillBinsProvider {
 
   private async refresh() {
     try {
-      const names = await this.fetch();
-      const entries: SkillBinTrustEntry[] = [];
-      for (const name of names) {
-        const resolvedPath = resolveSkillBinPath(name);
-        if (resolvedPath) {
-          entries.push({ name, resolvedPath });
-        }
-      }
-      this.bins = entries;
+      const bins = await this.fetch();
+      this.bins = resolveSkillBinTrustEntries(bins, this.pathEnv);
       this.lastRefresh = Date.now();
     } catch {
       if (!this.lastRefresh) {
@@ -202,47 +213,23 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
   const browserProxyEnabled =
     cfg.nodeHost?.browserProxy?.enabled !== false && resolvedBrowser.enabled;
-  const marketplaceEnabled =
-    config.marketplace?.enabled === true &&
-    Boolean(
-      config.marketplace?.claudeApiKey ||
-      process.env.HANZO_API_KEY ||
-      process.env.ANTHROPIC_API_KEY,
-    );
-  const isRemoteMode = cfg.gateway?.mode === "remote";
-  const token =
-    process.env.BOT_GATEWAY_TOKEN?.trim() ||
-    (isRemoteMode ? cfg.gateway?.remote?.token : cfg.gateway?.auth?.token);
-  const password =
-    process.env.BOT_GATEWAY_PASSWORD?.trim() ||
-    (isRemoteMode ? cfg.gateway?.remote?.password : cfg.gateway?.auth?.password);
+  const { token, password } = await resolveNodeHostGatewayCredentials({
+    config: cfg,
+    env: process.env,
+  });
 
-  // Gateway URL resolution priority:
-  // 1. BOT_NODE_GATEWAY_URL env var (cloud pods set this for unified gateway)
-  // 2. gateway.remote.url from config (remote mode, e.g. wss://gw.hanzo.bot)
-  // 3. Constructed from CLI --host/--port/--tls options
-  const envGatewayUrl = process.env.BOT_NODE_GATEWAY_URL?.trim();
-  const envGatewayHost = process.env.BOT_NODE_GATEWAY_HOST?.trim();
-  const remoteUrl = isRemoteMode ? cfg.gateway?.remote?.url : undefined;
   const host = gateway.host ?? "127.0.0.1";
   const port = gateway.port ?? 18789;
   const scheme = gateway.tls ? "wss" : "ws";
-  const url = envGatewayUrl || remoteUrl || `${scheme}://${host}:${port}`;
+  const url = `${scheme}://${host}:${port}`;
   const pathEnv = ensureNodePathEnv();
-
-  // Build optional WS headers — BOT_NODE_GATEWAY_HOST overrides the Host
-  // header sent to the gateway.  Useful when BOT_NODE_GATEWAY_URL points to a
-  // direct IP (bypassing CDN/proxy) but nginx-ingress still needs the original
-  // hostname for virtual-host routing.
-  const wsHeaders: Record<string, string> | undefined = envGatewayHost
-    ? { Host: envGatewayHost }
-    : undefined;
+  // eslint-disable-next-line no-console
+  console.log(`node host PATH: ${pathEnv}`);
 
   const client = new GatewayClient({
     url,
-    wsHeaders,
-    token: token?.trim() || undefined,
-    password: password?.trim() || undefined,
+    token: token || undefined,
+    password: password || undefined,
     instanceId: nodeId,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: displayName,
@@ -251,20 +238,11 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     mode: GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
-    caps: [
-      "system",
-      ...(process.env.BOT_CLOUD_NODE === "true" ? ["cloud"] : []),
-      ...(browserProxyEnabled ? ["browser"] : []),
-      ...(marketplaceEnabled ? ["marketplace"] : []),
-    ],
+    caps: ["system", ...(browserProxyEnabled ? ["browser"] : [])],
     commands: [
-      "system.run",
-      "system.which",
-      "system.execApprovals.get",
-      "system.execApprovals.set",
-      "shutdown",
-      ...(browserProxyEnabled ? ["browser.proxy"] : []),
-      ...(marketplaceEnabled ? ["marketplace.proxy"] : []),
+      ...NODE_SYSTEM_RUN_COMMANDS,
+      ...NODE_EXEC_APPROVALS_COMMANDS,
+      ...(browserProxyEnabled ? [NODE_BROWSER_PROXY_COMMAND] : []),
     ],
     pathEnv,
     permissions: undefined,
@@ -279,18 +257,6 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         return;
       }
       void handleInvoke(payload, client, skillBins);
-    },
-    onHelloOk: () => {
-      // eslint-disable-next-line no-console
-      console.log(`\n  Connected to gateway: ${url}`);
-      // eslint-disable-next-line no-console
-      console.log(`  Node name:   ${displayName}`);
-      if (isRemoteMode) {
-        // eslint-disable-next-line no-console
-        console.log(`  Playground:  https://app.hanzo.bot/nodes`);
-      }
-      // eslint-disable-next-line no-console
-      console.log("");
     },
     onConnectError: (err) => {
       // keep retrying (handled by GatewayClient)
@@ -307,23 +273,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     const res = await client.request<{ bins: Array<unknown> }>("skills.bins", {});
     const bins = Array.isArray(res?.bins) ? res.bins.map((bin) => String(bin)) : [];
     return bins;
-  });
-
-  // Keep-alive handle: GatewayClient reconnect timers use .unref() and
-  // won't prevent process exit.  A referenced interval ensures the event
-  // loop stays active so the node host can reconnect indefinitely.
-  setInterval(() => {}, 2_147_483_647);
+  }, pathEnv);
 
   client.start();
-
-  if (marketplaceEnabled && config.marketplace) {
-    const idleDetector = new IdleDetector(client, config.marketplace);
-    idleDetector.start();
-    // eslint-disable-next-line no-console
-    console.log(
-      `  Marketplace: enabled (idle threshold: ${config.marketplace.idleThresholdSec ?? 300}s)`,
-    );
-  }
-
   await new Promise(() => {});
 }

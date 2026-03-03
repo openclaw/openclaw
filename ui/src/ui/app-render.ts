@@ -1,10 +1,10 @@
 import { html, nothing } from "lit";
-import type { AppViewState } from "./app-view-state.ts";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
+import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
@@ -66,7 +66,7 @@ import {
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
-import { resolveConfiguredCronModelSuggestions } from "./views/agents-utils.ts";
+import { resolveConfiguredCronModelSuggestions, sortLocaleStrings } from "./views/agents-utils.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -144,7 +144,8 @@ export function renderApp(state: AppViewState) {
     state.updateAvailable?.currentVersion ||
     t("common.na");
   const availableUpdate =
-    state.updateAvailable && state.updateAvailable.version !== state.updateAvailable.currentVersion
+    state.updateAvailable &&
+    state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion
       ? state.updateAvailable
       : null;
   const versionStatusClass = availableUpdate ? "warn" : "ok";
@@ -190,7 +191,7 @@ export function renderApp(state: AppViewState) {
           .filter(Boolean),
       ].filter(Boolean),
     ),
-  ).toSorted((a, b) => a.localeCompare(b));
+  );
   const visibleCronJobs = getVisibleCronJobs(state);
   const selectedDeliveryChannel =
     state.cronForm.deliveryChannel && state.cronForm.deliveryChannel.trim()
@@ -240,7 +241,7 @@ export function renderApp(state: AppViewState) {
               <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="Bot" />
             </div>
             <div class="brand-text">
-              <div class="brand-title">BOT</div>
+              <div class="brand-title">bot</div>
               <div class="brand-sub">Gateway Dashboard</div>
             </div>
           </div>
@@ -308,7 +309,7 @@ export function renderApp(state: AppViewState) {
         ${
           availableUpdate
             ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${availableUpdate.version}
+              <strong>Update available:</strong> v${availableUpdate.latestVersion}
               (running v${availableUpdate.currentVersion}).
               <button
                 class="btn btn--sm update-banner__btn"
@@ -337,14 +338,12 @@ export function renderApp(state: AppViewState) {
                 settings: state.settings,
                 password: state.password,
                 lastError: state.lastError,
+                lastErrorCode: state.lastErrorCode,
                 presenceCount,
                 sessionsCount,
                 cronEnabled: state.cronStatus?.enabled ?? null,
                 cronNext,
                 lastChannelsRefresh: state.channelsLastSuccess,
-                authMode: state.authMode ?? null,
-                iamUser: state.iamUser ?? null,
-                iamLoggingIn: state.iamLoggingIn ?? false,
                 onSettingsChange: (next) => state.applySettings(next),
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {
@@ -360,9 +359,6 @@ export function renderApp(state: AppViewState) {
                 },
                 onConnect: () => state.connect(),
                 onRefresh: () => state.loadOverview(),
-                onIamLogin: () => state.handleIamLogin?.(),
-                onIamSignup: () => state.handleIamSignup?.(),
-                onIamLogout: () => state.handleIamLogout?.(),
               })
             : nothing
         }
@@ -402,8 +398,6 @@ export function renderApp(state: AppViewState) {
                 onNostrProfileSave: () => state.handleNostrProfileSave(),
                 onNostrProfileImport: () => state.handleNostrProfileImport(),
                 onNostrProfileToggleAdvanced: () => state.handleNostrProfileToggleAdvanced(),
-                expandedChannel: state.expandedChannel ?? null,
-                onChannelSelect: (key) => (state.expandedChannel = key),
               })
             : nothing
         }
@@ -999,8 +993,6 @@ export function renderApp(state: AppViewState) {
                       : { kind: "gateway" as const };
                   return saveExecApprovals(state, target);
                 },
-                onNodeBillingSet: (nodeId, billingMode, budgetCents) =>
-                  state.handleNodeBillingSet?.(nodeId, billingMode, budgetCents),
               })
             : nothing
         }
@@ -1033,6 +1025,7 @@ export function renderApp(state: AppViewState) {
                 loading: state.chatLoading,
                 sending: state.chatSending,
                 compactionStatus: state.compactionStatus,
+                fallbackStatus: state.fallbackStatus,
                 assistantAvatarUrl: chatAvatarUrl,
                 messages: state.chatMessages,
                 toolMessages: state.chatToolMessages,

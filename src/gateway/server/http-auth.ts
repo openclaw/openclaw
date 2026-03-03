@@ -1,8 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { AuthRateLimiter } from "../auth-rate-limit.js";
-import type { GatewayWsClient } from "./ws-types.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "../../canvas-host/a2ui.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
+import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
   isLocalDirectRequest,
@@ -13,6 +12,7 @@ import { CANVAS_CAPABILITY_TTL_MS } from "../canvas-capability.js";
 import { authorizeGatewayBearerRequestOrReply } from "../http-auth-helpers.js";
 import { getBearerToken } from "../http-utils.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "../protocol/client-info.js";
+import type { GatewayWsClient } from "./ws-types.js";
 
 export function isCanvasPath(pathname: string): boolean {
   return (

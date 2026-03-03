@@ -1,3 +1,5 @@
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
 import type {
   WindowsSpawnProgram,
   WindowsSpawnProgramCandidate,
@@ -8,8 +10,6 @@ import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgramCandidate,
 } from "bot/plugin-sdk";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
 
 export type SpawnExit = {
   code: number | null;

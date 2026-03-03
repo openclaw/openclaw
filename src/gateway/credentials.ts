@@ -1,4 +1,5 @@
 import type { BotConfig } from "../config/config.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 
 export type ExplicitGatewayAuth = {
   token?: string;
@@ -53,7 +54,7 @@ function readGatewayTokenEnv(
   if (!includeLegacyEnv) {
     return undefined;
   }
-  return trimToUndefined(env.BOT_GATEWAY_TOKEN);
+  return trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
 }
 
 function readGatewayPasswordEnv(
@@ -67,7 +68,7 @@ function readGatewayPasswordEnv(
   if (!includeLegacyEnv) {
     return undefined;
   }
-  return trimToUndefined(env.BOT_GATEWAY_PASSWORD);
+  return trimToUndefined(env.CLAWDBOT_GATEWAY_PASSWORD);
 }
 
 export function resolveGatewayCredentialsFromValues(params: {

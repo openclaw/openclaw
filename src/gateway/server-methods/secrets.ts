@@ -1,5 +1,12 @@
+import type { ErrorObject } from "ajv";
+import { isKnownSecretTargetId } from "../../secrets/target-registry.js";
+import {
+  ErrorCodes,
+  errorShape,
+  validateSecretsResolveParams,
+  validateSecretsResolveResult,
+} from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 
 function invalidSecretsResolveField(
   errors: ErrorObject[] | null | undefined,

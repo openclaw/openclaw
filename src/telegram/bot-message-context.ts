@@ -1,8 +1,4 @@
 import type { Bot } from "grammy";
-import type { MsgContext } from "../auto-reply/templating.js";
-import type { BotConfig } from "../config/config.js";
-import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
-import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
   findModelInCatalog,
@@ -20,18 +16,28 @@ import {
 } from "../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { logInboundDrop } from "../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { recordInboundSession } from "../channels/session.js";
+import {
+  createStatusReactionController,
+  type StatusReactionController,
+} from "../channels/status-reactions.js";
+import type { BotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
+import type {
+  DmPolicy,
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import { buildPairingReply } from "../pairing/pairing-messages.js";
-import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
@@ -39,8 +45,8 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
   isSenderAllowed,
+  normalizeAllowFrom,
   normalizeDmAllowFromWithStore,
-  resolveSenderAllowMatch,
 } from "./bot-access.js";
 import {
   buildGroupLabel,
@@ -59,7 +65,17 @@ import {
   hasBotMention,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
+import type { StickerMetadata, TelegramContext } from "./bot/types.js";
+import { enforceTelegramDmAccess } from "./dm-access.js";
+import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import {
+  buildTelegramStatusReactionVariants,
+  resolveTelegramAllowedEmojiReactions,
+  resolveTelegramReactionVariant,
+  resolveTelegramStatusReactionEmojis,
+} from "./status-reaction-variants.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -112,6 +128,8 @@ export type BuildTelegramMessageContextParams = {
   resolveGroupActivation: ResolveGroupActivation;
   resolveGroupRequireMention: ResolveGroupRequireMention;
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
+  /** Global (per-account) handler for sendChatAction 401 backoff (#27092). */
+  sendChatActionHandler: import("./sendchataction-401-backoff.js").TelegramSendChatActionHandler;
 };
 
 async function resolveStickerVisionSupport(params: {
@@ -153,13 +171,9 @@ export const buildTelegramMessageContext = async ({
   resolveGroupActivation,
   resolveGroupRequireMention,
   resolveTelegramGroupConfig,
+  sendChatActionHandler,
 }: BuildTelegramMessageContextParams) => {
   const msg = primaryCtx.message;
-  recordChannelActivity({
-    channel: "telegram",
-    accountId: account.accountId,
-    direction: "inbound",
-  });
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const senderId = msg.from?.id ? String(msg.from.id) : "";
@@ -214,12 +228,17 @@ export const buildTelegramMessageContext = async ({
       : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
-  const effectiveDmAllow = normalizeDmAllowFromWithStore({ allowFrom, storeAllowFrom });
+  // Calculate groupAllowOverride first - it's needed for both DM and group allowlist checks
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-  const effectiveGroupAllow = normalizeDmAllowFromWithStore({
-    allowFrom: groupAllowOverride ?? groupAllowFrom,
+  // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
+  const dmAllowFrom = groupAllowOverride ?? allowFrom;
+  const effectiveDmAllow = normalizeDmAllowFromWithStore({
+    allowFrom: dmAllowFrom,
     storeAllowFrom,
+    dmPolicy: effectiveDmPolicy,
   });
+  // Group sender checks are explicit and must not inherit DM pairing-store entries.
+  const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? groupAllowFrom);
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
   const senderUsername = msg.from?.username ?? "";
   const baseAccess = evaluateTelegramGroupBaseAccess({
@@ -277,7 +296,12 @@ export const buildTelegramMessageContext = async ({
   const sendTyping = async () => {
     await withTelegramApiErrorLogging({
       operation: "sendChatAction",
-      fn: () => bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(replyThreadId)),
+      fn: () =>
+        sendChatActionHandler.sendChatAction(
+          chatId,
+          "typing",
+          buildTypingThreadParams(replyThreadId),
+        ),
     });
   };
 
@@ -286,93 +310,37 @@ export const buildTelegramMessageContext = async ({
       await withTelegramApiErrorLogging({
         operation: "sendChatAction",
         fn: () =>
-          bot.api.sendChatAction(chatId, "record_voice", buildTypingThreadParams(replyThreadId)),
+          sendChatActionHandler.sendChatAction(
+            chatId,
+            "record_voice",
+            buildTypingThreadParams(replyThreadId),
+          ),
       });
     } catch (err) {
       logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);
     }
   };
 
-  // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled"
-  if (!isGroup) {
-    if (dmPolicy === "disabled") {
-      return null;
-    }
-
-    if (dmPolicy !== "open") {
-      const senderUsername = msg.from?.username ?? "";
-      const senderUserId = msg.from?.id != null ? String(msg.from.id) : null;
-      const candidate = senderUserId ?? String(chatId);
-      const allowMatch = resolveSenderAllowMatch({
-        allow: effectiveDmAllow,
-        senderId: candidate,
-        senderUsername,
-      });
-      const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
-        allowMatch.matchSource ?? "none"
-      }`;
-      const allowed =
-        effectiveDmAllow.hasWildcard || (effectiveDmAllow.hasEntries && allowMatch.allowed);
-      if (!allowed) {
-        if (dmPolicy === "pairing") {
-          try {
-            const from = msg.from as
-              | {
-                  first_name?: string;
-                  last_name?: string;
-                  username?: string;
-                  id?: number;
-                }
-              | undefined;
-            const telegramUserId = from?.id ? String(from.id) : candidate;
-            const { code, created } = await upsertChannelPairingRequest({
-              channel: "telegram",
-              id: telegramUserId,
-              accountId: account.accountId,
-              meta: {
-                username: from?.username,
-                firstName: from?.first_name,
-                lastName: from?.last_name,
-              },
-            });
-            if (created) {
-              logger.info(
-                {
-                  chatId: String(chatId),
-                  senderUserId: senderUserId ?? undefined,
-                  username: from?.username,
-                  firstName: from?.first_name,
-                  lastName: from?.last_name,
-                  matchKey: allowMatch.matchKey ?? "none",
-                  matchSource: allowMatch.matchSource ?? "none",
-                },
-                "telegram pairing request",
-              );
-              await withTelegramApiErrorLogging({
-                operation: "sendMessage",
-                fn: () =>
-                  bot.api.sendMessage(
-                    chatId,
-                    buildPairingReply({
-                      channel: "telegram",
-                      idLine: `Your Telegram user id: ${telegramUserId}`,
-                      code,
-                    }),
-                  ),
-              });
-            }
-          } catch (err) {
-            logVerbose(`telegram pairing reply failed for chat ${chatId}: ${String(err)}`);
-          }
-        } else {
-          logVerbose(
-            `Blocked unauthorized telegram sender ${candidate} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
-          );
-        }
-        return null;
-      }
-    }
+  if (
+    !(await enforceTelegramDmAccess({
+      isGroup,
+      dmPolicy: effectiveDmPolicy,
+      msg,
+      chatId,
+      effectiveDmAllow,
+      accountId: account.accountId,
+      bot,
+      logger,
+    }))
+  ) {
+    return null;
   }
+
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "inbound",
+  });
 
   const botUsername = primaryCtx.me?.username?.toLowerCase();
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
@@ -426,12 +394,22 @@ export const buildTelegramMessageContext = async ({
   let bodyText = rawBody;
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
 
-  // Audio transcription: transcribe voice notes before they reach the agent.
-  // In groups: enables mention detection in voice notes.
-  // In DMs: replaces <media:audio> placeholder with transcript text.
+  const disableAudioPreflight =
+    firstDefined(
+      topicConfig?.disableAudioPreflight,
+      (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight,
+    ) === true;
+
+  // Preflight audio transcription for mention detection in groups
+  // This allows voice notes to be checked for mentions before being dropped
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
-    hasAudio && !hasUserText && (!isGroup || (requireMention && mentionRegexes.length > 0));
+    isGroup &&
+    requireMention &&
+    hasAudio &&
+    !hasUserText &&
+    mentionRegexes.length > 0 &&
+    !disableAudioPreflight;
 
   if (needsPreflightTranscription) {
     try {
@@ -451,53 +429,6 @@ export const buildTelegramMessageContext = async ({
       });
     } catch (err) {
       logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
-    }
-
-    // Fallback: if the media pipeline returned nothing, try calling whisper-cli directly.
-    // This handles cases where the pipeline's attachment normalization or model resolution
-    // silently produces no output (e.g. format mismatch, missing config fields).
-    if (!preflightTranscript && allMedia.length > 0) {
-      const audioMedia = allMedia.find((m) => m.contentType?.startsWith("audio/"));
-      if (audioMedia?.path) {
-        try {
-          const { execFile } = await import("node:child_process");
-          const { promisify } = await import("node:util");
-          const { mkdtemp, readFile, rm } = await import("node:fs/promises");
-          const { tmpdir } = await import("node:os");
-          const pathMod = await import("node:path");
-          const execFileAsync = promisify(execFile);
-
-          const audioModels = cfg.tools?.media?.audio?.models;
-          const cliEntry = audioModels?.find(
-            (m: { type?: string; command?: string }) => m.type === "cli" || m.command,
-          );
-          if (cliEntry?.command) {
-            const outputDir = await mkdtemp(pathMod.join(tmpdir(), "bot-audio-fallback-"));
-            const outputBase = pathMod.join(outputDir, "out");
-            const resolvedArgs = (cliEntry.args ?? []).map((a: string) =>
-              a.replace("{{MediaPath}}", audioMedia.path).replace("{{OutputBase}}", outputBase),
-            );
-            try {
-              await execFileAsync(cliEntry.command, resolvedArgs, {
-                timeout: 30_000,
-                maxBuffer: 1024 * 1024,
-              });
-              const outputFile = outputBase + ".txt";
-              const text = (await readFile(outputFile, "utf-8")).trim();
-              if (text) {
-                preflightTranscript = text;
-                logVerbose(
-                  `telegram: audio fallback transcription succeeded (${text.length} chars)`,
-                );
-              }
-            } finally {
-              await rm(outputDir, { recursive: true, force: true }).catch(() => {});
-            }
-          }
-        } catch (fallbackErr) {
-          logVerbose(`telegram: audio fallback transcription failed: ${String(fallbackErr)}`);
-        }
-      }
     }
   }
 
@@ -612,11 +543,77 @@ export const buildTelegramMessageContext = async ({
       messageId: number,
       reactions: Array<{ type: "emoji"; emoji: string }>,
     ) => Promise<void>;
+    getChat?: (chatId: number | string) => Promise<unknown>;
   };
   const reactionApi =
     typeof api.setMessageReaction === "function" ? api.setMessageReaction.bind(api) : null;
-  const ackReactionPromise =
-    shouldAckReaction() && msg.message_id && reactionApi
+  const getChatApi = typeof api.getChat === "function" ? api.getChat.bind(api) : null;
+
+  // Status Reactions controller (lifecycle reactions)
+  const statusReactionsConfig = cfg.messages?.statusReactions;
+  const statusReactionsEnabled =
+    statusReactionsConfig?.enabled === true && Boolean(reactionApi) && shouldAckReaction();
+  const resolvedStatusReactionEmojis = resolveTelegramStatusReactionEmojis({
+    initialEmoji: ackReaction,
+    overrides: statusReactionsConfig?.emojis,
+  });
+  const statusReactionVariantsByEmoji = buildTelegramStatusReactionVariants(
+    resolvedStatusReactionEmojis,
+  );
+  let allowedStatusReactionEmojisPromise: Promise<Set<string> | null> | null = null;
+  const statusReactionController: StatusReactionController | null =
+    statusReactionsEnabled && msg.message_id
+      ? createStatusReactionController({
+          enabled: true,
+          adapter: {
+            setReaction: async (emoji: string) => {
+              if (reactionApi) {
+                if (!allowedStatusReactionEmojisPromise) {
+                  allowedStatusReactionEmojisPromise = resolveTelegramAllowedEmojiReactions({
+                    chat: msg.chat,
+                    chatId,
+                    getChat: getChatApi ?? undefined,
+                  }).catch((err) => {
+                    logVerbose(
+                      `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
+                    );
+                    return null;
+                  });
+                }
+                const allowedStatusReactionEmojis = await allowedStatusReactionEmojisPromise;
+                const resolvedEmoji = resolveTelegramReactionVariant({
+                  requestedEmoji: emoji,
+                  variantsByRequestedEmoji: statusReactionVariantsByEmoji,
+                  allowedEmojiReactions: allowedStatusReactionEmojis,
+                });
+                if (!resolvedEmoji) {
+                  return;
+                }
+                await reactionApi(chatId, msg.message_id, [
+                  { type: "emoji", emoji: resolvedEmoji },
+                ]);
+              }
+            },
+            // Telegram replaces atomically — no removeReaction needed
+          },
+          initialEmoji: ackReaction,
+          emojis: resolvedStatusReactionEmojis,
+          timing: statusReactionsConfig?.timing,
+          onError: (err) => {
+            logVerbose(`telegram status-reaction error for chat ${chatId}: ${String(err)}`);
+          },
+        })
+      : null;
+
+  // When status reactions are enabled, setQueued() replaces the simple ack reaction
+  const ackReactionPromise = statusReactionController
+    ? shouldAckReaction()
+      ? Promise.resolve(statusReactionController.setQueued()).then(
+          () => true,
+          () => false,
+        )
+      : null
+    : shouldAckReaction() && msg.message_id && reactionApi
       ? withTelegramApiErrorLogging({
           operation: "setMessageReaction",
           fn: () => reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReaction }]),
@@ -631,14 +628,22 @@ export const buildTelegramMessageContext = async ({
 
   const replyTarget = describeReplyTarget(msg);
   const forwardOrigin = normalizeForwardedContext(msg);
+  // Build forward annotation for reply target if it was itself a forwarded message (issue #9619)
+  const replyForwardAnnotation = replyTarget?.forwardedFrom
+    ? `[Forwarded from ${replyTarget.forwardedFrom.from}${
+        replyTarget.forwardedFrom.date
+          ? ` at ${new Date(replyTarget.forwardedFrom.date * 1000).toISOString()}`
+          : ""
+      }]\n`
+    : "";
   const replySuffix = replyTarget
     ? replyTarget.kind === "quote"
       ? `\n\n[Quoting ${replyTarget.sender}${
           replyTarget.id ? ` id:${replyTarget.id}` : ""
-        }]\n"${replyTarget.body}"\n[/Quoting]`
+        }]\n${replyForwardAnnotation}"${replyTarget.body}"\n[/Quoting]`
       : `\n\n[Replying to ${replyTarget.sender}${
           replyTarget.id ? ` id:${replyTarget.id}` : ""
-        }]\n${replyTarget.body}\n[/Replying]`
+        }]\n${replyForwardAnnotation}${replyTarget.body}\n[/Replying]`
     : "";
   const forwardPrefix = forwardOrigin
     ? `[Forwarded from ${forwardOrigin.from}${
@@ -692,13 +697,10 @@ export const buildTelegramMessageContext = async ({
     });
   }
 
-  const skillFilter = firstDefined(topicConfig?.skills, groupConfig?.skills);
-  const systemPromptParts = [
-    groupConfig?.systemPrompt?.trim() || null,
-    topicConfig?.systemPrompt?.trim() || null,
-  ].filter((entry): entry is string => Boolean(entry));
-  const groupSystemPrompt =
-    systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+  const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
+    groupConfig,
+    topicConfig,
+  });
   const commandBody = normalizeCommandBody(rawBody, { botUsername });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
@@ -735,6 +737,15 @@ export const buildTelegramMessageContext = async ({
     ReplyToBody: replyTarget?.body,
     ReplyToSender: replyTarget?.sender,
     ReplyToIsQuote: replyTarget?.kind === "quote" ? true : undefined,
+    // Forward context from reply target (issue #9619: forward + comment bundling)
+    ReplyToForwardedFrom: replyTarget?.forwardedFrom?.from,
+    ReplyToForwardedFromType: replyTarget?.forwardedFrom?.fromType,
+    ReplyToForwardedFromId: replyTarget?.forwardedFrom?.fromId,
+    ReplyToForwardedFromUsername: replyTarget?.forwardedFrom?.fromUsername,
+    ReplyToForwardedFromTitle: replyTarget?.forwardedFrom?.fromTitle,
+    ReplyToForwardedDate: replyTarget?.forwardedFrom?.date
+      ? replyTarget.forwardedFrom.date * 1000
+      : undefined,
     ForwardedFrom: forwardOrigin?.from,
     ForwardedFromType: forwardOrigin?.fromType,
     ForwardedFromId: forwardOrigin?.fromId,
@@ -784,7 +795,7 @@ export const buildTelegramMessageContext = async ({
       ? {
           sessionKey: route.mainSessionKey,
           channel: "telegram",
-          to: String(chatId),
+          to: `telegram:${chatId}`,
           accountId: route.accountId,
           // Preserve DM topic threadId for replies (fixes #8891)
           threadId: dmThreadId != null ? String(dmThreadId) : undefined,
@@ -849,6 +860,7 @@ export const buildTelegramMessageContext = async ({
     ackReactionPromise,
     reactionApi,
     removeAckAfterReply,
+    statusReactionController,
     accountId: account.accountId,
   };
 };

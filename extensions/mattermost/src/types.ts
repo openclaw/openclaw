@@ -1,4 +1,9 @@
-import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "bot/plugin-sdk";
+import type {
+  BlockStreamingCoalesceConfig,
+  DmPolicy,
+  GroupPolicy,
+  SecretInput,
+} from "bot/plugin-sdk";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 

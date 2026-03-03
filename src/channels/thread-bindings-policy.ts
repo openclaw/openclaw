@@ -173,28 +173,6 @@ function resolveThreadBindingChannelScope(params: {
     channel,
     accountId,
   });
-  return resolveThreadBindingIdleTimeoutMs({
-    channelIdleHoursRaw: account?.idleHours ?? root?.idleHours,
-    sessionIdleHoursRaw: params.cfg.session?.threadBindings?.idleHours,
-  });
-}
-
-export function resolveThreadBindingMaxAgeMsForChannel(params: {
-  cfg: BotConfig;
-  channel: string;
-  accountId?: string;
-}): number {
-  const channel = normalizeChannelId(params.channel);
-  const accountId = normalizeAccountId(params.accountId);
-  const { root, account } = resolveChannelThreadBindings({
-    cfg: params.cfg,
-    channel,
-    accountId,
-  });
-  return resolveThreadBindingMaxAgeMs({
-    channelMaxAgeHoursRaw: account?.maxAgeHours ?? root?.maxAgeHours,
-    sessionMaxAgeHoursRaw: params.cfg.session?.threadBindings?.maxAgeHours,
-  });
 }
 
 export function formatThreadBindingDisabledError(params: {

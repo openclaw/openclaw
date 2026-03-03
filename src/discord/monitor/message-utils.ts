@@ -1,16 +1,57 @@
 import type { ChannelType, Client, Message } from "@buape/carbon";
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { buildMediaPayload } from "../../channels/plugins/media-payload.js";
 import { logVerbose } from "../../globals.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { fetchRemoteMedia, type FetchLike } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 
+const DISCORD_CDN_HOSTNAMES = [
+  "cdn.discordapp.com",
+  "media.discordapp.net",
+  "*.discordapp.com",
+  "*.discordapp.net",
+];
+
+// Allow Discord CDN downloads when VPN/proxy DNS resolves to RFC2544 benchmark ranges.
 const DISCORD_MEDIA_SSRF_POLICY: SsrFPolicy = {
-  allowedHostnames: ["cdn.discordapp.com", "media.discordapp.net"],
+  hostnameAllowlist: DISCORD_CDN_HOSTNAMES,
   allowRfc2544BenchmarkRange: true,
 };
+
+function mergeHostnameList(...lists: Array<string[] | undefined>): string[] | undefined {
+  const merged = lists
+    .flatMap((list) => list ?? [])
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  if (merged.length === 0) {
+    return undefined;
+  }
+  return Array.from(new Set(merged));
+}
+
+function resolveDiscordMediaSsrFPolicy(policy?: SsrFPolicy): SsrFPolicy {
+  if (!policy) {
+    return DISCORD_MEDIA_SSRF_POLICY;
+  }
+  const hostnameAllowlist = mergeHostnameList(
+    DISCORD_MEDIA_SSRF_POLICY.hostnameAllowlist,
+    policy.hostnameAllowlist,
+  );
+  const allowedHostnames = mergeHostnameList(
+    DISCORD_MEDIA_SSRF_POLICY.allowedHostnames,
+    policy.allowedHostnames,
+  );
+  return {
+    ...DISCORD_MEDIA_SSRF_POLICY,
+    ...policy,
+    ...(allowedHostnames ? { allowedHostnames } : {}),
+    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
+    allowRfc2544BenchmarkRange:
+      Boolean(DISCORD_MEDIA_SSRF_POLICY.allowRfc2544BenchmarkRange) ||
+      Boolean(policy.allowRfc2544BenchmarkRange),
+  };
+}
 
 export type DiscordMediaInfo = {
   path: string;
@@ -244,7 +285,7 @@ async function appendResolvedMediaFromAttachments(params: {
         filePathHint: attachment.filename ?? attachment.url,
         maxBytes: params.maxBytes,
         fetchImpl: params.fetchImpl,
-        ssrfPolicy: DISCORD_MEDIA_SSRF_POLICY,
+        ssrfPolicy: params.ssrfPolicy,
       });
       const saved = await saveMediaBuffer(
         fetched.buffer,
@@ -357,7 +398,7 @@ async function appendResolvedMediaFromStickers(params: {
           filePathHint: candidate.fileName,
           maxBytes: params.maxBytes,
           fetchImpl: params.fetchImpl,
-          ssrfPolicy: DISCORD_MEDIA_SSRF_POLICY,
+          ssrfPolicy: params.ssrfPolicy,
         });
         const saved = await saveMediaBuffer(
           fetched.buffer,

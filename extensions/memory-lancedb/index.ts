@@ -6,11 +6,11 @@
  * Provides seamless auto-recall and auto-capture via lifecycle hooks.
  */
 
-import type * as LanceDB from "@lancedb/lancedb";
-import type { BotPluginApi } from "bot/plugin-sdk";
-import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
+import type * as LanceDB from "@lancedb/lancedb";
+import { Type } from "@sinclair/typebox";
 import OpenAI from "openai";
+import type { BotPluginApi } from "bot/plugin-sdk";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
   MEMORY_CATEGORIES,
@@ -119,8 +119,8 @@ class MemoryDB {
     const results = await this.table!.vectorSearch(vector).limit(limit).toArray();
 
     // LanceDB uses L2 distance by default; convert to similarity score
-    const mapped = results.map((row: Record<string, unknown>) => {
-      const distance = typeof row._distance === "number" ? row._distance : 0;
+    const mapped = results.map((row) => {
+      const distance = row._distance ?? 0;
       // Use inverse for a 0-1 range: sim = 1 / (1 + d)
       const score = 1 / (1 + distance);
       return {
@@ -136,7 +136,7 @@ class MemoryDB {
       };
     });
 
-    return mapped.filter((r: { score: number }) => r.score >= minScore);
+    return mapped.filter((r) => r.score >= minScore);
   }
 
   async delete(id: string): Promise<boolean> {
@@ -167,6 +167,7 @@ class Embeddings {
     apiKey: string,
     private model: string,
     baseUrl?: string,
+    private dimensions?: number,
   ) {
     this.client = new OpenAI({ apiKey, baseURL: baseUrl });
   }
@@ -302,7 +303,7 @@ const memoryPlugin = {
 
     const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim);
-    const embeddings = new Embeddings(apiKey, model, baseUrl);
+    const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
 

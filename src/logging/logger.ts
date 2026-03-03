@@ -1,27 +1,31 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
+import { getCommandPathWithRootOptions } from "../cli/argv.js";
 import type { BotConfig } from "../config/types.js";
-import type { ConsoleStyle } from "./console.js";
 import { resolvePreferredBotTmpDir } from "../infra/tmp-bot-dir.js";
 import { readLoggingConfig } from "./config.js";
+import type { ConsoleStyle } from "./console.js";
+import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
 import { formatLocalIsoWithOffset } from "./timestamps.js";
 
 export const DEFAULT_LOG_DIR = resolvePreferredBotTmpDir();
 export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "bot.log"); // legacy single-file path
 
-const LOG_PREFIX = "bot";
+const LOG_PREFIX = "@hanzo/bot";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+const DEFAULT_MAX_LOG_FILE_BYTES = 500 * 1024 * 1024; // 500 MB
 
-const requireConfig = createRequire(import.meta.url);
+const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
 export type LoggerSettings = {
   level?: LogLevel;
   file?: string;
+  maxFileBytes?: number;
   consoleLevel?: LogLevel;
   consoleStyle?: ConsoleStyle;
 };
@@ -31,6 +35,7 @@ type LogObj = { date?: Date } & Record<string, unknown>;
 type ResolvedSettings = {
   level: LogLevel;
   file: string;
+  maxFileBytes: number;
 };
 export type LoggerResolvedSettings = ResolvedSettings;
 export type LogTransportRecord = Record<string, unknown>;
@@ -66,30 +71,45 @@ function canUseSilentVitestFileLogFastPath(envLevel: LogLevel | undefined): bool
 }
 
 function resolveSettings(): ResolvedSettings {
+  const envLevel = resolveEnvLogLevelOverride();
+  // Test runs default file logs to silent. Skip config reads and fallback load in the
+  // common case to avoid pulling heavy config/schema stacks on startup.
+  if (canUseSilentVitestFileLogFastPath(envLevel)) {
+    return {
+      level: "silent",
+      file: defaultRollingPathForToday(),
+      maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
+    };
+  }
+
   let cfg: BotConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   if (!cfg && !shouldSkipLoadConfigFallback()) {
     try {
-      const loaded = requireConfig("../config/config.js") as {
-        loadConfig?: () => BotConfig;
-      };
-      cfg = loaded.loadConfig?.().logging;
+      const loaded = requireConfig?.("../config/config.js") as
+        | {
+            loadConfig?: () => BotConfig;
+          }
+        | undefined;
+      cfg = loaded?.loadConfig?.().logging;
     } catch {
       cfg = undefined;
     }
   }
   const defaultLevel =
     process.env.VITEST === "true" && process.env.BOT_TEST_FILE_LOG !== "1" ? "silent" : "info";
-  const level = normalizeLogLevel(cfg?.level, defaultLevel);
+  const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
+  const level = envLevel ?? fromConfig;
   const file = cfg?.file ?? defaultRollingPathForToday();
-  return { level, file };
+  const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
+  return { level, file, maxFileBytes };
 }
 
 function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
   if (!a) {
     return true;
   }
-  return a.level !== b.level || a.file !== b.file;
+  return a.level !== b.level || a.file !== b.file || a.maxFileBytes !== b.maxFileBytes;
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
@@ -123,17 +143,35 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   if (isRollingPath(settings.file)) {
     pruneOldRollingLogs(path.dirname(settings.file));
   }
-  const logger = new TsLogger<LogObj>({
-    name: "bot",
-    minLevel: levelToMinLevel(settings.level),
-    type: "hidden", // no ansi formatting
-  });
+  let currentFileBytes = getCurrentLogFileBytes(settings.file);
+  let warnedAboutSizeCap = false;
 
   logger.attachTransport((logObj: LogObj) => {
     try {
       const time = formatLocalIsoWithOffset(logObj.date ?? new Date());
       const line = JSON.stringify({ ...logObj, time });
-      fs.appendFileSync(settings.file, `${line}\n`, { encoding: "utf8" });
+      const payload = `${line}\n`;
+      const payloadBytes = Buffer.byteLength(payload, "utf8");
+      const nextBytes = currentFileBytes + payloadBytes;
+      if (nextBytes > settings.maxFileBytes) {
+        if (!warnedAboutSizeCap) {
+          warnedAboutSizeCap = true;
+          const warningLine = JSON.stringify({
+            time: formatLocalIsoWithOffset(new Date()),
+            level: "warn",
+            subsystem: "logging",
+            message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
+          });
+          appendLogLine(settings.file, `${warningLine}\n`);
+          process.stderr.write(
+            `[bot] log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}\n`,
+          );
+        }
+        return;
+      }
+      if (appendLogLine(settings.file, payload)) {
+        currentFileBytes = nextBytes;
+      }
     } catch {
       // never block on logging failures
     }
@@ -143,6 +181,30 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   }
 
   return logger;
+}
+
+function resolveMaxLogFileBytes(raw: unknown): number {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_MAX_LOG_FILE_BYTES;
+}
+
+function getCurrentLogFileBytes(file: string): number {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
+function appendLogLine(file: string, line: string): boolean {
+  try {
+    fs.appendFileSync(file, line, { encoding: "utf8" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function getLogger(): TsLogger<LogObj> {

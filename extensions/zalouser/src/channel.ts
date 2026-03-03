@@ -1,3 +1,5 @@
+import fsp from "node:fs/promises";
+import path from "node:path";
 import type {
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
@@ -22,9 +24,6 @@ import {
   resolveChannelAccountConfigBasePath,
   setAccountEnabledInConfigSection,
 } from "bot/plugin-sdk";
-import fsp from "node:fs/promises";
-import path from "node:path";
-import type { ZcaFriend, ZcaGroup, ZcaUserInfo } from "./types.js";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -40,7 +39,15 @@ import { zalouserOnboardingAdapter } from "./onboarding.js";
 import { probeZalouser } from "./probe.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
-import { checkZcaInstalled, parseJsonOutput, runZca, runZcaInteractive } from "./zca.js";
+import {
+  listZaloFriendsMatching,
+  listZaloGroupMembers,
+  listZaloGroupsMatching,
+  logoutZaloProfile,
+  startZaloQrLogin,
+  waitForZaloQrLogin,
+  getZaloUserInfo,
+} from "./zalo-js.js";
 
 const meta = {
   id: "zalouser",
@@ -73,7 +80,10 @@ async function writeQrDataUrlToTempFile(
     return null;
   }
   const safeProfile = profile.replace(/[^a-zA-Z0-9_-]+/g, "-") || "default";
-  const filePath = path.join(resolvePreferredBotTmpDir(), `bot-zalouser-qr-${safeProfile}.png`);
+  const filePath = path.join(
+    resolvePreferredBotTmpDir(),
+    `bot-zalouser-qr-${safeProfile}.png`,
+  );
   await fsp.writeFile(filePath, Buffer.from(base64, "base64"));
   return filePath;
 }
@@ -517,12 +527,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
         cfg: cfg,
         accountId: accountId ?? DEFAULT_ACCOUNT_ID,
       });
-      const ok = await checkZcaInstalled();
-      if (!ok) {
-        throw new Error(
-          "Missing dependency: `zca` not found in PATH. See docs.hanzo.bot/channels/zalouser",
-        );
-      }
+
       runtime.log(
         `Generating QR login for Zalo Personal (account: ${account.accountId}, profile: ${account.profile})...`,
       );

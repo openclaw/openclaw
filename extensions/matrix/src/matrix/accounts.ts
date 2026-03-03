@@ -1,4 +1,9 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "bot/plugin-sdk/account-id";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "bot/plugin-sdk/account-id";
+import { hasConfiguredSecretInput } from "../secret-input.js";
 import type { CoreConfig, MatrixConfig } from "../types.js";
 import { resolveMatrixConfigForAccount } from "./client.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials.js";

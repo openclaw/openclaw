@@ -1,9 +1,14 @@
-import { MatrixClient } from "@vector-im/matrix-bot-sdk";
+import { fetchWithSsrFGuard } from "bot/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "bot/plugin-sdk/account-id";
-import type { CoreConfig } from "../../types.js";
-import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 import { getMatrixRuntime } from "../../runtime.js";
+import {
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "../../secret-input.js";
+import type { CoreConfig } from "../../types.js";
+import { loadMatrixSdk } from "../sdk-runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
+import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
 function clean(value: unknown, path: string): string {
   return normalizeResolvedSecretInputString({ value, path }) ?? "";
@@ -180,16 +185,20 @@ export async function resolveMatrixAuth(params?: {
     );
   }
 
-  // Login with password using HTTP API
-  const loginResponse = await fetch(`${resolved.homeserver}/_matrix/client/v3/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      type: "m.login.password",
-      identifier: { type: "m.id.user", user: resolved.userId },
-      password: resolved.password,
-      initial_device_display_name: resolved.deviceName ?? "Hanzo Bot Gateway",
-    }),
+  // Login with password using HTTP API.
+  const { response: loginResponse, release: releaseLoginResponse } = await fetchWithSsrFGuard({
+    url: `${resolved.homeserver}/_matrix/client/v3/login`,
+    init: {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "m.login.password",
+        identifier: { type: "m.id.user", user: resolved.userId },
+        password: resolved.password,
+        initial_device_display_name: resolved.deviceName ?? "Bot Gateway",
+      }),
+    },
+    auditContext: "matrix.login",
   });
   const login = await (async () => {
     try {

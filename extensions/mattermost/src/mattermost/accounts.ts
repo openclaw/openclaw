@@ -1,5 +1,10 @@
 import type { BotConfig } from "bot/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "bot/plugin-sdk/account-id";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "bot/plugin-sdk/account-id";
+import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
 import type { MattermostAccountConfig, MattermostChatMode } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
 
@@ -40,6 +45,13 @@ export function listMattermostAccountIds(cfg: BotConfig): string[] {
 }
 
 export function resolveDefaultMattermostAccountId(cfg: BotConfig): string {
+  const preferred = normalizeOptionalAccountId(cfg.channels?.mattermost?.defaultAccount);
+  if (
+    preferred &&
+    listMattermostAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
+  ) {
+    return preferred;
+  }
   const ids = listMattermostAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
@@ -58,9 +70,18 @@ function resolveAccountConfig(
   return accounts[accountId] as MattermostAccountConfig | undefined;
 }
 
-function mergeMattermostAccountConfig(cfg: BotConfig, accountId: string): MattermostAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.mattermost ??
-    {}) as MattermostAccountConfig & { accounts?: unknown };
+function mergeMattermostAccountConfig(
+  cfg: BotConfig,
+  accountId: string,
+): MattermostAccountConfig {
+  const {
+    accounts: _ignored,
+    defaultAccount: _ignoredDefaultAccount,
+    ...base
+  } = (cfg.channels?.mattermost ?? {}) as MattermostAccountConfig & {
+    accounts?: unknown;
+    defaultAccount?: unknown;
+  };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
 
   // Shallow merging is fine for most keys, but `commands` should be merged

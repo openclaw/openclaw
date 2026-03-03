@@ -1,5 +1,5 @@
-import type { CliDeps } from "../cli/deps.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { CliDeps } from "../cli/deps.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -253,7 +253,7 @@ export function buildGatewayCronService(params: {
       });
     },
     runHeartbeatOnce: async (opts) => {
-      const { runtimeConfig, agentId } = resolveCronWakeTarget(opts);
+      const { runtimeConfig, agentId, sessionKey } = resolveCronWakeTarget(opts);
       // Merge cron-supplied heartbeat overrides (e.g. target: "last") with the
       // fully resolved agent heartbeat config so cron-triggered heartbeats
       // respect agent-specific overrides (agents.list[].heartbeat) before
@@ -277,27 +277,69 @@ export function buildGatewayCronService(params: {
         cfg: runtimeConfig,
         reason: opts?.reason,
         agentId,
+        sessionKey,
         heartbeat: heartbeatOverride,
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
-    runIsolatedAgentJob: async ({ job, message }) => {
+    runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
         job,
         message,
+        abortSignal,
         agentId,
         sessionKey: `cron:${job.id}`,
         lane: "cron",
       });
     },
-    sendCronFailureAlert: async ({ job, text, channel, to }) => {
+    sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+      const webhookToken = trimToOptionalString(params.cfg.cron?.webhookToken);
+
+      // Webhook mode requires a URL - fail closed if missing
+      if (mode === "webhook" && !to) {
+        cronLogger.warn(
+          { jobId: job.id },
+          "cron: failure alert webhook mode requires URL, skipping",
+        );
+        return;
+      }
+
+      if (mode === "webhook" && to) {
+        const webhookUrl = normalizeHttpWebhookUrl(to);
+        if (webhookUrl) {
+          await postCronWebhook({
+            webhookUrl,
+            webhookToken,
+            payload: {
+              jobId: job.id,
+              jobName: job.name,
+              message: text,
+            },
+            logContext: { jobId: job.id },
+            blockedLog: "cron: failure alert webhook blocked by SSRF guard",
+            failedLog: "cron: failure alert webhook failed",
+            logger: cronLogger,
+          });
+        } else {
+          cronLogger.warn(
+            {
+              jobId: job.id,
+              webhookUrl: redactWebhookUrl(to),
+            },
+            "cron: failure alert webhook URL is invalid, skipping",
+          );
+        }
+        return;
+      }
+
       const target = await resolveDeliveryTarget(runtimeConfig, agentId, {
         channel,
         to,
+        accountId,
       });
       if (!target.ok) {
         throw target.error;
@@ -305,7 +347,7 @@ export function buildGatewayCronService(params: {
       await deliverOutboundPayloads({
         cfg: runtimeConfig,
         channel: target.channel,
-        to: target.to ?? "",
+        to: target.to,
         accountId: target.accountId,
         threadId: target.threadId,
         payloads: [{ text }],

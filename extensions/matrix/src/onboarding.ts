@@ -3,17 +3,20 @@ import {
   addWildcardAllowFrom,
   formatResolvedUnresolvedNote,
   formatDocsLink,
+  hasConfiguredSecretInput,
+  mergeAllowFromEntries,
+  promptSingleChannelSecretInput,
   promptChannelAccessConfig,
   type SecretInput,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
 } from "bot/plugin-sdk";
-import type { CoreConfig } from "./types.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
+import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
 
@@ -120,12 +123,7 @@ async function promptMatrixAllowFrom(params: {
       continue;
     }
 
-    const unique = [
-      ...new Set([
-        ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
-        ...resolvedIds,
-      ]),
-    ];
+    const unique = mergeAllowFromEntries(existingAllowFrom, resolvedIds);
     return {
       ...cfg,
       channels: {
@@ -354,7 +352,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
     const deviceName = String(
       await prompter.text({
         message: "Matrix device name (optional)",
-        initialValue: existing.deviceName ?? "Hanzo Bot Gateway",
+        initialValue: existing.deviceName ?? "Bot Gateway",
       }),
     ).trim();
 

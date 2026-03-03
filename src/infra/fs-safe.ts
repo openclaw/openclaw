@@ -1,7 +1,7 @@
-import type { Stats } from "node:fs";
-import type { FileHandle } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import type { Stats } from "node:fs";
 import { constants as fsConstants } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -328,10 +328,16 @@ async function verifyAtomicWriteResult(params: {
 }): Promise<void> {
   const rootReal = await fs.realpath(params.rootDir);
   const rootWithSep = ensureTrailingSep(rootReal);
-  const expanded = await expandRelativePathWithHome(params.relativePath);
-  const resolved = path.resolve(rootWithSep, expanded);
-  if (!isPathInside(rootWithSep, resolved)) {
-    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  const opened = await openVerifiedLocalFile(params.targetPath, { rejectHardlinks: true });
+  try {
+    if (!sameFileIdentity(opened.stat, params.expectedStat)) {
+      throw new SafeOpenError("path-mismatch", "path changed during write");
+    }
+    if (!isPathInside(rootWithSep, opened.realPath)) {
+      throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+    }
+  } finally {
+    await opened.handle.close().catch(() => {});
   }
 }
 

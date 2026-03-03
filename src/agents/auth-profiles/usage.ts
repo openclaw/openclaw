@@ -1,9 +1,30 @@
 import type { BotConfig } from "../../config/config.js";
-import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
+import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
-function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
+const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
+  "auth_permanent",
+  "auth",
+  "billing",
+  "format",
+  "model_not_found",
+  "timeout",
+  "rate_limit",
+  "unknown",
+];
+const FAILURE_REASON_SET = new Set<AuthProfileFailureReason>(FAILURE_REASON_PRIORITY);
+const FAILURE_REASON_ORDER = new Map<AuthProfileFailureReason, number>(
+  FAILURE_REASON_PRIORITY.map((reason, index) => [reason, index]),
+);
+
+function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
+  return normalizeProviderId(provider ?? "") === "openrouter";
+}
+
+export function resolveProfileUnusableUntil(
+  stats: Pick<ProfileUsageStats, "cooldownUntil" | "disabledUntil">,
+): number | null {
   const values = [stats.cooldownUntil, stats.disabledUntil]
     .filter((value): value is number => typeof value === "number")
     .filter((value) => Number.isFinite(value) && value > 0);
@@ -17,12 +38,94 @@ function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
  * Check if a profile is currently in cooldown (due to rate limiting or errors).
  */
 export function isProfileInCooldown(store: AuthProfileStore, profileId: string): boolean {
+  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
+    return false;
+  }
   const stats = store.usageStats?.[profileId];
   if (!stats) {
     return false;
   }
   const unusableUntil = resolveProfileUnusableUntil(stats);
   return unusableUntil ? Date.now() < unusableUntil : false;
+}
+
+function isActiveUnusableWindow(until: number | undefined, now: number): boolean {
+  return typeof until === "number" && Number.isFinite(until) && until > 0 && now < until;
+}
+
+/**
+ * Infer the most likely reason all candidate profiles are currently unavailable.
+ *
+ * We prefer explicit active `disabledReason` values (for example billing/auth)
+ * over generic cooldown buckets, then fall back to failure-count signals.
+ */
+export function resolveProfilesUnavailableReason(params: {
+  store: AuthProfileStore;
+  profileIds: string[];
+  now?: number;
+}): AuthProfileFailureReason | null {
+  const now = params.now ?? Date.now();
+  const scores = new Map<AuthProfileFailureReason, number>();
+  const addScore = (reason: AuthProfileFailureReason, value: number) => {
+    if (!FAILURE_REASON_SET.has(reason) || value <= 0 || !Number.isFinite(value)) {
+      return;
+    }
+    scores.set(reason, (scores.get(reason) ?? 0) + value);
+  };
+
+  for (const profileId of params.profileIds) {
+    const stats = params.store.usageStats?.[profileId];
+    if (!stats) {
+      continue;
+    }
+
+    const disabledActive = isActiveUnusableWindow(stats.disabledUntil, now);
+    if (disabledActive && stats.disabledReason && FAILURE_REASON_SET.has(stats.disabledReason)) {
+      // Disabled reasons are explicit and high-signal; weight heavily.
+      addScore(stats.disabledReason, 1_000);
+      continue;
+    }
+
+    const cooldownActive = isActiveUnusableWindow(stats.cooldownUntil, now);
+    if (!cooldownActive) {
+      continue;
+    }
+
+    let recordedReason = false;
+    for (const [rawReason, rawCount] of Object.entries(stats.failureCounts ?? {})) {
+      const reason = rawReason as AuthProfileFailureReason;
+      const count = typeof rawCount === "number" ? rawCount : 0;
+      if (!FAILURE_REASON_SET.has(reason) || count <= 0) {
+        continue;
+      }
+      addScore(reason, count);
+      recordedReason = true;
+    }
+    if (!recordedReason) {
+      addScore("rate_limit", 1);
+    }
+  }
+
+  if (scores.size === 0) {
+    return null;
+  }
+
+  let best: AuthProfileFailureReason | null = null;
+  let bestScore = -1;
+  let bestPriority = Number.MAX_SAFE_INTEGER;
+  for (const reason of FAILURE_REASON_PRIORITY) {
+    const score = scores.get(reason);
+    if (typeof score !== "number") {
+      continue;
+    }
+    const priority = FAILURE_REASON_ORDER.get(reason) ?? Number.MAX_SAFE_INTEGER;
+    if (score > bestScore || (score === bestScore && priority < bestPriority)) {
+      best = reason;
+      bestScore = score;
+      bestPriority = priority;
+    }
+  }
+  return best;
 }
 
 /**
@@ -229,155 +332,53 @@ function calculateAuthProfileBillingDisableMsWithConfig(params: {
   return Math.min(maxMs, raw);
 }
 
-/**
- * Reason priority for breaking ties when multiple failure reasons have the
- * same count. Lower index = higher priority.
- */
-const REASON_PRIORITY: readonly AuthProfileFailureReason[] = [
-  "billing",
-  "auth_permanent",
-  "auth",
-  "model_not_found",
-  "format",
-  "timeout",
-  "rate_limit",
-  "unknown",
-];
-
-/**
- * Determine why all given profiles are currently unavailable.
- * Returns the most significant failure reason across all active cooldown/disabled
- * windows, or `null` if at least one profile is available (no active window).
- */
-export function resolveProfilesUnavailableReason(params: {
-  store: AuthProfileStore;
-  profileIds: string[];
-  now?: number;
-}): AuthProfileFailureReason | null {
-  const { store, profileIds } = params;
-  const now = params.now ?? Date.now();
-
-  // Aggregate failure reasons across all profiles that are currently unavailable.
-  // Active disabled reasons (from disabledReason) represent the authoritative
-  // explanation for why a profile was explicitly disabled and take priority
-  // over accumulated historical failure counts.
-  const disabledReasons: Partial<Record<AuthProfileFailureReason, number>> = {};
-  const failureCountAggregated: Partial<Record<AuthProfileFailureReason, number>> = {};
-  let allUnavailable = true;
-
-  for (const id of profileIds) {
-    const stats = store.usageStats?.[id];
-    if (!stats) {
-      // No stats means the profile has never failed, so it's available.
-      allUnavailable = false;
-      continue;
-    }
-
-    const unusableUntil = resolveProfileUnusableUntil(stats);
-    if (!unusableUntil || now >= unusableUntil) {
-      allUnavailable = false;
-      continue;
-    }
-
-    // Profile is actively unavailable. Check for disabled reason first.
-    if (
-      stats.disabledUntil != null &&
-      Number.isFinite(stats.disabledUntil) &&
-      now < stats.disabledUntil &&
-      stats.disabledReason
-    ) {
-      disabledReasons[stats.disabledReason] = (disabledReasons[stats.disabledReason] ?? 0) + 1;
-    }
-
-    // Also aggregate from failureCounts for fallback ranking.
-    if (stats.failureCounts) {
-      for (const [reason, count] of Object.entries(stats.failureCounts)) {
-        if (typeof count === "number" && count > 0) {
-          const key = reason as AuthProfileFailureReason;
-          failureCountAggregated[key] = (failureCountAggregated[key] ?? 0) + count;
-        }
-      }
-    }
-
-    // If profile has cooldown but no failure counts or disabled reason, treat as rate_limit.
-    if (
-      stats.cooldownUntil != null &&
-      Number.isFinite(stats.cooldownUntil) &&
-      now < stats.cooldownUntil &&
-      !stats.disabledReason &&
-      (!stats.failureCounts || Object.keys(stats.failureCounts).length === 0)
-    ) {
-      failureCountAggregated.rate_limit = (failureCountAggregated.rate_limit ?? 0) + 1;
-    }
-  }
-
-  if (!allUnavailable) {
-    return null;
-  }
-
-  if (profileIds.length === 0) {
-    return null;
-  }
-
-  // Active disabled reasons are authoritative. If any profile has an explicit
-  // disabled reason, that takes priority over historical failure counts.
-  const disabledReasonEntries = Object.entries(disabledReasons).filter(
-    ([, count]) => typeof count === "number" && count > 0,
-  );
-  if (disabledReasonEntries.length > 0) {
-    // Pick the highest-priority disabled reason using REASON_PRIORITY.
-    let bestReason: AuthProfileFailureReason | null = null;
-    let bestPriority = REASON_PRIORITY.length;
-    let bestCount = 0;
-    for (const [reason, count] of disabledReasonEntries) {
-      const key = reason as AuthProfileFailureReason;
-      const priority = REASON_PRIORITY.indexOf(key);
-      const effectivePriority = priority >= 0 ? priority : REASON_PRIORITY.length;
-      if (
-        effectivePriority < bestPriority ||
-        (effectivePriority === bestPriority && (count ?? 0) > bestCount)
-      ) {
-        bestReason = key;
-        bestPriority = effectivePriority;
-        bestCount = count ?? 0;
-      }
-    }
-    if (bestReason) {
-      return bestReason;
-    }
-  }
-
-  // Fall back to the highest count from historical failure counts.
-  let bestReason: AuthProfileFailureReason | null = null;
-  let bestCount = 0;
-  let bestPriority = REASON_PRIORITY.length;
-
-  for (const [reason, count] of Object.entries(failureCountAggregated)) {
-    if (typeof count !== "number" || count <= 0) {
-      continue;
-    }
-    const key = reason as AuthProfileFailureReason;
-    const priority = REASON_PRIORITY.indexOf(key);
-    const effectivePriority = priority >= 0 ? priority : REASON_PRIORITY.length;
-    if (count > bestCount || (count === bestCount && effectivePriority < bestPriority)) {
-      bestReason = key;
-      bestCount = count;
-      bestPriority = effectivePriority;
-    }
-  }
-
-  return bestReason ?? "rate_limit";
-}
-
 export function resolveProfileUnusableUntilForDisplay(
   store: AuthProfileStore,
   profileId: string,
 ): number | null {
+  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
+    return null;
+  }
   const stats = store.usageStats?.[profileId];
   if (!stats) {
     return null;
   }
   return resolveProfileUnusableUntil(stats);
+}
+
+function resetUsageStats(
+  existing: ProfileUsageStats | undefined,
+  overrides?: Partial<ProfileUsageStats>,
+): ProfileUsageStats {
+  return {
+    ...existing,
+    errorCount: 0,
+    cooldownUntil: undefined,
+    disabledUntil: undefined,
+    disabledReason: undefined,
+    failureCounts: undefined,
+    ...overrides,
+  };
+}
+
+function updateUsageStatsEntry(
+  store: AuthProfileStore,
+  profileId: string,
+  updater: (existing: ProfileUsageStats | undefined) => ProfileUsageStats,
+): void {
+  store.usageStats = store.usageStats ?? {};
+  store.usageStats[profileId] = updater(store.usageStats[profileId]);
+}
+
+function keepActiveWindowOrRecompute(params: {
+  existingUntil: number | undefined;
+  now: number;
+  recomputedUntil: number;
+}): number {
+  const { existingUntil, now, recomputedUntil } = params;
+  const hasActiveWindow =
+    typeof existingUntil === "number" && Number.isFinite(existingUntil) && existingUntil > now;
+  return hasActiveWindow ? existingUntil : recomputedUntil;
 }
 
 function computeNextProfileUsageStats(params: {
@@ -404,26 +405,39 @@ function computeNextProfileUsageStats(params: {
     lastFailureAt: params.now,
   };
 
-  if (params.reason === "billing") {
-    const billingCount = failureCounts.billing ?? 1;
+  if (params.reason === "billing" || params.reason === "auth_permanent") {
+    const billingCount = failureCounts[params.reason] ?? 1;
     const backoffMs = calculateAuthProfileBillingDisableMsWithConfig({
       errorCount: billingCount,
       baseMs: params.cfgResolved.billingBackoffMs,
       maxMs: params.cfgResolved.billingMaxMs,
     });
-    updatedStats.disabledUntil = params.now + backoffMs;
-    updatedStats.disabledReason = "billing";
+    // Keep active disable windows immutable so retries within the window cannot
+    // extend recovery time indefinitely.
+    updatedStats.disabledUntil = keepActiveWindowOrRecompute({
+      existingUntil: params.existing.disabledUntil,
+      now: params.now,
+      recomputedUntil: params.now + backoffMs,
+    });
+    updatedStats.disabledReason = params.reason;
   } else {
     const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
-    updatedStats.cooldownUntil = params.now + backoffMs;
+    // Keep active cooldown windows immutable so retries within the window
+    // cannot push recovery further out.
+    updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
+      existingUntil: params.existing.cooldownUntil,
+      now: params.now,
+      recomputedUntil: params.now + backoffMs,
+    });
   }
 
   return updatedStats;
 }
 
 /**
- * Mark a profile as failed for a specific reason. Billing failures are treated
- * as "disabled" (longer backoff) vs the regular cooldown window.
+ * Mark a profile as failed for a specific reason. Billing and permanent-auth
+ * failures are treated as "disabled" (longer backoff) vs the regular cooldown
+ * window.
  */
 export async function markAuthProfileFailure(params: {
   store: AuthProfileStore;
@@ -433,11 +447,15 @@ export async function markAuthProfileFailure(params: {
   agentDir?: string;
 }): Promise<void> {
   const { store, profileId, reason, agentDir, cfg } = params;
+  const profile = store.profiles[profileId];
+  if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
+    return;
+  }
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       const profile = freshStore.profiles[profileId];
-      if (!profile) {
+      if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
         return false;
       }
       const now = Date.now();
@@ -519,11 +537,7 @@ export async function clearAuthProfileCooldown(params: {
         return false;
       }
 
-      freshStore.usageStats[profileId] = {
-        ...freshStore.usageStats[profileId],
-        errorCount: 0,
-        cooldownUntil: undefined,
-      };
+      updateUsageStatsEntry(freshStore, profileId, (existing) => resetUsageStats(existing));
       return true;
     },
   });
@@ -535,10 +549,6 @@ export async function clearAuthProfileCooldown(params: {
     return;
   }
 
-  store.usageStats[profileId] = {
-    ...store.usageStats[profileId],
-    errorCount: 0,
-    cooldownUntil: undefined,
-  };
+  updateUsageStatsEntry(store, profileId, (existing) => resetUsageStats(existing));
   saveAuthProfileStore(store, agentDir);
 }

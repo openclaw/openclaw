@@ -1,5 +1,6 @@
-import type { BotConfig } from "bot/plugin-sdk";
+import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { BotConfig } from "bot/plugin-sdk";
 import {
   createDedupeCache,
   createFixedWindowRateLimiter,
@@ -12,8 +13,9 @@ import {
   registerWebhookTarget,
   resolveSingleWebhookTarget,
   resolveWebhookTargets,
+  WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "bot/plugin-sdk";
-import { timingSafeEqual } from "node:crypto";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.js";

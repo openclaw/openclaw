@@ -1,4 +1,5 @@
 import type { RuntimeEnv } from "bot/plugin-sdk";
+import type { Foreigns } from "../urbit/foreigns.js";
 import { formatChangesDate } from "./utils.js";
 
 export async function fetchGroupChanges(

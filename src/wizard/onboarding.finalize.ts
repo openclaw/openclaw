@@ -1,10 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OnboardOptions } from "../commands/onboard-types.js";
-import type { BotConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
-import type { WizardPrompter } from "./prompts.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -18,23 +13,26 @@ import {
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
-  buildWebchatUrl,
   detectBrowserOpenSupport,
   formatControlUiSshHint,
   openUrl,
   probeGatewayReachable,
-  resolveCanonicalMainSessionKey,
   waitForGatewayReachable,
   resolveControlUiLinks,
-  resolveLocalBrowserControlUiLinks,
 } from "../commands/onboard-helpers.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
+import type { BotConfig } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { setupOnboardingShellCompletion } from "./onboarding.completion.js";
+import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
+import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
+import type { WizardPrompter } from "./prompts.js";
 
 type FinalizeOnboardingOptions = {
   flow: WizardFlow;
@@ -218,8 +216,8 @@ export async function finalizeOnboardingWizard(
       await prompter.note(
         [
           "Docs:",
-          "https://github.com/hanzoai/bot/wiki/gateway-health",
-          "https://github.com/hanzoai/bot/wiki/gateway-troubleshooting",
+          "https://docs.hanzo.bot/gateway/health",
+          "https://docs.hanzo.bot/gateway/troubleshooting",
         ].join("\n"),
         "Health check help",
       );
@@ -253,22 +251,31 @@ export async function finalizeOnboardingWizard(
     customBindHost: settings.customBindHost,
     basePath: controlUiBasePath,
   });
-  const localBrowserLinks = resolveLocalBrowserControlUiLinks({
-    bind: settings.bind,
-    port: settings.port,
-    customBindHost: settings.customBindHost,
-    basePath: controlUiBasePath,
-  });
-  const canonicalSessionKey = resolveCanonicalMainSessionKey(nextConfig);
   const authedUrl =
     settings.authMode === "token" && settings.gatewayToken
-      ? `${localBrowserLinks.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
-      : localBrowserLinks.httpUrl;
-  const webchatUrl = buildWebchatUrl({
-    httpUrl: localBrowserLinks.httpUrl,
-    sessionKey: canonicalSessionKey,
-    token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-  });
+      ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
+      : links.httpUrl;
+  let resolvedGatewayPassword = "";
+  if (settings.authMode === "password") {
+    try {
+      resolvedGatewayPassword =
+        (await resolveOnboardingSecretInputString({
+          config: nextConfig,
+          value: nextConfig.gateway?.auth?.password,
+          path: "gateway.auth.password",
+          env: process.env,
+        })) ?? "";
+    } catch (error) {
+      await prompter.note(
+        [
+          "Could not resolve gateway.auth.password SecretRef for onboarding auth.",
+          error instanceof Error ? error.message : String(error),
+        ].join("\n"),
+        "Gateway auth",
+      );
+    }
+  }
+
   const gatewayProbe = await probeGatewayReachable({
     url: links.wsUrl,
     token: settings.authMode === "token" ? settings.gatewayToken : undefined,
@@ -288,14 +295,13 @@ export async function finalizeOnboardingWizard(
 
   await prompter.note(
     [
-      `Web UI: ${localBrowserLinks.httpUrl}`,
+      `Web UI: ${links.httpUrl}`,
       settings.authMode === "token" && settings.gatewayToken
         ? `Web UI (with token): ${authedUrl}`
         : undefined,
-      `WebChat: ${webchatUrl}`,
       `Gateway WS: ${links.wsUrl}`,
       gatewayStatusLine,
-      "Docs: https://github.com/hanzoai/bot/wiki/control-ui",
+      "Docs: https://docs.hanzo.bot/web/control-ui",
     ]
       .filter(Boolean)
       .join("\n"),
@@ -324,11 +330,11 @@ export async function finalizeOnboardingWizard(
     await prompter.note(
       [
         "Gateway token: shared auth for the Gateway + Control UI.",
-        "Stored in: ~/.hanzo/bot/bot.json (gateway.auth.token) or BOT_GATEWAY_TOKEN.",
-        `View token: ${formatCliCommand("hanzo-bot config get gateway.auth.token")}`,
-        `Generate token: ${formatCliCommand("hanzo-bot doctor --generate-gateway-token")}`,
+        "Stored in: ~/.hanzoai/bot.json (gateway.auth.token) or BOT_GATEWAY_TOKEN.",
+        `View token: ${formatCliCommand("bot config get gateway.auth.token")}`,
+        `Generate token: ${formatCliCommand("bot doctor --generate-gateway-token")}`,
         "Web UI stores a copy in this browser's localStorage (bot.control.settings.v1).",
-        `Open the dashboard anytime: ${formatCliCommand("hanzo-bot dashboard --no-open")}`,
+        `Open the dashboard anytime: ${formatCliCommand("bot dashboard --no-open")}`,
         "If prompted: paste the token into Control UI settings (or use the tokenized dashboard URL).",
       ].join("\n"),
       "Token",
@@ -358,7 +364,7 @@ export async function finalizeOnboardingWizard(
     } else if (hatchChoice === "web") {
       const browserSupport = await detectBrowserOpenSupport();
       if (browserSupport.ok) {
-        controlUiOpened = await openUrl(webchatUrl);
+        controlUiOpened = await openUrl(authedUrl);
         if (!controlUiOpened) {
           controlUiOpenHint = formatControlUiSshHint({
             port: settings.port,
@@ -375,10 +381,10 @@ export async function finalizeOnboardingWizard(
       }
       await prompter.note(
         [
-          `WebChat link: ${webchatUrl}`,
+          `Dashboard link (with token): ${authedUrl}`,
           controlUiOpened
-            ? "Opened in your browser. Keep that tab to control Hanzo Bot."
-            : "Copy/paste this URL in a browser on this machine to control Hanzo Bot.",
+            ? "Opened in your browser. Keep that tab to control Bot."
+            : "Copy/paste this URL in a browser on this machine to control Bot.",
           controlUiOpenHint,
         ]
           .filter(Boolean)
@@ -387,7 +393,7 @@ export async function finalizeOnboardingWizard(
       );
     } else {
       await prompter.note(
-        `When you're ready: ${formatCliCommand("hanzo-bot dashboard --no-open")}`,
+        `When you're ready: ${formatCliCommand("bot dashboard --no-open")}`,
         "Later",
       );
     }
@@ -398,13 +404,13 @@ export async function finalizeOnboardingWizard(
   await prompter.note(
     [
       "Back up your agent workspace.",
-      "Docs: https://github.com/hanzoai/bot/wiki/agent-workspace",
+      "Docs: https://docs.hanzo.bot/concepts/agent-workspace",
     ].join("\n"),
     "Workspace backup",
   );
 
   await prompter.note(
-    "Running agents on your computer is risky — harden your setup: https://github.com/hanzoai/bot/wiki/security",
+    "Running agents on your computer is risky — harden your setup: https://docs.hanzo.bot/security",
     "Security",
   );
 
@@ -418,7 +424,7 @@ export async function finalizeOnboardingWizard(
   if (shouldOpenControlUi) {
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
-      controlUiOpened = await openUrl(webchatUrl);
+      controlUiOpened = await openUrl(authedUrl);
       if (!controlUiOpened) {
         controlUiOpenHint = formatControlUiSshHint({
           port: settings.port,
@@ -436,10 +442,10 @@ export async function finalizeOnboardingWizard(
 
     await prompter.note(
       [
-        `WebChat link: ${webchatUrl}`,
+        `Dashboard link (with token): ${authedUrl}`,
         controlUiOpened
-          ? "Opened in your browser. Keep that tab to control Hanzo Bot."
-          : "Copy/paste this URL in a browser on this machine to control Hanzo Bot.",
+          ? "Opened in your browser. Keep that tab to control Bot."
+          : "Copy/paste this URL in a browser on this machine to control Bot.",
         controlUiOpenHint,
       ]
         .filter(Boolean)
@@ -459,19 +465,19 @@ export async function finalizeOnboardingWizard(
           webSearchKey
             ? "API key: stored in config (tools.web.search.apiKey)."
             : "API key: provided via BRAVE_API_KEY env var (Gateway environment).",
-          "Docs: https://github.com/hanzoai/bot/wiki/web-search",
+          "Docs: https://docs.hanzo.bot/tools/web",
         ].join("\n")
       : [
-          "If you want your agent to be able to search the web, you'll need an API key.",
+          "If you want your agent to be able to search the web, you’ll need an API key.",
           "",
-          "Hanzo Bot uses Brave Search for the `web_search` tool. Without a Brave Search API key, web search won't work.",
+          "Bot uses Brave Search for the `web_search` tool. Without a Brave Search API key, web search won’t work.",
           "",
           "Set it up interactively:",
-          `- Run: ${formatCliCommand("hanzo-bot configure --section web")}`,
+          `- Run: ${formatCliCommand("bot configure --section web")}`,
           "- Enable web_search and paste your Brave Search API key",
           "",
           "Alternative: set BRAVE_API_KEY in the Gateway environment (no config changes).",
-          "Docs: https://github.com/hanzoai/bot/wiki/web-search",
+          "Docs: https://docs.hanzo.bot/tools/web",
         ].join("\n"),
     "Web search (optional)",
   );
@@ -483,10 +489,10 @@ export async function finalizeOnboardingWizard(
 
   await prompter.outro(
     controlUiOpened
-      ? "Onboarding complete. Dashboard opened; keep that tab to control Hanzo Bot."
+      ? "Onboarding complete. Dashboard opened; keep that tab to control Bot."
       : seededInBackground
         ? "Onboarding complete. Web UI seeded in the background; open it anytime with the dashboard link above."
-        : "Onboarding complete. Use the dashboard link above to control Hanzo Bot.",
+        : "Onboarding complete. Use the dashboard link above to control Bot.",
   );
 
   return { launchedTui };

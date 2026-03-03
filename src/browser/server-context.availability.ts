@@ -1,15 +1,15 @@
-import type { ResolvedBrowserProfile } from "./config.js";
-import type {
-  BrowserServerState,
-  ContextOptions,
-  ProfileRuntimeState,
-} from "./server-context.types.js";
 import {
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
-import { isChromeCdpReady, isChromeReachable, launchBotChrome, stopBotChrome } from "./chrome.js";
+import {
+  isChromeCdpReady,
+  isChromeReachable,
+  launchBotChrome,
+  stopBotChrome,
+} from "./chrome.js";
+import type { ResolvedBrowserProfile } from "./config.js";
 import {
   ensureChromeExtensionRelayServer,
   stopChromeExtensionRelayServer,
@@ -20,6 +20,11 @@ import {
   CDP_READY_AFTER_LAUNCH_POLL_MS,
   CDP_READY_AFTER_LAUNCH_WINDOW_MS,
 } from "./server-context.constants.js";
+import type {
+  BrowserServerState,
+  ContextOptions,
+  ProfileRuntimeState,
+} from "./server-context.types.js";
 
 type AvailabilityDeps = {
   opts: ContextOptions;

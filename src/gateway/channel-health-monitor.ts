@@ -1,6 +1,11 @@
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { ChannelManager } from "./server-channels.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  evaluateChannelHealth,
+  resolveChannelRestartReason,
+  type ChannelHealthPolicy,
+} from "./channel-health-policy.js";
+import type { ChannelManager } from "./server-channels.js";
 
 const log = createSubsystemLogger("gateway/health-monitor");
 
@@ -17,6 +22,13 @@ const ONE_HOUR_MS = 60 * 60_000;
  * alive (health checks pass) but Slack silently stops delivering events.
  */
 const DEFAULT_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
+const DEFAULT_CHANNEL_CONNECT_GRACE_MS = 120_000;
+
+export type ChannelHealthTimingPolicy = {
+  monitorStartupGraceMs: number;
+  channelConnectGraceMs: number;
+  staleEventThresholdMs: number;
+};
 
 export type ChannelHealthMonitorDeps = {
   channelManager: ChannelManager;
@@ -30,7 +42,6 @@ export type ChannelHealthMonitorDeps = {
   timing?: Partial<ChannelHealthTimingPolicy>;
   cooldownCycles?: number;
   maxRestartsPerHour?: number;
-  staleEventThresholdMs?: number;
   abortSignal?: AbortSignal;
 };
 
@@ -43,47 +54,24 @@ type RestartRecord = {
   restartsThisHour: { at: number }[];
 };
 
-function isManagedAccount(snapshot: { enabled?: boolean; configured?: boolean }): boolean {
-  return snapshot.enabled !== false && snapshot.configured !== false;
-}
-
-function isChannelHealthy(
-  snapshot: {
-    running?: boolean;
-    connected?: boolean;
-    enabled?: boolean;
-    configured?: boolean;
-    lastEventAt?: number | null;
-    lastStartAt?: number | null;
-  },
-  opts: { now: number; staleEventThresholdMs: number },
-): boolean {
-  if (!isManagedAccount(snapshot)) {
-    return true;
-  }
-  if (!snapshot.running) {
-    return false;
-  }
-  if (snapshot.connected === false) {
-    return false;
-  }
-
-  // Stale socket detection: if the channel has been running long enough
-  // (past the stale threshold) and we have never received an event, or the
-  // last event was received longer ago than the threshold, treat as unhealthy.
-  if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
-    const upSince = snapshot.lastStartAt ?? 0;
-    const upDuration = opts.now - upSince;
-    if (upDuration > opts.staleEventThresholdMs) {
-      const lastEvent = snapshot.lastEventAt ?? 0;
-      const eventAge = opts.now - lastEvent;
-      if (eventAge > opts.staleEventThresholdMs) {
-        return false;
-      }
-    }
-  }
-
-  return true;
+function resolveTimingPolicy(
+  deps: Pick<
+    ChannelHealthMonitorDeps,
+    "startupGraceMs" | "channelStartupGraceMs" | "staleEventThresholdMs" | "timing"
+  >,
+): ChannelHealthTimingPolicy {
+  return {
+    monitorStartupGraceMs:
+      deps.timing?.monitorStartupGraceMs ?? deps.startupGraceMs ?? DEFAULT_MONITOR_STARTUP_GRACE_MS,
+    channelConnectGraceMs:
+      deps.timing?.channelConnectGraceMs ??
+      deps.channelStartupGraceMs ??
+      DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+    staleEventThresholdMs:
+      deps.timing?.staleEventThresholdMs ??
+      deps.staleEventThresholdMs ??
+      DEFAULT_STALE_EVENT_THRESHOLD_MS,
+  };
 }
 
 export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): ChannelHealthMonitor {
@@ -92,7 +80,6 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     checkIntervalMs = DEFAULT_CHECK_INTERVAL_MS,
     cooldownCycles = DEFAULT_COOLDOWN_CYCLES,
     maxRestartsPerHour = DEFAULT_MAX_RESTARTS_PER_HOUR,
-    staleEventThresholdMs = DEFAULT_STALE_EVENT_THRESHOLD_MS,
     abortSignal,
   } = deps;
   const timing = resolveTimingPolicy(deps);
@@ -135,7 +122,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
-          if (isChannelHealthy(status, { now, staleEventThresholdMs })) {
+          const healthPolicy: ChannelHealthPolicy = {
+            now,
+            staleEventThresholdMs: timing.staleEventThresholdMs,
+            channelConnectGraceMs: timing.channelConnectGraceMs,
+          };
+          const health = evaluateChannelHealth(status, healthPolicy);
+          if (health.healthy) {
             continue;
           }
 
@@ -157,19 +150,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             continue;
           }
 
-          const isStaleSocket =
-            status.running &&
-            status.connected !== false &&
-            status.lastEventAt != null &&
-            now - (status.lastEventAt ?? 0) > staleEventThresholdMs;
-
-          const reason = !status.running
-            ? status.reconnectAttempts && status.reconnectAttempts >= 10
-              ? "gave-up"
-              : "stopped"
-            : isStaleSocket
-              ? "stale-socket"
-              : "stuck";
+          const reason = resolveChannelRestartReason(status, health);
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 

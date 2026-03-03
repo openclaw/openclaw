@@ -1,10 +1,16 @@
 import type { BotConfig } from "../config/config.js";
+import type { SecretInput } from "../config/types.secrets.js";
+import { isSecureWebSocketUrl } from "../gateway/net.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import type { SecretInputMode } from "./onboard-types.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import {
+  promptSecretRefForOnboarding,
+  resolveSecretInputModeForEnvSelection,
+} from "./auth-choice.apply-helpers.js";
 import { detectBinary } from "./onboard-helpers.js";
+import type { SecretInputMode } from "./onboard-types.js";
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 
@@ -30,9 +36,28 @@ function ensureWsUrl(value: string): string {
   return trimmed;
 }
 
+function validateGatewayWebSocketUrl(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
+    return "URL must start with ws:// or wss://";
+  }
+  if (
+    !isSecureWebSocketUrl(trimmed, {
+      allowPrivateWs: process.env.BOT_ALLOW_INSECURE_PRIVATE_WS === "1",
+    })
+  ) {
+    return (
+      "Use wss:// for remote hosts, or ws://127.0.0.1/localhost via SSH tunnel. " +
+      "Break-glass: BOT_ALLOW_INSECURE_PRIVATE_WS=1 for trusted private networks."
+    );
+  }
+  return undefined;
+}
+
 export async function promptRemoteGatewayConfig(
   cfg: BotConfig,
   prompter: WizardPrompter,
+  options?: { secretInputMode?: SecretInputMode },
 ): Promise<BotConfig> {
   let selectedBeacon: GatewayBonjourBeacon | null = null;
   let suggestedUrl = cfg.gateway?.remote?.url ?? DEFAULT_GATEWAY_URL;
@@ -96,7 +121,15 @@ export async function promptRemoteGatewayConfig(
         ],
       });
       if (mode === "direct") {
-        suggestedUrl = `ws://${host}:${port}`;
+        suggestedUrl = `wss://${host}:${port}`;
+        await prompter.note(
+          [
+            "Direct remote access defaults to TLS.",
+            `Using: ${suggestedUrl}`,
+            "If your gateway is loopback-only, choose SSH tunnel and keep ws://127.0.0.1:18789.",
+          ].join("\n"),
+          "Direct remote",
+        );
       } else {
         suggestedUrl = DEFAULT_GATEWAY_URL;
         await prompter.note(
@@ -116,10 +149,7 @@ export async function promptRemoteGatewayConfig(
   const urlInput = await prompter.text({
     message: "Gateway WebSocket URL",
     initialValue: suggestedUrl,
-    validate: (value) =>
-      String(value).trim().startsWith("ws://") || String(value).trim().startsWith("wss://")
-        ? undefined
-        : "URL must start with ws:// or wss://",
+    validate: (value) => validateGatewayWebSocketUrl(String(value)),
   });
   const url = ensureWsUrl(String(urlInput));
 

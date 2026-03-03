@@ -1,5 +1,4 @@
-import type { SystemRunApprovalBindingV1 } from "../infra/exec-approvals.js";
-import type { ExecApprovalRequestPayload } from "./exec-approval-manager.js";
+import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import {
   buildSystemRunApprovalBinding,
   missingSystemRunApprovalBinding,
@@ -42,14 +41,13 @@ export function evaluateSystemRunApprovalMatch(params: {
     env: params.binding.env,
   });
 
-  const expectedBindingRaw = params.request.systemRunBindingV1;
-  if (!expectedBindingRaw) {
-    return missingSystemRunApprovalBindingV1({
+  const expectedBinding = params.request.systemRunBinding;
+  if (!expectedBinding) {
+    return missingSystemRunApprovalBinding({
       actualEnvKeys: actualBinding.envKeys,
     });
   }
-  const expectedBinding = expectedBindingRaw as SystemRunApprovalBindingV1;
-  return matchSystemRunApprovalBindingV1({
+  return matchSystemRunApprovalBinding({
     expected: expectedBinding,
     actual: actualBinding.binding,
     actualEnvKeys: actualBinding.envKeys,

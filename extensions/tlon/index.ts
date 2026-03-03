@@ -1,3 +1,7 @@
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { BotPluginApi } from "bot/plugin-sdk";
 import { emptyPluginConfigSchema } from "bot/plugin-sdk";
 import { tlonPlugin } from "./src/channel.js";

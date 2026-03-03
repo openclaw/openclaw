@@ -1,13 +1,13 @@
-import type { BotConfig } from "bot/plugin-sdk";
-import type { MentionTarget } from "./mention.js";
-import type { FeishuSendResult } from "./types.js";
+import type { ClawdbotConfig } from "bot/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
+import type { FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 
@@ -107,7 +107,7 @@ function parseQuotedMessageContent(rawContent: string, msgType: string): string 
  * Useful for fetching quoted/replied message content.
  */
 export async function getMessageFeishu(params: {
-  cfg: BotConfig;
+  cfg: ClawdbotConfig;
   messageId: string;
   accountId?: string;
 }): Promise<FeishuMessageInfo | null> {
@@ -166,27 +166,9 @@ export async function getMessageFeishu(params: {
       return null;
     }
 
-    // Parse content based on message type
-    let content = item.body?.content ?? "";
-    try {
-      const parsed = JSON.parse(content);
-      if (item.msg_type === "text" && parsed.text) {
-        content = parsed.text;
-      } else if (item.msg_type === "interactive" && parsed.elements) {
-        // Extract text from interactive card
-        const texts: string[] = [];
-        for (const element of parsed.elements) {
-          if (element.tag === "div" && element.text?.content) {
-            texts.push(element.text.content);
-          } else if (element.tag === "markdown" && element.content) {
-            texts.push(element.content);
-          }
-        }
-        content = texts.join("\n") || "[Interactive Card]";
-      }
-    } catch {
-      // Keep raw content if parsing fails
-    }
+    const msgType = item.msg_type ?? "text";
+    const rawContent = item.body?.content ?? "";
+    const content = parseQuotedMessageContent(rawContent, msgType);
 
     return {
       messageId: item.message_id ?? messageId,
@@ -204,7 +186,7 @@ export async function getMessageFeishu(params: {
 }
 
 export type SendFeishuMessageParams = {
-  cfg: BotConfig;
+  cfg: ClawdbotConfig;
   to: string;
   text: string;
   replyToMessageId?: string;
@@ -295,7 +277,7 @@ export async function sendMessageFeishu(
 }
 
 export type SendFeishuCardParams = {
-  cfg: BotConfig;
+  cfg: ClawdbotConfig;
   to: string;
   card: Record<string, unknown>;
   replyToMessageId?: string;
@@ -347,7 +329,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
 }
 
 export async function updateCardFeishu(params: {
-  cfg: BotConfig;
+  cfg: ClawdbotConfig;
   messageId: string;
   card: Record<string, unknown>;
   accountId?: string;
@@ -398,7 +380,7 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
  * This renders markdown properly in Feishu (code blocks, tables, bold/italic, etc.)
  */
 export async function sendMarkdownCardFeishu(params: {
-  cfg: BotConfig;
+  cfg: ClawdbotConfig;
   to: string;
   text: string;
   replyToMessageId?: string;
@@ -422,7 +404,7 @@ export async function sendMarkdownCardFeishu(params: {
  * Note: Feishu only allows editing messages within 24 hours.
  */
 export async function editMessageFeishu(params: {
-  cfg: BotConfig;
+  cfg: ClawdbotConfig;
   messageId: string;
   text: string;
   accountId?: string;

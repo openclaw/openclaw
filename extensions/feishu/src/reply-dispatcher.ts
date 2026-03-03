@@ -2,14 +2,14 @@ import {
   createReplyPrefixContext,
   createTypingCallbacks,
   logTypingFailure,
-  type BotConfig,
+  type ClawdbotConfig,
   type ReplyPayload,
   type RuntimeEnv,
 } from "bot/plugin-sdk";
-import type { MentionTarget } from "./mention.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu } from "./media.js";
+import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
@@ -37,7 +37,7 @@ function normalizeEpochMs(timestamp: number | undefined): number | undefined {
 }
 
 export type CreateFeishuReplyDispatcherParams = {
-  cfg: BotConfig;
+  cfg: ClawdbotConfig;
   agentId: string;
   runtime: RuntimeEnv;
   chatId: string;
@@ -45,6 +45,8 @@ export type CreateFeishuReplyDispatcherParams = {
   /** When true, preserve typing indicator on reply target but send messages without reply metadata */
   skipReplyToInMessages?: boolean;
   replyInThread?: boolean;
+  /** True when inbound message is already inside a thread/topic context */
+  threadReply?: boolean;
   rootId?: string;
   mentionTargets?: MentionTarget[];
   accountId?: string;
@@ -62,11 +64,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyToMessageId,
     skipReplyToInMessages,
     replyInThread,
+    threadReply,
     rootId,
     mentionTargets,
     accountId,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
+  const threadReplyMode = threadReply === true;
+  const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const account = resolveFeishuAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -78,6 +83,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         return;
       }
       if (!replyToMessageId) {
+        return;
+      }
+      // Skip typing indicator for old messages — likely replays after context
+      // compaction that would flood users with stale notifications (#30418).
+      const messageCreateTimeMs = normalizeEpochMs(params.messageCreateTimeMs);
+      if (
+        messageCreateTimeMs !== undefined &&
+        Date.now() - messageCreateTimeMs > TYPING_INDICATOR_MAX_AGE_MS
+      ) {
+        return;
+      }
+      // Feishu reactions persist until explicitly removed, so skip keepalive
+      // re-adds when a reaction already exists. Re-adding the same emoji
+      // triggers a new push notification for every call (#28660).
+      if (typingState?.reactionId) {
         return;
       }
       typingState = await addTypingIndicator({
@@ -187,7 +207,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       try {
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
-          replyInThread,
+          replyInThread: effectiveReplyInThread,
           rootId,
         });
       } catch (error) {
@@ -244,7 +264,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (hasText) {
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
-          if ((info?.kind === "block" || info?.kind === "final") && streamingEnabled && useCard) {
+          if (info?.kind === "block") {
+            // Drop internal block chunks unless we can safely consume them as
+            // streaming-card fallback content.
+            if (!(streamingEnabled && useCard)) {
+              return;
+            }
+            startStreaming();
+            if (streamingStartPromise) {
+              await streamingStartPromise;
+            }
+          }
+
+          if (info?.kind === "final" && streamingEnabled && useCard) {
             startStreaming();
             if (streamingStartPromise) {
               await streamingStartPromise;
@@ -252,6 +284,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
 
           if (streaming?.isActive()) {
+            if (info?.kind === "block") {
+              // Some runtimes emit block payloads without onPartial/final callbacks.
+              // Mirror block text into streamText so onIdle close still sends content.
+              queueStreamingUpdate(text);
+            }
             if (info?.kind === "final") {
               streamText = text;
               await closeStreaming();
@@ -264,7 +301,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   to: chatId,
                   mediaUrl,
                   replyToMessageId: sendReplyToMessageId,
-                  replyInThread,
+                  replyInThread: effectiveReplyInThread,
                   accountId,
                 });
               }
@@ -284,7 +321,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 to: chatId,
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
-                replyInThread,
+                replyInThread: effectiveReplyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
               });
@@ -302,7 +339,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 to: chatId,
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
-                replyInThread,
+                replyInThread: effectiveReplyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
               });
@@ -318,7 +355,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               to: chatId,
               mediaUrl,
               replyToMessageId: sendReplyToMessageId,
-              replyInThread,
+              replyInThread: effectiveReplyInThread,
               accountId,
             });
           }

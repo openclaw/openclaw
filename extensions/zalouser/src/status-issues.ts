@@ -45,23 +45,13 @@ export function collectZalouserStatusIssues(
     const configured = account.configured === true;
 
     if (!configured) {
-      if (isMissingZca(lastError)) {
-        issues.push({
-          channel: "zalouser",
-          accountId,
-          kind: "runtime",
-          message: "zca CLI not found in PATH.",
-          fix: "Install zca-cli and ensure it is on PATH for the Gateway process.",
-        });
-      } else {
-        issues.push({
-          channel: "zalouser",
-          accountId,
-          kind: "auth",
-          message: "Not authenticated (no zca session).",
-          fix: "Run: hanzo-bot channels login --channel zalouser",
-        });
-      }
+      issues.push({
+        channel: "zalouser",
+        accountId,
+        kind: "auth",
+        message: "Not authenticated (no saved Zalo session).",
+        fix: "Run: bot channels login --channel zalouser",
+      });
       continue;
     }
 

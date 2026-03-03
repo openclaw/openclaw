@@ -96,7 +96,7 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
 
   try {
     const { deliverOutboundPayloads } = await import("./outbound/deliver.js");
-    const _outboundSession = buildOutboundSessionContext({
+    const outboundSession = buildOutboundSessionContext({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
     });
@@ -107,6 +107,7 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
       accountId: target.accountId,
       threadId: target.threadId,
       payloads: [{ text }],
+      session: outboundSession,
     });
   } catch (err) {
     log.warn(`Failed to deliver session maintenance warning: ${String(err)}`);

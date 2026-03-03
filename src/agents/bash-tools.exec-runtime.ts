@@ -1,17 +1,18 @@
+import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import path from "node:path";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
-import type { ProcessSession } from "./bash-process-registry.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
-import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
-import type { ManagedRun } from "../process/supervisor/index.js";
+import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import type { ProcessSession } from "./bash-process-registry.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { BashSandboxConfig } from "./bash-tools.shared.js";
+export { applyPathPrepend, findPathKey, normalizePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
+import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   addSession,

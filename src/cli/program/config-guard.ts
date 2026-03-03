@@ -1,6 +1,7 @@
-import type { RuntimeEnv } from "../../runtime.js";
 import { loadAndMaybeMigrateDoctorConfig } from "../../commands/doctor-config-flow.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { formatConfigIssueLines } from "../../config/issue-format.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
@@ -109,7 +110,7 @@ export async function ensureConfigReady(params: {
   }
   params.runtime.error("");
   params.runtime.error(
-    `${muted("Run:")} ${commandText(formatCliCommand("hanzo-bot doctor --fix"))}`,
+    `${muted("Run:")} ${commandText(formatCliCommand("bot doctor --fix"))}`,
   );
   if (!allowInvalid) {
     params.runtime.exit(1);

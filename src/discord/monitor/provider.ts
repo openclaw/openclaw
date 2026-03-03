@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import {
   Client,
   ReadyListener,
@@ -9,12 +10,9 @@ import {
 import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
 import { Routes } from "discord-api-types/v10";
-import { inspect } from "node:util";
-import type { HistoryEntry } from "../../auto-reply/reply/history.js";
-import type { BotConfig, ReplyToMode } from "../../config/config.js";
-import type { DiscordMonitorStatusSink } from "./status.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
+import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import {
   resolveThreadBindingIdleTimeoutMs,
@@ -26,6 +24,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../../config/commands.js";
+import type { BotConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import {
@@ -77,6 +76,7 @@ import { resolveDiscordPresenceUpdate } from "./presence.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
+import type { DiscordMonitorStatusSink } from "./status.js";
 import {
   createNoopThreadBindingManager,
   createThreadBindingManager,
@@ -113,59 +113,6 @@ function summarizeGuilds(entries?: Record<string, unknown>) {
   const sample = keys.slice(0, 4);
   const suffix = keys.length > sample.length ? ` (+${keys.length - sample.length})` : "";
   return `${sample.join(", ")}${suffix}`;
-}
-
-const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
-const DEFAULT_THREAD_BINDING_MAX_AGE_HOURS = 0;
-
-function normalizeThreadBindingHours(raw: unknown): number | undefined {
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return undefined;
-  }
-  if (raw < 0) {
-    return undefined;
-  }
-  return raw;
-}
-
-function resolveThreadBindingIdleTimeoutMs(params: {
-  channelIdleHoursRaw: unknown;
-  sessionIdleHoursRaw: unknown;
-}): number {
-  const idleHours =
-    normalizeThreadBindingHours(params.channelIdleHoursRaw) ??
-    normalizeThreadBindingHours(params.sessionIdleHoursRaw) ??
-    DEFAULT_THREAD_BINDING_IDLE_HOURS;
-  return Math.floor(idleHours * 60 * 60 * 1000);
-}
-
-function resolveThreadBindingMaxAgeMs(params: {
-  channelMaxAgeHoursRaw: unknown;
-  sessionMaxAgeHoursRaw: unknown;
-}): number {
-  const maxAgeHours =
-    normalizeThreadBindingHours(params.channelMaxAgeHoursRaw) ??
-    normalizeThreadBindingHours(params.sessionMaxAgeHoursRaw) ??
-    DEFAULT_THREAD_BINDING_MAX_AGE_HOURS;
-  return Math.floor(maxAgeHours * 60 * 60 * 1000);
-}
-
-function normalizeThreadBindingsEnabled(raw: unknown): boolean | undefined {
-  if (typeof raw !== "boolean") {
-    return undefined;
-  }
-  return raw;
-}
-
-function resolveThreadBindingsEnabled(params: {
-  channelEnabledRaw: unknown;
-  sessionEnabledRaw: unknown;
-}): boolean {
-  return (
-    normalizeThreadBindingsEnabled(params.channelEnabledRaw) ??
-    normalizeThreadBindingsEnabled(params.sessionEnabledRaw) ??
-    true
-  );
 }
 
 function formatThreadBindingDurationForConfigLabel(durationMs: number): string {

@@ -48,9 +48,9 @@ function loadPrecomputedChannelOptions(): string[] | null {
 }
 
 export function resolveCliChannelOptions(): string[] {
-  const catalog = listChannelPluginCatalogEntries().map((entry) => entry.id);
-  const base = dedupe([...CHAT_CHANNEL_ORDER, ...catalog]);
   if (isTruthyEnvValue(process.env.BOT_EAGER_CHANNEL_OPTIONS)) {
+    const catalog = listChannelPluginCatalogEntries().map((entry) => entry.id);
+    const base = dedupe([...CHAT_CHANNEL_ORDER, ...catalog]);
     ensurePluginRegistryLoaded();
     const pluginIds = listChannelPlugins().map((plugin) => plugin.id);
     return dedupe([...base, ...pluginIds]);

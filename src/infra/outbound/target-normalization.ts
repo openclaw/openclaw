@@ -1,5 +1,6 @@
-import type { ChannelId } from "../../channels/plugins/types.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelId } from "../../channels/plugins/types.js";
+import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 
 export function normalizeChannelTargetInput(raw: string): string {
   return raw.trim();

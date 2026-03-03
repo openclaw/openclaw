@@ -21,6 +21,53 @@ function runBrowserDebug(action: () => Promise<void>) {
   });
 }
 
+async function withDebugContext(
+  cmd: Command,
+  parentOpts: (cmd: Command) => BrowserParentOpts,
+  action: (context: DebugContext) => Promise<void>,
+) {
+  const parent = parentOpts(cmd);
+  await runBrowserDebug(() =>
+    action({
+      parent,
+      profile: parent.browserProfile,
+    }),
+  );
+}
+
+function printJsonResult(parent: BrowserParentOpts, result: unknown): boolean {
+  if (!parent.json) {
+    return false;
+  }
+  defaultRuntime.log(JSON.stringify(result, null, 2));
+  return true;
+}
+
+async function callDebugRequest<T>(
+  parent: BrowserParentOpts,
+  params: BrowserRequestParams,
+): Promise<T> {
+  return callBrowserRequest<T>(parent, params, { timeoutMs: BROWSER_DEBUG_TIMEOUT_MS });
+}
+
+function resolveProfileQuery(profile?: string) {
+  return profile ? { profile } : undefined;
+}
+
+function resolveDebugQuery(params: {
+  targetId?: unknown;
+  clear?: unknown;
+  profile?: string;
+  filter?: unknown;
+}) {
+  return {
+    targetId: typeof params.targetId === "string" ? params.targetId.trim() || undefined : undefined,
+    filter: typeof params.filter === "string" ? params.filter.trim() || undefined : undefined,
+    clear: Boolean(params.clear),
+    profile: params.profile,
+  };
+}
+
 export function registerBrowserDebugCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -57,21 +104,16 @@ export function registerBrowserDebugCommands(
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
         const result = await callDebugRequest<{
           errors: Array<{ timestamp: string; name?: string; message: string }>;
-        }>(
-          parent,
-          {
-            method: "GET",
-            path: "/errors",
-            query: {
-              targetId: opts.targetId?.trim() || undefined,
-              clear: Boolean(opts.clear),
-              profile,
-            },
-          },
-          { timeoutMs: 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+        }>(parent, {
+          method: "GET",
+          path: "/errors",
+          query: resolveDebugQuery({
+            targetId: opts.targetId,
+            clear: opts.clear,
+            profile,
+          }),
+        });
+        if (printJsonResult(parent, result)) {
           return;
         }
         if (!result.errors.length) {
@@ -103,22 +145,17 @@ export function registerBrowserDebugCommands(
             url: string;
             failureText?: string;
           }>;
-        }>(
-          parent,
-          {
-            method: "GET",
-            path: "/requests",
-            query: {
-              targetId: opts.targetId?.trim() || undefined,
-              filter: opts.filter?.trim() || undefined,
-              clear: Boolean(opts.clear),
-              profile,
-            },
-          },
-          { timeoutMs: 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+        }>(parent, {
+          method: "GET",
+          path: "/requests",
+          query: resolveDebugQuery({
+            targetId: opts.targetId,
+            filter: opts.filter,
+            clear: opts.clear,
+            profile,
+          }),
+        });
+        if (printJsonResult(parent, result)) {
           return;
         }
         if (!result.requests.length) {

@@ -1,4 +1,9 @@
 import type { MSTeamsConfig } from "bot/plugin-sdk";
+import {
+  hasConfiguredSecretInput,
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "./secret-input.js";
 
 export type MSTeamsCredentials = {
   appId: string;

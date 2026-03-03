@@ -1,5 +1,3 @@
-import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
-import type { ChannelOutboundAdapter } from "../types.js";
 import {
   getThreadBindingManager,
   type ThreadBindingRecord,
@@ -9,7 +7,10 @@ import {
   sendPollDiscord,
   sendWebhookMessageDiscord,
 } from "../../../discord/send.js";
+import type { OutboundIdentity } from "../../../infra/outbound/identity.js";
 import { normalizeDiscordOutboundTarget } from "../normalize/discord.js";
+import type { ChannelOutboundAdapter } from "../types.js";
+import { sendTextMediaPayload } from "./direct-text-media.js";
 
 function resolveDiscordOutboundTarget(params: {
   to: string;

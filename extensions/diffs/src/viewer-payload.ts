@@ -1,5 +1,5 @@
-import type { DiffViewerPayload } from "./types.js";
 import { DIFF_INDICATORS, DIFF_LAYOUTS, DIFF_THEMES } from "./types.js";
+import type { DiffViewerPayload } from "./types.js";
 
 const OVERFLOW_VALUES = ["scroll", "wrap"] as const;
 

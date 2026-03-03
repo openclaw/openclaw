@@ -1,5 +1,6 @@
-import type { BotConfig } from "bot/plugin-sdk";
+import type { ClawdbotConfig } from "bot/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "bot/plugin-sdk/account-id";
+import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type {
   FeishuConfig,
   FeishuAccountConfig,
@@ -11,7 +12,7 @@ import type {
 /**
  * List all configured account IDs from the accounts field.
  */
-function listConfiguredAccountIds(cfg: BotConfig): string[] {
+function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
   const accounts = (cfg.channels?.feishu as FeishuConfig)?.accounts;
   if (!accounts || typeof accounts !== "object") {
     return [];
@@ -23,7 +24,7 @@ function listConfiguredAccountIds(cfg: BotConfig): string[] {
  * List all Feishu account IDs.
  * If no accounts are configured, returns [DEFAULT_ACCOUNT_ID] for backward compatibility.
  */
-export function listFeishuAccountIds(cfg: BotConfig): string[] {
+export function listFeishuAccountIds(cfg: ClawdbotConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
   if (ids.length === 0) {
     // Backward compatibility: no accounts configured, use default
@@ -63,18 +64,17 @@ export function resolveDefaultFeishuAccountSelection(cfg: ClawdbotConfig): {
 /**
  * Resolve the default account ID.
  */
-export function resolveDefaultFeishuAccountId(cfg: BotConfig): string {
-  const ids = listFeishuAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
+export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
+  return resolveDefaultFeishuAccountSelection(cfg).accountId;
 }
 
 /**
  * Get the raw account-specific config.
  */
-function resolveAccountConfig(cfg: BotConfig, accountId: string): FeishuAccountConfig | undefined {
+function resolveAccountConfig(
+  cfg: ClawdbotConfig,
+  accountId: string,
+): FeishuAccountConfig | undefined {
   const accounts = (cfg.channels?.feishu as FeishuConfig)?.accounts;
   if (!accounts || typeof accounts !== "object") {
     return undefined;
@@ -86,7 +86,7 @@ function resolveAccountConfig(cfg: BotConfig, accountId: string): FeishuAccountC
  * Merge top-level config with account-specific config.
  * Account-specific fields override top-level fields.
  */
-function mergeFeishuAccountConfig(cfg: BotConfig, accountId: string): FeishuConfig {
+function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
 
   // Extract base config (exclude accounts field to avoid recursion)
@@ -158,7 +158,7 @@ export function resolveFeishuCredentials(
  * Resolve a complete Feishu account with merged config.
  */
 export function resolveFeishuAccount(params: {
-  cfg: BotConfig;
+  cfg: ClawdbotConfig;
   accountId?: string | null;
 }): ResolvedFeishuAccount {
   const hasExplicitAccountId =
@@ -205,7 +205,7 @@ export function resolveFeishuAccount(params: {
 /**
  * List all enabled and configured accounts.
  */
-export function listEnabledFeishuAccounts(cfg: BotConfig): ResolvedFeishuAccount[] {
+export function listEnabledFeishuAccounts(cfg: ClawdbotConfig): ResolvedFeishuAccount[] {
   return listFeishuAccountIds(cfg)
     .map((accountId) => resolveFeishuAccount({ cfg, accountId }))
     .filter((account) => account.enabled && account.configured);

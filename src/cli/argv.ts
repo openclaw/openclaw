@@ -65,8 +65,16 @@ export function hasRootVersionAlias(argv: string[]): boolean {
 }
 
 export function isRootVersionInvocation(argv: string[]): boolean {
+  return isRootInvocationForFlags(argv, VERSION_FLAGS, { includeVersionAlias: true });
+}
+
+function isRootInvocationForFlags(
+  argv: string[],
+  targetFlags: Set<string>,
+  options?: { includeVersionAlias?: boolean },
+): boolean {
   const args = argv.slice(2);
-  let hasVersion = false;
+  let hasTarget = false;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (!arg) {
@@ -75,29 +83,26 @@ export function isRootVersionInvocation(argv: string[]): boolean {
     if (arg === FLAG_TERMINATOR) {
       break;
     }
-    if (arg === ROOT_VERSION_ALIAS_FLAG || VERSION_FLAGS.has(arg)) {
-      hasVersion = true;
+    if (
+      targetFlags.has(arg) ||
+      (options?.includeVersionAlias === true && arg === ROOT_VERSION_ALIAS_FLAG)
+    ) {
+      hasTarget = true;
       continue;
     }
-    if (ROOT_BOOLEAN_FLAGS.has(arg)) {
+    const consumed = consumeRootOptionToken(args, i);
+    if (consumed > 0) {
+      i += consumed - 1;
       continue;
     }
-    if (arg.startsWith("--profile=") || arg.startsWith("--log-level=")) {
-      continue;
-    }
-    if (ROOT_VALUE_FLAGS.has(arg)) {
-      const next = args[i + 1];
-      if (isValueToken(next)) {
-        i += 1;
-      }
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      return false;
-    }
+    // Unknown flags and subcommand-scoped help/version should fall back to Commander.
     return false;
   }
-  return hasVersion;
+  return hasTarget;
+}
+
+export function isRootHelpInvocation(argv: string[]): boolean {
+  return isRootInvocationForFlags(argv, HELP_FLAGS);
 }
 
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
@@ -283,7 +288,7 @@ export function buildParseArgv(params: {
   const normalizedArgv =
     programName && baseArgv[0] === programName
       ? baseArgv.slice(1)
-      : baseArgv[0]?.endsWith("bot")
+      : baseArgv[0]?.endsWith("@hanzo/bot")
         ? baseArgv.slice(1)
         : baseArgv;
   const looksLikeNode =
@@ -292,7 +297,7 @@ export function buildParseArgv(params: {
   if (looksLikeNode) {
     return normalizedArgv;
   }
-  return ["node", programName || "bot", ...normalizedArgv];
+  return ["node", programName || "@hanzo/bot", ...normalizedArgv];
 }
 
 export function shouldMigrateStateFromPath(path: string[]): boolean {

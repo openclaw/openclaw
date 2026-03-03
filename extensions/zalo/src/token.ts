@@ -1,5 +1,7 @@
-import { type BaseTokenResolution, DEFAULT_ACCOUNT_ID } from "bot/plugin-sdk";
 import { readFileSync } from "node:fs";
+import type { BaseTokenResolution } from "bot/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "bot/plugin-sdk/account-id";
+import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type { ZaloConfig } from "./types.js";
 
 export type ZaloTokenResolution = BaseTokenResolution & {

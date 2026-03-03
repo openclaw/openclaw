@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
-import type { GatewayAuthConfig, GatewayTailscaleConfig, BotConfig } from "../config/config.js";
+import type {
+  GatewayAuthConfig,
+  GatewayTailscaleConfig,
+  BotConfig,
+} from "../config/config.js";
 import { writeConfigFile } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
@@ -62,11 +66,9 @@ function resolveGatewayAuthFromConfig(params: {
     params.cfg.gateway?.tailscale,
     params.tailscaleOverride,
   );
-  const mergedAuthConfig = params.authOverride
-    ? mergeGatewayAuthConfig(params.cfg.gateway?.auth, params.authOverride)
-    : params.cfg.gateway?.auth;
   return resolveGatewayAuth({
-    authConfig: mergedAuthConfig,
+    authConfig: params.cfg.gateway?.auth,
+    authOverride: params.authOverride,
     env: params.env,
     tailscaleMode: tailscaleConfig.mode ?? "off",
   });
@@ -75,7 +77,6 @@ function resolveGatewayAuthFromConfig(params: {
 function shouldPersistGeneratedToken(params: {
   persistRequested: boolean;
   resolvedAuth: ResolvedGatewayAuth;
-  hasModeOverride?: boolean;
 }): boolean {
   if (!params.persistRequested) {
     return false;
@@ -83,7 +84,7 @@ function shouldPersistGeneratedToken(params: {
 
   // Keep CLI/runtime mode overrides ephemeral: startup should not silently
   // mutate durable auth policy when mode was chosen by an override flag.
-  if (params.hasModeOverride) {
+  if (params.resolvedAuth.modeSource === "override") {
     return false;
   }
 
@@ -208,27 +209,14 @@ export async function ensureGatewayStartupAuth(params: {
     authOverride: params.authOverride,
     tailscaleOverride: params.tailscaleOverride,
   });
-
-  // Determine whether the resolved auth is already explicitly configured.
-  // We generate a token when either:
-  //   1. mode is "token" but no token value exists yet, OR
-  //   2. mode defaulted to "none" because nothing was configured (implicit none)
-  //
-  // We do NOT generate when the user explicitly set mode to password, none,
-  // trusted-proxy, or iam — those are intentional choices.
-  const hasExplicitMode = Boolean(params.cfg.gateway?.auth?.mode || params.authOverride?.mode);
-  const needsGeneration =
-    (resolved.mode === "token" && !resolved.token?.trim().length) ||
-    (resolved.mode === "none" && !hasExplicitMode);
-
-  if (!needsGeneration) {
-    assertHooksTokenSeparateFromGatewayAuth({ cfg: params.cfg, auth: resolved });
-    return { cfg: params.cfg, auth: resolved, persistedGeneratedToken: false };
+  if (resolved.mode !== "token" || (resolved.token?.trim().length ?? 0) > 0) {
+    assertHooksTokenSeparateFromGatewayAuth({ cfg: cfgForAuth, auth: resolved });
+    return { cfg: cfgForAuth, auth: resolved, persistedGeneratedToken: false };
   }
 
   const generatedToken = crypto.randomBytes(24).toString("hex");
   const nextCfg: BotConfig = {
-    ...params.cfg,
+    ...cfgForAuth,
     gateway: {
       ...cfgForAuth.gateway,
       auth: {
@@ -241,7 +229,6 @@ export async function ensureGatewayStartupAuth(params: {
   const persist = shouldPersistGeneratedToken({
     persistRequested,
     resolvedAuth: resolved,
-    hasModeOverride: params.authOverride?.mode !== undefined,
   });
   if (persist) {
     await writeConfigFile(nextCfg);

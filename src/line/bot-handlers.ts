@@ -7,9 +7,14 @@ import type {
   LeaveEvent,
   PostbackEvent,
 } from "@line/bot-sdk";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
+import { resolveControlCommandGate } from "../channels/command-gating.js";
 import type { BotConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
+import {
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../config/runtime-group-policy.js";
 import { danger, logVerbose } from "../globals.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
@@ -17,7 +22,13 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
-import { firstDefined, isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
+import type { RuntimeEnv } from "../runtime.js";
+import {
+  firstDefined,
+  isSenderAllowed,
+  normalizeAllowFrom,
+  normalizeDmAllowFromWithStore,
+} from "./bot-access.js";
 import {
   getLineSourceInfo,
   buildLineMessageContext,
@@ -26,6 +37,7 @@ import {
 } from "./bot-message-context.js";
 import { downloadLineMedia } from "./download.js";
 import { pushMessageLine, replyMessageLine } from "./send.js";
+import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 
 interface MediaRef {
   path: string;
@@ -266,6 +278,7 @@ async function shouldProcessLineEvent(
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
 
   const storeAllowFrom = await readChannelAllowFromStore(
     "line",
@@ -275,6 +288,7 @@ async function shouldProcessLineEvent(
   const effectiveDmAllow = normalizeDmAllowFromWithStore({
     allowFrom: account.config.allowFrom,
     storeAllowFrom,
+    dmPolicy,
   });
   const groupConfig = resolveLineGroupConfig({ config: account.config, groupId, roomId });
   const groupAllowOverride = groupConfig?.allowFrom;
@@ -286,13 +300,22 @@ async function shouldProcessLineEvent(
     account.config.groupAllowFrom,
     fallbackGroupAllowFrom,
   );
-  const effectiveGroupAllow = normalizeDmAllowFromWithStore({
-    allowFrom: groupAllowFrom,
-    storeAllowFrom,
+  // Group sender policy must be derived from explicit group config only.
+  // Pairing store entries are DM-oriented and must not expand group allowlists.
+  const effectiveGroupAllow = normalizeAllowFrom(groupAllowFrom);
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.line !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+    });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "line",
+    accountId: account.accountId,
+    log: (message) => logVerbose(message),
   });
-  const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
 
   if (isGroup) {
     if (groupConfig?.enabled === false) {

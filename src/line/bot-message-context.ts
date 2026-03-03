@@ -1,18 +1,16 @@
 import type { MessageEvent, StickerEventMessage, EventSource, PostbackEvent } from "@line/bot-sdk";
-import type { BotConfig } from "../config/config.js";
-import type { ResolvedLineAccount } from "./types.js";
-import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
+import { formatInboundEnvelope } from "../auto-reply/envelope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
-import {
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-  updateLastRoute,
-} from "../config/sessions.js";
+import { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
+import { recordInboundSession } from "../channels/session.js";
+import type { BotConfig } from "../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
+import { normalizeAllowFrom } from "./bot-access.js";
+import type { ResolvedLineAccount, LineGroupConfig } from "./types.js";
 
 interface MediaRef {
   path: string;

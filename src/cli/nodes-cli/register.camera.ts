@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import type { NodesRpcOpts } from "./types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { renderTable } from "../../terminal/table.js";
 import { shortenHomePath } from "../../utils.js";
@@ -13,7 +12,14 @@ import {
 } from "../nodes-camera.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { buildNodeInvokeParams, callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import {
+  buildNodeInvokeParams,
+  callGatewayCli,
+  nodesCallOpts,
+  resolveNode,
+  resolveNodeId,
+} from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
 
 const parseFacing = (value: string): CameraFacing => {
   const v = String(value ?? "")

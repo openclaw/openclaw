@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 
 export const NOVNC_PASSWORD_ENV_KEY = "BOT_BROWSER_NOVNC_PASSWORD";
-const NOVNC_TOKEN_TTL_MS = 5 * 60 * 1000;
+const NOVNC_TOKEN_TTL_MS = 60 * 1000;
+const NOVNC_PASSWORD_LENGTH = 8;
+const NOVNC_PASSWORD_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 type NoVncObserverTokenEntry = {
   noVncPort: number;

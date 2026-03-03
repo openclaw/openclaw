@@ -1,4 +1,12 @@
 import crypto from "node:crypto";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import { parseAbsoluteTimeMs } from "../parse.js";
+import { computeNextRunAtMs } from "../schedule.js";
+import {
+  normalizeCronStaggerMs,
+  resolveCronStaggerMs,
+  resolveDefaultCronStaggerMs,
+} from "../stagger.js";
 import type {
   CronDelivery,
   CronDeliveryPatch,
@@ -9,14 +17,6 @@ import type {
   CronPayload,
   CronPayloadPatch,
 } from "../types.js";
-import type { CronServiceState } from "./state.js";
-import { parseAbsoluteTimeMs } from "../parse.js";
-import { computeNextRunAtMs } from "../schedule.js";
-import {
-  normalizeCronStaggerMs,
-  resolveCronStaggerMs,
-  resolveDefaultCronStaggerMs,
-} from "../stagger.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import {
   normalizeOptionalAgentId,
@@ -25,6 +25,7 @@ import {
   normalizePayloadToSystemText,
   normalizeRequiredName,
 } from "./normalize.js";
+import type { CronServiceState } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
@@ -229,6 +230,14 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
           : typeof schedule.at === "string"
             ? parseAbsoluteTimeMs(schedule.at)
             : null;
+    // One-shot jobs stay due until they successfully finish, but if the
+    // schedule was updated to a time after the last run, re-arm the job.
+    if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
+      if (atMs !== null && Number.isFinite(atMs) && atMs > job.state.lastRunAtMs) {
+        return atMs;
+      }
+      return undefined;
+    }
     return atMs !== null && Number.isFinite(atMs) ? atMs : undefined;
   }
   const next = computeStaggeredCronNextRunAtMs(job, nowMs);
@@ -546,6 +555,15 @@ export function applyJobPatch(
   if ("failureAlert" in patch) {
     job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
   }
+  if (
+    job.sessionTarget === "main" &&
+    job.delivery?.mode !== "webhook" &&
+    job.delivery?.failureDestination
+  ) {
+    throw new Error(
+      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
+    );
+  }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
     job.delivery = undefined;
   }
@@ -713,10 +731,6 @@ function mergeCronDelivery(
   if ("accountId" in patch) {
     next.accountId = normalizeOptionalTrimmedString(patch.accountId);
   }
-  if ("accountId" in patch) {
-    const accountId = typeof patch.accountId === "string" ? patch.accountId.trim() : "";
-    next.accountId = accountId ? accountId : undefined;
-  }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
   }
@@ -794,42 +808,6 @@ function mergeCronFailureAlert(
   if ("accountId" in patch) {
     const accountId = typeof patch.accountId === "string" ? patch.accountId.trim() : "";
     next.accountId = accountId ? accountId : undefined;
-  }
-
-  return next;
-}
-
-function mergeCronFailureAlert(
-  existing: CronFailureAlert | false | undefined,
-  patch: CronFailureAlert | false | undefined,
-): CronFailureAlert | false | undefined {
-  if (patch === false) {
-    return false;
-  }
-  if (patch === undefined) {
-    return existing;
-  }
-  const base = existing === false || existing === undefined ? {} : existing;
-  const next: CronFailureAlert = { ...base };
-
-  if ("after" in patch) {
-    const after = typeof patch.after === "number" && Number.isFinite(patch.after) ? patch.after : 0;
-    next.after = after > 0 ? Math.floor(after) : undefined;
-  }
-  if ("channel" in patch) {
-    const channel = typeof patch.channel === "string" ? patch.channel.trim() : "";
-    next.channel = channel ? channel : undefined;
-  }
-  if ("to" in patch) {
-    const to = typeof patch.to === "string" ? patch.to.trim() : "";
-    next.to = to ? to : undefined;
-  }
-  if ("cooldownMs" in patch) {
-    const cooldownMs =
-      typeof patch.cooldownMs === "number" && Number.isFinite(patch.cooldownMs)
-        ? patch.cooldownMs
-        : -1;
-    next.cooldownMs = cooldownMs >= 0 ? Math.floor(cooldownMs) : undefined;
   }
 
   return next;

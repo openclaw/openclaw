@@ -1,5 +1,6 @@
 import type { BaseTokenResolution } from "../channels/plugins/types.js";
 import type { BotConfig } from "../config/config.js";
+import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
 export type DiscordTokenSource = "env" | "config" | "none";

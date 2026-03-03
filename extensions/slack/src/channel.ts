@@ -63,6 +63,24 @@ function isSlackAccountConfigured(account: ResolvedSlackAccount): boolean {
   return Boolean(account.appToken?.trim());
 }
 
+type SlackSendFn = ReturnType<typeof getSlackRuntime>["channel"]["slack"]["sendMessageSlack"];
+
+function resolveSlackSendContext(params: {
+  cfg: Parameters<typeof resolveSlackAccount>[0]["cfg"];
+  accountId?: string;
+  deps?: { sendSlack?: SlackSendFn };
+  replyToId?: string | number | null;
+  threadId?: string | number | null;
+}) {
+  const send = params.deps?.sendSlack ?? getSlackRuntime().channel.slack.sendMessageSlack;
+  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const token = getTokenForOperation(account, "write");
+  const botToken = account.botToken?.trim();
+  const tokenOverride = token && token !== botToken ? token : undefined;
+  const threadTsValue = params.replyToId ?? params.threadId;
+  return { send, threadTsValue, tokenOverride };
+}
+
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: "slack",
   meta: {
@@ -145,6 +163,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         .map((entry) => String(entry).trim())
         .filter(Boolean)
         .map((entry) => entry.toLowerCase()),
+    resolveDefaultTo: ({ cfg, accountId }) =>
+      resolveSlackAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {

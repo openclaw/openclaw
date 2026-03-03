@@ -1,13 +1,15 @@
-import type { Bot } from "grammy";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { RuntimeEnv } from "../runtime.js";
+import type { Bot } from "grammy";
+import { resolveStateDir } from "../config/paths.js";
 import {
   normalizeTelegramCommandName,
   TELEGRAM_COMMAND_NAME_PATTERN,
 } from "../config/telegram-custom-commands.js";
+import { logVerbose } from "../globals.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 
 export const TELEGRAM_MAX_COMMANDS = 100;

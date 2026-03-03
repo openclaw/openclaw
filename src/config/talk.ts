@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { TalkConfig, TalkProviderConfig } from "./types.gateway.js";
 import type { BotConfig } from "./types.js";
+import { coerceSecretRef } from "./types.secrets.js";
 
 type TalkApiKeyDeps = {
   fs?: typeof fs;

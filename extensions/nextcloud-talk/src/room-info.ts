@@ -1,5 +1,6 @@
-import type { RuntimeEnv } from "bot/plugin-sdk";
 import { readFileSync } from "node:fs";
+import { fetchWithSsrFGuard } from "bot/plugin-sdk";
+import type { RuntimeEnv } from "bot/plugin-sdk";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
 

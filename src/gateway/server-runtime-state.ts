@@ -1,5 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 import { WebSocketServer } from "ws";
+import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
+import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -9,17 +11,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
-import type { MarketplaceHttpOptions } from "./marketplace-http.js";
-import type { NodeRegistry } from "./node-registry.js";
-import type { DedupeEntry } from "./server-shared.js";
-import type { GatewayTlsRuntime } from "./server/tls.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
-import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
-import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
-import { marketplaceEventBus } from "./marketplace/event-bus.js";
-import { MarketplaceScheduler } from "./marketplace/scheduler.js";
-import { TrustManager } from "./marketplace/trust.js";
-import { resolveGatewayListenHosts } from "./net.js";
+import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
 import {
   createGatewayBroadcaster,
   type GatewayBroadcastFn,
@@ -32,11 +24,16 @@ import {
 } from "./server-chat.js";
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
-import { setMarketplaceScheduler } from "./server-methods/marketplace.js";
-import { createVncProxy } from "./server-methods/vnc.js";
+import type { DedupeEntry } from "./server-shared.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
-import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
+import {
+  createGatewayPluginRequestHandler,
+  shouldEnforceGatewayAuthForPluginPath,
+  type PluginRoutePathContext,
+} from "./server/plugins-http.js";
+import type { GatewayTlsRuntime } from "./server/tls.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").BotConfig;
@@ -48,6 +45,7 @@ export async function createGatewayRuntimeState(params: {
   openAiChatCompletionsEnabled: boolean;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
+  strictTransportSecurityHeader?: string;
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
@@ -62,15 +60,12 @@ export async function createGatewayRuntimeState(params: {
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
-  /** Node registry for VNC tunnel support. */
-  nodeRegistry?: NodeRegistry;
 }): Promise<{
   canvasHost: CanvasHostHandler | null;
   httpServer: HttpServer;
   httpServers: HttpServer[];
   httpBindHosts: string[];
   wss: WebSocketServer;
-  vncProxy: ReturnType<typeof createVncProxy>;
   clients: Set<GatewayWsClient>;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
@@ -128,37 +123,19 @@ export async function createGatewayRuntimeState(params: {
     return shouldEnforceGatewayAuthForPluginPath(params.pluginRegistry, pathContext);
   };
 
-  const vncProxy = createVncProxy({ nodeRegistry: params.nodeRegistry });
-  const gatewayScheme = params.gatewayTls?.enabled ? "https" : "http";
-  const gatewayOrigin = `${gatewayScheme}://${params.bindHost}:${params.port}`;
-
-  // Initialize P2P marketplace if enabled in gateway config.
-  let marketplaceOpts: MarketplaceHttpOptions | undefined;
-  const marketplaceConfig = params.cfg.gateway?.marketplace;
-  if (marketplaceConfig?.enabled && params.nodeRegistry) {
-    const trustManager = new TrustManager();
-    const scheduler = new MarketplaceScheduler(trustManager);
-    setMarketplaceScheduler(scheduler);
-
-    // Wire idle status events from nodes to the scheduler.
-    marketplaceEventBus.onIdleStatus((evt) => {
-      scheduler.updateSellerStatus(evt.nodeId, evt.status, {
-        maxConcurrent: evt.maxConcurrent,
-      });
-    });
-
-    marketplaceOpts = {
-      auth: params.resolvedAuth,
-      trustedProxies: params.cfg.gateway?.trustedProxies,
-      rateLimiter: params.rateLimiter,
-      iamConfig: params.resolvedAuth.iam,
-      nodeRegistry: params.nodeRegistry,
-      scheduler,
-      marketplaceConfig,
-    };
-  }
-
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
+  if (!isLoopbackHost(params.bindHost)) {
+    params.log.warn(
+      "⚠️  Gateway is binding to a non-loopback address. " +
+        "Ensure authentication is configured before exposing to public networks.",
+    );
+  }
+  if (params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true) {
+    params.log.warn(
+      "⚠️  gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true is enabled. " +
+        "Host-header origin fallback weakens origin checks and should only be used as break-glass.",
+    );
+  }
   const httpServers: HttpServer[] = [];
   const httpBindHosts: string[] = [];
   for (const host of bindHosts) {
@@ -171,15 +148,13 @@ export async function createGatewayRuntimeState(params: {
       openAiChatCompletionsEnabled: params.openAiChatCompletionsEnabled,
       openResponsesEnabled: params.openResponsesEnabled,
       openResponsesConfig: params.openResponsesConfig,
+      strictTransportSecurityHeader: params.strictTransportSecurityHeader,
       handleHooksRequest,
       handlePluginRequest,
       shouldEnforcePluginGatewayAuth,
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,
       tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
-      vncEnabled: true,
-      gatewayOrigin,
-      marketplace: marketplaceOpts,
     });
     try {
       await listenGatewayHttpServer({
@@ -215,7 +190,6 @@ export async function createGatewayRuntimeState(params: {
       clients,
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,
-      vncProxy,
     });
   }
 
@@ -236,7 +210,6 @@ export async function createGatewayRuntimeState(params: {
     httpServers,
     httpBindHosts,
     wss,
-    vncProxy,
     clients,
     broadcast,
     broadcastToConnIds,

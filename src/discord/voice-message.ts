@@ -10,16 +10,15 @@
  * - No other content (text, embeds, etc.)
  */
 
-import type { RequestClient } from "@buape/carbon";
-import { execFile } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
+import { RateLimitError, type RequestClient } from "@buape/carbon";
 import type { RetryRunner } from "../infra/retry-policy.js";
 import { resolvePreferredBotTmpDir } from "../infra/tmp-bot-dir.js";
-
-const execFileAsync = promisify(execFile);
+import { parseFfprobeCodecAndSampleRate, runFfmpeg, runFfprobe } from "../media/ffmpeg-exec.js";
+import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "../media/ffmpeg-limits.js";
+import { unlinkIfExists } from "../media/temp-files.js";
 
 const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
@@ -184,6 +183,8 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
   }
 
   // Convert to OGG/Opus
+  // Always resample to 48kHz to ensure Discord voice messages play at correct speed
+  // (Discord expects 48kHz; lower sample rates like 24kHz from some TTS providers cause 0.5x playback)
   const tempDir = resolvePreferredBotTmpDir();
   const outputPath = path.join(tempDir, `voice-${crypto.randomUUID()}.ogg`);
 

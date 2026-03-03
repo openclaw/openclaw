@@ -1,6 +1,7 @@
 import type { BotConfig } from "../config/config.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -60,6 +61,14 @@ export function createBotTools(options?: {
   modelHasVision?: boolean;
   /** If true, restrict file-based tools to the workspace/sandbox root. */
   workspaceOnly?: boolean;
+  /** Filesystem policy for image/pdf tools. */
+  fsPolicy?: ToolFsPolicy;
+  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  sessionId?: string;
+  /** Trusted sender id from inbound context (runtime-provided, not tool args). */
+  requesterSenderId?: string;
+  /** Whether the trusted sender is an owner. */
+  senderIsOwner?: boolean;
   /** Explicit agent ID override for cron/hook sessions. */
   requesterAgentIdOverride?: string;
   /** Require explicit message targets (no implicit last-route sends). */

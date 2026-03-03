@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
@@ -5,20 +7,17 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import fs from "node:fs/promises";
-import os from "node:os";
+import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { BotConfig } from "../../../config/config.js";
+import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
-import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
-import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
-import { getMachineDisplayName } from "../../../infra/machine-name.js";
-import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
-import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
@@ -81,7 +80,7 @@ import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
-import { buildEmbeddedExtensionPaths } from "../extensions.js";
+import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
   logToolSchemasForGoogle,
@@ -117,6 +116,7 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
@@ -228,7 +228,114 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
     });
 }
 
-function trimWhitespaceFromToolCallNamesInMessage(message: unknown): void {
+function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    // Keep whitespace-only placeholders unchanged so they do not collapse to
+    // empty names (which can later surface as toolName="" loops).
+    return rawName;
+  }
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return trimmed;
+  }
+  if (allowedToolNames.has(trimmed)) {
+    return trimmed;
+  }
+  const normalized = normalizeToolName(trimmed);
+  if (allowedToolNames.has(normalized)) {
+    return normalized;
+  }
+  const folded = trimmed.toLowerCase();
+  let caseInsensitiveMatch: string | null = null;
+  for (const name of allowedToolNames) {
+    if (name.toLowerCase() !== folded) {
+      continue;
+    }
+    if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
+      return trimmed;
+    }
+    caseInsensitiveMatch = name;
+  }
+  return caseInsensitiveMatch ?? trimmed;
+}
+
+function isToolCallBlockType(type: unknown): boolean {
+  return type === "toolCall" || type === "toolUse" || type === "functionCall";
+}
+
+function normalizeToolCallIdsInMessage(message: unknown): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+
+  const usedIds = new Set<string>();
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; id?: unknown };
+    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+      continue;
+    }
+    const trimmedId = typedBlock.id.trim();
+    if (!trimmedId) {
+      continue;
+    }
+    usedIds.add(trimmedId);
+  }
+
+  let fallbackIndex = 1;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; id?: unknown };
+    if (!isToolCallBlockType(typedBlock.type)) {
+      continue;
+    }
+    if (typeof typedBlock.id === "string") {
+      const trimmedId = typedBlock.id.trim();
+      if (trimmedId) {
+        if (typedBlock.id !== trimmedId) {
+          typedBlock.id = trimmedId;
+        }
+        usedIds.add(trimmedId);
+        continue;
+      }
+    }
+
+    let fallbackId = "";
+    while (!fallbackId || usedIds.has(fallbackId)) {
+      fallbackId = `call_auto_${fallbackIndex++}`;
+    }
+    typedBlock.id = fallbackId;
+    usedIds.add(fallbackId);
+  }
+}
+
+export function resolveOllamaBaseUrlForRun(params: {
+  modelBaseUrl?: string;
+  providerBaseUrl?: string;
+}): string {
+  const providerBaseUrl = params.providerBaseUrl?.trim() ?? "";
+  if (providerBaseUrl) {
+    return providerBaseUrl;
+  }
+  const modelBaseUrl = params.modelBaseUrl?.trim() ?? "";
+  if (modelBaseUrl) {
+    return modelBaseUrl;
+  }
+  return OLLAMA_NATIVE_BASE_URL;
+}
+
+function trimWhitespaceFromToolCallNamesInMessage(
+  message: unknown,
+  allowedToolNames?: Set<string>,
+): void {
   if (!message || typeof message !== "object") {
     return;
   }
@@ -244,20 +351,22 @@ function trimWhitespaceFromToolCallNamesInMessage(message: unknown): void {
     if (typedBlock.type !== "toolCall" || typeof typedBlock.name !== "string") {
       continue;
     }
-    const trimmed = typedBlock.name.trim();
-    if (trimmed !== typedBlock.name) {
-      typedBlock.name = trimmed;
+    const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames);
+    if (normalized !== typedBlock.name) {
+      typedBlock.name = normalized;
     }
   }
+  normalizeToolCallIdsInMessage(message);
 }
 
 function wrapStreamTrimToolCallNames(
   stream: ReturnType<typeof streamSimple>,
+  allowedToolNames?: Set<string>,
 ): ReturnType<typeof streamSimple> {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    trimWhitespaceFromToolCallNamesInMessage(message);
+    trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames);
     return message;
   };
 
@@ -273,8 +382,8 @@ function wrapStreamTrimToolCallNames(
               partial?: unknown;
               message?: unknown;
             };
-            trimWhitespaceFromToolCallNamesInMessage(event.partial);
-            trimWhitespaceFromToolCallNamesInMessage(event.message);
+            trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
+            trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
           }
           return result;
         },
@@ -290,13 +399,18 @@ function wrapStreamTrimToolCallNames(
   return stream;
 }
 
-export function wrapStreamFnTrimToolCallNames(baseFn: StreamFn): StreamFn {
+export function wrapStreamFnTrimToolCallNames(
+  baseFn: StreamFn,
+  allowedToolNames?: Set<string>,
+): StreamFn {
   return (model, context, options) => {
     const maybeStream = baseFn(model, context, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) => wrapStreamTrimToolCallNames(stream));
+      return Promise.resolve(maybeStream).then((stream) =>
+        wrapStreamTrimToolCallNames(stream, allowedToolNames),
+      );
     }
-    return wrapStreamTrimToolCallNames(maybeStream);
+    return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames);
   };
 }
 
@@ -500,6 +614,7 @@ export async function runEmbeddedAttempt(
     const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
+      agentId: params.agentId,
     });
     const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
       config: params.config,
@@ -713,7 +828,9 @@ export async function runEmbeddedAttempt(
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
-      timeoutMs: resolveSessionLockMaxHoldFromTimeout(params.timeoutMs),
+      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
+        timeoutMs: params.timeoutMs,
+      }),
     });
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
@@ -759,24 +876,24 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
       });
 
-      // Sets compaction/pruning runtime state and returns extension paths
+      // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
-      const embeddedExtensionPaths = buildEmbeddedExtensionPaths({
+      const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
       });
-      // Only create an explicit resource loader when there are extension paths
+      // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.
       let resourceLoader: DefaultResourceLoader | undefined;
-      if (embeddedExtensionPaths.length > 0) {
+      if (extensionFactories.length > 0) {
         resourceLoader = new DefaultResourceLoader({
           cwd: resolvedWorkspace,
           agentDir,
           settingsManager,
-          additionalExtensionPaths: embeddedExtensionPaths,
+          extensionFactories,
         });
         await resourceLoader.reload();
       }
@@ -919,6 +1036,7 @@ export async function runEmbeddedAttempt(
         params.modelId,
         params.streamParams,
         params.thinkLevel,
+        sessionAgentId,
       );
 
       if (cacheTrace) {
@@ -979,10 +1097,36 @@ export async function runEmbeddedAttempt(
         };
       }
 
+      if (
+        params.model.api === "openai-responses" ||
+        params.model.api === "openai-codex-responses"
+      ) {
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const ctx = context as unknown as { messages?: unknown };
+          const messages = ctx?.messages;
+          if (!Array.isArray(messages)) {
+            return inner(model, context, options);
+          }
+          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(messages as AgentMessage[]);
+          if (sanitized === messages) {
+            return inner(model, context, options);
+          }
+          const nextContext = {
+            ...(context as unknown as Record<string, unknown>),
+            messages: sanitized,
+          } as unknown;
+          return inner(model, nextContext as typeof context, options);
+        };
+      }
+
       // Some models emit tool names with surrounding whitespace (e.g. " read ").
       // pi-agent-core dispatches tool calls with exact string matching, so normalize
       // names on the live response stream before tool execution.
-      activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(activeSession.agent.streamFn);
+      activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
+        activeSession.agent.streamFn,
+        allowedToolNames,
+      );
 
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(

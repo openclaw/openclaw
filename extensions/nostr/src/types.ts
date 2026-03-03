@@ -1,4 +1,9 @@
 import type { BotConfig } from "bot/plugin-sdk";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "bot/plugin-sdk/account-id";
 import type { NostrProfile } from "./config-schema.js";
 import { getPublicKeyFromPrivate } from "./nostr-bus.js";
 import { DEFAULT_RELAYS } from "./nostr-bus.js";
@@ -53,6 +58,10 @@ export function listNostrAccountIds(cfg: BotConfig): string[] {
  * Get the default account ID
  */
 export function resolveDefaultNostrAccountId(cfg: BotConfig): string {
+  const preferred = resolveConfiguredDefaultNostrAccountId(cfg);
+  if (preferred) {
+    return preferred;
+  }
   const ids = listNostrAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
