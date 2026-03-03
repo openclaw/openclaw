@@ -114,16 +114,59 @@ describe("checkDirectoryOwnership", () => {
   it("returns ok:true when process.getuid is unavailable (Windows)", async () => {
     const originalGetuid = process.getuid;
     try {
-      // Simulate Windows / environments without getuid
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (process as any).getuid = undefined;
+      // Simulate Windows / environments without getuid using defineProperty
+      // to avoid suppressing the no-explicit-any lint rule.
+      Object.defineProperty(process, "getuid", {
+        value: undefined,
+        writable: true,
+        configurable: true,
+      });
 
       const result = await checkDirectoryOwnership(tmpDir);
 
       expect(result.ok).toBe(true);
       expect(result.foreignFiles).toHaveLength(0);
     } finally {
-      process.getuid = originalGetuid;
+      Object.defineProperty(process, "getuid", {
+        value: originalGetuid,
+        writable: true,
+        configurable: true,
+      });
     }
+  });
+
+  it("returns ok:false when the root directory itself is foreign-owned", async () => {
+    if (typeof process.getuid !== "function") {
+      return;
+    }
+
+    const dir = path.join(tmpDir, "foreign-root");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "file.txt"), "hello");
+
+    const currentUid = process.getuid();
+    const foreignUid = currentUid === 0 ? 1 : 0;
+
+    const realLstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (p, opts?) => {
+      const stat = await realLstat(p as string, opts as never);
+      if (String(p) === dir) {
+        const fakeStat = Object.create(Object.getPrototypeOf(stat) as object) as typeof stat;
+        Object.assign(fakeStat, stat);
+        Object.defineProperty(fakeStat, "uid", {
+          value: foreignUid,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+        return fakeStat;
+      }
+      return stat;
+    });
+
+    const result = await checkDirectoryOwnership(dir);
+
+    expect(result.ok).toBe(false);
+    expect(result.foreignFiles).toContain(dir);
   });
 });

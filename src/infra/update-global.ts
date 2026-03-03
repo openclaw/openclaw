@@ -171,6 +171,19 @@ export async function checkDirectoryOwnership(dirPath: string): Promise<Director
   }
   const foreignFiles: string[] = [];
 
+  // Check the package root directory itself — a foreign-owned root will cause
+  // EACCES on npm even if all children are user-owned.
+  try {
+    const rootStat = await fs.lstat(dirPath);
+    if (rootStat.uid !== currentUid) {
+      foreignFiles.push(dirPath);
+    }
+  } catch {
+    // Can't stat the root at all — treat as foreign.
+    foreignFiles.push(dirPath);
+    return { ok: false, foreignFiles };
+  }
+
   async function scan(dir: string): Promise<void> {
     if (foreignFiles.length >= FOREIGN_FILES_CAP) {
       return;
