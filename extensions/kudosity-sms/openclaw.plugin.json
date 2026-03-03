@@ -1,0 +1,40 @@
+{
+  "id": "kudosity-sms",
+  "channels": ["kudosity-sms"],
+  "name": "Kudosity SMS",
+  "description": "Cloud SMS channel powered by Kudosity — send and receive SMS via the Kudosity API",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "Kudosity API key for authenticating requests"
+      },
+      "sender": {
+        "type": "string",
+        "description": "Default sender number (E.164 format, e.g. +61400000000)"
+      },
+      "webhookSecret": {
+        "type": "string",
+        "description": "Optional secret for validating inbound webhook payloads"
+      }
+    }
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "API Key",
+      "placeholder": "Your Kudosity API key",
+      "sensitive": true
+    },
+    "sender": {
+      "label": "Sender Number",
+      "placeholder": "+61400000000"
+    },
+    "webhookSecret": {
+      "label": "Webhook Secret",
+      "placeholder": "Optional — for validating inbound webhooks",
+      "sensitive": true
+    }
+  }
+}
