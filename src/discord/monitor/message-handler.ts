@@ -25,6 +25,7 @@ type DiscordMessageHandlerParams = Omit<
   "ackReactionScope" | "groupPolicy" | "data" | "client"
 > & {
   setStatus?: DiscordMonitorStatusSink;
+  abortSignal?: AbortSignal;
 };
 
 const RUN_ACTIVITY_HEARTBEAT_MS = 60_000;
@@ -56,8 +57,12 @@ export function createDiscordMessageHandler(
   const runQueue = new KeyedAsyncQueue();
   let activeRuns = 0;
   let runActivityHeartbeat: ReturnType<typeof setInterval> | null = null;
+  let lifecycleActive = !params.abortSignal?.aborted;
 
   const publishRunStatus = () => {
+    if (!lifecycleActive) {
+      return;
+    }
     params.setStatus?.({
       activeRuns,
       busy: activeRuns > 0,
@@ -74,11 +79,11 @@ export function createDiscordMessageHandler(
   };
 
   const ensureRunActivityHeartbeat = () => {
-    if (runActivityHeartbeat || activeRuns <= 0) {
+    if (runActivityHeartbeat || activeRuns <= 0 || !lifecycleActive) {
       return;
     }
     runActivityHeartbeat = setInterval(() => {
-      if (activeRuns <= 0) {
+      if (!lifecycleActive || activeRuns <= 0) {
         clearRunActivityHeartbeat();
         return;
       }
@@ -87,11 +92,24 @@ export function createDiscordMessageHandler(
     runActivityHeartbeat.unref?.();
   };
 
-  // Reset stale busy counters inherited from previous runtime snapshots.
-  params.setStatus?.({
-    activeRuns: 0,
-    busy: false,
-  });
+  const onAbort = () => {
+    lifecycleActive = false;
+    clearRunActivityHeartbeat();
+  };
+
+  if (params.abortSignal?.aborted) {
+    onAbort();
+  } else {
+    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+  }
+
+  if (lifecycleActive) {
+    // Reset stale busy counters inherited from previous runtime snapshots.
+    params.setStatus?.({
+      activeRuns: 0,
+      busy: false,
+    });
+  }
 
   const enqueueDiscordRun = (ctx: DiscordMessagePreflightContext) => {
     const queueKey = resolveDiscordRunQueueKey(ctx);
