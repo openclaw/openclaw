@@ -44,7 +44,10 @@ describe("appendInjectedAssistantMessageToTranscript after_message_write wiring"
       expect(appended.ok).toBe(true);
       expect(hookMocks.runner.runAfterMessageWrite).toHaveBeenCalledTimes(1);
 
-      const firstCall = hookMocks.runner.runAfterMessageWrite.mock.calls[0];
+      const mockCalls = hookMocks.runner.runAfterMessageWrite.mock.calls as unknown as Array<
+        unknown[]
+      >;
+      const firstCall = mockCalls[0];
       expect(firstCall).toBeDefined();
       const event = firstCall?.[0] as { sessionFile?: string; message?: { role?: string } };
       const ctx = firstCall?.[1] as { sessionKey?: string; agentId?: string };
