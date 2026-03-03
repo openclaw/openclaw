@@ -216,9 +216,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       originatingTo: params.originatingTo,
       accountId: params.accountId,
     });
-    // Preserve legacy behavior when we captured a sent text but could not
-    // extract a target (for example providerless/invalid tool args).
-    return suppressByRoute || messagingToolSentTargets.length === 0;
+    // Preserve legacy behavior when any successful send could not be routed
+    // to an explicit target (for example providerless/invalid tool args).
+    const hasUnknownMessagingTargets =
+      messagingToolSentTargets.length < messagingToolSentTexts.length;
+    return suppressByRoute || hasUnknownMessagingTargets;
   };
   const trimMessagingToolSent = () => {
     if (messagingToolSentTexts.length > MAX_MESSAGING_SENT_TEXTS) {

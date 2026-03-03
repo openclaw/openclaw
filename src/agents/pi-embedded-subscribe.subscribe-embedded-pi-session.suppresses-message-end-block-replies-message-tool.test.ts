@@ -96,6 +96,27 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onBlockReply).not.toHaveBeenCalled();
   });
+  it("suppresses message_end block replies when any successful send target is unknown", async () => {
+    const { emit, onBlockReply } = createBlockReplyHarness("message_end");
+
+    const messageText = "This is the answer.";
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-known-other-target",
+      to: "any;+;c9e1c78203f74195b1db32e57529fb6a",
+      message: messageText,
+      result: "ok",
+    });
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-unknown-target",
+      message: messageText,
+      result: "ok",
+    });
+    emitAssistantMessageEnd(emit, messageText);
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
   it("does not suppress message_end replies when message tool reports error", async () => {
     const { emit, onBlockReply } = createBlockReplyHarness("message_end");
 
@@ -140,6 +161,27 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextEndBlock(emit, messageText);
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+  it("suppresses text_end block replies when any successful send target is unknown", async () => {
+    const { emit, onBlockReply } = createBlockReplyHarness("text_end");
+
+    const messageText = "Done - sent.";
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-other-chat-text-end-2",
+      to: "any;+;c9e1c78203f74195b1db32e57529fb6a",
+      message: messageText,
+      result: "ok",
+    });
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-missing-target-text-end-2",
+      message: messageText,
+      result: "ok",
+    });
+    emitAssistantTextEndBlock(emit, messageText);
+
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
   it("clears block reply state on message_start", () => {
     const { emit, onBlockReply } = createBlockReplyHarness("text_end");
