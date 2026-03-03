@@ -23,7 +23,10 @@ function createDeferred<T = void>() {
   return { promise, resolve };
 }
 
-function createHandlerParams(overrides?: { setStatus?: (patch: Record<string, unknown>) => void }) {
+function createHandlerParams(overrides?: {
+  setStatus?: (patch: Record<string, unknown>) => void;
+  abortSignal?: AbortSignal;
+}) {
   const cfg: OpenClawConfig = {
     channels: {
       discord: {
@@ -60,6 +63,7 @@ function createHandlerParams(overrides?: { setStatus?: (patch: Record<string, un
     groupDmEnabled: false,
     threadBindings: createNoopThreadBindingManager("default"),
     setStatus: overrides?.setStatus,
+    abortSignal: overrides?.abortSignal,
   };
 }
 
@@ -220,6 +224,41 @@ describe("createDiscordMessageHandler queue behavior", () => {
       setIntervalSpy.mockRestore();
       clearIntervalSpy.mockRestore();
     }
+  });
+
+  it("stops status publishing after lifecycle abort", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const runInFlight = createDeferred();
+    processDiscordMessageMock.mockImplementation(async () => {
+      await runInFlight.promise;
+    });
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: { channel_id: string } }) =>
+        createPreflightContext(params.data.channel_id),
+    );
+
+    const setStatus = vi.fn();
+    const abortController = new AbortController();
+    const handler = createDiscordMessageHandler(
+      createHandlerParams({ setStatus, abortSignal: abortController.signal }),
+    );
+
+    await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    });
+
+    const callsBeforeAbort = setStatus.mock.calls.length;
+    abortController.abort();
+
+    runInFlight.resolve();
+    await runInFlight.promise;
+    await Promise.resolve();
+
+    expect(setStatus.mock.calls.length).toBe(callsBeforeAbort);
   });
 
   it("preserves non-debounced message ordering by awaiting debouncer enqueue", async () => {

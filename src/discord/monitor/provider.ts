@@ -597,6 +597,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       token,
       runtime,
       setStatus: opts.setStatus,
+      abortSignal: opts.abortSignal,
       botUserId,
       guildHistories,
       historyLimit,
