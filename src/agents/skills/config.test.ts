@@ -46,4 +46,21 @@ describe("shouldIncludeSkill — enabled override (#32752)", () => {
     const entry = makeEntry({ metadata: undefined });
     expect(shouldIncludeSkill({ entry })).toBe(true);
   });
+
+  it("respects allowBundled even with enabled: true for bundled skills", () => {
+    const entry = makeEntry({
+      skill: {
+        name: "test-skill",
+        source: "openclaw-bundled",
+        content: "",
+      } as SkillEntry["skill"],
+    });
+    const config: OpenClawConfig = {
+      skills: {
+        entries: { "test-skill": { enabled: true } },
+        allowBundled: ["other-skill"],
+      },
+    } as unknown as OpenClawConfig;
+    expect(shouldIncludeSkill({ entry, config })).toBe(false);
+  });
 });
