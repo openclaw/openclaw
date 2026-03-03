@@ -96,9 +96,9 @@ RUN set -eux; \
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # ---- Install gog (gogcli) ----
-# Pin version by setting GOGCLI_TAG at build time, or default to the latest release.
-# Resolve "latest" via GitHub releases redirect (no API call) to avoid API rate limits in CI.
-ARG GOGCLI_TAG=latest
+# Pin version by setting GOGCLI_TAG at build time.
+# Default stays pinned for reproducible CI builds.
+ARG GOGCLI_TAG=v0.11.0
 RUN set -eux; \
   arch="$(dpkg --print-architecture)"; \
   case "$arch" in \
@@ -107,10 +107,10 @@ RUN set -eux; \
   *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
   esac; \
   if [ "$GOGCLI_TAG" = "latest" ]; then \
-  GOGCLI_TAG="$(curl -fsSIL https://github.com/steipete/gogcli/releases/latest | awk -F': ' 'tolower($1)==\"location\" {gsub(\"\\r\", \"\", $2); print $2}' | awk -F/ '{print $NF}' | tail -n1)"; \
+  GOGCLI_TAG="$(curl -fsSI -H 'User-Agent: openclaw-docker-build' https://github.com/steipete/gogcli/releases/latest | awk 'tolower($1)==\"location:\" {print $2}' | tr -d '\r' | awk -F/ '{print $NF}' | tail -n1)"; \
   if [ -z "$GOGCLI_TAG" ]; then \
-    echo "ERROR: Failed to resolve gogcli latest release tag" >&2; \
-    exit 1; \
+    echo "WARN: Failed to resolve gogcli latest release tag; falling back to v0.11.0" >&2; \
+    GOGCLI_TAG="v0.11.0"; \
   fi; \
   fi; \
   ver="${GOGCLI_TAG#v}"; \
