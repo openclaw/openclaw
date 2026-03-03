@@ -224,14 +224,16 @@ function generatePkce(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-function resolvePlatform(): "WINDOWS" | "MACOS" | "LINUX" {
+function resolvePlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
   if (process.platform === "win32") {
     return "WINDOWS";
   }
-  if (process.platform === "linux") {
-    return "LINUX";
+  if (process.platform === "darwin") {
+    return "MACOS";
   }
-  return "MACOS";
+  // Linux and other platforms must use PLATFORM_UNSPECIFIED
+  // Google's loadCodeAssist API rejects "LINUX" as an invalid Platform enum value
+  return "PLATFORM_UNSPECIFIED";
 }
 
 async function fetchWithTimeout(
