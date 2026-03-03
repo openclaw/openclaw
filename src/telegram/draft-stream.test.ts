@@ -414,6 +414,43 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalledWith(123, 17, "Message B partial");
   });
 
+  it("does not skip first post-forceNewMessage update after superseded draft fallback", async () => {
+    let resolveFirstSend: ((value: { message_id: number }) => void) | undefined;
+    const firstSend = new Promise<{ message_id: number }>((resolve) => {
+      resolveFirstSend = resolve;
+    });
+    const api = createMockDraftApi();
+    api.sendMessageDraft.mockRejectedValueOnce(
+      new Error(
+        "Call to 'sendMessageDraft' failed! (400: Bad Request: method sendMessageDraft can be used only in private chats)",
+      ),
+    );
+    api.sendMessage.mockReturnValueOnce(firstSend).mockResolvedValueOnce({ message_id: 42 });
+    const onSupersededPreview = vi.fn();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      onSupersededPreview,
+    });
+
+    stream.update("שלום");
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+
+    stream.forceNewMessage();
+    resolveFirstSend?.({ message_id: 17 });
+    await vi.waitFor(() => expect(onSupersededPreview).toHaveBeenCalledTimes(1));
+
+    stream.update("שלום");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "שלום", {
+      message_thread_id: 42,
+    });
+  });
+
   it("supports rendered previews with parse_mode", async () => {
     const api = createMockDraftApi();
     const stream = createTelegramDraftStream({

@@ -307,7 +307,7 @@ export function createTelegramDraftStream(params: {
             renderedParseMode,
             sendGeneration,
           });
-          if (sent) {
+          if (sent && sendGeneration === generation) {
             lastSentText = fallbackText;
           }
         }
