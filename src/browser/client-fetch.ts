@@ -146,9 +146,11 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     );
   }
 
-  // Other non-Playwright errors: also treat as action failures rather than service-down,
-  // since the request did reach the service but produced an unexpected error.
-  return new Error(`Browser action failed: ${msg}. ${actionHint}`);
+  // Other errors: treat conservatively as potential connection failures (e.g. ECONNREFUSED).
+  // Network-level fetch errors reach here without Playwright or timeout markers.
+  return new Error(
+    `Can't reach the OpenClaw browser control service. ${operatorHint} ${modelHint} (${msg})`,
+  );
 }
 
 async function fetchHttpJson<T>(
