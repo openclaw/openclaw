@@ -1,8 +1,8 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
 
 const STORE_VERSION = 2;
 
@@ -104,19 +104,16 @@ export async function writeTelegramUpdateOffset(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   const payload: TelegramUpdateOffsetState = {
     version: STORE_VERSION,
     lastUpdateId: params.updateId,
     botId: extractBotIdFromToken(params.botToken),
   };
-  await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, {
-    encoding: "utf-8",
+  await writeJsonAtomic(filePath, payload, {
+    mode: 0o600,
+    trailingNewline: true,
+    ensureDirMode: 0o700,
   });
-  await fs.chmod(tmp, 0o600);
-  await fs.rename(tmp, filePath);
 }
 
 export async function deleteTelegramUpdateOffset(params: {
