@@ -864,7 +864,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   if (globalManager) {
     const ownershipCheck = await checkDirectoryOwnership(pkgRoot);
     if (!ownershipCheck.ok) {
-      const fileList = ownershipCheck.foreignFiles.join("\n  ");
+      const fileList = ownershipCheck.unwritableFiles.join("\n  ");
       return {
         status: "error",
         mode: globalManager,

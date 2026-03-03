@@ -155,69 +155,56 @@ export function globalInstallFallbackArgs(
 
 export type DirectoryOwnershipResult = {
   ok: boolean;
-  foreignFiles: string[];
+  unwritableFiles: string[];
 };
 
-const FOREIGN_FILES_CAP = 10;
+const UNWRITABLE_FILES_CAP = 10;
+const WRITABLE_DIR_MODE = fs.constants.W_OK | fs.constants.X_OK;
+const WRITABLE_FILE_MODE = fs.constants.W_OK;
 
 export async function checkDirectoryOwnership(dirPath: string): Promise<DirectoryOwnershipResult> {
-  if (typeof process.getuid !== "function") {
-    return { ok: true, foreignFiles: [] };
-  }
-  const currentUid = process.getuid();
-  // Root can write any file regardless of ownership — skip the preflight.
-  if (currentUid === 0) {
-    return { ok: true, foreignFiles: [] };
-  }
-  const foreignFiles: string[] = [];
+  const unwritableFiles: string[] = [];
 
-  // Check the package root directory itself — a foreign-owned root will cause
-  // EACCES on npm even if all children are user-owned.
+  // Check the package root directory itself first — a non-writable root blocks
+  // npm regardless of whether child entries are writable.
   try {
-    const rootStat = await fs.lstat(dirPath);
-    if (rootStat.uid !== currentUid) {
-      foreignFiles.push(dirPath);
-    }
+    await fs.access(dirPath, WRITABLE_DIR_MODE);
   } catch {
-    // Can't stat the root at all — treat as foreign.
-    foreignFiles.push(dirPath);
-    return { ok: false, foreignFiles };
+    unwritableFiles.push(dirPath);
+    return { ok: false, unwritableFiles };
   }
 
   async function scan(dir: string): Promise<void> {
-    if (foreignFiles.length >= FOREIGN_FILES_CAP) {
+    if (unwritableFiles.length >= UNWRITABLE_FILES_CAP) {
       return;
     }
     let entries: import("node:fs").Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
-      // If we can't read a directory, treat it as a foreign-owned file —
-      // proceeding would let the same EACCES hit npm during the update.
-      foreignFiles.push(dir);
+      // Can't read the directory — treat it as unwritable.
+      unwritableFiles.push(dir);
       return;
     }
     for (const entry of entries) {
-      if (foreignFiles.length >= FOREIGN_FILES_CAP) {
+      if (unwritableFiles.length >= UNWRITABLE_FILES_CAP) {
         break;
       }
       const fullPath = path.join(dir, entry.name);
+      const mode = entry.isDirectory() ? WRITABLE_DIR_MODE : WRITABLE_FILE_MODE;
       try {
-        const stat = await fs.lstat(fullPath);
-        if (stat.uid !== currentUid) {
-          foreignFiles.push(fullPath);
-        }
+        await fs.access(fullPath, mode);
       } catch {
-        // ignore stat errors
+        unwritableFiles.push(fullPath);
       }
-      if (entry.isDirectory() && foreignFiles.length < FOREIGN_FILES_CAP) {
+      if (entry.isDirectory() && unwritableFiles.length < UNWRITABLE_FILES_CAP) {
         await scan(fullPath);
       }
     }
   }
 
   await scan(dirPath);
-  return { ok: foreignFiles.length === 0, foreignFiles };
+  return { ok: unwritableFiles.length === 0, unwritableFiles };
 }
 
 export async function cleanupGlobalRenameDirs(params: {

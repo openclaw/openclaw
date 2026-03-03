@@ -19,7 +19,7 @@ describe("checkDirectoryOwnership", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns ok:true when all files are owned by the current user", async () => {
+  it("returns ok:true when all files are writable by the current process", async () => {
     const dir = path.join(tmpDir, "owned");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "file.txt"), "hello");
@@ -29,53 +29,32 @@ describe("checkDirectoryOwnership", () => {
     const result = await checkDirectoryOwnership(dir);
 
     expect(result.ok).toBe(true);
-    expect(result.foreignFiles).toHaveLength(0);
+    expect(result.unwritableFiles).toHaveLength(0);
   });
 
-  it("returns ok:false when a foreign-owned file is present", async () => {
-    if (typeof process.getuid !== "function") {
-      // Skip on platforms without getuid
-      return;
-    }
-
-    const dir = path.join(tmpDir, "foreign");
+  it("returns ok:false when a file is not writable", async () => {
+    const dir = path.join(tmpDir, "unwritable-file");
     await fs.mkdir(dir, { recursive: true });
-    const ownedFile = path.join(dir, "mine.txt");
-    const foreignFile = path.join(dir, "foreign.txt");
-    await fs.writeFile(ownedFile, "mine");
-    await fs.writeFile(foreignFile, "foreign");
+    const writableFile = path.join(dir, "mine.txt");
+    const unwritableFile = path.join(dir, "locked.txt");
+    await fs.writeFile(writableFile, "mine");
+    await fs.writeFile(unwritableFile, "locked");
 
-    const currentUid = process.getuid();
-    const foreignUid = currentUid === 0 ? 1 : 0;
-
-    const realLstat = fs.lstat.bind(fs);
-    vi.spyOn(fs, "lstat").mockImplementation(async (p, opts?) => {
-      const stat = await realLstat(p as string, opts as never);
-      if (String(p) === foreignFile) {
-        const fakeStat = Object.create(Object.getPrototypeOf(stat) as object) as typeof stat;
-        Object.assign(fakeStat, stat);
-        Object.defineProperty(fakeStat, "uid", {
-          value: foreignUid,
-          writable: true,
-          enumerable: true,
-          configurable: true,
-        });
-        return fakeStat;
+    const realAccess = fs.access.bind(fs);
+    vi.spyOn(fs, "access").mockImplementation(async (p, mode?) => {
+      if (String(p) === unwritableFile) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
       }
-      return stat;
+      return realAccess(p as string, mode);
     });
 
     const result = await checkDirectoryOwnership(dir);
 
     expect(result.ok).toBe(false);
-    expect(result.foreignFiles).toContain(foreignFile);
+    expect(result.unwritableFiles).toContain(unwritableFile);
   });
 
   it("returns ok:false when a directory is unreadable", async () => {
-    if (typeof process.getuid !== "function") {
-      return;
-    }
-
     const dir = path.join(tmpDir, "unreadable");
     await fs.mkdir(dir, { recursive: true });
     const subDir = path.join(dir, "restricted");
@@ -83,90 +62,50 @@ describe("checkDirectoryOwnership", () => {
 
     const realReaddir = fs.readdir.bind(fs);
     vi.spyOn(fs, "readdir").mockImplementation(
-      async (p: Parameters<typeof fs.readdir>[0], opts?: Parameters<typeof fs.readdir>[1]) => {
+      (async (p: unknown, opts?: unknown) => {
         if (String(p) === subDir) {
-          throw new Error("EACCES: permission denied");
+          throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
         }
-        return realReaddir(p as string, opts as never) as never;
-      },
+        return realReaddir(p as string, opts as never);
+      }) as never,
     );
 
     const result = await checkDirectoryOwnership(dir);
 
     expect(result.ok).toBe(false);
-    expect(result.foreignFiles).toContain(subDir);
+    expect(result.unwritableFiles).toContain(subDir);
   });
 
-  it("returns ok:true when running as root (uid 0)", async () => {
-    if (typeof process.getuid !== "function") {
-      return;
-    }
-    const originalGetuid = process.getuid;
-    try {
-      process.getuid = () => 0;
-      const result = await checkDirectoryOwnership(tmpDir);
-      expect(result.ok).toBe(true);
-      expect(result.foreignFiles).toHaveLength(0);
-    } finally {
-      process.getuid = originalGetuid;
-    }
-  });
-  it("returns ok:true when process.getuid is unavailable (Windows)", async () => {
-    const originalGetuid = process.getuid;
-    try {
-      // Simulate Windows / environments without getuid using defineProperty
-      // to avoid suppressing the no-explicit-any lint rule.
-      Object.defineProperty(process, "getuid", {
-        value: undefined,
-        writable: true,
-        configurable: true,
-      });
-
-      const result = await checkDirectoryOwnership(tmpDir);
-
-      expect(result.ok).toBe(true);
-      expect(result.foreignFiles).toHaveLength(0);
-    } finally {
-      Object.defineProperty(process, "getuid", {
-        value: originalGetuid,
-        writable: true,
-        configurable: true,
-      });
-    }
-  });
-
-  it("returns ok:false when the root directory itself is foreign-owned", async () => {
-    if (typeof process.getuid !== "function") {
-      return;
-    }
-
-    const dir = path.join(tmpDir, "foreign-root");
+  it("returns ok:false when the root directory itself is not writable", async () => {
+    const dir = path.join(tmpDir, "unwritable-root");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "file.txt"), "hello");
 
-    const currentUid = process.getuid();
-    const foreignUid = currentUid === 0 ? 1 : 0;
-
-    const realLstat = fs.lstat.bind(fs);
-    vi.spyOn(fs, "lstat").mockImplementation(async (p, opts?) => {
-      const stat = await realLstat(p as string, opts as never);
+    const realAccess = fs.access.bind(fs);
+    vi.spyOn(fs, "access").mockImplementation(async (p, mode?) => {
       if (String(p) === dir) {
-        const fakeStat = Object.create(Object.getPrototypeOf(stat) as object) as typeof stat;
-        Object.assign(fakeStat, stat);
-        Object.defineProperty(fakeStat, "uid", {
-          value: foreignUid,
-          writable: true,
-          enumerable: true,
-          configurable: true,
-        });
-        return fakeStat;
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
       }
-      return stat;
+      return realAccess(p as string, mode);
     });
 
     const result = await checkDirectoryOwnership(dir);
 
     expect(result.ok).toBe(false);
-    expect(result.foreignFiles).toContain(dir);
+    expect(result.unwritableFiles).toContain(dir);
+  });
+
+  it("returns ok:true for shared-install directories writable via group permissions", async () => {
+    const dir = path.join(tmpDir, "group-writable");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "file.txt"), "shared");
+
+    // All fs.access calls succeed — simulates group/ACL-writable shared install
+    vi.spyOn(fs, "access").mockResolvedValue(undefined);
+
+    const result = await checkDirectoryOwnership(dir);
+
+    expect(result.ok).toBe(true);
+    expect(result.unwritableFiles).toHaveLength(0);
   });
 });
