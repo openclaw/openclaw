@@ -360,6 +360,16 @@ describe("detectGatewayManagementExecCommand", () => {
     expect(detected).toBeNull();
   });
 
+  it("does not detect pnpm-wrapped commands when option values are missing", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "pnpm --dir --recursive exec openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
   it("does not detect npx-wrapped commands with unknown npx flags", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "npx --bogus openclaw gateway restart",
@@ -395,6 +405,7 @@ describe("detectGatewayManagementExecCommand", () => {
       command: "systemctl --user restart openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
+      platform: "linux",
     });
 
     expect(detected).toEqual({
@@ -410,6 +421,7 @@ describe("detectGatewayManagementExecCommand", () => {
       command: "systemctl --user restart --no-block openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
+      platform: "linux",
     });
 
     expect(detected).toEqual({
@@ -425,6 +437,7 @@ describe("detectGatewayManagementExecCommand", () => {
       command: "systemctl --user restart openclaw-gateway.service",
       cwd: process.cwd(),
       env: { ...process.env, OPENCLAW_PROFILE: "dev" },
+      platform: "linux",
     });
 
     expect(detected).toBeNull();
@@ -435,6 +448,7 @@ describe("detectGatewayManagementExecCommand", () => {
       command: "systemctl --user restart openclaw-gateway-dev.service",
       cwd: process.cwd(),
       env: { ...process.env, OPENCLAW_PROFILE: "dev" },
+      platform: "linux",
     });
 
     expect(detected).toEqual({
@@ -504,6 +518,7 @@ describe("detectGatewayManagementExecCommand", () => {
       command: 'schtasks /Run /TN "OpenClaw Gateway"',
       cwd: process.cwd(),
       env: process.env,
+      platform: "win32",
     });
 
     expect(detected).toEqual({
@@ -519,16 +534,22 @@ describe("detectGatewayManagementExecCommand", () => {
       command: 'schtasks /Run /TN "OpenClaw Gateway"',
       cwd: process.cwd(),
       env: { ...process.env, OPENCLAW_PROFILE: "dev" },
+      platform: "win32",
     });
 
     expect(detected).toBeNull();
   });
 
-  it("detects schtasks task name for the active profile", () => {
+  it("matches configured OPENCLAW_WINDOWS_TASK_NAME exactly", () => {
     const detected = detectGatewayManagementExecCommand({
-      command: 'schtasks /Run /TN "OpenClaw Gateway (dev)"',
+      command: 'schtasks /Run /TN "OpenClaw Gateway Dev"',
       cwd: process.cwd(),
-      env: { ...process.env, OPENCLAW_PROFILE: "dev" },
+      env: {
+        ...process.env,
+        OPENCLAW_PROFILE: "dev",
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Dev",
+      },
+      platform: "win32",
     });
 
     expect(detected).toEqual({
@@ -544,6 +565,7 @@ describe("detectGatewayManagementExecCommand", () => {
       command: 'schtasks /Run /TN "OpenClaw Gateway Backup"',
       cwd: process.cwd(),
       env: process.env,
+      platform: "win32",
     });
 
     expect(detected).toBeNull();
@@ -554,6 +576,7 @@ describe("detectGatewayManagementExecCommand", () => {
       command: "systemctl --user restart ssh.service",
       cwd: process.cwd(),
       env: process.env,
+      platform: "linux",
     });
 
     expect(detected).toBeNull();
@@ -564,6 +587,7 @@ describe("detectGatewayManagementExecCommand", () => {
       command: "systemctl --user restart openclaw-gateway.service nginx.service",
       cwd: process.cwd(),
       env: process.env,
+      platform: "linux",
     });
 
     expect(detected).toBeNull();
@@ -574,6 +598,7 @@ describe("detectGatewayManagementExecCommand", () => {
       command: "systemctl --host remote.example restart openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
+      platform: "linux",
     });
 
     expect(detected).toBeNull();
@@ -584,6 +609,7 @@ describe("detectGatewayManagementExecCommand", () => {
       command: "systemctl -Hremote.example restart openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
+      platform: "linux",
     });
 
     expect(detected).toBeNull();
@@ -594,11 +620,13 @@ describe("detectGatewayManagementExecCommand", () => {
       command: "systemctl restart --help openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
+      platform: "linux",
     });
     const withVersion = detectGatewayManagementExecCommand({
       command: "systemctl --version restart openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
+      platform: "linux",
     });
 
     expect(withHelp).toBeNull();
@@ -610,6 +638,7 @@ describe("detectGatewayManagementExecCommand", () => {
       command: "systemctl --bogus restart openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
+      platform: "linux",
     });
 
     expect(detected).toBeNull();
@@ -620,6 +649,7 @@ describe("detectGatewayManagementExecCommand", () => {
       command: "systemctl --user restart openclaw-gateway-prod.service",
       cwd: process.cwd(),
       env: process.env,
+      platform: "linux",
     });
 
     expect(detected).toBeNull();
@@ -633,6 +663,7 @@ describe("detectGatewayManagementExecCommand", () => {
         ...process.env,
         OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-prod.service",
       },
+      platform: "linux",
     });
 
     expect(detected).toEqual({
@@ -641,6 +672,39 @@ describe("detectGatewayManagementExecCommand", () => {
       hard: false,
       complex: false,
     });
+  });
+
+  it("does not detect systemctl commands on non-linux platforms", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --user restart openclaw-gateway.service",
+      cwd: process.cwd(),
+      env: process.env,
+      platform: "darwin",
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect schtasks commands on non-windows platforms", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: 'schtasks /Run /TN "OpenClaw Gateway"',
+      cwd: process.cwd(),
+      env: process.env,
+      platform: "linux",
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect systemctl commands when option values are missing", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --user --lines --quiet restart openclaw-gateway.service",
+      cwd: process.cwd(),
+      env: process.env,
+      platform: "linux",
+    });
+
+    expect(detected).toBeNull();
   });
 });
 
@@ -774,49 +838,58 @@ describe("exec gateway management interception", () => {
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
   });
 
-  it("intercepts systemctl gateway restart commands", async () => {
-    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+  it.runIf(process.platform === "linux")(
+    "intercepts systemctl gateway restart commands",
+    async () => {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
-    const result = await tool.execute("call3-systemctl", {
-      command: "systemctl --user restart openclaw-gateway.service",
-    });
+      const result = await tool.execute("call3-systemctl", {
+        command: "systemctl --user restart openclaw-gateway.service",
+      });
 
-    const text = result.content.find((part) => part.type === "text")?.text ?? "";
-    expect(result.details).toMatchObject({
-      status: "completed",
-      exitCode: 0,
-    });
-    expect(text).toContain("Gateway restart scheduled safely");
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
-  });
+      const text = result.content.find((part) => part.type === "text")?.text ?? "";
+      expect(result.details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+      });
+      expect(text).toContain("Gateway restart scheduled safely");
+      expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
-  it("intercepts schtasks run commands as restart", async () => {
-    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+  it.runIf(process.platform === "win32")(
+    "intercepts schtasks run commands as restart",
+    async () => {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
-    const result = await tool.execute("call3-schtasks", {
-      command: 'schtasks /Run /TN "OpenClaw Gateway"',
-    });
+      const result = await tool.execute("call3-schtasks", {
+        command: 'schtasks /Run /TN "OpenClaw Gateway"',
+      });
 
-    const text = result.content.find((part) => part.type === "text")?.text ?? "";
-    expect(result.details).toMatchObject({
-      status: "completed",
-      exitCode: 0,
-    });
-    expect(text).toContain("Gateway restart scheduled safely");
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
-  });
+      const text = result.content.find((part) => part.type === "text")?.text ?? "";
+      expect(result.details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+      });
+      expect(text).toContain("Gateway restart scheduled safely");
+      expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
-  it("blocks launchctl stop commands for gateway labels", async () => {
-    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+  it.runIf(process.platform === "darwin")(
+    "blocks launchctl stop commands for gateway labels",
+    async () => {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
-    await expect(
-      tool.execute("call3-launchctl-stop", {
-        command: "launchctl bootout gui/$UID/ai.openclaw.gateway",
-      }),
-    ).rejects.toThrow(/openclaw gateway stop/);
+      await expect(
+        tool.execute("call3-launchctl-stop", {
+          command: "launchctl bootout gui/$UID/ai.openclaw.gateway",
+        }),
+      ).rejects.toThrow(/openclaw gateway stop/);
 
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
-  });
+      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("blocks gateway stop/start via exec", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });

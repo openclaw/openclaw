@@ -371,7 +371,7 @@ function consumePnpmOption(argv: string[], idx: number): number | null {
       return null;
     }
     const next = argv[idx + 1]?.trim() ?? "";
-    if (!next || next === FLAG_TERMINATOR) {
+    if (!next || next === FLAG_TERMINATOR || next.startsWith("-")) {
       return null;
     }
     return 2;
@@ -379,7 +379,7 @@ function consumePnpmOption(argv: string[], idx: number): number | null {
 
   if (token === "-C") {
     const next = argv[idx + 1]?.trim() ?? "";
-    if (!next || next === FLAG_TERMINATOR) {
+    if (!next || next === FLAG_TERMINATOR || next.startsWith("-")) {
       return null;
     }
     return 2;
@@ -654,6 +654,10 @@ function consumeSystemctlOption(argv: string[], idx: number): number | null {
   if (idx + 1 >= argv.length) {
     return null;
   }
+  const next = argv[idx + 1]?.trim() ?? "";
+  if (!next || next === FLAG_TERMINATOR || next.startsWith("-")) {
+    return null;
+  }
   return 2;
 }
 
@@ -691,7 +695,11 @@ function collectSystemctlPositionals(argv: string[]): string[] | null {
 function parseGatewayActionFromSystemctlArgv(
   argv: string[],
   env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
 ): GatewayManagementAction | null {
+  if (platform !== "linux") {
+    return null;
+  }
   if (normalizeExecutableToken(argv[0] ?? "") !== "systemctl") {
     return null;
   }
@@ -752,7 +760,11 @@ function parseGatewayActionFromLaunchctlArgv(
 function parseGatewayActionFromSchtasksArgv(
   argv: string[],
   env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
 ): GatewayManagementAction | null {
+  if (platform !== "win32") {
+    return null;
+  }
   if (normalizeExecutableToken(argv[0] ?? "") !== "schtasks") {
     return null;
   }
@@ -826,7 +838,7 @@ export function detectGatewayManagementExecCommand(params: {
       }
     }
 
-    const systemctlAction = parseGatewayActionFromSystemctlArgv(argv, identityEnv);
+    const systemctlAction = parseGatewayActionFromSystemctlArgv(argv, identityEnv, platform);
     if (systemctlAction) {
       return {
         action: systemctlAction,
@@ -846,7 +858,7 @@ export function detectGatewayManagementExecCommand(params: {
       };
     }
 
-    const schtasksAction = parseGatewayActionFromSchtasksArgv(argv, identityEnv);
+    const schtasksAction = parseGatewayActionFromSchtasksArgv(argv, identityEnv, platform);
     if (schtasksAction) {
       return {
         action: schtasksAction,
