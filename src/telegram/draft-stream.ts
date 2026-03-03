@@ -51,9 +51,10 @@ function resolveSendMessageDraftApi(api: Bot["api"]): TelegramSendMessageDraft |
   // Fall back to raw API call for Bot API 9.3+ (sendMessageDraft)
   // Grammy exposes `api.raw` as a Proxy that forwards any method call to the Bot API.
   // This allows using new Bot API methods before Grammy adds typed wrappers.
-  // The raw proxy is always present in Grammy >= 1.0, so we just need to check it exists.
+  // Guard: ensure rawApi exists and sendMessageDraft is callable (may not be if Grammy's
+  // raw API is a typed interface rather than a Proxy in some edge configurations).
   const rawApi = (api as Bot["api"] & { raw?: GrammyRawApiProxy }).raw;
-  if (!rawApi) {
+  if (!rawApi || typeof rawApi.sendMessageDraft !== "function") {
     return undefined;
   }
 
