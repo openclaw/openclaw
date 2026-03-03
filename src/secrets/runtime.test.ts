@@ -123,7 +123,7 @@ describe("secrets runtime snapshot", () => {
           "custom:inline-token": {
             type: "token",
             provider: "custom",
-            token: { source: "env", provider: "default", id: "MY_TOKEN" },
+            token: { source: "env", provider: "default", id: "MY_TOKEN" } as unknown as string,
           },
         }),
     });
@@ -150,7 +150,7 @@ describe("secrets runtime snapshot", () => {
           "custom:inline-key": {
             type: "api_key",
             provider: "custom",
-            key: { source: "env", provider: "default", id: "MY_KEY" },
+            key: { source: "env", provider: "default", id: "MY_KEY" } as unknown as string,
           },
         }),
     });
@@ -181,7 +181,7 @@ describe("secrets runtime snapshot", () => {
             type: "api_key",
             provider: "custom",
             keyRef: { source: "env", provider: "default", id: "PRIMARY_KEY" },
-            key: { source: "env", provider: "default", id: "SHADOW_KEY" },
+            key: { source: "env", provider: "default", id: "SHADOW_KEY" } as unknown as string,
           },
         }),
     });
