@@ -1050,23 +1050,23 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).not.toContain("after a short hard cutoff.");
   });
 
-  it("lists subagents for the current command session over the target session", async () => {
+  it("prefers CommandTargetSessionKey for native /subagents list", async () => {
     addSubagentRunForTests({
-      runId: "run-1",
-      childSessionKey: "agent:main:subagent:abc",
-      requesterSessionKey: "agent:main:slack:slash:u1",
-      requesterDisplayKey: "agent:main:slack:slash:u1",
-      task: "do thing",
+      runId: "run-target",
+      childSessionKey: "agent:main:subagent:target",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "target session run",
       cleanup: "keep",
       createdAt: 1000,
       startedAt: 1000,
     });
     addSubagentRunForTests({
-      runId: "run-2",
-      childSessionKey: "agent:main:subagent:def",
+      runId: "run-command",
+      childSessionKey: "agent:main:subagent:command",
       requesterSessionKey: "agent:main:slack:slash:u1",
       requesterDisplayKey: "agent:main:slack:slash:u1",
-      task: "another thing",
+      task: "slash session run",
       cleanup: "keep",
       createdAt: 2000,
       startedAt: 2000,
@@ -1083,8 +1083,8 @@ describe("handleCommands subagents", () => {
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("active subagents:");
-    expect(result.reply?.text).toContain("do thing");
-    expect(result.reply?.text).not.toContain("\n\n2.");
+    expect(result.reply?.text).toContain("target session run");
+    expect(result.reply?.text).not.toContain("slash session run");
   });
 
   it("formats subagent usage with io and prompt/cache breakdown", async () => {
