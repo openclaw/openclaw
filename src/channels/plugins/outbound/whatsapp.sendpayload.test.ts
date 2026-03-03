@@ -15,6 +15,49 @@ function baseCtx(payload: ReplyPayload) {
 }
 
 describe("whatsappOutbound sendPayload", () => {
+  it("forwards cfg on sendText", async () => {
+    const cfg = {
+      channels: { whatsapp: { enabled: true } },
+    };
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "wa-1" });
+    const sendText = whatsappOutbound.sendText!;
+
+    await sendText({
+      cfg,
+      to: "5511999999999@c.us",
+      text: "hello",
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "5511999999999@c.us",
+      "hello",
+      expect.objectContaining({ cfg }),
+    );
+  });
+
+  it("forwards cfg on sendMedia", async () => {
+    const cfg = {
+      channels: { whatsapp: { enabled: true } },
+    };
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "wa-1" });
+    const sendMedia = whatsappOutbound.sendMedia!;
+
+    await sendMedia({
+      cfg,
+      to: "5511999999999@c.us",
+      text: "caption",
+      mediaUrl: "https://example.com/a.jpg",
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "5511999999999@c.us",
+      "caption",
+      expect.objectContaining({ cfg, mediaUrl: "https://example.com/a.jpg" }),
+    );
+  });
+
   it("text-only delegates to sendText", async () => {
     const ctx = baseCtx({ text: "hello" });
     const result = await whatsappOutbound.sendPayload!(ctx);

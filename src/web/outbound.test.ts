@@ -7,6 +7,11 @@ import { resetLogger, setLoggerOverride } from "../logging.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { setActiveWebListener } from "./active-listener.js";
 
+const loadConfigMock = vi.fn(() => ({}));
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => loadConfigMock(),
+}));
+
 const loadWebMediaMock = vi.fn();
 vi.mock("./media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
@@ -22,6 +27,8 @@ describe("web outbound", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    loadConfigMock.mockReset();
+    loadConfigMock.mockReturnValue({});
     setActiveWebListener({
       sendComposingTo,
       sendMessage,
@@ -44,6 +51,18 @@ describe("web outbound", () => {
     });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
+  });
+
+  it("prefers caller cfg over loadConfig when provided", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          enabled: true,
+        },
+      },
+    };
+    await sendMessageWhatsApp("+1555", "hi", { verbose: false, cfg } as never);
+    expect(loadConfigMock).not.toHaveBeenCalled();
   });
 
   it("throws a helpful error when no active listener exists", async () => {

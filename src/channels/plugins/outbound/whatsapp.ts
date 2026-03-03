@@ -15,21 +15,23 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
     resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
   sendPayload: async (ctx) =>
     await sendTextMediaPayload({ channel: "whatsapp", ctx, adapter: whatsappOutbound }),
-  sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
+  sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) => {
     const send =
       deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;
     const result = await send(to, text, {
       verbose: false,
+      cfg,
       accountId: accountId ?? undefined,
       gifPlayback,
     });
     return { channel: "whatsapp", ...result };
   },
-  sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, accountId, deps, gifPlayback }) => {
+  sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, gifPlayback }) => {
     const send =
       deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;
     const result = await send(to, text, {
       verbose: false,
+      cfg,
       mediaUrl,
       mediaLocalRoots,
       accountId: accountId ?? undefined,
