@@ -1,21 +1,15 @@
 import { getFileExtension, normalizeMimeType } from "./mime.js";
 
-export const TELEGRAM_VOICE_AUDIO_EXTENSIONS = new Set([".oga", ".ogg", ".opus", ".mp3", ".m4a"]);
+export const TELEGRAM_VOICE_AUDIO_EXTENSIONS = new Set([".oga", ".ogg", ".opus"]);
 
 /**
- * MIME types compatible with voice messages.
- * Telegram sendVoice supports OGG/Opus, MP3, and M4A.
- * https://core.telegram.org/bots/api#sendvoice
+ * MIME types treated as *voice-bubble compatible* by OpenClaw.
+ *
+ * Note: Telegram Bot API may accept additional audio formats for sendVoice,
+ * but many clients render non-Opus/non-Ogg files as regular audio cards.
+ * To make `asVoice` reliably produce voice bubbles, we only route OGG/Opus here.
  */
-export const TELEGRAM_VOICE_MIME_TYPES = new Set([
-  "audio/ogg",
-  "audio/opus",
-  "audio/mpeg",
-  "audio/mp3",
-  "audio/mp4",
-  "audio/x-m4a",
-  "audio/m4a",
-]);
+export const TELEGRAM_VOICE_MIME_TYPES = new Set(["audio/ogg", "audio/opus"]);
 
 export function isTelegramVoiceCompatibleAudio(opts: {
   contentType?: string | null;

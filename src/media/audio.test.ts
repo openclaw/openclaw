@@ -9,7 +9,6 @@ describe("isVoiceCompatibleAudio", () => {
   it.each([
     ...Array.from(TELEGRAM_VOICE_MIME_TYPES, (contentType) => ({ contentType, fileName: null })),
     { contentType: "audio/ogg; codecs=opus", fileName: null },
-    { contentType: "audio/mp4; codecs=mp4a.40.2", fileName: null },
   ])("returns true for MIME type $contentType", (opts) => {
     expect(isVoiceCompatibleAudio(opts)).toBe(true);
   });
@@ -36,6 +35,6 @@ describe("isVoiceCompatibleAudio", () => {
   });
 
   it("prefers MIME type over extension", () => {
-    expect(isVoiceCompatibleAudio({ contentType: "audio/mpeg", fileName: "file.wav" })).toBe(true);
+    expect(isVoiceCompatibleAudio({ contentType: "audio/ogg", fileName: "file.wav" })).toBe(true);
   });
 });
