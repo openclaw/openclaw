@@ -19,6 +19,10 @@ export type BrowserStatus = {
   noSandbox?: boolean;
   executablePath?: string | null;
   attachOnly: boolean;
+  /** Firecrawl live view URL (for human-in-the-loop preview). */
+  liveViewUrl?: string;
+  /** Firecrawl session ID (for lifecycle management). */
+  firecrawlSessionId?: string;
 };
 
 export type ProfileStatus = {
@@ -163,7 +167,7 @@ export async function browserCreateProfile(
     name: string;
     color?: string;
     cdpUrl?: string;
-    driver?: "openclaw" | "extension";
+    driver?: "openclaw" | "extension" | "firecrawl";
   },
 ): Promise<BrowserCreateProfileResult> {
   return await fetchBrowserJson<BrowserCreateProfileResult>(
