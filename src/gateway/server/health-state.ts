@@ -18,6 +18,21 @@ let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 let healthRuntimeSnapshotProvider: (() => ChannelRuntimeSnapshot) | null = null;
+const CHANNEL_RUNTIME_OVERLAY_KEYS = [
+  "running",
+  "connected",
+  "lastStartAt",
+  "lastStopAt",
+  "lastError",
+  "lastConnectedAt",
+  "lastDisconnect",
+  "lastMessageAt",
+  "lastEventAt",
+  "reconnectAttempts",
+  "botTokenSource",
+  "appTokenSource",
+  "userTokenSource",
+] as const;
 
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
@@ -150,9 +165,13 @@ export async function overlayHealthSnapshotWithRuntime(
       channelSummary;
     const nextChannel = {
       ...channelSummary,
-      ...defaultAccount,
       accounts: mergedAccounts,
     };
+    for (const key of CHANNEL_RUNTIME_OVERLAY_KEYS) {
+      if (defaultAccount[key] !== undefined) {
+        nextChannel[key] = defaultAccount[key];
+      }
+    }
     if (channelSummary.probe !== undefined) {
       nextChannel.probe = channelSummary.probe;
     }

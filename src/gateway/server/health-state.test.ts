@@ -136,12 +136,15 @@ describe("refreshGatewayHealthSnapshot", () => {
   });
 
   test("merges live runtime channel state into health snapshots", async () => {
-    const snap = await healthStateModule.overlayHealthSnapshotWithRuntime(buildBaseHealthSummary());
+    const input = buildBaseHealthSummary();
+    input.channels.slack.configured = false;
+    const snap = await healthStateModule.overlayHealthSnapshotWithRuntime(input);
 
     expect(snap.channels.slack.botTokenSource).toBe("config");
     expect(snap.channels.slack.appTokenSource).toBe("config");
     expect(snap.channels.slack.running).toBe(true);
     expect(snap.channels.slack.lastStartAt).toBe(1_777_000_000_000);
+    expect(snap.channels.slack.configured).toBe(false);
     expect(snap.channels.slack.accounts?.default?.running).toBe(true);
     expect(snap.channels.slack.accounts?.default?.botTokenSource).toBe("config");
     expect(healthStateModule.getHealthCache()).toBeNull();
