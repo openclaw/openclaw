@@ -1,10 +1,16 @@
+import fs from "node:fs/promises";
 import {
   ensureAuthProfileStore,
   getCustomProviderApiKey,
   resolveAuthProfileOrder,
   resolveEnvApiKey,
 } from "../agents/model-auth.js";
-import { resolveApiKeyForProfile } from "../agents/auth-profiles.js";
+import {
+  resolveApiKeyForProfile,
+  resolveAuthStorePathForDisplay,
+  type AuthProfileStore,
+  type AuthProfileCredential,
+} from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { type SecretInput, type SecretRef } from "../config/types.secrets.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
@@ -100,7 +106,30 @@ async function resolveExistingProviderApiKey(params: {
   agentDir?: string;
 }): Promise<{ apiKey: string; source: string; credential: SecretInput } | null> {
   try {
-    const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+    let store: AuthProfileStore = { version: 1, profiles: {} };
+    try {
+      const raw = await fs.readFile(resolveAuthStorePathForDisplay(params.agentDir), "utf-8");
+      const parsed = JSON.parse(raw) as { version?: number; profiles?: Record<string, unknown> };
+      const profiles: Record<string, AuthProfileCredential> = {};
+      if (parsed && typeof parsed === "object" && parsed.profiles) {
+        for (const [profileId, profile] of Object.entries(parsed.profiles)) {
+          if (!profile || typeof profile !== "object") {
+            continue;
+          }
+          profiles[profileId] = profile as AuthProfileCredential;
+        }
+      }
+      store = {
+        version: Number(parsed?.version ?? 1),
+        profiles,
+      };
+    } catch {}
+
+    if (Object.keys(store.profiles).length === 0 && !params.agentDir) {
+      // Keep backwards compatibility on the main/default agent by falling back to the
+      // runtime store when the on-disk store is missing.
+      store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+    }
     const orderedProfiles = resolveAuthProfileOrder({
       cfg: params.config,
       store,

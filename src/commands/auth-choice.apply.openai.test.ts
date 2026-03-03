@@ -274,6 +274,54 @@ describe("applyAuthChoiceOpenAI", () => {
     expect(parsedSecondary.profiles?.["openai:default"]?.keyRef).toBeUndefined();
   });
 
+  it("does not reuse main-agent profile keys when configuring a secondary agent", async () => {
+    const defaultAgentDir = await setupTempState();
+    delete process.env.OPENAI_API_KEY;
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    expect(stateDir).toBeTruthy();
+    const secondaryAgentDir = path.join(String(stateDir), "agents", "secondary-empty", "agent");
+    await fs.mkdir(secondaryAgentDir, { recursive: true });
+
+    const runtime = createExitThrowingRuntime();
+    const seedPrompter = createWizardPrompter({}, { defaultSelect: "" });
+    await applyAuthChoiceOpenAI({
+      authChoice: "apiKey",
+      config: {},
+      prompter: seedPrompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "openai",
+        token: "sk-openai-default-only",
+      },
+      agentDir: defaultAgentDir,
+    });
+
+    const confirm = vi.fn(async () => true);
+    const text = vi.fn(async () => "sk-openai-secondary-manual");
+    const reconfigurePrompter = createWizardPrompter(
+      { confirm, text },
+      { defaultSelect: "plaintext" },
+    );
+    await applyAuthChoiceOpenAI({
+      authChoice: "openai-api-key",
+      config: {},
+      prompter: reconfigurePrompter,
+      runtime,
+      setDefaultModel: true,
+      agentDir: secondaryAgentDir,
+    });
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(text).toHaveBeenCalledWith(expect.objectContaining({ message: "Enter OpenAI API key" }));
+
+    const parsedSecondary = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(secondaryAgentDir);
+    expect(parsedSecondary.profiles?.["openai:default"]?.key).toBe("sk-openai-secondary-manual");
+    expect(parsedSecondary.profiles?.["openai:default"]?.keyRef).toBeUndefined();
+  });
+
   it("keeps keyRef credentials when reusing stored OpenAI auth profile values", async () => {
     const agentDir = await setupTempState();
     process.env.OPENAI_API_KEY = "sk-openai-ref";
