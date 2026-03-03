@@ -157,6 +157,37 @@ describe("system run command helpers", () => {
     });
   });
 
+  test("validateSystemRunCommandConsistency accepts rawCommand with basename when argv has absolute path", () => {
+    // LLMs commonly send argv with absolute paths but rawCommand with short names.
+    // This is the most frequent real-world mismatch: the LLM resolves the binary
+    // to its absolute path in argv but uses the short name in rawCommand.
+    const res = validateSystemRunCommandConsistency({
+      argv: ["/bin/echo", "hello"],
+      rawCommand: "echo hello",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.cmdText).toBe("echo hello");
+  });
+
+  test("validateSystemRunCommandConsistency accepts rawCommand with basename for multi-segment paths", () => {
+    const res = validateSystemRunCommandConsistency({
+      argv: ["/usr/bin/curl", "-s", "http://example.com"],
+      rawCommand: "curl -s http://example.com",
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  test("validateSystemRunCommandConsistency rejects genuinely different commands even with path prefix", () => {
+    // Basename fallback should not weaken security — different command names still fail.
+    expectRawCommandMismatch({
+      argv: ["/bin/echo", "hello"],
+      rawCommand: "cat hello",
+    });
+  });
+
   test("resolveSystemRunCommand requires command when rawCommand is present", () => {
     const res = resolveSystemRunCommand({ rawCommand: "echo hi" });
     expect(res.ok).toBe(false);
