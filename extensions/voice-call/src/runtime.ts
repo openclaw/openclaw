@@ -230,7 +230,7 @@ export async function createVoiceCallRuntime(params: {
         err instanceof Error ? err.message : String(err)
       }`,
     );
-    
+
     // Clean up tunnel if started
     if (tunnelResult) {
       try {
@@ -243,7 +243,7 @@ export async function createVoiceCallRuntime(params: {
         );
       }
     }
-    
+
     // Clean up tailscale exposure (idempotent, safe to call even if not set up)
     try {
       await cleanupTailscaleExposure(config);
@@ -254,7 +254,7 @@ export async function createVoiceCallRuntime(params: {
         }`,
       );
     }
-    
+
     // Clean up webhook server last
     try {
       await webhookServer.stop();
@@ -265,7 +265,7 @@ export async function createVoiceCallRuntime(params: {
         }`,
       );
     }
-    
+
     throw err;
   }
 }
