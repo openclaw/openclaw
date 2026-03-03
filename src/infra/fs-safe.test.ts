@@ -251,18 +251,21 @@ describe("fs-safe", () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const relativePath = path.join("nested", "default-mode.txt");
     const openSpy = vi.spyOn(fs, "open");
-    const opened = await openWritableFileWithinRoot({
-      rootDir: root,
-      relativePath,
-    });
-    await opened.handle.close();
+    try {
+      const opened = await openWritableFileWithinRoot({
+        rootDir: root,
+        relativePath,
+      });
+      await opened.handle.close();
 
-    const targetOpenCalls = openSpy.mock.calls.filter(([filePath]) =>
-      String(filePath).endsWith(relativePath),
-    );
-    expect(targetOpenCalls.length).toBeGreaterThan(0);
-    expect(targetOpenCalls.every((call) => call.length === 2)).toBe(true);
-    openSpy.mockRestore();
+      const targetOpenCalls = openSpy.mock.calls.filter(([filePath]) =>
+        String(filePath).endsWith(relativePath),
+      );
+      expect(targetOpenCalls.length).toBeGreaterThan(0);
+      expect(targetOpenCalls.every((call) => call.length === 2)).toBe(true);
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   it("does not truncate existing target when atomic rename fails", async () => {
