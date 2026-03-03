@@ -205,12 +205,10 @@ export function createTelegramDraftStream(params: {
   }: PreviewSendParams): Promise<boolean> => {
     const draftId = streamDraftId ?? allocateTelegramDraftId();
     streamDraftId = draftId;
-    const draftParams = {
-      ...(threadParams?.message_thread_id != null
-        ? { message_thread_id: threadParams.message_thread_id }
-        : {}),
-      ...(renderedParseMode ? { parse_mode: renderedParseMode } : {}),
-    };
+    // Do NOT pass message_thread_id to sendMessageDraft in DM chats — Telegram
+    // clients (iOS confirmed) interpret it as a pinned-message association, causing
+    // the draft to flash as a "Pinned Message" notification.
+    const draftParams = renderedParseMode ? { parse_mode: renderedParseMode } : {};
     await resolvedDraftApi!(
       chatId,
       draftId,

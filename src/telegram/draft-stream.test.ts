@@ -122,15 +122,31 @@ describe("createTelegramDraftStream", () => {
 
     stream.update("Hello");
     await vi.waitFor(() =>
-      expect(api.sendMessageDraft).toHaveBeenCalledWith(123, expect.any(Number), "Hello", {
-        message_thread_id: 42,
-      }),
+      expect(api.sendMessageDraft).toHaveBeenCalledWith(
+        123,
+        expect.any(Number),
+        "Hello",
+        undefined,
+      ),
     );
     expect(api.sendMessage).not.toHaveBeenCalled();
     expect(api.editMessageText).not.toHaveBeenCalled();
     await stream.clear();
 
     expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not pass message_thread_id to sendMessageDraft in DM chats (pinned message bug)", async () => {
+    const api = createMockDraftApi();
+    const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+
+    stream.update("Hello");
+    await vi.waitFor(() => expect(api.sendMessageDraft).toHaveBeenCalledTimes(1));
+
+    // sendMessageDraft must NOT receive message_thread_id — in DM chats it causes
+    // the draft to appear as a "Pinned Message" notification in Telegram clients.
+    const draftParams = api.sendMessageDraft.mock.calls[0]?.[3];
+    expect(draftParams?.message_thread_id).toBeUndefined();
   });
 
   it("supports forcing message transport in dm threads", async () => {
