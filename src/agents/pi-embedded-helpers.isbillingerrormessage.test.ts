@@ -427,10 +427,13 @@ describe("isFailoverErrorMessage", () => {
     const samples = [
       "Unhandled stop reason: abort",
       "Unhandled stop reason: error",
+      "Unhandled stop reason: network_error",
       "stop reason: abort",
       "stop reason: error",
+      "stop reason: network_error",
       "reason: abort",
       "reason: error",
+      "reason: network_error",
     ];
     for (const sample of samples) {
       expect(isTimeoutErrorMessage(sample)).toBe(true);
