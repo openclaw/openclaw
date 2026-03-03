@@ -1,18 +1,16 @@
 import type { MessageEvent, StickerEventMessage, EventSource, PostbackEvent } from "@line/bot-sdk";
-import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
+import { formatInboundEnvelope } from "../auto-reply/envelope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
+import { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
+import { recordInboundSession } from "../channels/session.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-  updateLastRoute,
-} from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import type { ResolvedLineAccount } from "./types.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
+import { normalizeAllowFrom } from "./bot-access.js";
+import type { ResolvedLineAccount, LineGroupConfig } from "./types.js";
 
 interface MediaRef {
   path: string;
@@ -208,6 +206,20 @@ function resolveLineAddresses(params: {
   return { fromAddress, toAddress, originatingTo };
 }
 
+function resolveLineGroupSystemPrompt(
+  groups: Record<string, LineGroupConfig | undefined> | undefined,
+  source: LineSourceInfoWithPeerId,
+): string | undefined {
+  if (!groups) {
+    return undefined;
+  }
+  const entry =
+    (source.groupId ? (groups[source.groupId] ?? groups[`group:${source.groupId}`]) : undefined) ??
+    (source.roomId ? (groups[source.roomId] ?? groups[`room:${source.roomId}`]) : undefined) ??
+    groups["*"];
+  return entry?.systemPrompt?.trim() || undefined;
+}
+
 async function finalizeLineInboundContext(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -243,12 +255,9 @@ async function finalizeLineInboundContext(params: {
     senderLabel,
   });
 
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
+    cfg: params.cfg,
     agentId: params.route.agentId,
-  });
-  const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
-  const previousTimestamp = readSessionUpdatedAt({
-    storePath,
     sessionKey: params.route.sessionKey,
   });
 
@@ -293,28 +302,46 @@ async function finalizeLineInboundContext(params: {
     ...params.locationContext,
     OriginatingChannel: "line" as const,
     OriginatingTo: originatingTo,
+    GroupSystemPrompt: params.source.isGroup
+      ? resolveLineGroupSystemPrompt(params.account.config.groups, params.source)
+      : undefined,
   });
 
-  void recordSessionMetaFromInbound({
+  const pinnedMainDmOwner = !params.source.isGroup
+    ? resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: params.cfg.session?.dmScope,
+        allowFrom: params.account.config.allowFrom,
+        normalizeEntry: (entry) => normalizeAllowFrom([entry]).entries[0],
+      })
+    : null;
+  await recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? params.route.sessionKey,
     ctx: ctxPayload,
-  }).catch((err) => {
-    logVerbose(`line: failed updating session meta: ${String(err)}`);
+    updateLastRoute: !params.source.isGroup
+      ? {
+          sessionKey: params.route.mainSessionKey,
+          channel: "line",
+          to: params.source.userId ?? params.source.peerId,
+          accountId: params.route.accountId,
+          mainDmOwnerPin:
+            pinnedMainDmOwner && params.source.userId
+              ? {
+                  ownerRecipient: pinnedMainDmOwner,
+                  senderRecipient: params.source.userId,
+                  onSkip: ({ ownerRecipient, senderRecipient }) => {
+                    logVerbose(
+                      `line: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                    );
+                  },
+                }
+              : undefined,
+        }
+      : undefined,
+    onRecordError: (err) => {
+      logVerbose(`line: failed updating session meta: ${String(err)}`);
+    },
   });
-
-  if (!params.source.isGroup) {
-    await updateLastRoute({
-      storePath,
-      sessionKey: params.route.mainSessionKey,
-      deliveryContext: {
-        channel: "line",
-        to: params.source.userId ?? params.source.peerId,
-        accountId: params.route.accountId,
-      },
-      ctx: ctxPayload,
-    });
-  }
 
   if (shouldLogVerbose()) {
     const preview = body.slice(0, 200).replace(/\n/g, "\\n");

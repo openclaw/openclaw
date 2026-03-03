@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw config` (get/set/unset values and config file path)"
+summary: "CLI reference for `openclaw config` (get/set/unset/file/validate)"
 read_when:
   - You want to read or edit config non-interactively
 title: "config"
@@ -7,8 +7,8 @@ title: "config"
 
 # `openclaw config`
 
-Config helpers: get/set/unset values by path and print the active config file.
-Run without a subcommand to open
+Config helpers: get/set/unset/validate values by path and print the active
+config file. Run without a subcommand to open
 the configure wizard (same as `openclaw configure`).
 
 ## Examples
@@ -20,6 +20,8 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
 openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
 openclaw config unset tools.web.search.apiKey
+openclaw config validate
+openclaw config validate --json
 ```
 
 ## Paths
@@ -54,3 +56,13 @@ openclaw config set channels.whatsapp.groups '["*"]' --strict-json
 - `config file`: Print the active config file path (resolved from `OPENCLAW_CONFIG_PATH` or default location).
 
 Restart the gateway after edits.
+
+## Validate
+
+Validate the current config against the active schema without starting the
+gateway.
+
+```bash
+openclaw config validate
+openclaw config validate --json
+```

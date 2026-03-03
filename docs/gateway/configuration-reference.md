@@ -825,16 +825,22 @@ Time format in system prompt. Default: `auto` (OS preference).
     defaults: {
       models: {
         "anthropic/claude-opus-4-6": { alias: "opus" },
-        "minimax/MiniMax-M2.1": { alias: "minimax" },
+        "minimax/MiniMax-M2.5": { alias: "minimax" },
       },
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["minimax/MiniMax-M2.1"],
+        fallbacks: ["minimax/MiniMax-M2.5"],
       },
       imageModel: {
         primary: "openrouter/qwen/qwen-2.5-vl-72b-instruct:free",
         fallbacks: ["openrouter/google/gemini-2.0-flash-vision:free"],
       },
+      pdfModel: {
+        primary: "anthropic/claude-opus-4-6",
+        fallbacks: ["openai/gpt-5-mini"],
+      },
+      pdfMaxBytesMb: 10,
+      pdfMaxPages: 20,
       thinkingDefault: "low",
       verboseDefault: "off",
       elevatedDefault: "on",
@@ -853,6 +859,11 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `image` tool path as its vision-model config.
   - Also used as fallback routing when the selected/default model cannot accept image input.
+- `pdfModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
+  - Used by the `pdf` tool for model routing.
+  - If omitted, the PDF tool falls back to `imageModel`, then to best-effort provider defaults.
+- `pdfMaxBytesMb`: default PDF size limit for the `pdf` tool when `maxBytesMb` is not passed at call time.
+- `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool.
 - `model.primary`: format `provider/model` (e.g. `anthropic/claude-opus-4-6`). If you omit the provider, OpenClaw assumes `anthropic` (deprecated).
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`).
 - `params` merge precedence (config): `agents.defaults.models["provider/model"].params` is the base, then `agents.list[].params` (matching agent id) overrides by key.
@@ -874,6 +885,7 @@ Your configured aliases always win over defaults.
 
 Z.AI GLM-4.x models automatically enable thinking mode unless you set `--thinking off` or define `agents.defaults.models["zai/<model>"].params.thinking` yourself.
 Z.AI models enable `tool_stream` by default for tool call streaming. Set `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
+Anthropic Claude 4.6 models default to `adaptive` thinking when no explicit thinking level is set.
 
 ### `agents.defaults.cliBackends`
 
@@ -1158,13 +1170,42 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
 
 **`docker.binds`** mounts additional host directories; global and per-agent binds are merged.
 
-**Sandboxed browser** (`sandbox.browser.enabled`): Chromium + CDP in a container. noVNC URL injected into system prompt. Does not require `browser.enabled` in main config.
-noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived token URL that serves a local bootstrap page; noVNC password is passed via URL fragment (instead of URL query).
+**Sandboxed browser** (`sandbox.browser.enabled`): Chromium + CDP in a container. noVNC URL injected into system prompt. Does not require `browser.enabled` in `openclaw.json`.
+noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived token URL (instead of exposing the password in the shared URL).
 
 - `allowHostControl: false` (default) blocks sandboxed sessions from targeting the host browser.
 - `network` defaults to `openclaw-sandbox-browser` (dedicated bridge network). Set to `bridge` only when you explicitly want global bridge connectivity.
 - `cdpSourceRange` optionally restricts CDP ingress at the container edge to a CIDR range (for example `172.21.0.1/32`).
 - `sandbox.browser.binds` mounts additional host directories into the sandbox browser container only. When set (including `[]`), it replaces `docker.binds` for the browser container.
+- Launch defaults are defined in `scripts/sandbox-browser-entrypoint.sh` and tuned for container hosts:
+  - `--remote-debugging-address=127.0.0.1`
+  - `--remote-debugging-port=<derived from OPENCLAW_BROWSER_CDP_PORT>`
+  - `--user-data-dir=${HOME}/.chrome`
+  - `--no-first-run`
+  - `--no-default-browser-check`
+  - `--disable-3d-apis`
+  - `--disable-gpu`
+  - `--disable-software-rasterizer`
+  - `--disable-dev-shm-usage`
+  - `--disable-background-networking`
+  - `--disable-features=TranslateUI`
+  - `--disable-breakpad`
+  - `--disable-crash-reporter`
+  - `--renderer-process-limit=2`
+  - `--no-zygote`
+  - `--metrics-recording-only`
+  - `--disable-extensions` (default enabled)
+  - `--disable-3d-apis`, `--disable-software-rasterizer`, and `--disable-gpu` are
+    enabled by default and can be disabled with
+    `OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS=0` if WebGL/3D usage requires it.
+  - `OPENCLAW_BROWSER_DISABLE_EXTENSIONS=0` re-enables extensions if your workflow
+    depends on them.
+  - `--renderer-process-limit=2` can be changed with
+    `OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT=<N>`; set `0` to use Chromium's
+    default process limit.
+  - plus `--no-sandbox` and `--disable-setuid-sandbox` when `noSandbox` is enabled.
+  - Defaults are the container image baseline; use a custom browser image with a custom
+    entrypoint to change container defaults.
 
 </Accordion>
 
@@ -1564,7 +1605,8 @@ Defaults for Talk mode (macOS/iOS/Android).
 ```
 
 - Voice IDs fall back to `ELEVENLABS_VOICE_ID` or `SAG_VOICE_ID`.
-- `apiKey` falls back to `ELEVENLABS_API_KEY`.
+- `apiKey` and `providers.*.apiKey` accept plaintext strings or SecretRef objects.
+- `ELEVENLABS_API_KEY` fallback applies only when no Talk API key is configured.
 - `voiceAliases` lets Talk directives use friendly names.
 
 ---
@@ -1574,6 +1616,8 @@ Defaults for Talk mode (macOS/iOS/Android).
 ### Tool profiles
 
 `tools.profile` sets a base allowlist before `tools.allow`/`tools.deny`:
+
+Local onboarding defaults new local configs to `tools.profile: "messaging"` when unset (existing explicit profiles are preserved).
 
 | Profile     | Includes                                                                                  |
 | ----------- | ----------------------------------------------------------------------------------------- |
@@ -1761,7 +1805,7 @@ Configures inbound media understanding (image/audio/video):
 
 - `provider`: API provider id (`openai`, `anthropic`, `google`/`gemini`, `groq`, etc.)
 - `model`: model id override
-- `profile` / `preferredProfile`: auth profile selection
+- `profile` / `preferredProfile`: `auth-profiles.json` profile selection
 
 **CLI entry** (`type: "cli"`):
 
@@ -1774,7 +1818,7 @@ Configures inbound media understanding (image/audio/video):
 - `prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`: per-entry overrides.
 - Failures fall back to the next entry.
 
-Provider auth follows standard order: auth profiles → env vars → `models.providers.*.apiKey`.
+Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
 
 </Accordion>
 
@@ -1816,6 +1860,35 @@ Notes:
 - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
 - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"`, visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
 
+### `tools.sessions_spawn`
+
+Controls inline attachment support for `sessions_spawn`.
+
+```json5
+{
+  tools: {
+    sessions_spawn: {
+      attachments: {
+        enabled: false, // opt-in: set true to allow inline file attachments
+        maxTotalBytes: 5242880, // 5 MB total across all files
+        maxFiles: 50,
+        maxFileBytes: 1048576, // 1 MB per file
+        retainOnSessionKeep: false, // keep attachments when cleanup="keep"
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- Attachments are only supported for `runtime: "subagent"`. ACP runtime rejects them.
+- Files are materialized into the child workspace at `.openclaw/attachments/<uuid>/` with a `.manifest.json`.
+- Attachment content is automatically redacted from transcript persistence.
+- Base64 inputs are validated with strict alphabet/padding checks and a pre-decode size guard.
+- File permissions are `0700` for directories and `0600` for files.
+- Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
+
 ### `tools.subagents`
 
 ```json5
@@ -1823,7 +1896,7 @@ Notes:
   agents: {
     defaults: {
       subagents: {
-        model: "minimax/MiniMax-M2.1",
+        model: "minimax/MiniMax-M2.5",
         maxConcurrent: 1,
         runTimeoutSeconds: 900,
         archiveAfterMinutes: 60,
@@ -1889,6 +1962,7 @@ OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `model
 - `models.providers.*.baseUrl`: upstream API base URL.
 - `models.providers.*.headers`: extra static headers for proxy/tenant routing.
 - `models.providers.*.models`: explicit provider model catalog entries.
+- `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
 - `models.bedrockDiscovery`: Bedrock auto-discovery settings root.
 - `models.bedrockDiscovery.enabled`: turn discovery polling on/off.
 - `models.bedrockDiscovery.region`: AWS region for discovery.
@@ -2039,8 +2113,8 @@ Anthropic-compatible, built-in provider. Shortcut: `openclaw onboard --auth-choi
   env: { SYNTHETIC_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.1" },
-      models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.1": { alias: "MiniMax M2.1" } },
+      model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5" },
+      models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.5": { alias: "MiniMax M2.5" } },
     },
   },
   models: {
@@ -2052,8 +2126,8 @@ Anthropic-compatible, built-in provider. Shortcut: `openclaw onboard --auth-choi
         api: "anthropic-messages",
         models: [
           {
-            id: "hf:MiniMaxAI/MiniMax-M2.1",
-            name: "MiniMax M2.1",
+            id: "hf:MiniMaxAI/MiniMax-M2.5",
+            name: "MiniMax M2.5",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -2071,15 +2145,15 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
 
 </Accordion>
 
-<Accordion title="MiniMax M2.1 (direct)">
+<Accordion title="MiniMax M2.5 (direct)">
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "minimax/MiniMax-M2.1" },
+      model: { primary: "minimax/MiniMax-M2.5" },
       models: {
-        "minimax/MiniMax-M2.1": { alias: "Minimax" },
+        "minimax/MiniMax-M2.5": { alias: "Minimax" },
       },
     },
   },
@@ -2092,8 +2166,8 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
         api: "anthropic-messages",
         models: [
           {
-            id: "MiniMax-M2.1",
-            name: "MiniMax M2.1",
+            id: "MiniMax-M2.5",
+            name: "MiniMax M2.5",
             reasoning: false,
             input: ["text"],
             cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
@@ -2113,7 +2187,7 @@ Set `MINIMAX_API_KEY`. Shortcut: `openclaw onboard --auth-choice minimax-api`.
 
 <Accordion title="Local models (LM Studio)">
 
-See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.1 via LM Studio Responses API on serious hardware; keep hosted models merged for fallback.
+See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.5 via LM Studio Responses API on serious hardware; keep hosted models merged for fallback.
 
 </Accordion>
 
@@ -2208,6 +2282,7 @@ See [Plugins](/tools/plugin).
     color: "#FF4500",
     // headless: false,
     // noSandbox: false,
+    // extraArgs: [],
     // executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     // attachOnly: false,
   },
@@ -2222,6 +2297,8 @@ See [Plugins](/tools/plugin).
 - Remote profiles are attach-only (start/stop/reset disabled).
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).
+- `extraArgs` appends extra launch flags to local Chromium startup (for example
+  `--disable-gpu`, window sizing, or debug flags).
 
 ---
 
@@ -2315,6 +2392,7 @@ See [Plugins](/tools/plugin).
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required when browser clients are expected from non-loopback origins.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `ws://` or `wss://`.
+- `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`: client-side break-glass override that allows plaintext `ws://` to trusted private-network IPs; default remains loopback-only for plaintext.
 - `gateway.remote.token` / `.password` are remote-client credential fields. They do not configure gateway auth by themselves.
 - Local gateway call paths can use `gateway.remote.*` as fallback when `gateway.auth.*` is unset.
 - `trustedProxies`: reverse proxy IPs that terminate TLS. Only list proxies you control.
@@ -2561,14 +2639,11 @@ Validation:
 - `source: "file"` id: absolute JSON pointer (for example `"/providers/openai/apiKey"`)
 - `source: "exec"` id pattern: `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`
 
-### Supported fields in config
+### Supported credential surface
 
-- `models.providers.<provider>.apiKey`
-- `skills.entries.<skillKey>.apiKey`
-- `channels.googlechat.serviceAccount`
-- `channels.googlechat.serviceAccountRef`
-- `channels.googlechat.accounts.<accountId>.serviceAccount`
-- `channels.googlechat.accounts.<accountId>.serviceAccountRef`
+- Canonical matrix: [SecretRef Credential Surface](/reference/secretref-credential-surface)
+- `secrets apply` targets supported `openclaw.json` credential paths.
+- `auth-profiles.json` refs are included in runtime resolution and audit coverage.
 
 ### Secret providers config
 
@@ -2606,6 +2681,7 @@ Notes:
 - If `trustedDirs` is configured, the trusted-dir check applies to the resolved target path.
 - `exec` child environment is minimal by default; pass required variables explicitly with `passEnv`.
 - Secret refs are resolved at activation time into an in-memory snapshot, then request paths read the snapshot only.
+- Active-surface filtering applies during activation: unresolved refs on enabled surfaces fail startup/reload, while inactive surfaces are skipped with diagnostics.
 
 ---
 
@@ -2625,8 +2701,8 @@ Notes:
 }
 ```
 
-- Per-agent auth profiles stored at `<agentDir>/auth-profiles.json`.
-- Auth profiles support value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`).
+- Per-agent profiles are stored at `<agentDir>/auth-profiles.json`.
+- `auth-profiles.json` supports value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`).
 - Static runtime credentials come from in-memory resolved snapshots; legacy static `auth.json` entries are scrubbed when discovered.
 - Legacy OAuth imports from `~/.openclaw/credentials/oauth.json`.
 - See [OAuth](/concepts/oauth).
@@ -2652,6 +2728,26 @@ Notes:
 - Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`.
 - Set `logging.file` for a stable path.
 - `consoleLevel` bumps to `debug` when `--verbose`.
+
+---
+
+## CLI
+
+```json5
+{
+  cli: {
+    banner: {
+      taglineMode: "off", // random | default | off
+    },
+  },
+}
+```
+
+- `cli.banner.taglineMode` controls banner tagline style:
+  - `"random"` (default): rotating funny/seasonal taglines.
+  - `"default"`: fixed neutral tagline (`All your chats, one OpenClaw.`).
+  - `"off"`: no tagline text (banner title/version still shown).
+- To hide the entire banner (not just taglines), set env `OPENCLAW_HIDE_BANNER=1`.
 
 ---
 
@@ -2803,7 +2899,7 @@ Split config into multiple files:
 - Array of files: deep-merged in order (later overrides earlier).
 - Sibling keys: merged after includes (override included values).
 - Nested includes: up to 10 levels deep.
-- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of the main config file). Absolute/`../` forms are allowed only when they still resolve inside that boundary.
+- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary.
 - Errors: clear messages for missing files, parse errors, and circular includes.
 
 ---

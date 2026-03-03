@@ -26,21 +26,25 @@ function createDispatcher(): ReplyDispatcher {
   };
 }
 
+function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>) {
+  return createAcpDispatchDeliveryCoordinator({
+    cfg: createAcpTestConfig(),
+    ctx: buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+    }),
+    dispatcher: createDispatcher(),
+    inboundAudio: false,
+    shouldRouteToOriginating: false,
+    ...(onReplyStart ? { onReplyStart } : {}),
+  });
+}
+
 describe("createAcpDispatchDeliveryCoordinator", () => {
   it("starts reply lifecycle only once when called directly and through deliver", async () => {
     const onReplyStart = vi.fn(async () => {});
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher: createDispatcher(),
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-      onReplyStart,
-    });
+    const coordinator = createCoordinator(onReplyStart);
 
     await coordinator.startReplyLifecycle();
     await coordinator.deliver("final", { text: "hello" });
@@ -52,18 +56,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
   it("starts reply lifecycle once when deliver triggers first", async () => {
     const onReplyStart = vi.fn(async () => {});
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher: createDispatcher(),
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-      onReplyStart,
-    });
+    const coordinator = createCoordinator(onReplyStart);
 
     await coordinator.deliver("final", { text: "hello" });
     await coordinator.startReplyLifecycle();
@@ -73,18 +66,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
   it("does not start reply lifecycle for empty payload delivery", async () => {
     const onReplyStart = vi.fn(async () => {});
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher: createDispatcher(),
-      inboundAudio: false,
-      shouldRouteToOriginating: false,
-      onReplyStart,
-    });
+    const coordinator = createCoordinator(onReplyStart);
 
     await coordinator.deliver("final", {});
 

@@ -1,85 +1,23 @@
 import Foundation
 import OpenClawKit
-import os
 import Testing
 @testable import OpenClaw
 
 @Suite struct GatewayChannelRequestTests {
-    private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
-        private let requestSendDelayMs: Int
-        private let connectRequestID = OSAllocatedUnfairLock<String?>(initialState: nil)
-        private let pendingReceiveHandler =
-            OSAllocatedUnfairLock<(@Sendable (Result<URLSessionWebSocketTask.Message, Error>)
-                    -> Void)?>(initialState: nil)
-        private let sendCount = OSAllocatedUnfairLock(initialState: 0)
-
-        var state: URLSessionTask.State = .suspended
-
-        init(requestSendDelayMs: Int) {
-            self.requestSendDelayMs = requestSendDelayMs
-        }
-
-        func resume() {
-            self.state = .running
-        }
-
-        func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-            _ = (closeCode, reason)
-            self.state = .canceling
-            let handler = self.pendingReceiveHandler.withLock { handler in
-                defer { handler = nil }
-                return handler
-            }
-            handler?(Result<URLSessionWebSocketTask.Message, Error>.failure(URLError(.cancelled)))
-        }
-
-        func send(_ message: URLSessionWebSocketTask.Message) async throws {
-            _ = message
-            let currentSendCount = self.sendCount.withLock { count in
-                defer { count += 1 }
-                return count
-            }
-
-            // First send is the connect handshake. Second send is the request frame.
-            if currentSendCount == 0 {
-                if let id = GatewayWebSocketTestSupport.connectRequestID(from: message) {
-                    self.connectRequestID.withLock { $0 = id }
-                }
-            }
-            if currentSendCount == 1 {
-                try await Task.sleep(nanoseconds: UInt64(self.requestSendDelayMs) * 1_000_000)
-                throw URLError(.cannotConnectToHost)
-            }
-        }
-
-        func receive() async throws -> URLSessionWebSocketTask.Message {
-            let id = self.connectRequestID.withLock { $0 } ?? "connect"
-            return .data(GatewayWebSocketTestSupport.connectOkData(id: id))
-        }
-
-        func receive(
-            completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
-        {
-            self.pendingReceiveHandler.withLock { $0 = completionHandler }
-        }
-    }
-
-    private final class FakeWebSocketSession: WebSocketSessioning, @unchecked Sendable {
-        private let requestSendDelayMs: Int
-
-        init(requestSendDelayMs: Int) {
-            self.requestSendDelayMs = requestSendDelayMs
-        }
-
-        func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-            _ = url
-            let task = FakeWebSocketTask(requestSendDelayMs: self.requestSendDelayMs)
-            return WebSocketTaskBox(task: task)
-        }
+    private func makeSession(requestSendDelayMs: Int) -> GatewayTestWebSocketSession {
+        GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { _, _, sendIndex in
+                        guard sendIndex == 1 else { return }
+                        try await Task.sleep(nanoseconds: UInt64(requestSendDelayMs) * 1_000_000)
+                        throw URLError(.cannotConnectToHost)
+                    })
+            })
     }
 
     @Test func requestTimeoutThenSendFailureDoesNotDoubleResume() async throws {
-        let session = FakeWebSocketSession(requestSendDelayMs: 100)
+        let session = self.makeSession(requestSendDelayMs: 100)
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,

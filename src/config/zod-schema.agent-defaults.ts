@@ -18,6 +18,9 @@ export const AgentDefaultsSchema = z
   .object({
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
+    pdfModel: AgentModelSchema.optional(),
+    pdfMaxBytesMb: z.number().positive().optional(),
+    pdfMaxPages: z.number().int().positive().optional(),
     models: z
       .record(
         z.string(),

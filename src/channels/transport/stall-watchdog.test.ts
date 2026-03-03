@@ -1,17 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 import { createArmableStallWatchdog } from "./stall-watchdog.js";
 
+function createTestWatchdog(
+  onTimeout: Parameters<typeof createArmableStallWatchdog>[0]["onTimeout"],
+) {
+  return createArmableStallWatchdog({
+    label: "test-watchdog",
+    timeoutMs: 1_000,
+    checkIntervalMs: 100,
+    onTimeout,
+  });
+}
+
 describe("createArmableStallWatchdog", () => {
   it("fires onTimeout once when armed and idle exceeds timeout", async () => {
     vi.useFakeTimers();
     try {
       const onTimeout = vi.fn();
-      const watchdog = createArmableStallWatchdog({
-        label: "test-watchdog",
-        timeoutMs: 1_000,
-        checkIntervalMs: 100,
-        onTimeout,
-      });
+      const watchdog = createTestWatchdog(onTimeout);
 
       watchdog.arm();
       await vi.advanceTimersByTimeAsync(1_500);
@@ -28,12 +34,7 @@ describe("createArmableStallWatchdog", () => {
     vi.useFakeTimers();
     try {
       const onTimeout = vi.fn();
-      const watchdog = createArmableStallWatchdog({
-        label: "test-watchdog",
-        timeoutMs: 1_000,
-        checkIntervalMs: 100,
-        onTimeout,
-      });
+      const watchdog = createTestWatchdog(onTimeout);
 
       watchdog.arm();
       await vi.advanceTimersByTimeAsync(500);
@@ -51,12 +52,7 @@ describe("createArmableStallWatchdog", () => {
     vi.useFakeTimers();
     try {
       const onTimeout = vi.fn();
-      const watchdog = createArmableStallWatchdog({
-        label: "test-watchdog",
-        timeoutMs: 1_000,
-        checkIntervalMs: 100,
-        onTimeout,
-      });
+      const watchdog = createTestWatchdog(onTimeout);
 
       watchdog.arm();
       await vi.advanceTimersByTimeAsync(700);
