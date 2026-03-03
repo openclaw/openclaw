@@ -168,8 +168,11 @@ export async function runEmbeddedAttempt(
   process.chdir(effectiveWorkspace);
   try {
     const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
+    // Always discover skills from the real agent workspace, not the sandbox cwd.
+    // In read-only sandbox mode, the sandbox workspace may not contain workspace skills.
+    const skillWorkspace = resolvedWorkspace;
     const skillEntries = shouldLoadSkillEntries
-      ? loadWorkspaceSkillEntries(effectiveWorkspace)
+      ? loadWorkspaceSkillEntries(skillWorkspace, { config: params.config })
       : [];
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
@@ -185,7 +188,7 @@ export async function runEmbeddedAttempt(
       skillsSnapshot: params.skillsSnapshot,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
-      workspaceDir: effectiveWorkspace,
+      workspaceDir: skillWorkspace,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

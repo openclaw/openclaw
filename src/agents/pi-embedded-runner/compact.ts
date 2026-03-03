@@ -190,8 +190,10 @@ export async function compactEmbeddedPiSessionDirect(
   process.chdir(effectiveWorkspace);
   try {
     const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
+    // Keep skill discovery anchored to the real workspace when sandbox cwd differs.
+    const skillWorkspace = resolvedWorkspace;
     const skillEntries = shouldLoadSkillEntries
-      ? loadWorkspaceSkillEntries(effectiveWorkspace)
+      ? loadWorkspaceSkillEntries(skillWorkspace, { config: params.config })
       : [];
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
@@ -206,7 +208,7 @@ export async function compactEmbeddedPiSessionDirect(
       skillsSnapshot: params.skillsSnapshot,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
-      workspaceDir: effectiveWorkspace,
+      workspaceDir: skillWorkspace,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
