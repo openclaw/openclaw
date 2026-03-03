@@ -205,7 +205,7 @@ Exa provides neural search that understands meaning, not just keywords. It retur
 **Environment alternative:** set `EXA_API_KEY` in the Gateway environment.
 For a gateway install, put it in `~/.openclaw/.env`.
 
-### Notes
+### Exa notes
 
 - Exa's neural search mode understands query intent and finds semantically relevant results even without exact keyword matches.
 - The `type` option controls the search strategy: `"auto"` lets Exa choose, `"neural"` forces semantic search, `"keyword"` forces traditional matching.
