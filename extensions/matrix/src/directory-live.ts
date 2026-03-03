@@ -1,4 +1,5 @@
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 import { resolveMatrixAuth } from "./matrix/client.js";
 
 type MatrixUserResult = {
@@ -38,13 +39,14 @@ async function fetchMatrixJson<T>(params: {
   method?: "GET" | "POST";
   body?: unknown;
 }): Promise<T> {
-  const res = await fetch(`${params.homeserver}${params.path}`, {
+  const res = await fetchWithSsrFGuard(`${params.homeserver}${params.path}`, {
     method: params.method ?? "GET",
     headers: {
       Authorization: `Bearer ${params.accessToken}`,
       "Content-Type": "application/json",
     },
     body: params.body ? JSON.stringify(params.body) : undefined,
+    auditContext: "matrix.directory",
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -174,7 +176,8 @@ export async function listMatrixDirectoryGroupsLive(
   }
 
   if (query.startsWith("!")) {
-    return [createGroupDirectoryEntry({ id: query, name: query })];
+    const originalId = params.query?.trim() ?? query;
+    return [createGroupDirectoryEntry({ id: originalId, name: originalId })];
   }
 
   const joined = await fetchMatrixJson<MatrixJoinedRoomsResponse>({
