@@ -1064,6 +1064,39 @@ type TaskOutcome =
 
 ---
 
+### 22. Harness-Aware Agent Execution ✅
+
+**Purpose:** Harness 스펙(steps + verificationChecklist) 준수를 시스템적으로 추적. 에이전트가 step/check를 보고하면 Task Hub에서 자동 verification 관리.
+
+**Tools:**
+
+| Tool                   | Description                                       |
+| ---------------------- | ------------------------------------------------- |
+| `harness_report_step`  | 스펙 step 완료/스킵 보고                          |
+| `harness_report_check` | 검증 체크리스트 항목 결과 보고 (자동 passed 전환) |
+
+**Files:**
+
+| File                                    | Purpose                             |
+| --------------------------------------- | ----------------------------------- |
+| `src/agents/tools/harness-tool.ts`      | 도구 구현                           |
+| `src/agents/openclaw-tools.ts`          | 도구 등록                           |
+| `src/agents/tools/task-file-io.ts`      | TaskFile에 harness 필드 추가        |
+| `src/agents/tools/task-blocking.ts`     | task_backlog_add 스키마 확장        |
+| `src/infra/task-continuation-runner.ts` | harness protocol 프롬프트 자동 주입 |
+
+**How it works:**
+
+1. Task Hub Launch → `delegateToAgent()`에 `harnessProjectSlug`, `harnessItemId` 전달
+2. Gateway `task_backlog_add` → TaskFile에 harness 필드 직렬화
+3. `task-continuation-runner`가 pickup prompt에 harness protocol 자동 주입
+4. 에이전트가 `harness_report_step/check` 호출 → Task Hub Verify API
+5. 전체 checks 통과 시 `verification.status = "passed"` 자동 전환
+
+**상세 설계 문서:** [custom-docs/HARNESS-EXECUTION-DESIGN.md](./custom-docs/HARNESS-EXECUTION-DESIGN.md)
+
+---
+
 ## Upstream Merge History
 
 | Date       | Version    | Commit      | Notes                                                                                                                                           |

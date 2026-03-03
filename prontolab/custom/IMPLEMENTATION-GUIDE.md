@@ -1,7 +1,7 @@
 # Sisyphus 패턴 구현 가이드
 
 > 이 문서만 보고 순서대로 실행하면 구현이 완료됨.
-> 모든 변경은 서버(`ssh -p 2222 server@ssh.speculatingwook.online`)에서 수행.
+> 모든 변경은 서버에서 수행.
 >
 > 관련 문서: [SISYPHUS-DESIGN.md](./SISYPHUS-DESIGN.md) | [REFERENCES.md](./REFERENCES.md)
 >
@@ -11,7 +11,7 @@
 
 ## 전제 조건
 
-- SSH 접속 가능: `ssh -p 2222 server@ssh.speculatingwook.online`
+- SSH 접속 가능 (내부 네트워크)
 - 설정 파일: `~/.openclaw/openclaw.json`
 - Workspace: `~/.openclaw/workspace-{agentId}/`
 

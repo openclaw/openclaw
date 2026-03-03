@@ -175,14 +175,14 @@ subagents?: {
 
 ### 3.3 서버 환경
 
-| 항목         | 값                                              |
-| ------------ | ----------------------------------------------- |
-| 서버         | Mac Mini (Yoonui-Macmini)                       |
-| SSH          | `ssh -p 2222 server@ssh.speculatingwook.online` |
-| 설정 파일    | `~/.openclaw/openclaw.json`                     |
-| Workspace    | `~/.openclaw/workspace-{agentId}/`              |
-| Gateway 포트 | 18789                                           |
-| Task-Hub     | Docker (OrbStack), port 3102→3000               |
+| 항목         | 값                                 |
+| ------------ | ---------------------------------- |
+| 서버         | Mac Mini (Yoonui-Macmini)          |
+| SSH          | (내부 네트워크 — 별도 공유)        |
+| 설정 파일    | `~/.openclaw/openclaw.json`        |
+| Workspace    | `~/.openclaw/workspace-{agentId}/` |
+| Gateway 포트 | 18789                              |
+| Task-Hub     | Docker (OrbStack), port 3102→3000  |
 
 ---
 
