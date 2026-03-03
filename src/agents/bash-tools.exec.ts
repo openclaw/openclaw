@@ -424,6 +424,25 @@ export function createExecTool(
         });
       }
 
+      const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
+      const gatewayInterceptResult = await maybeInterceptGatewayManagementExec({
+        host,
+        command: params.command,
+        cwd: workdir,
+        env,
+        sessionKey: defaults?.sessionKey,
+      });
+      if (gatewayInterceptResult) {
+        const text = gatewayInterceptResult.content.find((part) => part.type === "text")?.text;
+        if (text) {
+          return {
+            ...gatewayInterceptResult,
+            content: [{ type: "text", text: `${getWarningText()}${text}` }],
+          };
+        }
+        return gatewayInterceptResult;
+      }
+
       if (host === "gateway" && !bypassApprovals) {
         const gatewayResult = await processGatewayAllowlist({
           command: params.command,
@@ -462,26 +481,7 @@ export function createExecTool(
       const effectiveTimeout = backgroundTimeoutBypass
         ? null
         : (explicitTimeoutSec ?? defaultTimeoutSec);
-      const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
-
-      const gatewayInterceptResult = await maybeInterceptGatewayManagementExec({
-        host,
-        command: params.command,
-        cwd: workdir,
-        env,
-        sessionKey: defaults?.sessionKey,
-      });
-      if (gatewayInterceptResult) {
-        const text = gatewayInterceptResult.content.find((part) => part.type === "text")?.text;
-        if (text) {
-          return {
-            ...gatewayInterceptResult,
-            content: [{ type: "text", text: `${getWarningText()}${text}` }],
-          };
-        }
-        return gatewayInterceptResult;
-      }
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.

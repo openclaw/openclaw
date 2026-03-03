@@ -21,6 +21,10 @@ const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({
   coalesced: false,
   cooldownMsApplied: 0,
 }));
+const processGatewayAllowlistMock = vi.fn(async () => ({
+  pendingResult: null,
+  execCommandOverride: undefined,
+}));
 
 vi.mock("../config/commands.js", () => ({
   isRestartEnabled: (...args: Parameters<typeof isRestartEnabledMock>) =>
@@ -47,6 +51,15 @@ vi.mock("../infra/restart.js", () => ({
     scheduleGatewaySigusr1RestartMock(...args),
 }));
 
+vi.mock("./bash-tools.exec-host-gateway.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("./bash-tools.exec-host-gateway.js")>();
+  return {
+    ...mod,
+    processGatewayAllowlist: (...args: Parameters<typeof processGatewayAllowlistMock>) =>
+      processGatewayAllowlistMock(...args),
+  };
+});
+
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let detectGatewayManagementExecCommand: typeof import("./bash-tools.exec-gateway-management.js").detectGatewayManagementExecCommand;
 
@@ -72,6 +85,10 @@ beforeEach(() => {
     mode: "emit",
     coalesced: false,
     cooldownMsApplied: 0,
+  });
+  processGatewayAllowlistMock.mockResolvedValue({
+    pendingResult: null,
+    execCommandOverride: undefined,
   });
   resetProcessRegistryForTests();
 });
@@ -392,11 +409,63 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
+  it("does not detect systemctl default unit when current profile is non-default", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --user restart openclaw-gateway.service",
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_PROFILE: "dev" },
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("detects systemctl unit for the active profile", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --user restart openclaw-gateway-dev.service",
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_PROFILE: "dev" },
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "systemctl",
+      hard: false,
+      complex: false,
+    });
+  });
+
   it("detects launchctl kickstart commands for gateway labels", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "launchctl kickstart -k gui/501/ai.openclaw.gateway",
       cwd: process.cwd(),
       env: process.env,
+      platform: "darwin",
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "launchctl",
+      hard: false,
+      complex: false,
+    });
+  });
+
+  it("does not detect launchctl default label when current profile is non-default", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "launchctl kickstart -k gui/501/ai.openclaw.gateway",
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_PROFILE: "dev" },
+      platform: "darwin",
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("detects launchctl label for the active profile", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "launchctl kickstart -k gui/501/ai.openclaw.dev",
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_PROFILE: "dev" },
       platform: "darwin",
     });
 
@@ -424,6 +493,31 @@ describe("detectGatewayManagementExecCommand", () => {
       command: 'schtasks /Run /TN "OpenClaw Gateway"',
       cwd: process.cwd(),
       env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "schtasks",
+      hard: false,
+      complex: false,
+    });
+  });
+
+  it("does not detect schtasks default task when current profile is non-default", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: 'schtasks /Run /TN "OpenClaw Gateway"',
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_PROFILE: "dev" },
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("detects schtasks task name for the active profile", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: 'schtasks /Run /TN "OpenClaw Gateway (dev)"',
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_PROFILE: "dev" },
     });
 
     expect(detected).toEqual({
@@ -569,6 +663,29 @@ describe("exec gateway management interception", () => {
     );
     expect(listRunningSessions()).toHaveLength(0);
     expect(listFinishedSessions()).toHaveLength(0);
+  });
+
+  it("intercepts gateway restart before approval handoff", async () => {
+    const gatewayAllowlistCallsBefore = processGatewayAllowlistMock.mock.calls.length;
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "always",
+      sessionKey: "agent:main:telegram:123:thread:9",
+    });
+
+    const result = await tool.execute("call1-approval", {
+      command: "openclaw gateway restart",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+    });
+    expect(processGatewayAllowlistMock.mock.calls.length).toBe(gatewayAllowlistCallsBefore);
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "exec:gateway-restart" }),
+    );
   });
 
   it("intercepts gateway restart --json and preserves json output shape", async () => {

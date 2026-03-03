@@ -161,10 +161,12 @@ function normalizeSystemdUnitToken(token: string): string {
 
 function collectGatewaySystemdUnitBases(env: NodeJS.ProcessEnv): Set<string> {
   const units = new Set<string>();
-  units.add(resolveGatewaySystemdServiceName().toLowerCase());
-  units.add(resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE).toLowerCase());
-  for (const legacy of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {
-    units.add(legacy.toLowerCase());
+  const currentProfile = normalizeGatewayProfile(env.OPENCLAW_PROFILE) ?? undefined;
+  units.add(resolveGatewaySystemdServiceName(currentProfile).toLowerCase());
+  if (!currentProfile) {
+    for (const legacy of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {
+      units.add(legacy.toLowerCase());
+    }
   }
 
   const configured = normalizeSystemdUnitToken(env.OPENCLAW_SYSTEMD_UNIT ?? "");
@@ -187,8 +189,8 @@ function isGatewaySystemdUnitToken(token: string, env: NodeJS.ProcessEnv): boole
 
 function collectGatewayLaunchdLabels(env: NodeJS.ProcessEnv): Set<string> {
   const labels = new Set<string>();
-  labels.add(resolveGatewayLaunchAgentLabel().toLowerCase());
-  labels.add(resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE).toLowerCase());
+  const currentProfile = normalizeGatewayProfile(env.OPENCLAW_PROFILE) ?? undefined;
+  labels.add(resolveGatewayLaunchAgentLabel(currentProfile).toLowerCase());
 
   const configured = normalizeLower(env.OPENCLAW_LAUNCHD_LABEL);
   if (configured) {
@@ -228,10 +230,12 @@ function isGatewayLaunchctlTarget(token: string, env: NodeJS.ProcessEnv): boolea
 
 function collectGatewayWindowsTaskNames(env: NodeJS.ProcessEnv): Set<string> {
   const names = new Set<string>();
-  names.add(resolveGatewayWindowsTaskName().toLowerCase());
-  names.add(resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE).toLowerCase());
-  for (const legacy of LEGACY_GATEWAY_WINDOWS_TASK_NAMES) {
-    names.add(legacy.toLowerCase());
+  const currentProfile = normalizeGatewayProfile(env.OPENCLAW_PROFILE) ?? undefined;
+  names.add(resolveGatewayWindowsTaskName(currentProfile).toLowerCase());
+  if (!currentProfile) {
+    for (const legacy of LEGACY_GATEWAY_WINDOWS_TASK_NAMES) {
+      names.add(legacy.toLowerCase());
+    }
   }
 
   const configured = normalizeLower(env.OPENCLAW_WINDOWS_TASK_NAME);
