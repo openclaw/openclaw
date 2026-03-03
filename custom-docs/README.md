@@ -2,20 +2,31 @@
 
 > prontoclaw 포크의 커스텀 기능 설계 및 구현 문서
 
-## 문서 목록
+## planning/ — 진행 중인 설계 문서
 
-| 문서                                                                                   | 내용                                                              | 상태                                    |
-| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------- |
-| [SISYPHUS-DESIGN.md](./SISYPHUS-DESIGN.md)                                             | Sisyphus 패턴 sub-agent orchestration 설계                        | 핵심 구조 반영, 운영 문서로 유지        |
-| [IMPLEMENTATION-GUIDE.md](./IMPLEMENTATION-GUIDE.md)                                   | Sisyphus 패턴 단계별 구현 가이드                                  | 주요 단계 반영 완료, 검증 기준 문서     |
-| [REFERENCES.md](./REFERENCES.md)                                                       | 소스 코드 참조, 설정 스냅샷, 서버 환경                            | 참조 문서                               |
-| [TASK-STEPS-DESIGN.md](./TASK-STEPS-DESIGN.md)                                         | Task Steps + Event-Based Continuation 설계                        | 핵심 로직 구현, 모니터링 연동 확장 가능 |
-| [OPERATIONS-RUNBOOK.md](./OPERATIONS-RUNBOOK.md)                                       | Upstream sync/버전 스큐 방지 운영 런북                            | 운영 문서                               |
-| [WORKSESSION-COLLAB-DESIGN.md](./WORKSESSION-COLLAB-DESIGN.md)                         | `workSessionId` 기반 3인+ 협업/Conversations 구조 설계            | 설계 문서 (구현 전 검토용)              |
-| [SYSTEM-ARCHITECTURE.md](./SYSTEM-ARCHITECTURE.md)                                     | 시스템 아키텍처 & 데이터 플로우 (Mermaid 다이어그램)              | 참조 문서                               |
-| [AGENT-COLLABORATION-V2.md](./AGENT-COLLABORATION-V2.md)                               | Agent Collaboration v2 아키텍처 (Handler/Observer, ChannelRouter) | 구현 완료                               |
-| [HARNESS-EXECUTION-DESIGN.md](./HARNESS-EXECUTION-DESIGN.md)                           | Harness-Aware Agent Execution 설계                                | 구현 완료                               |
-| [deferred-fallback-discord-default-bot.md](./deferred-fallback-discord-default-bot.md) | Discord default bot fallback 설계                                 | 참조 문서                               |
+| 문서                                                                                            | 내용                                                   | 상태         |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------ |
+| [OUROBOROS-INTEGRATION-DESIGN.md](./planning/OUROBOROS-INTEGRATION-DESIGN.md)                   | Ouroboros 6-Phase 분리 아키텍처 적용 설계              | 설계 검토 중 |
+| [WORKSESSION-COLLAB-DESIGN.md](./planning/WORKSESSION-COLLAB-DESIGN.md)                         | `workSessionId` 기반 3인+ 협업/Conversations 구조 설계 | 설계 검토 중 |
+| [deferred-fallback-discord-default-bot.md](./planning/deferred-fallback-discord-default-bot.md) | Discord default bot fallback 설계                      | 설계 검토 중 |
+
+## planning/completed/ — 구현 완료된 설계 문서
+
+| 문서                                                                            | 내용                                       |
+| ------------------------------------------------------------------------------- | ------------------------------------------ |
+| [HARNESS-EXECUTION-DESIGN.md](./planning/completed/HARNESS-EXECUTION-DESIGN.md) | Harness-Aware Agent Execution 설계         |
+| [AGENT-COLLABORATION-V2.md](./planning/completed/AGENT-COLLABORATION-V2.md)     | Agent Collaboration v2 아키텍처            |
+| [SISYPHUS-DESIGN.md](./planning/completed/SISYPHUS-DESIGN.md)                   | Sisyphus 패턴 sub-agent orchestration 설계 |
+| [TASK-STEPS-DESIGN.md](./planning/completed/TASK-STEPS-DESIGN.md)               | Task Steps + Event-Based Continuation 설계 |
+| [IMPLEMENTATION-GUIDE.md](./planning/completed/IMPLEMENTATION-GUIDE.md)         | Sisyphus 패턴 단계별 구현 가이드           |
+
+## 참조 문서
+
+| 문서                                               | 내용                                   |
+| -------------------------------------------------- | -------------------------------------- |
+| [REFERENCES.md](./REFERENCES.md)                   | 소스 코드 참조, 설정 스냅샷, 서버 환경 |
+| [OPERATIONS-RUNBOOK.md](./OPERATIONS-RUNBOOK.md)   | Upstream sync/버전 스큐 방지 운영 런북 |
+| [SYSTEM-ARCHITECTURE.md](./SYSTEM-ARCHITECTURE.md) | 시스템 아키텍처 & 데이터 플로우        |
 
 ## improvements/ — 아키텍처 개선 설계 문서
 
