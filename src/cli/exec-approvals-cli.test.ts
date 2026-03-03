@@ -119,6 +119,39 @@ describe("exec approvals CLI", () => {
     );
   });
 
+  it("expands explicit wildcard add into concrete agents", async () => {
+    localSnapshot.file = {
+      version: 1,
+      agents: {
+        main: { allowlist: [] },
+        minimax: { allowlist: [] },
+      },
+    };
+    const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
+    saveExecApprovals.mockClear();
+
+    await runApprovalsCommand(["approvals", "allowlist", "add", "--agent", "*", "/usr/bin/uname"]);
+
+    expect(saveExecApprovals).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          main: expect.objectContaining({
+            allowlist: expect.arrayContaining([
+              expect.objectContaining({ pattern: "/usr/bin/uname" }),
+            ]),
+          }),
+          minimax: expect.objectContaining({
+            allowlist: expect.arrayContaining([
+              expect.objectContaining({ pattern: "/usr/bin/uname" }),
+            ]),
+          }),
+        }),
+      }),
+    );
+    const saved = saveExecApprovals.mock.calls.at(-1)?.[0];
+    expect(saved?.agents?.["*"]).toBeUndefined();
+  });
+
   it("removes wildcard allowlist entry and prunes empty agent", async () => {
     localSnapshot.file = {
       version: 1,
@@ -141,5 +174,35 @@ describe("exec approvals CLI", () => {
       }),
     );
     expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("expands explicit wildcard remove into concrete agents", async () => {
+    localSnapshot.file = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [{ pattern: "/usr/bin/uname", lastUsedAt: Date.now() }],
+        },
+        minimax: {
+          allowlist: [{ pattern: "/usr/bin/uname", lastUsedAt: Date.now() }],
+        },
+      },
+    };
+    const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
+    saveExecApprovals.mockClear();
+
+    await runApprovalsCommand([
+      "approvals",
+      "allowlist",
+      "remove",
+      "--agent",
+      "*",
+      "/usr/bin/uname",
+    ]);
+
+    const saved = saveExecApprovals.mock.calls.at(-1)?.[0];
+    expect(saved?.agents?.main).toBeUndefined();
+    expect(saved?.agents?.minimax).toBeUndefined();
+    expect(saved?.agents?.["*"]).toBeUndefined();
   });
 });

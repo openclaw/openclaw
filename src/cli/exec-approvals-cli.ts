@@ -247,6 +247,19 @@ function resolveAgentKey(value?: string | null): string {
   return trimmed ? trimmed : "*";
 }
 
+function resolveAllowlistAgentKeys(file: ExecApprovalsFile, value?: string | null): string[] {
+  const resolved = resolveAgentKey(value);
+  if (resolved !== "*") {
+    return [resolved];
+  }
+  const isExplicitWildcard = value?.trim() === "*";
+  if (!isExplicitWildcard) {
+    return [resolved];
+  }
+  const concreteAgentKeys = Object.keys(file.agents ?? {}).filter((agentId) => agentId !== "*");
+  return concreteAgentKeys.length > 0 ? concreteAgentKeys : [resolved];
+}
+
 function normalizeAllowlistEntry(entry: { pattern?: string } | null): string | null {
   const pattern = entry?.pattern?.trim() ?? "";
   return pattern ? pattern : null;
@@ -276,26 +289,35 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
   targetLabel: string;
   baseHash: string;
   file: ExecApprovalsFile;
-  agentKey: string;
-  agent: ExecApprovalsAgent;
-  allowlistEntries: NonNullable<ExecApprovalsAgent["allowlist"]>;
+  targets: Array<{
+    agentKey: string;
+    agent: ExecApprovalsAgent;
+    allowlistEntries: NonNullable<ExecApprovalsAgent["allowlist"]>;
+  }>;
 }> {
   const { snapshot, nodeId, source, targetLabel, baseHash } =
     await loadWritableSnapshotTarget(opts);
   const file = snapshot.file ?? { version: 1 };
   file.version = 1;
 
-  const agentKey = resolveAgentKey(opts.agent);
-  const agent = ensureAgent(file, agentKey);
-  const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
+  const agentKeys = resolveAllowlistAgentKeys(file, opts.agent);
+  const targets = agentKeys.map((agentKey) => {
+    const agent = ensureAgent(file, agentKey);
+    const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
+    return { agentKey, agent, allowlistEntries };
+  });
 
-  return { nodeId, source, targetLabel, baseHash, file, agentKey, agent, allowlistEntries };
+  return { nodeId, source, targetLabel, baseHash, file, targets };
 }
 
-type WritableAllowlistAgentContext = Awaited<ReturnType<typeof loadWritableAllowlistAgent>> & {
-  trimmedPattern: string;
-};
-type AllowlistMutation = (context: WritableAllowlistAgentContext) => boolean | Promise<boolean>;
+type WritableAllowlistMutationContext = Omit<
+  Awaited<ReturnType<typeof loadWritableAllowlistAgent>>,
+  "targets"
+> &
+  Awaited<ReturnType<typeof loadWritableAllowlistAgent>>["targets"][number] & {
+    trimmedPattern: string;
+  };
+type AllowlistMutation = (context: WritableAllowlistMutationContext) => boolean | Promise<boolean>;
 
 async function runAllowlistMutation(
   pattern: string,
@@ -305,7 +327,11 @@ async function runAllowlistMutation(
   try {
     const trimmedPattern = requireTrimmedNonEmpty(pattern, "Pattern required.");
     const context = await loadWritableAllowlistAgent(opts);
-    const shouldSave = await mutate({ ...context, trimmedPattern });
+    let shouldSave = false;
+    for (const target of context.targets) {
+      const changed = await mutate({ ...context, ...target, trimmedPattern });
+      shouldSave = shouldSave || changed;
+    }
     if (!shouldSave) {
       return;
     }
