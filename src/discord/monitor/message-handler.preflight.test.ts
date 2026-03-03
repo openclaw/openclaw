@@ -83,6 +83,187 @@ describe("preflightDiscordMessage", () => {
     transcribeFirstAudioMock.mockReset();
   });
 
+  it("drops bound-thread bot system messages to prevent ACP self-loop", async () => {
+    const threadBinding = createThreadBinding({
+      targetKind: "acp",
+      targetSessionKey: "agent:main:acp:discord-thread-1",
+    });
+    const threadId = "thread-system-1";
+    const parentId = "channel-parent-1";
+    const client = {
+      fetchChannel: async (channelId: string) => {
+        if (channelId === threadId) {
+          return {
+            id: threadId,
+            type: ChannelType.PublicThread,
+            name: "focus",
+            parentId,
+            ownerId: "owner-1",
+          };
+        }
+        if (channelId === parentId) {
+          return {
+            id: parentId,
+            type: ChannelType.GuildText,
+            name: "general",
+          };
+        }
+        return null;
+      },
+    } as unknown as import("@buape/carbon").Client;
+    const message = {
+      id: "m-system-1",
+      content:
+        "⚙️ codex-acp session active (auto-unfocus in 24h). Messages here go directly to this session.",
+      timestamp: new Date().toISOString(),
+      channelId: threadId,
+      attachments: [],
+      mentionedUsers: [],
+      mentionedRoles: [],
+      mentionedEveryone: false,
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "OpenClaw",
+      },
+    } as unknown as import("@buape/carbon").Message;
+
+    const result = await preflightDiscordMessage({
+      cfg: {
+        session: {
+          mainKey: "main",
+          scope: "per-sender",
+        },
+      } as import("../../config/config.js").OpenClawConfig,
+      discordConfig: {
+        allowBots: true,
+      } as NonNullable<import("../../config/config.js").OpenClawConfig["channels"]>["discord"],
+      accountId: "default",
+      token: "token",
+      runtime: {} as import("../../runtime.js").RuntimeEnv,
+      botUserId: "openclaw-bot",
+      guildHistories: new Map(),
+      historyLimit: 0,
+      mediaMaxBytes: 1_000_000,
+      textLimit: 2_000,
+      replyToMode: "all",
+      dmEnabled: true,
+      groupDmEnabled: true,
+      ackReactionScope: "direct",
+      groupPolicy: "open",
+      threadBindings: {
+        getByThreadId: (id: string) => (id === threadId ? threadBinding : undefined),
+      } as import("./thread-bindings.js").ThreadBindingManager,
+      data: {
+        channel_id: threadId,
+        guild_id: "guild-1",
+        guild: {
+          id: "guild-1",
+          name: "Guild One",
+        },
+        author: message.author,
+        message,
+      } as unknown as import("./listeners.js").DiscordMessageEvent,
+      client,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps bound-thread regular bot messages flowing when allowBots=true", async () => {
+    const threadBinding = createThreadBinding({
+      targetKind: "acp",
+      targetSessionKey: "agent:main:acp:discord-thread-1",
+    });
+    const threadId = "thread-bot-regular-1";
+    const parentId = "channel-parent-regular-1";
+    const client = {
+      fetchChannel: async (channelId: string) => {
+        if (channelId === threadId) {
+          return {
+            id: threadId,
+            type: ChannelType.PublicThread,
+            name: "focus",
+            parentId,
+            ownerId: "owner-1",
+          };
+        }
+        if (channelId === parentId) {
+          return {
+            id: parentId,
+            type: ChannelType.GuildText,
+            name: "general",
+          };
+        }
+        return null;
+      },
+    } as unknown as import("@buape/carbon").Client;
+    const message = {
+      id: "m-bot-regular-1",
+      content: "here is tool output chunk",
+      timestamp: new Date().toISOString(),
+      channelId: threadId,
+      attachments: [],
+      mentionedUsers: [],
+      mentionedRoles: [],
+      mentionedEveryone: false,
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+    } as unknown as import("@buape/carbon").Message;
+
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) => (ref.conversationId === threadId ? threadBinding : null),
+    });
+
+    const result = await preflightDiscordMessage({
+      cfg: {
+        session: {
+          mainKey: "main",
+          scope: "per-sender",
+        },
+      } as import("../../config/config.js").OpenClawConfig,
+      discordConfig: {
+        allowBots: true,
+      } as NonNullable<import("../../config/config.js").OpenClawConfig["channels"]>["discord"],
+      accountId: "default",
+      token: "token",
+      runtime: {} as import("../../runtime.js").RuntimeEnv,
+      botUserId: "openclaw-bot",
+      guildHistories: new Map(),
+      historyLimit: 0,
+      mediaMaxBytes: 1_000_000,
+      textLimit: 2_000,
+      replyToMode: "all",
+      dmEnabled: true,
+      groupDmEnabled: true,
+      ackReactionScope: "direct",
+      groupPolicy: "open",
+      threadBindings: {
+        getByThreadId: (id: string) => (id === threadId ? threadBinding : undefined),
+      } as import("./thread-bindings.js").ThreadBindingManager,
+      data: {
+        channel_id: threadId,
+        guild_id: "guild-1",
+        guild: {
+          id: "guild-1",
+          name: "Guild One",
+        },
+        author: message.author,
+        message,
+      } as unknown as import("./listeners.js").DiscordMessageEvent,
+      client,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.boundSessionKey).toBe(threadBinding.targetSessionKey);
+  });
+
   it("bypasses mention gating in bound threads for allowed bot senders", async () => {
     const threadBinding = createThreadBinding();
     const threadId = "thread-bot-focus";
