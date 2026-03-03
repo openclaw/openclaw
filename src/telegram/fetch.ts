@@ -138,6 +138,32 @@ function restoreTelegramDispatcherForSafeRetry(desiredAutoSelectFamily: boolean 
   }
 }
 
+function reapplyTelegramDispatcherWorkaround(desiredAutoSelectFamily: boolean | null): void {
+  if (desiredAutoSelectFamily === null) {
+    return;
+  }
+  const existingGlobalDispatcher = getGlobalDispatcher();
+  const shouldPreserveExistingProxy =
+    isProxyLikeDispatcher(existingGlobalDispatcher) && !hasProxyEnvConfigured();
+  if (shouldPreserveExistingProxy) {
+    return;
+  }
+  try {
+    setGlobalDispatcher(
+      new EnvHttpProxyAgent({
+        connect: {
+          autoSelectFamily: desiredAutoSelectFamily,
+          autoSelectFamilyAttemptTimeout: 300,
+        },
+      }),
+    );
+    appliedGlobalDispatcherAutoSelectFamily = desiredAutoSelectFamily;
+    log.info(`global undici dispatcher autoSelectFamily=${desiredAutoSelectFamily} (reapplied)`);
+  } catch {
+    // ignore if setGlobalDispatcher is unavailable
+  }
+}
+
 function collectErrorCodes(err: unknown): Set<string> {
   const codes = new Set<string>();
   const queue: unknown[] = [err];
@@ -225,7 +251,11 @@ export function resolveTelegramFetch(
             shouldRetryWithIpv4Fallback(ipv4FallbackErr) &&
             restoreTelegramDispatcherForSafeRetry(desiredAutoSelectFamily)
           ) {
-            return sourceFetch(input, init);
+            try {
+              return await sourceFetch(input, init);
+            } finally {
+              reapplyTelegramDispatcherWorkaround(desiredAutoSelectFamily);
+            }
           }
           throw ipv4FallbackErr;
         }

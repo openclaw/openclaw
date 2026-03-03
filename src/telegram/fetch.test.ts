@@ -293,7 +293,7 @@ describe("resolveTelegramFetch", () => {
 
     expect(response).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(3);
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(4);
   });
 
   it("does not reapply dispatcher workaround after safe restore on subsequent resolve calls", async () => {
@@ -321,7 +321,8 @@ describe("resolveTelegramFetch", () => {
     // 1) initial autoSelectFamily apply
     // 2) ipv4 fallback apply
     // 3) safe restore to baseline dispatcher
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(3);
+    // 4) reapply configured dispatcher workaround after temporary safe restore
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(4);
   });
 
   it("does not retry when fetch fails without fallback network error codes", async () => {
