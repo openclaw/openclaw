@@ -18,7 +18,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
+import {
+  normalizeMessageChannel,
+  type GatewayClientMode,
+  type GatewayClientName,
+} from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import {
   listConfiguredMessageChannels,
@@ -38,6 +42,7 @@ import {
   resolveSlackAutoThreadId,
   resolveTelegramAutoThreadId,
 } from "./message-action-params.js";
+import { actionRequiresTarget } from "./message-action-spec.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
   applyCrossContextDecoration,
@@ -290,6 +295,7 @@ function normalizeTargetsParamForAction(params: {
   cfg: OpenClawConfig;
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
+  toolContext?: ChannelThreadingToolContext;
 }) {
   const targets = readTrimmedTargetsParam(params.args);
   if (targets.length === 0) {
@@ -314,10 +320,12 @@ function normalizeTargetsParamForAction(params: {
         `Conflicting destinations provided for ${params.action}. Use either targets or a single target destination.`,
       );
     }
-    const channelHint =
+    const explicitChannelHint =
       typeof params.args.channel === "string"
         ? (normalizeMessageChannel(params.args.channel) ?? params.args.channel.trim().toLowerCase())
         : undefined;
+    const channelHint =
+      explicitChannelHint ?? normalizeMessageChannel(params.toolContext?.currentChannelProvider);
     const mappedGroup = resolveKnownGroupTargetFromRoutingMap({
       cfg: params.cfg,
       channelHint,
@@ -898,7 +906,7 @@ export async function runMessageAction(
   parseComponentsParam(params);
 
   const action = input.action;
-  normalizeTargetsParamForAction({ cfg, action, args: params });
+  normalizeTargetsParamForAction({ cfg, action, args: params, toolContext: input.toolContext });
   if (action === "broadcast") {
     return handleBroadcastAction(input, params);
   }
