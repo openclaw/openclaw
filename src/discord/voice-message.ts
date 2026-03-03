@@ -333,7 +333,9 @@ export async function sendDiscordVoiceMessage(
     )) as { id: string; channel_id: string };
   } catch (err) {
     // Fallback: raw Discord REST path (keeps behavior robust if RequestClient path fails)
-    if (!token) throw err;
+    if (!token) {
+      throw err;
+    }
 
     const authHeaders = {
       Authorization: `Bot ${token}`,
@@ -356,13 +358,18 @@ export async function sendDiscordVoiceMessage(
 
     if (!slotRes.ok) {
       const txt = await slotRes.text().catch(() => "");
-      throw new Error(`Discord voice upload slot failed (${slotRes.status})${txt ? `: ${txt}` : ""}`);
+      throw new Error(
+        `Discord voice upload slot failed (${slotRes.status})${txt ? `: ${txt}` : ""}`,
+        { cause: err },
+      );
     }
 
     const slotPayload = (await slotRes.json()) as UploadUrlResponse;
     const slot = slotPayload.attachments?.[0];
     if (!slot?.upload_url || !slot?.upload_filename) {
-      throw new Error("Discord voice upload slot payload missing upload_url/upload_filename");
+      throw new Error("Discord voice upload slot payload missing upload_url/upload_filename", {
+        cause: err,
+      });
     }
 
     const uploadRes = await fetch(slot.upload_url, {
@@ -372,7 +379,7 @@ export async function sendDiscordVoiceMessage(
     });
 
     if (!uploadRes.ok) {
-      throw new Error(`Failed to upload voice message: ${uploadRes.status}`);
+      throw new Error(`Failed to upload voice message: ${uploadRes.status}`, { cause: err });
     }
 
     const msgRes = await fetch(`${DISCORD_API_BASE}/channels/${channelId}/messages`, {
@@ -383,7 +390,9 @@ export async function sendDiscordVoiceMessage(
 
     if (!msgRes.ok) {
       const txt = await msgRes.text().catch(() => "");
-      throw new Error(`Discord voice message failed (${msgRes.status})${txt ? `: ${txt}` : ""}`);
+      throw new Error(`Discord voice message failed (${msgRes.status})${txt ? `: ${txt}` : ""}`, {
+        cause: err,
+      });
     }
 
     return (await msgRes.json()) as { id: string; channel_id: string };
