@@ -1078,8 +1078,8 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
 
-      // Copilot/Claude can reject persisted `thinking` blocks (e.g. thinkingSignature:"reasoning_text")
-      // on *any* follow-up provider call (including tool continuations). Wrap the stream function
+      // GitHub Copilot's Claude endpoints may have issues with thinking block signatures
+      // on follow-up provider calls (including tool continuations). Wrap the stream function
       // so every outbound request sees sanitized messages.
       if (transcriptPolicy.dropThinkingBlocks || transcriptPolicy.clearThinkingSignatures) {
         const inner = activeSession.agent.streamFn;
