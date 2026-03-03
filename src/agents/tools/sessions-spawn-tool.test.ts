@@ -115,4 +115,53 @@ describe("sessions_spawn tool", () => {
     );
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
+
+  it("forwards ACP sandbox options and requester sandbox context", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:subagent:parent",
+      sandboxed: true,
+    });
+
+    await tool.execute("call-2b", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+      sandbox: "require",
+    });
+
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "investigate",
+        sandbox: "require",
+      }),
+      expect.objectContaining({
+        agentSessionKey: "agent:main:subagent:parent",
+        sandboxed: true,
+      }),
+    );
+  });
+
+  it("rejects attachments for ACP runtime", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+      agentAccountId: "default",
+      agentTo: "channel:123",
+      agentThreadId: "456",
+    });
+
+    const result = await tool.execute("call-3", {
+      runtime: "acp",
+      task: "analyze file",
+      attachments: [{ name: "a.txt", content: "hello", encoding: "utf8" }],
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("attachments are currently unsupported for runtime=acp");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
 });

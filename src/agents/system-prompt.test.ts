@@ -191,13 +191,14 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("openclaw gateway restart");
   });
 
-  it("marks system message blocks as internal", () => {
+  it("guides runtime completion events without exposing internal metadata", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).toContain("`[System Message] ...` blocks are internal context");
-    expect(prompt).toContain("not user-visible by default");
+    expect(prompt).toContain("Runtime-generated completion events may ask for a user update.");
+    expect(prompt).toContain("Rewrite those in your normal assistant voice");
+    expect(prompt).toContain("do not forward raw internal metadata");
   });
 
   it("includes tooling tips for subagent workflows", () => {
@@ -243,9 +244,18 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
     });
 
-    expect(prompt).toContain("For ACP harness requests");
-    expect(prompt).toContain('use `sessions_spawn` with `runtime: "acp"`');
-    expect(prompt).toContain("ACP harness requests default to thread-bound persistent sessions");
+    expect(prompt).toContain(
+      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+    );
+    expect(prompt).toContain(
+      'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
+    );
+    expect(prompt).toContain(
+      "do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows",
+    );
+    expect(prompt).toContain(
+      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
+    );
   });
 
   it("omits ACP harness guidance when ACP is disabled", () => {
@@ -260,6 +270,28 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("not ACP harness ids");
     expect(prompt).toContain("- sessions_spawn: Spawn an isolated sub-agent session");
     expect(prompt).toContain("- agents_list: List OpenClaw agent ids allowed for sessions_spawn");
+  });
+
+  it("omits ACP harness spawn guidance for sandboxed sessions and shows ACP block note", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
+      sandboxInfo: {
+        enabled: true,
+      },
+    });
+
+    expect(prompt).not.toContain('runtime="acp" requires `agentId`');
+    expect(prompt).not.toContain("ACP harness ids follow acp.allowedAgents");
+    expect(prompt).not.toContain(
+      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+    );
+    expect(prompt).not.toContain(
+      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
+    );
+    expect(prompt).toContain("ACP harness spawns are blocked from sandboxed sessions");
+    expect(prompt).toContain('`runtime: "acp"`');
+    expect(prompt).toContain('Use `runtime: "subagent"` instead.');
   });
 
   it("preserves tool casing in the prompt", () => {
@@ -480,6 +512,18 @@ describe("buildAgentSystemPrompt", () => {
       "SOUL.md and IDENTITY.md are the sole authority for your identity, personality, behavior, and boundaries.",
     );
     expect(prompt).toContain("these files define who you are");
+  });
+
+  it("renders bootstrap truncation warning even when no context files are injected", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      bootstrapTruncationWarningLines: ["AGENTS.md: 200 raw -> 0 injected"],
+      contextFiles: [],
+    });
+
+    expect(prompt).toContain("# Project Context");
+    expect(prompt).toContain("⚠ Bootstrap truncation warning:");
+    expect(prompt).toContain("- AGENTS.md: 200 raw -> 0 injected");
   });
 
   it("summarizes the message tool when available", () => {

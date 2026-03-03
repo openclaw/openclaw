@@ -80,7 +80,7 @@ export async function resolveDiscordUserAllowlist(params: {
   entries: string[];
   fetcher?: typeof fetch;
 }): Promise<DiscordUserResolution[]> {
-  const token = normalizeDiscordToken(params.token);
+  const token = normalizeDiscordToken(params.token, "channels.discord.token");
   if (!token) {
     return params.entries.map((input) => ({
       input,

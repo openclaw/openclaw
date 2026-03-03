@@ -73,7 +73,10 @@ compaction.
 Large files are truncated with a marker. The max per-file size is controlled by
 `agents.defaults.bootstrapMaxChars` (default: 20000). Total injected bootstrap
 content across files is capped by `agents.defaults.bootstrapTotalMaxChars`
-(default: 150000). Missing files inject a short missing-file marker.
+(default: 150000). Missing files inject a short missing-file marker. When truncation
+occurs, OpenClaw can inject a warning block in Project Context; control this with
+`agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`;
+default: `once`).
 
 Sub-agent sessions only inject `AGENTS.md` and `TOOLS.md` (other bootstrap files
 are filtered out to keep the sub-agent context small).
