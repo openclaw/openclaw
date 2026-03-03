@@ -130,6 +130,43 @@ async function setupCronTestRun(params: {
   return { prevSkipCron, dir };
 }
 
+function expectCronJobIdFromResponse(response: { ok?: unknown; payload?: unknown }) {
+  expect(response.ok).toBe(true);
+  const value = (response.payload as { id?: unknown } | null)?.id;
+  const id = typeof value === "string" ? value : "";
+  expect(id.length > 0).toBe(true);
+  return id;
+}
+
+async function addMainSystemEventCronJob(params: { ws: unknown; name: string; text?: string }) {
+  const response = await rpcReq(params.ws, "cron.add", {
+    name: params.name,
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: params.text ?? "hello" },
+  });
+  return expectCronJobIdFromResponse(response);
+}
+
+function getWebhookCall(index: number) {
+  const [args] = fetchWithSsrFGuardMock.mock.calls[index] as unknown as [
+    {
+      url?: string;
+      init?: {
+        method?: string;
+        headers?: Record<string, string>;
+        body?: string;
+      };
+    },
+  ];
+  const url = args.url ?? "";
+  const init = args.init ?? {};
+  const body = JSON.parse(init.body ?? "{}") as Record<string, unknown>;
+  return { url, init, body };
+}
+
 describe("gateway server cron", () => {
   afterAll(async () => {
     if (!cronSuiteTempRootPromise) {
@@ -215,18 +252,7 @@ describe("gateway server cron", () => {
       expect(wrappedPayload?.wakeMode).toBe("now");
       expect((wrappedPayload?.schedule as { kind?: unknown } | undefined)?.kind).toBe("at");
 
-      const patchRes = await rpcReq(ws, "cron.add", {
-        name: "patch test",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
-      });
-      expect(patchRes.ok).toBe(true);
-      const patchJobIdValue = (patchRes.payload as { id?: unknown } | null)?.id;
-      const patchJobId = typeof patchJobIdValue === "string" ? patchJobIdValue : "";
-      expect(patchJobId.length > 0).toBe(true);
+      const patchJobId = await addMainSystemEventCronJob({ ws, name: "patch test" });
 
       const atMs = Date.now() + 1_000;
       const updateRes = await rpcReq(ws, "cron.update", {
@@ -344,18 +370,7 @@ describe("gateway server cron", () => {
       expect(legacyDeliveryPatched?.delivery?.to).toBe("+15550001111");
       expect(legacyDeliveryPatched?.delivery?.bestEffort).toBe(true);
 
-      const rejectRes = await rpcReq(ws, "cron.add", {
-        name: "patch reject",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
-      });
-      expect(rejectRes.ok).toBe(true);
-      const rejectJobIdValue = (rejectRes.payload as { id?: unknown } | null)?.id;
-      const rejectJobId = typeof rejectJobIdValue === "string" ? rejectJobIdValue : "";
-      expect(rejectJobId.length > 0).toBe(true);
+      const rejectJobId = await addMainSystemEventCronJob({ ws, name: "patch reject" });
 
       const rejectUpdateRes = await rpcReq(ws, "cron.update", {
         id: rejectJobId,
@@ -365,18 +380,7 @@ describe("gateway server cron", () => {
       });
       expect(rejectUpdateRes.ok).toBe(false);
 
-      const jobIdRes = await rpcReq(ws, "cron.add", {
-        name: "jobId test",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
-      });
-      expect(jobIdRes.ok).toBe(true);
-      const jobIdValue = (jobIdRes.payload as { id?: unknown } | null)?.id;
-      const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
-      expect(jobId.length > 0).toBe(true);
+      const jobId = await addMainSystemEventCronJob({ ws, name: "jobId test" });
 
       const jobIdUpdateRes = await rpcReq(ws, "cron.update", {
         jobId,
@@ -387,18 +391,7 @@ describe("gateway server cron", () => {
       });
       expect(jobIdUpdateRes.ok).toBe(true);
 
-      const disableRes = await rpcReq(ws, "cron.add", {
-        name: "disable test",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
-      });
-      expect(disableRes.ok).toBe(true);
-      const disableJobIdValue = (disableRes.payload as { id?: unknown } | null)?.id;
-      const disableJobId = typeof disableJobIdValue === "string" ? disableJobIdValue : "";
-      expect(disableJobId.length > 0).toBe(true);
+      const disableJobId = await addMainSystemEventCronJob({ ws, name: "disable test" });
 
       const disableUpdateRes = await rpcReq(ws, "cron.update", {
         id: disableJobId,
@@ -601,23 +594,12 @@ describe("gateway server cron", () => {
         () => fetchWithSsrFGuardMock.mock.calls.length === 1,
         CRON_WAIT_TIMEOUT_MS,
       );
-      const [notifyArgs] = fetchWithSsrFGuardMock.mock.calls[0] as unknown as [
-        {
-          url?: string;
-          init?: {
-            method?: string;
-            headers?: Record<string, string>;
-            body?: string;
-          };
-        },
-      ];
-      const notifyUrl = notifyArgs.url ?? "";
-      const notifyInit = notifyArgs.init ?? {};
-      expect(notifyUrl).toBe("https://example.invalid/cron-finished");
-      expect(notifyInit.method).toBe("POST");
-      expect(notifyInit.headers?.Authorization).toBe("Bearer cron-webhook-token");
-      expect(notifyInit.headers?.["Content-Type"]).toBe("application/json");
-      const notifyBody = JSON.parse(notifyInit.body ?? "{}");
+      const notifyCall = getWebhookCall(0);
+      expect(notifyCall.url).toBe("https://example.invalid/cron-finished");
+      expect(notifyCall.init.method).toBe("POST");
+      expect(notifyCall.init.headers?.Authorization).toBe("Bearer cron-webhook-token");
+      expect(notifyCall.init.headers?.["Content-Type"]).toBe("application/json");
+      const notifyBody = notifyCall.body;
       expect(notifyBody.action).toBe("finished");
       expect(notifyBody.jobId).toBe(notifyJobId);
 
@@ -632,22 +614,11 @@ describe("gateway server cron", () => {
         () => fetchWithSsrFGuardMock.mock.calls.length === 2,
         CRON_WAIT_TIMEOUT_MS,
       );
-      const [legacyArgs] = fetchWithSsrFGuardMock.mock.calls[1] as unknown as [
-        {
-          url?: string;
-          init?: {
-            method?: string;
-            headers?: Record<string, string>;
-            body?: string;
-          };
-        },
-      ];
-      const legacyUrl = legacyArgs.url ?? "";
-      const legacyInit = legacyArgs.init ?? {};
-      expect(legacyUrl).toBe("https://legacy.example.invalid/cron-finished");
-      expect(legacyInit.method).toBe("POST");
-      expect(legacyInit.headers?.Authorization).toBe("Bearer cron-webhook-token");
-      const legacyBody = JSON.parse(legacyInit.body ?? "{}");
+      const legacyCall = getWebhookCall(1);
+      expect(legacyCall.url).toBe("https://legacy.example.invalid/cron-finished");
+      expect(legacyCall.init.method).toBe("POST");
+      expect(legacyCall.init.headers?.Authorization).toBe("Bearer cron-webhook-token");
+      const legacyBody = legacyCall.body;
       expect(legacyBody.action).toBe("finished");
       expect(legacyBody.jobId).toBe("legacy-notify-job");
 
@@ -706,18 +677,9 @@ describe("gateway server cron", () => {
         () => fetchWithSsrFGuardMock.mock.calls.length === 1,
         CRON_WAIT_TIMEOUT_MS,
       );
-      const [failureDestArgs] = fetchWithSsrFGuardMock.mock.calls[0] as unknown as [
-        {
-          url?: string;
-          init?: {
-            method?: string;
-            headers?: Record<string, string>;
-            body?: string;
-          };
-        },
-      ];
-      expect(failureDestArgs.url).toBe("https://example.invalid/failure-destination");
-      const failureDestBody = JSON.parse(failureDestArgs.init?.body ?? "{}");
+      const failureDestCall = getWebhookCall(0);
+      expect(failureDestCall.url).toBe("https://example.invalid/failure-destination");
+      const failureDestBody = failureDestCall.body;
       expect(failureDestBody.message).toBe(
         'Cron job "failure destination webhook" failed: unknown error',
       );
