@@ -128,7 +128,7 @@ function restoreTelegramDispatcherForSafeRetry(): boolean {
     return false;
   }
   try {
-    setGlobalDispatcher(baselineGlobalDispatcher);
+    setGlobalDispatcher(baselineGlobalDispatcher as Parameters<typeof setGlobalDispatcher>[0]);
     appliedGlobalDispatcherAutoSelectFamily = null;
     log.warn("fetch fallback: restoring original undici dispatcher for safe retry");
     return true;
