@@ -17,6 +17,7 @@ const ONE_HOUR_MS = 60 * 60_000;
  * alive (health checks pass) but Slack silently stops delivering events.
  */
 const DEFAULT_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
+const DEFAULT_CHANNEL_STARTUP_GRACE_MS = 120_000;
 
 export type ChannelHealthMonitorDeps = {
   channelManager: ChannelManager;
@@ -25,6 +26,7 @@ export type ChannelHealthMonitorDeps = {
   cooldownCycles?: number;
   maxRestartsPerHour?: number;
   staleEventThresholdMs?: number;
+  channelStartupGraceMs?: number;
   abortSignal?: AbortSignal;
 };
 
@@ -50,13 +52,19 @@ function isChannelHealthy(
     lastEventAt?: number | null;
     lastStartAt?: number | null;
   },
-  opts: { now: number; staleEventThresholdMs: number },
+  opts: { now: number; staleEventThresholdMs: number; channelStartupGraceMs: number },
 ): boolean {
   if (!isManagedAccount(snapshot)) {
     return true;
   }
   if (!snapshot.running) {
     return false;
+  }
+  if (snapshot.lastStartAt != null) {
+    const upDuration = opts.now - snapshot.lastStartAt;
+    if (upDuration < opts.channelStartupGraceMs) {
+      return true;
+    }
   }
   if (snapshot.connected === false) {
     return false;
@@ -88,6 +96,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     cooldownCycles = DEFAULT_COOLDOWN_CYCLES,
     maxRestartsPerHour = DEFAULT_MAX_RESTARTS_PER_HOUR,
     staleEventThresholdMs = DEFAULT_STALE_EVENT_THRESHOLD_MS,
+    channelStartupGraceMs = DEFAULT_CHANNEL_STARTUP_GRACE_MS,
     abortSignal,
   } = deps;
 
@@ -132,7 +141,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
-          if (isChannelHealthy(status, { now, staleEventThresholdMs })) {
+          if (isChannelHealthy(status, { now, staleEventThresholdMs, channelStartupGraceMs })) {
             continue;
           }
 
