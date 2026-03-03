@@ -391,16 +391,12 @@ async function saveSessionStoreUnlocked(
       const removedSessionFiles = new Map<string, string | undefined>();
       const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
         onPruned: ({ entry }) => {
-          if (!removedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
-            removedSessionFiles.set(entry.sessionId, entry.sessionFile);
-          }
+          rememberRemovedSessionFile(removedSessionFiles, entry);
         },
       });
       const capped = capEntryCount(store, maintenance.maxEntries, {
         onCapped: ({ entry }) => {
-          if (!removedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
-            removedSessionFiles.set(entry.sessionId, entry.sessionFile);
-          }
+          rememberRemovedSessionFile(removedSessionFiles, entry);
         },
       });
       const archivedDirs = new Set<string>();
@@ -474,14 +470,10 @@ async function saveSessionStoreUnlocked(
   if (process.platform === "win32") {
     for (let i = 0; i < 5; i++) {
       try {
-        await writeTextAtomic(storePath, json, { mode: 0o600 });
-        updateSessionStoreWriteCaches({ storePath, store, serialized: json });
+        await writeSessionStoreAtomic({ storePath, store, serialized: json });
         return;
       } catch (err) {
-        const code =
-          err && typeof err === "object" && "code" in err
-            ? String((err as { code?: unknown }).code)
-            : null;
+        const code = getErrorCode(err);
         if (code === "ENOENT") {
           return;
         }
@@ -498,25 +490,17 @@ async function saveSessionStoreUnlocked(
   }
 
   try {
-    await writeTextAtomic(storePath, json, { mode: 0o600 });
-    updateSessionStoreWriteCaches({ storePath, store, serialized: json });
+    await writeSessionStoreAtomic({ storePath, store, serialized: json });
   } catch (err) {
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? String((err as { code?: unknown }).code)
-        : null;
+    const code = getErrorCode(err);
 
     if (code === "ENOENT") {
       // In tests the temp session-store directory may be deleted while writes are in-flight.
       // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
       try {
-        await writeTextAtomic(storePath, json, { mode: 0o600 });
-        updateSessionStoreWriteCaches({ storePath, store, serialized: json });
+        await writeSessionStoreAtomic({ storePath, store, serialized: json });
       } catch (err2) {
-        const code2 =
-          err2 && typeof err2 === "object" && "code" in err2
-            ? String((err2 as { code?: unknown }).code)
-            : null;
+        const code2 = getErrorCode(err2);
         if (code2 === "ENOENT") {
           return;
         }
@@ -573,6 +557,51 @@ type SessionStoreLockQueue = {
 };
 
 const LOCK_QUEUES = new Map<string, SessionStoreLockQueue>();
+
+function getErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return null;
+  }
+  return String((error as { code?: unknown }).code);
+}
+
+function rememberRemovedSessionFile(
+  removedSessionFiles: Map<string, string | undefined>,
+  entry: SessionEntry,
+): void {
+  if (!removedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
+    removedSessionFiles.set(entry.sessionId, entry.sessionFile);
+  }
+}
+
+async function writeSessionStoreAtomic(params: {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  serialized: string;
+}): Promise<void> {
+  await writeTextAtomic(params.storePath, params.serialized, { mode: 0o600 });
+  updateSessionStoreWriteCaches({
+    storePath: params.storePath,
+    store: params.store,
+    serialized: params.serialized,
+  });
+}
+
+async function persistResolvedSessionEntry(params: {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  resolved: ReturnType<typeof resolveStoreSessionEntry>;
+  next: SessionEntry;
+}): Promise<SessionEntry> {
+  params.store[params.resolved.normalizedKey] = params.next;
+  for (const legacyKey of params.resolved.legacyKeys) {
+    delete params.store[legacyKey];
+  }
+  await saveSessionStoreUnlocked(params.storePath, params.store, {
+    activeSessionKey: params.resolved.normalizedKey,
+  });
+  return params.next;
+}
 
 function lockTimeoutError(storePath: string): Error {
   return new Error(`timeout waiting for session store lock: ${storePath}`);
@@ -694,14 +723,12 @@ export async function updateSessionStoreEntry(params: {
       return existing;
     }
     const next = mergeSessionEntry(existing, patch);
-    store[resolved.normalizedKey] = next;
-    for (const legacyKey of resolved.legacyKeys) {
-      delete store[legacyKey];
-    }
-    await saveSessionStoreUnlocked(storePath, store, {
-      activeSessionKey: resolved.normalizedKey,
+    return await persistResolvedSessionEntry({
+      storePath,
+      store,
+      resolved,
+      next,
     });
-    return next;
   });
 }
 
@@ -825,13 +852,11 @@ export async function updateLastRoute(params: {
       existing,
       metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
     );
-    store[resolved.normalizedKey] = next;
-    for (const legacyKey of resolved.legacyKeys) {
-      delete store[legacyKey];
-    }
-    await saveSessionStoreUnlocked(storePath, store, {
-      activeSessionKey: resolved.normalizedKey,
+    return await persistResolvedSessionEntry({
+      storePath,
+      store,
+      resolved,
+      next,
     });
-    return next;
   });
 }
