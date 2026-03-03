@@ -6,7 +6,9 @@ import {
   defaultSlackTestConfig,
   getSlackTestState,
   getSlackClient,
+  getSlackHandlers,
   getSlackHandlerOrThrow,
+  flush,
   resetSlackTestState,
   runSlackMessageOnce,
   startSlackMonitor,
@@ -35,16 +37,17 @@ describe("monitorSlackProvider tool results", () => {
     parent_user_id?: string;
   };
 
+  const baseSlackMessageEvent = Object.freeze({
+    type: "message",
+    user: "U1",
+    text: "hello",
+    ts: "123",
+    channel: "C1",
+    channel_type: "im",
+  }) as SlackMessageEvent;
+
   function makeSlackMessageEvent(overrides: Partial<SlackMessageEvent> = {}): SlackMessageEvent {
-    return {
-      type: "message",
-      user: "U1",
-      text: "hello",
-      ts: "123",
-      channel: "C1",
-      channel_type: "im",
-      ...overrides,
-    };
+    return { ...baseSlackMessageEvent, ...overrides };
   }
 
   function setDirectMessageReplyMode(replyToMode: "off" | "all" | "first") {
@@ -65,6 +68,25 @@ describe("monitorSlackProvider tool results", () => {
 
   function firstReplyCtx(): { WasMentioned?: boolean } {
     return (replyMock.mock.calls[0]?.[0] ?? {}) as { WasMentioned?: boolean };
+  }
+
+  function setRequireMentionChannelConfig(mentionPatterns?: string[]) {
+    slackTestState.config = {
+      ...(mentionPatterns
+        ? {
+            messages: {
+              responsePrefix: "PFX",
+              groupChat: { mentionPatterns },
+            },
+          }
+        : {}),
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          channels: { C1: { allow: true, requireMention: true } },
+        },
+      },
+    };
   }
 
   async function runDirectMessageEvent(ts: string, extraEvent: Record<string, unknown> = {}) {
@@ -99,6 +121,32 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
   }
+
+  it("skips socket startup when Slack channel is disabled", async () => {
+    slackTestState.config = {
+      channels: {
+        slack: {
+          enabled: false,
+          mode: "socket",
+          botToken: "xoxb-config",
+          appToken: "xapp-config",
+        },
+      },
+    };
+    const client = getSlackClient();
+    if (!client) {
+      throw new Error("Slack client not registered");
+    }
+    client.auth.test.mockClear();
+
+    const { controller, run } = startSlackMonitor(monitorSlackProvider);
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(client.auth.test).not.toHaveBeenCalled();
+    expect(getSlackHandlers()?.size ?? 0).toBe(0);
+  });
 
   it("skips tool summaries with responsePrefix", async () => {
     replyMock.mockResolvedValue({ text: "final reply" });
@@ -300,6 +348,7 @@ describe("monitorSlackProvider tool results", () => {
       return { text: "final reply" };
     });
 
+    setDirectMessageReplyMode("all");
     await runSlackMessageOnce(monitorSlackProvider, {
       event: makeSlackMessageEvent(),
     });
@@ -324,18 +373,7 @@ describe("monitorSlackProvider tool results", () => {
   });
 
   async function expectMentionPatternMessageAccepted(text: string): Promise<void> {
-    slackTestState.config = {
-      messages: {
-        responsePrefix: "PFX",
-        groupChat: { mentionPatterns: ["\\bopenclaw\\b"] },
-      },
-      channels: {
-        slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-          channels: { C1: { allow: true, requireMention: true } },
-        },
-      },
-    };
+    setRequireMentionChannelConfig(["\\bopenclaw\\b"]);
     replyMock.mockResolvedValue({ text: "hi" });
 
     await runSlackMessageOnce(monitorSlackProvider, {
@@ -358,14 +396,7 @@ describe("monitorSlackProvider tool results", () => {
   });
 
   it("treats replies to bot threads as implicit mentions", async () => {
-    slackTestState.config = {
-      channels: {
-        slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-          channels: { C1: { allow: true, requireMention: true } },
-        },
-      },
-    };
+    setRequireMentionChannelConfig();
     replyMock.mockResolvedValue({ text: "hi" });
 
     await runSlackMessageOnce(monitorSlackProvider, {
@@ -442,7 +473,7 @@ describe("monitorSlackProvider tool results", () => {
     expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "111.222" });
   });
 
-  it("forces thread replies when replyToId is set", async () => {
+  it("ignores replyToId directive when replyToMode is off", async () => {
     replyMock.mockResolvedValue({ text: "forced reply", replyToId: "555" });
     slackTestState.config = {
       messages: {
@@ -459,6 +490,20 @@ describe("monitorSlackProvider tool results", () => {
         },
       },
     };
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent({
+        ts: "789",
+      }),
+    });
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: undefined });
+  });
+
+  it("keeps replyToId directive threading when replyToMode is all", async () => {
+    replyMock.mockResolvedValue({ text: "forced reply", replyToId: "555" });
+    setDirectMessageReplyMode("all");
 
     await runSlackMessageOnce(monitorSlackProvider, {
       event: makeSlackMessageEvent({

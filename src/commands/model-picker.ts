@@ -10,6 +10,7 @@ import {
   resolveConfiguredModelRef,
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
@@ -77,11 +78,7 @@ function createProviderAuthChecker(params: {
 }
 
 function resolveConfiguredModelRaw(cfg: OpenClawConfig): string {
-  const raw = cfg.agents?.defaults?.model as { primary?: string } | string | undefined;
-  if (typeof raw === "string") {
-    return raw.trim();
-  }
-  return raw?.primary?.trim() ?? "";
+  return resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
 }
 
 function resolveConfiguredModelKeys(cfg: OpenClawConfig): string[] {

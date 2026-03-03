@@ -7,30 +7,21 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
+import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
 
-const CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
+const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
-  const prior = CLI_RUN_QUEUE.get(key) ?? Promise.resolve();
-  const chained = prior.catch(() => undefined).then(task);
-  // Keep queue continuity even when a run rejects, without emitting unhandled rejections.
-  const tracked = chained
-    .catch(() => undefined)
-    .finally(() => {
-      if (CLI_RUN_QUEUE.get(key) === tracked) {
-        CLI_RUN_QUEUE.delete(key);
-      }
-    });
-  CLI_RUN_QUEUE.set(key, tracked);
-  return chained;
+  return CLI_RUN_QUEUE.enqueue(key, task);
 }
 
 type CliUsage = {
@@ -81,19 +72,18 @@ export function buildSystemPrompt(params: {
     },
   });
   const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+  const ownerDisplay = resolveOwnerDisplaySetting(params.config);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
-    ownerDisplay: params.config?.commands?.ownerDisplay,
-    ownerDisplaySecret:
-      params.config?.commands?.ownerDisplaySecret ??
-      params.config?.gateway?.auth?.token ??
-      params.config?.gateway?.remote?.token,
+    ownerDisplay: ownerDisplay.ownerDisplay,
+    ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
     reasoningTagHint: false,
     heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
+    acpEnabled: params.config?.acp?.enabled !== false,
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
     modelAliasLines: buildModelAliasLines(params.config),

@@ -37,6 +37,16 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
     process.exit = originalExit;
   });
 
+  function emitUnhandled(reason: unknown): void {
+    process.emit("unhandledRejection", reason, Promise.resolve());
+  }
+
+  function expectExitCodeFromUnhandled(reason: unknown, expected: number[]): void {
+    exitCalls = [];
+    emitUnhandled(reason);
+    expect(exitCalls).toEqual(expected);
+  }
+
   describe("fatal errors", () => {
     it("exits on fatal runtime codes", () => {
       const fatalCases = [
@@ -46,10 +56,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       ] as const;
 
       for (const { code, message } of fatalCases) {
-        exitCalls = [];
-        const err = Object.assign(new Error(message), { code });
-        process.emit("unhandledRejection", err, Promise.resolve());
-        expect(exitCalls).toEqual([1]);
+        expectExitCodeFromUnhandled(Object.assign(new Error(message), { code }), [1]);
       }
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -67,10 +74,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       ] as const;
 
       for (const { code, message } of configurationCases) {
-        exitCalls = [];
-        const err = Object.assign(new Error(message), { code });
-        process.emit("unhandledRejection", err, Promise.resolve());
-        expect(exitCalls).toEqual([1]);
+        expectExitCodeFromUnhandled(Object.assign(new Error(message), { code }), [1]);
       }
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -89,12 +93,26 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         Object.assign(new Error("DNS resolve failed"), { code: "UND_ERR_DNS_RESOLVE_FAILED" }),
         Object.assign(new Error("Connection reset"), { code: "ECONNRESET" }),
         Object.assign(new Error("Timeout"), { code: "ETIMEDOUT" }),
+        Object.assign(
+          new Error(
+            "A request error occurred: Client network socket disconnected before secure TLS connection was established",
+          ),
+          { code: "slack_webapi_request_error" },
+        ),
+        Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN slack.com"), {
+          code: "slack_webapi_request_error",
+          original: { code: "EAI_AGAIN", syscall: "getaddrinfo", hostname: "slack.com" },
+        }),
+        Object.assign(new Error("A request error occurred: unknown"), {
+          code: "slack_webapi_request_error",
+          original: Object.assign(new Error("connect timeout"), {
+            code: "UND_ERR_CONNECT_TIMEOUT",
+          }),
+        }),
       ];
 
       for (const transientErr of transientCases) {
-        exitCalls = [];
-        process.emit("unhandledRejection", transientErr, Promise.resolve());
-        expect(exitCalls).toEqual([]);
+        expectExitCodeFromUnhandled(transientErr, []);
       }
 
       expect(consoleWarnSpy).toHaveBeenCalledWith(
@@ -106,12 +124,32 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
     it("exits on generic errors without code", () => {
       const genericErr = new Error("Something went wrong");
 
-      process.emit("unhandledRejection", genericErr, Promise.resolve());
-
-      expect(exitCalls).toEqual([1]);
+      expectExitCodeFromUnhandled(genericErr, [1]);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         "[openclaw] Unhandled promise rejection:",
         expect.stringContaining("Something went wrong"),
+      );
+    });
+
+    it("exits on non-transient Slack request errors", () => {
+      const slackErr = Object.assign(
+        new Error("A request error occurred: invalid request payload"),
+        {
+          code: "slack_webapi_request_error",
+        },
+      );
+
+      expectExitCodeFromUnhandled(slackErr, [1]);
+    });
+
+    it("does not exit on AbortError and logs suppression warning", () => {
+      const abortErr = new Error("This operation was aborted");
+      abortErr.name = "AbortError";
+
+      expectExitCodeFromUnhandled(abortErr, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Suppressed AbortError:",
+        expect.stringContaining("This operation was aborted"),
       );
     });
   });
