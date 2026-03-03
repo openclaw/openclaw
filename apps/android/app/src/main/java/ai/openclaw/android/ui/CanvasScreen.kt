@@ -1,6 +1,7 @@
 package ai.openclaw.android.ui
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.util.Log
 import android.view.View
 import android.webkit.ConsoleMessage
@@ -22,6 +23,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import ai.openclaw.android.MainViewModel
+import java.net.URI
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -95,6 +97,22 @@ fun CanvasScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               viewModel.canvas.onPageFinished()
             }
 
+            override fun shouldOverrideUrlLoading(
+              view: WebView,
+              request: WebResourceRequest,
+            ): Boolean {
+              if (!request.isForMainFrame || !request.hasGesture()) return false
+              val targetUrl = request.url?.toString().orEmpty()
+              if (!shouldOpenCanvasNavigationInExternalBrowser(view.url, targetUrl)) return false
+              return try {
+                val intent = Intent(Intent.ACTION_VIEW, request.url).addCategory(Intent.CATEGORY_BROWSABLE)
+                view.context.startActivity(intent)
+                true
+              } catch (_: Throwable) {
+                false
+              }
+            }
+
             override fun onRenderProcessGone(
               view: WebView,
               detail: android.webkit.RenderProcessGoneDetail,
@@ -134,6 +152,44 @@ private fun disableForceDarkIfSupported(settings: WebSettings) {
   if (!WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) return
   @Suppress("DEPRECATION")
   WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_OFF)
+}
+
+internal fun shouldOpenCanvasNavigationInExternalBrowser(currentUrl: String?, targetUrl: String): Boolean {
+  val target = parseUriOrNull(targetUrl) ?: return false
+  if (!target.isHttpLike()) return false
+
+  val current = parseUriOrNull(currentUrl) ?: return false
+  if (!current.isHttpLike()) return true
+
+  return current.originKey() != target.originKey()
+}
+
+private fun parseUriOrNull(raw: String?): URI? {
+  val value = raw?.trim().orEmpty()
+  if (value.isEmpty()) return null
+  return try {
+    URI(value)
+  } catch (_: Throwable) {
+    null
+  }
+}
+
+private fun URI.isHttpLike(): Boolean {
+  val normalized = scheme?.lowercase() ?: return false
+  return normalized == "http" || normalized == "https"
+}
+
+private fun URI.originKey(): String {
+  val normalizedScheme = scheme?.lowercase().orEmpty()
+  val normalizedHost = host?.lowercase().orEmpty()
+  val normalizedPort =
+    when {
+      port >= 0 -> port
+      normalizedScheme == "http" -> 80
+      normalizedScheme == "https" -> 443
+      else -> -1
+    }
+  return "$normalizedScheme|$normalizedHost|$normalizedPort"
 }
 
 private class CanvasA2UIActionBridge(private val onMessage: (String) -> Unit) {
