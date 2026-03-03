@@ -390,6 +390,7 @@ function renderAgentOverview(params: {
     resolveModelPrimary(config.defaults?.model) ||
     (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null);
   const effectivePrimary = modelPrimary ?? defaultPrimary ?? null;
+  const hasExplicitModel = config.entry?.model != null;
   const modelFallbacks = resolveEffectiveModelFallbacks(
     config.entry?.model,
     config.defaults?.model,
@@ -456,7 +457,7 @@ function renderAgentOverview(params: {
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
             >
               ${
-                isDefault
+                isDefault || hasExplicitModel
                   ? nothing
                   : html`
                       <option value="">
