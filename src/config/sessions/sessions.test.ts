@@ -325,7 +325,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("skips delivery-mirror append when the latest assistant text already matches", async () => {
+  it("skips delivery-mirror append when the latest real assistant text already matches", async () => {
     const sessionId = "dup-session-id";
     const sessionKey = "dup-session-key";
     const store = {
@@ -354,9 +354,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           message: {
             role: "assistant",
             content: [{ type: "text", text: "same reply" }],
-            provider: "openclaw",
-            model: "delivery-mirror",
-            timestamp: Date.now() - 100,
+            provider: "openai-codex",
+            model: "gpt-5.3-codex",
           },
         }),
       ].join("\n") + "\n",
@@ -374,9 +373,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(lines.length).toBe(2);
   });
 
-  it("does not dedupe stale delivery-mirror tail entries with matching text", async () => {
-    const sessionId = "stale-tail-session-id";
-    const sessionKey = "stale-tail-session-key";
+  it("does not dedupe repeated delivery-mirror sends with matching text", async () => {
+    const sessionId = "mirror-tail-session-id";
+    const sessionKey = "mirror-tail-session-key";
     const store = {
       [sessionKey]: {
         sessionId,
@@ -405,7 +404,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
             content: [{ type: "text", text: "same reply" }],
             provider: "openclaw",
             model: "delivery-mirror",
-            timestamp: Date.now() - 10_000,
           },
         }),
       ].join("\n") + "\n",
@@ -423,9 +421,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(lines.length).toBe(3);
   });
 
-  it("does not dedupe against non-delivery-mirror assistant tail entries", async () => {
-    const sessionId = "non-mirror-tail-session-id";
-    const sessionKey = "non-mirror-tail-session-key";
+  it("does not dedupe when the latest real assistant text differs", async () => {
+    const sessionId = "different-tail-session-id";
+    const sessionKey = "different-tail-session-key";
     const store = {
       [sessionKey]: {
         sessionId,
@@ -451,7 +449,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           type: "message",
           message: {
             role: "assistant",
-            content: [{ type: "text", text: "same reply" }],
+            content: [{ type: "text", text: "different reply" }],
             provider: "openai-codex",
             model: "gpt-5.3-codex",
           },
