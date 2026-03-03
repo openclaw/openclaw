@@ -6,6 +6,7 @@ import readline from "node:readline";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   materializeWindowsSpawnProgram,
@@ -186,6 +187,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
   private readonly sources = new Set<MemorySource>();
   private readonly docPathCache = new Map<
@@ -260,6 +262,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         },
       ];
     }
+    this.managedCollectionNames = this.computeManagedCollectionNames();
   }
 
   private async initialize(mode: QmdManagerMode): Promise<void> {
@@ -1410,11 +1413,17 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (cutoff && entry.mtimeMs < cutoff) {
         continue;
       }
-      const target = path.join(exportDir, `${path.basename(sessionFile, ".jsonl")}.md`);
+      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
+      const target = path.join(exportDir, targetName);
       tracked.add(sessionFile);
       const state = this.exportedSessionState.get(sessionFile);
       if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
-        await fs.writeFile(target, this.renderSessionMarkdown(entry), "utf-8");
+        await writeFileWithinRoot({
+          rootDir: exportDir,
+          relativePath: targetName,
+          data: this.renderSessionMarkdown(entry),
+          encoding: "utf-8",
+        });
       }
       this.exportedSessionState.set(sessionFile, {
         hash: entry.hash,
@@ -1843,8 +1852,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     for (const collectionName of collectionNames) {
       const args = this.buildSearchArgs(command, query, limit);
       args.push("-c", collectionName);
+      // runQmd errors (missing collection, unsupported flags) must propagate
+      // for the caller's retry/repair/fallback logic.
       const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
-      const parsed = parseQmdQueryJson(result.stdout, result.stderr);
+      let parsed: QmdQueryResult[];
+      try {
+        parsed = parseQmdQueryJson(result.stdout, result.stderr);
+      } catch (err) {
+        log.warn(
+          `qmd ${command} parse failed for collection ${collectionName}, continuing with remaining collections: ${String(err)}`,
+        );
+        continue;
+      }
       for (const entry of parsed) {
         const normalizedDocId =
           typeof entry.docid === "string" && entry.docid.trim().length > 0
@@ -1881,15 +1900,27 @@ export class QmdMemoryManager implements MemorySearchManager {
   }): Promise<QmdQueryResult[]> {
     const bestByDocId = new Map<string, QmdQueryResult>();
     for (const collectionName of params.collectionNames) {
-      const parsed = await this.runQmdSearchViaMcporter({
-        mcporter: this.qmd.mcporter,
-        tool: params.tool,
-        query: params.query,
-        limit: params.limit,
-        minScore: params.minScore,
-        collection: collectionName,
-        timeoutMs: this.qmd.limits.timeoutMs,
-      });
+      let parsed: QmdQueryResult[];
+      try {
+        parsed = await this.runQmdSearchViaMcporter({
+          mcporter: this.qmd.mcporter,
+          tool: params.tool,
+          query: params.query,
+          limit: params.limit,
+          minScore: params.minScore,
+          collection: collectionName,
+          timeoutMs: this.qmd.limits.timeoutMs,
+        });
+      } catch (err) {
+        // Let missing-collection errors propagate for the caller's repair logic.
+        if (this.isMissingCollectionSearchError(err)) {
+          throw err;
+        }
+        log.warn(
+          `qmd mcporter search failed for collection ${collectionName}, continuing with remaining collections: ${String(err)}`,
+        );
+        continue;
+      }
       for (const entry of parsed) {
         if (typeof entry.docid !== "string" || !entry.docid.trim()) {
           continue;
@@ -1906,6 +1937,10 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private listManagedCollectionNames(): string[] {
+    return this.managedCollectionNames;
+  }
+
+  private computeManagedCollectionNames(): string[] {
     const seen = new Set<string>();
     const names: string[] = [];
     for (const collection of this.qmd.collections) {
