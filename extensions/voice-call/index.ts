@@ -498,7 +498,13 @@ const voiceCallPlugin = {
         try {
           await ensureRuntime();
         } catch (err) {
-          // Error already logged in runtime.ts with more detail
+          // Log startup failures (runtime.ts only logs createVoiceCallRuntime errors,
+          // not validation or disabled-config errors that happen earlier in ensureRuntime)
+          api.logger.error(
+            `[voice-call] Service startup failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
           // Ensure cleanup on startup failure (defensive, already done in ensureRuntime catch)
           runtimePromise = null;
           runtime = null;
