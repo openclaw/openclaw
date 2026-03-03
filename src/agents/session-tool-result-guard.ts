@@ -270,6 +270,7 @@ export function installSessionToolResultGuard(
       afterWrite?.({
         message: finalMessage,
         sessionFile: getSessionFile(),
+        isSynthetic: false,
       });
     } catch {
       // Keep append path resilient even if callback wiring is broken.

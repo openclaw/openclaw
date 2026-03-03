@@ -460,13 +460,15 @@ function persistAbortedPartials(params: {
   if (params.snapshots.length === 0) {
     return;
   }
-  const { storePath, entry } = loadSessionEntry(params.sessionKey);
+  const { storePath, entry, cfg } = loadSessionEntry(params.sessionKey);
+  const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg });
   for (const snapshot of params.snapshots) {
     const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
     const appended = appendAssistantTranscriptMessage({
       message: snapshot.text,
       sessionId,
       sessionKey: params.sessionKey,
+      agentId,
       storePath,
       sessionFile: entry?.sessionFile,
       createIfMissing: true,
