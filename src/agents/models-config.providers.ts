@@ -635,9 +635,10 @@ function buildMinimaxPortalProvider(): ProviderConfig {
   };
 }
 
-function buildMoonshotProvider(): ProviderConfig {
+function buildMoonshotProvider(params?: { baseUrl?: string }): ProviderConfig {
+  const baseUrl = params?.baseUrl?.trim() || MOONSHOT_BASE_URL;
   return {
-    baseUrl: MOONSHOT_BASE_URL,
+    baseUrl,
     api: "openai-completions",
     models: [
       {
@@ -948,7 +949,11 @@ export async function resolveImplicitProviders(params: {
     resolveEnvApiKeyVarName("moonshot") ??
     resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
   if (moonshotKey) {
-    providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
+    const explicitMoonshot = params.explicitProviders?.moonshot;
+    providers.moonshot = {
+      ...buildMoonshotProvider({ baseUrl: explicitMoonshot?.baseUrl }),
+      apiKey: moonshotKey,
+    };
   }
 
   const kimiCodingKey =
