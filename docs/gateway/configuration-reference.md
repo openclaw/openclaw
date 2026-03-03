@@ -2859,7 +2859,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 - `runLog.keepLines`: newest lines retained when run-log pruning is triggered. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 - `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
-- Cron job definitions do **not** belong in `openclaw.json`. Keys like `cron.jobs` are invalid config; create and edit jobs via `openclaw cron ...` or the cron tool/API.
+> **Note:** Cron job definitions do **not** belong in `openclaw.json`. Keys like `cron.jobs` are invalid config; create and edit jobs via `openclaw cron ...` or the cron tool/API.
 
 See [Cron Jobs](/automation/cron-jobs).
 
