@@ -591,6 +591,23 @@ export async function initSessionState(params: {
     (store) => {
       // Preserve per-session overrides while resetting compaction state on /new.
       store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+      
+      // Revalidate auto-label uniqueness under the lock to prevent race conditions.
+      // If another concurrent request set the same label, clear it to avoid ambiguity.
+      const entry = store[sessionKey];
+      if (entry?.label) {
+        for (const [key, other] of Object.entries(store)) {
+          if (key !== sessionKey && other?.label === entry.label) {
+            // Label conflict detected — clear the auto-assigned label
+            delete entry.label;
+            // Also clear sessionEntry.label to prevent later persistence code paths
+            // from reintroducing the duplicate label
+            delete sessionEntry.label;
+            break;
+          }
+        }
+      }
+      
       if (retiredLegacyMainDelivery) {
         store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
       }
