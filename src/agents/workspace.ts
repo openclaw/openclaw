@@ -8,6 +8,8 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
+import { formatDateStampInTimezone, resolveUserTimezone } from "./date-time.js";
+import type { OpenClawConfig } from "../config/config.js";
 
 export function resolveDefaultAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
@@ -495,7 +497,7 @@ async function resolveMemoryBootstrapEntries(
   return deduped;
 }
 
-export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
+export async function loadWorkspaceBootstrapFiles(dir: string, cfg?: OpenClawConfig): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
   const entries: Array<{
@@ -534,6 +536,10 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
 
   entries.push(...(await resolveMemoryBootstrapEntries(resolvedDir)));
 
+  // Perform YYYY-MM-DD date substitution
+  const userTimezone = resolveUserTimezone(cfg?.agents?.defaults?.timezone);
+  const dateStamp = formatDateStampInTimezone(Date.now(), userTimezone);
+
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
     const loaded = await readWorkspaceFileWithGuards({
@@ -541,10 +547,21 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
+      let content = loaded.content;
+      
+      // Only substitute in AGENTS.md and related files
+      if (
+        entry.name === DEFAULT_AGENTS_FILENAME ||
+        entry.name === DEFAULT_MEMORY_FILENAME ||
+        entry.name === DEFAULT_MEMORY_ALT_FILENAME
+      ) {
+        content = content.replaceAll("YYYY-MM-DD", dateStamp);
+      }
+      
       result.push({
         name: entry.name,
         path: entry.filePath,
-        content: loaded.content,
+        content,
         missing: false,
       });
     } else {

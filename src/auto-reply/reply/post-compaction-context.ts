@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
+import { formatDateStampInTimezone, resolveUserTimezone } from "../../agents/date-time.js";
+import type { OpenClawConfig } from "../../gateway/protocol/config-types.js";
 
 const MAX_CONTEXT_CHARS = 3000;
 
@@ -8,7 +10,10 @@ const MAX_CONTEXT_CHARS = 3000;
  * Read critical sections from workspace AGENTS.md for post-compaction injection.
  * Returns formatted system event text, or null if no AGENTS.md or no relevant sections.
  */
-export async function readPostCompactionContext(workspaceDir: string): Promise<string | null> {
+export async function readPostCompactionContext(
+  workspaceDir: string,
+  cfg?: OpenClawConfig,
+): Promise<string | null> {
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
 
   try {
@@ -36,7 +41,11 @@ export async function readPostCompactionContext(workspaceDir: string): Promise<s
       return null;
     }
 
-    const combined = sections.join("\n\n");
+    // Perform YYYY-MM-DD substitution with user's timezone
+    const userTimezone = resolveUserTimezone(cfg?.agents?.defaults?.timezone);
+    const dateStamp = formatDateStampInTimezone(Date.now(), userTimezone);
+    
+    const combined = sections.join("\n\n").replaceAll("YYYY-MM-DD", dateStamp);
     const safeContent =
       combined.length > MAX_CONTEXT_CHARS
         ? combined.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]..."

@@ -191,3 +191,25 @@ export function formatUserTime(
     return undefined;
   }
 }
+
+/**
+ * Format a timestamp as YYYY-MM-DD in the given timezone.
+ * Used for date substitution in AGENTS.md and other templates.
+ */
+export function formatDateStampInTimezone(nowMs: number, timezone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(nowMs));
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  if (year && month && day) {
+    return `${year}-${month}-${day}`;
+  }
+  // Fallback to UTC if timezone formatting fails
+  const utc = new Date(nowMs).toISOString().slice(0, 10);
+  return utc;
+}
