@@ -577,6 +577,64 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("skips immediately on open delivery circuit even when readiness probe throws", async () => {
+    const tmpDir = await createCaseDir("hb-delivery-circuit-readiness-throw");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "Final alert" }]);
+      const failingSend = vi
+        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .mockRejectedValue(new Error("Network request for 'sendMessage' failed!"));
+
+      for (let i = 0; i < 3; i += 1) {
+        await runHeartbeatOnce({
+          cfg,
+          deps: createHeartbeatDeps(failingSend, 1_000 + i),
+        });
+      }
+
+      const blocked = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          ...createHeartbeatDeps(failingSend, 5_000),
+          webAuthExists: async () => {
+            throw new Error("readiness-boom");
+          },
+        },
+      });
+
+      expect(blocked).toEqual({ status: "skipped", reason: "delivery-circuit-open" });
+      expect(replySpy).toHaveBeenCalledTimes(3);
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
   it("allows delivery again after cooldown and resets circuit on success", async () => {
     const tmpDir = await createCaseDir("hb-delivery-circuit-recover");
     const storePath = path.join(tmpDir, "sessions.json");

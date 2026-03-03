@@ -744,6 +744,21 @@ export async function runHeartbeatOnce(opts: {
           accountId: delivery.accountId,
         })
       : { showOk: false, showAlerts: true, useIndicator: true };
+  const deliveryCircuitKey = resolveHeartbeatDeliveryCircuitKey(delivery);
+  if (deliveryCircuitKey) {
+    const circuitState = getHeartbeatDeliveryCircuitState(deliveryCircuitKey, startedAt);
+    if (circuitState.isOpen) {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "delivery-circuit-open",
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("failed") : undefined,
+      });
+      return { status: "skipped", reason: "delivery-circuit-open" };
+    }
+  }
   const deliveryAccountId = delivery.accountId;
   const heartbeatPlugin = delivery.channel !== "none" ? getChannelPlugin(delivery.channel) : null;
   if (delivery.channel !== "none" && heartbeatPlugin?.heartbeat?.checkReady) {
@@ -780,21 +795,6 @@ export async function runHeartbeatOnce(opts: {
         reason: readiness.reason,
       });
       return { status: "skipped", reason: readiness.reason };
-    }
-  }
-  const deliveryCircuitKey = resolveHeartbeatDeliveryCircuitKey(delivery);
-  if (deliveryCircuitKey) {
-    const circuitState = getHeartbeatDeliveryCircuitState(deliveryCircuitKey, startedAt);
-    if (circuitState.isOpen) {
-      emitHeartbeatEvent({
-        status: "skipped",
-        reason: "delivery-circuit-open",
-        durationMs: Date.now() - startedAt,
-        channel: delivery.channel !== "none" ? delivery.channel : undefined,
-        accountId: delivery.accountId,
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("failed") : undefined,
-      });
-      return { status: "skipped", reason: "delivery-circuit-open" };
     }
   }
 
