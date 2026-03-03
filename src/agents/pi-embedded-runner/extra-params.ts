@@ -1189,7 +1189,11 @@ export function applyExtraParamsToAgent(
     log.debug(`applying Kilocode feature header for ${provider}/${modelId}`);
     // kilo/auto is a dynamic routing model — skip reasoning injection
     // (same rationale as OpenRouter "auto"). See: openclaw/openclaw#24851
-    const kilocodeThinkingLevel = modelId === "kilo/auto" ? undefined : thinkingLevel;
+    // Also skip for models known to reject reasoning.effort (e.g. x-ai/*).
+    const kilocodeThinkingLevel =
+      modelId === "kilo/auto" || isOpenRouterReasoningUnsupported(modelId)
+        ? undefined
+        : thinkingLevel;
     agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
   }
 

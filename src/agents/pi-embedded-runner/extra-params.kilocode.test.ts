@@ -151,4 +151,30 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
     // Non-auto models should have reasoning injected
     expect(capturedPayload?.reasoning).toEqual({ effort: "high" });
   });
+
+  it("does not inject reasoning.effort for x-ai models", () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload);
+      capturedPayload = payload;
+      return createAssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "kilocode", "x-ai/grok-3", undefined, "high");
+
+    const model = {
+      api: "openai-completions",
+      provider: "kilocode",
+      id: "x-ai/grok-3",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    // x-ai models reject reasoning.effort — should be skipped
+    expect(capturedPayload?.reasoning).toBeUndefined();
+  });
 });

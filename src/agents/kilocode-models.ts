@@ -167,7 +167,11 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
         continue;
       }
       seenIds.add(id);
-      models.push(toModelDefinition(entry));
+      try {
+        models.push(toModelDefinition(entry));
+      } catch (e) {
+        log.warn(`Skipping malformed model entry "${id}": ${String(e)}`);
+      }
     }
 
     // Ensure the static fallback models are always present
