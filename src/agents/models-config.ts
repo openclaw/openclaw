@@ -119,6 +119,12 @@ async function resolveProvidersForModelsJson(params: {
   const explicitProviders = cfg.models?.providers ?? {};
   const hasExplicitProviders = Object.keys(explicitProviders).length > 0;
 
+  // NOTE: resolveImplicitProviders is called even with explicit providers
+  // because it provides built-in catalog enrichment (model capabilities,
+  // context windows, reasoning flags) that mergeProviderModels applies to
+  // explicitly configured providers. Skipping it entirely would break
+  // catalog refresh. A future optimization could split catalog lookup from
+  // network discovery (e.g. Ollama probe) to avoid unnecessary probes.
   const implicitProviders = await resolveImplicitProviders({ agentDir, explicitProviders });
   const providers: Record<string, ProviderConfig> = mergeProviders({
     implicit: implicitProviders,
