@@ -12,7 +12,6 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-
 - `web_search` — Search the web via Brave Search API (default), Perplexity Sonar, Gemini with Google Search grounding, Grok, Kimi, or Baidu Search API.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
@@ -40,7 +39,7 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 | **Gemini**          | Google Search grounding, AI-synthesized      | Requires Gemini API key                        | `GEMINI_API_KEY`                             |
 | **Grok**            | xAI web-grounded responses                   | Requires xAI API key                           | `XAI_API_KEY`                                |
 | **Kimi**            | Moonshot web search capability               | Requires Moonshot API key                      | `KIMI_API_KEY` / `MOONSHOT_API_KEY`          |
-| **baidu**           | Fast, structured results, high quality       | Traditional search results               | `BAIDU_SEARCH_API_KEY`                       |
+| **baidu**           | Fast, structured results, high quality       | Traditional search results                     | `BAIDU_SEARCH_API_KEY`                       |
 
 See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) and [Baidu Search](/baidu-search) for provider-specific details.
 
