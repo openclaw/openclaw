@@ -158,17 +158,19 @@ export async function runReplyAgent(params: {
   // the race where draining empties the queue before we can check it here.
   const isContinuationEvent = isContinuationWake === true;
 
-  if (!isContinuationEvent && sessionKey) {
-    // External message — reset chain tracking
+  if (!isContinuationEvent && !isHeartbeat && sessionKey) {
+    // External (non-heartbeat) message — reset chain tracking and cancel timers.
+    // Regular heartbeats (including periodic polls) must NOT preempt pending
+    // continuation timers; only real user/external messages should.
     if (activeSessionEntry && (activeSessionEntry.continuationChainCount ?? 0) > 0) {
       activeSessionEntry.continuationChainCount = 0;
       activeSessionEntry.continuationChainStartedAt = undefined;
       activeSessionEntry.continuationChainTokens = undefined;
     }
-    // Cancel any pending continuation timer by bumping the generation counter.
-    // We don't clear the map entry yet — the timer callback needs the bumped value
-    // to detect invalidation. Cleanup happens when chains cap out or complete below.
+    // Cancel any pending continuation timer by bumping the generation counter,
+    // then clean up the map entry (the bump already invalidated in-flight callbacks).
     bumpContinuationGeneration(sessionKey);
+    clearContinuationGeneration(sessionKey);
     if (activeSessionStore && activeSessionEntry) {
       activeSessionStore[sessionKey] = {
         ...activeSessionEntry,
@@ -176,6 +178,23 @@ export async function runReplyAgent(params: {
         continuationChainStartedAt: undefined,
         continuationChainTokens: undefined,
       };
+    }
+    // Persist reset to disk so stale chain state doesn't survive reload
+    if (storePath) {
+      try {
+        await updateSessionStore(storePath, (store) => {
+          const entry = store[sessionKey];
+          if (entry) {
+            entry.continuationChainCount = 0;
+            entry.continuationChainStartedAt = undefined;
+            entry.continuationChainTokens = undefined;
+          }
+        });
+      } catch (err) {
+        defaultRuntime.log(
+          `Failed to persist continuation chain reset for ${sessionKey}: ${String(err)}`,
+        );
+      }
     }
   }
 
