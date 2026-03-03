@@ -933,7 +933,7 @@ async function writeFileWithinRootLegacy(params: {
       tempPath,
       data: params.data,
       encoding: params.encoding,
-      mode: targetMode || 0o666,
+      mode: targetMode ?? 0o666,
     });
     await fs.rename(tempPath, destinationPath);
     tempPath = null;
