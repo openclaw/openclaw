@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
   expectInstallUsesIgnoreScripts,
@@ -13,7 +13,9 @@ import {
 import { isAddressInUseError } from "./gmail-watcher.js";
 
 const fixtureRoot = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
+const sharedArchiveDir = path.join(fixtureRoot, "_archives");
 let tempDirIndex = 0;
+const sharedArchivePathByName = new Map<string, string>();
 
 const fixturesDir = path.resolve(process.cwd(), "test", "fixtures", "hooks-install");
 const zipHooksBuffer = fs.readFileSync(path.join(fixturesDir, "zip-hooks.zip"));
@@ -29,9 +31,8 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 function makeTempDir() {
-  fs.mkdirSync(fixtureRoot, { recursive: true });
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir);
   return dir;
 }
 
@@ -51,11 +52,21 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+beforeAll(() => {
+  fs.mkdirSync(fixtureRoot, { recursive: true });
+  fs.mkdirSync(sharedArchiveDir, { recursive: true });
+});
+
 function writeArchiveFixture(params: { fileName: string; contents: Buffer }) {
   const stateDir = makeTempDir();
-  const workDir = makeTempDir();
-  const archivePath = path.join(workDir, params.fileName);
-  fs.writeFileSync(archivePath, params.contents);
+  const archiveHash = createHash("sha256").update(params.contents).digest("hex").slice(0, 12);
+  const archiveKey = `${params.fileName}:${archiveHash}`;
+  let archivePath = sharedArchivePathByName.get(archiveKey);
+  if (!archivePath) {
+    archivePath = path.join(sharedArchiveDir, `${archiveHash}-${params.fileName}`);
+    fs.writeFileSync(archivePath, params.contents);
+    sharedArchivePathByName.set(archiveKey, archivePath);
+  }
   return {
     stateDir,
     archivePath,

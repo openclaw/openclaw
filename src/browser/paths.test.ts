@@ -28,6 +28,17 @@ async function withFixtureRoot<T>(
   }
 }
 
+async function createAliasedUploadsRoot(baseDir: string): Promise<{
+  canonicalUploadsDir: string;
+  aliasedUploadsDir: string;
+}> {
+  const canonicalUploadsDir = path.join(baseDir, "canonical", "uploads");
+  const aliasedUploadsDir = path.join(baseDir, "uploads-link");
+  await fs.mkdir(canonicalUploadsDir, { recursive: true });
+  await fs.symlink(canonicalUploadsDir, aliasedUploadsDir);
+  return { canonicalUploadsDir, aliasedUploadsDir };
+}
+
 describe("resolveExistingPathsWithinRoot", () => {
   function expectInvalidResult(
     result: Awaited<ReturnType<typeof resolveExistingPathsWithinRoot>>,
@@ -167,10 +178,7 @@ describe("resolveExistingPathsWithinRoot", () => {
     "accepts canonical absolute paths when upload root is a symlink alias",
     async () => {
       await withFixtureRoot(async ({ baseDir }) => {
-        const canonicalUploadsDir = path.join(baseDir, "canonical", "uploads");
-        const aliasedUploadsDir = path.join(baseDir, "uploads-link");
-        await fs.mkdir(canonicalUploadsDir, { recursive: true });
-        await fs.symlink(canonicalUploadsDir, aliasedUploadsDir);
+        const { canonicalUploadsDir, aliasedUploadsDir } = await createAliasedUploadsRoot(baseDir);
 
         const filePath = path.join(canonicalUploadsDir, "ok.txt");
         await fs.writeFile(filePath, "ok", "utf8");
@@ -198,10 +206,7 @@ describe("resolveExistingPathsWithinRoot", () => {
     "rejects canonical absolute paths outside symlinked upload root",
     async () => {
       await withFixtureRoot(async ({ baseDir }) => {
-        const canonicalUploadsDir = path.join(baseDir, "canonical", "uploads");
-        const aliasedUploadsDir = path.join(baseDir, "uploads-link");
-        await fs.mkdir(canonicalUploadsDir, { recursive: true });
-        await fs.symlink(canonicalUploadsDir, aliasedUploadsDir);
+        const { aliasedUploadsDir } = await createAliasedUploadsRoot(baseDir);
 
         const outsideDir = path.join(baseDir, "outside");
         await fs.mkdir(outsideDir, { recursive: true });

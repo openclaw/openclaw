@@ -7,12 +7,22 @@ vi.mock("./docker.js", () => ({
   execDockerRaw: vi.fn(),
 }));
 
+vi.mock("../../infra/boundary-file-read.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/boundary-file-read.js")>();
+  return {
+    ...actual,
+    openBoundaryFile: vi.fn(actual.openBoundaryFile),
+  };
+});
+
+import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { execDockerRaw } from "./docker.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
 
 const mockedExecDockerRaw = vi.mocked(execDockerRaw);
+const mockedOpenBoundaryFile = vi.mocked(openBoundaryFile);
 const DOCKER_SCRIPT_INDEX = 5;
 const DOCKER_FIRST_SCRIPT_ARG_INDEX = 7;
 
@@ -79,6 +89,9 @@ function installDockerReadMock(params?: { canonicalPath?: string }) {
     if (script.includes('cat -- "$1"')) {
       return dockerExecResult("content");
     }
+    if (script.includes("mktemp")) {
+      return dockerExecResult("/workspace/.openclaw-write-b.txt.ABC123\n");
+    }
     return dockerExecResult("");
   });
 }
@@ -93,9 +106,40 @@ async function createHostEscapeFixture(stateDir: string) {
   return { workspaceDir, outsideFile };
 }
 
+async function expectMkdirpAllowsExistingDirectory(params?: { forceBoundaryIoFallback?: boolean }) {
+  await withTempDir("openclaw-fs-bridge-mkdirp-", async (stateDir) => {
+    const workspaceDir = path.join(stateDir, "workspace");
+    const nestedDir = path.join(workspaceDir, "memory", "kemik");
+    await fs.mkdir(nestedDir, { recursive: true });
+
+    if (params?.forceBoundaryIoFallback) {
+      mockedOpenBoundaryFile.mockImplementationOnce(async () => ({
+        ok: false,
+        reason: "io",
+        error: Object.assign(new Error("EISDIR"), { code: "EISDIR" }),
+      }));
+    }
+
+    const bridge = createSandboxFsBridge({
+      sandbox: createSandbox({
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+      }),
+    });
+
+    await expect(bridge.mkdirp({ filePath: "memory/kemik" })).resolves.toBeUndefined();
+
+    const mkdirCall = findCallByScriptFragment('mkdir -p -- "$1"');
+    expect(mkdirCall).toBeDefined();
+    const mkdirPath = mkdirCall ? getDockerPathArg(mkdirCall[0]) : "";
+    expect(mkdirPath).toBe("/workspace/memory/kemik");
+  });
+}
+
 describe("sandbox fs bridge shell compatibility", () => {
   beforeEach(() => {
     mockedExecDockerRaw.mockClear();
+    mockedOpenBoundaryFile.mockClear();
     installDockerReadMock();
   });
 
@@ -189,26 +233,43 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(mockedExecDockerRaw).not.toHaveBeenCalled();
   });
 
+  it("writes via temp file + atomic rename (never direct truncation)", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.writeFile({ filePath: "b.txt", data: "hello" });
+
+    const scripts = getScriptsFromCalls();
+    expect(scripts.some((script) => script.includes('cat >"$1"'))).toBe(false);
+    expect(scripts.some((script) => script.includes('cat >"$tmp"'))).toBe(true);
+    expect(scripts.some((script) => script.includes('mv -f -- "$1" "$2"'))).toBe(true);
+  });
+
+  it("re-validates target before final rename and cleans temp file on failure", async () => {
+    mockedOpenBoundaryFile
+      .mockImplementationOnce(async () => ({ ok: false, reason: "path" }))
+      .mockImplementationOnce(async () => ({
+        ok: false,
+        reason: "validation",
+        error: new Error("Hardlinked path is not allowed"),
+      }));
+
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+    await expect(bridge.writeFile({ filePath: "b.txt", data: "hello" })).rejects.toThrow(
+      /hardlinked path/i,
+    );
+
+    const scripts = getScriptsFromCalls();
+    expect(scripts.some((script) => script.includes("mktemp"))).toBe(true);
+    expect(scripts.some((script) => script.includes('mv -f -- "$1" "$2"'))).toBe(false);
+    expect(scripts.some((script) => script.includes('rm -f -- "$1"'))).toBe(true);
+  });
+
   it("allows mkdirp for existing in-boundary subdirectories", async () => {
-    await withTempDir("openclaw-fs-bridge-mkdirp-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      const nestedDir = path.join(workspaceDir, "memory", "kemik");
-      await fs.mkdir(nestedDir, { recursive: true });
+    await expectMkdirpAllowsExistingDirectory();
+  });
 
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-      });
-
-      await expect(bridge.mkdirp({ filePath: "memory/kemik" })).resolves.toBeUndefined();
-
-      const mkdirCall = findCallByScriptFragment('mkdir -p -- "$1"');
-      expect(mkdirCall).toBeDefined();
-      const mkdirPath = mkdirCall ? getDockerPathArg(mkdirCall[0]) : "";
-      expect(mkdirPath).toBe("/workspace/memory/kemik");
-    });
+  it("allows mkdirp when boundary open reports io for an existing directory", async () => {
+    await expectMkdirpAllowsExistingDirectory({ forceBoundaryIoFallback: true });
   });
 
   it("rejects mkdirp when target exists as a file", async () => {
@@ -235,6 +296,10 @@ describe("sandbox fs bridge shell compatibility", () => {
   it("rejects pre-existing host symlink escapes before docker exec", async () => {
     await withTempDir("openclaw-fs-bridge-", async (stateDir) => {
       const { workspaceDir, outsideFile } = await createHostEscapeFixture(stateDir);
+      // File symlinks require SeCreateSymbolicLinkPrivilege on Windows.
+      if (process.platform === "win32") {
+        return;
+      }
       await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
 
       const bridge = createSandboxFsBridge({

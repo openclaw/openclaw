@@ -139,16 +139,14 @@ describe("secrets audit", () => {
       return;
     }
     const execLogPath = path.join(fixture.rootDir, "exec-calls.log");
-    const execScriptPath = path.join(fixture.rootDir, "resolver.mjs");
+    const execScriptPath = path.join(fixture.rootDir, "resolver.sh");
     await fs.writeFile(
       execScriptPath,
       [
-        `#!${process.execPath}`,
-        "import fs from 'node:fs';",
-        "const req = JSON.parse(fs.readFileSync(0, 'utf8'));",
-        `fs.appendFileSync(${JSON.stringify(execLogPath)}, 'x\\n');`,
-        "const values = Object.fromEntries((req.ids ?? []).map((id) => [id, `value:${id}`]));",
-        "process.stdout.write(JSON.stringify({ protocolVersion: 1, values }));",
+        "#!/bin/sh",
+        `printf 'x\\n' >> ${JSON.stringify(execLogPath)}`,
+        "cat >/dev/null",
+        'printf \'{"protocolVersion":1,"values":{"providers/openai/apiKey":"value:providers/openai/apiKey","providers/moonshot/apiKey":"value:providers/moonshot/apiKey"}}\'',
       ].join("\n"),
       { encoding: "utf8", mode: 0o700 },
     );

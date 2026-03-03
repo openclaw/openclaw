@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { request } from "node:http";
+import { request, type IncomingMessage } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { startTelegramWebhook } from "./webhook.js";
@@ -23,6 +23,22 @@ const WEBHOOK_POST_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 8_000;
 const TELEGRAM_TOKEN = "tok";
 const TELEGRAM_SECRET = "secret";
 const TELEGRAM_WEBHOOK_PATH = "/hook";
+
+function collectResponseBody(
+  res: IncomingMessage,
+  onDone: (payload: { statusCode: number; body: string }) => void,
+): void {
+  const chunks: Buffer[] = [];
+  res.on("data", (chunk: Buffer | string) => {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  });
+  res.on("end", () => {
+    onDone({
+      statusCode: res.statusCode ?? 0,
+      body: Buffer.concat(chunks).toString("utf-8"),
+    });
+  });
+}
 
 vi.mock("grammy", async (importOriginal) => {
   const actual = await importOriginal<typeof import("grammy")>();
@@ -124,16 +140,7 @@ async function postWebhookPayloadWithChunkPlan(params: {
         },
       },
       (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (chunk: Buffer | string) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        });
-        res.on("end", () => {
-          finishResolve({
-            statusCode: res.statusCode ?? 0,
-            body: Buffer.concat(chunks).toString("utf-8"),
-          });
-        });
+        collectResponseBody(res, finishResolve);
       },
     );
 
@@ -412,7 +419,7 @@ describe("startTelegramWebhook", () => {
   it("keeps webhook payload readable when callback delays body read", async () => {
     handlerSpy.mockImplementationOnce(async (...args: unknown[]) => {
       const [update, reply] = args as [unknown, (json: string) => Promise<void>];
-      await sleep(50);
+      await sleep(10);
       await reply(JSON.stringify(update));
     });
 
@@ -439,7 +446,7 @@ describe("startTelegramWebhook", () => {
     const seenPayloads: string[] = [];
     const delayedHandler = async (...args: unknown[]) => {
       const [update, reply] = args as [unknown, (json: string) => Promise<void>];
-      await sleep(50);
+      await sleep(10);
       seenPayloads.push(JSON.stringify(update));
       await reply("ok");
     };
@@ -483,7 +490,7 @@ describe("startTelegramWebhook", () => {
           ) => {
             seenUpdates.push(update);
             void (async () => {
-              await sleep(50);
+              await sleep(10);
               await reply("ok");
             })();
           },
@@ -555,16 +562,8 @@ describe("startTelegramWebhook", () => {
               },
             },
             (res) => {
-              const chunks: Buffer[] = [];
-              res.on("data", (chunk: Buffer | string) => {
-                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-              });
-              res.on("end", () => {
-                resolve({
-                  kind: "response",
-                  statusCode: res.statusCode ?? 0,
-                  body: Buffer.concat(chunks).toString("utf-8"),
-                });
+              collectResponseBody(res, (payload) => {
+                resolve({ kind: "response", ...payload });
               });
             },
           );
@@ -597,9 +596,7 @@ describe("startTelegramWebhook", () => {
     });
 
     abort.abort();
-    await sleep(25);
-
-    expect(deleteWebhookSpy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(deleteWebhookSpy).toHaveBeenCalledTimes(1));
     expect(deleteWebhookSpy).toHaveBeenCalledWith({ drop_pending_updates: false });
   });
 });
