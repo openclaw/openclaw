@@ -59,9 +59,10 @@ export function extractToolCallsFromAssistant(
       continue;
     }
     if (typeof rec.type === "string" && TOOL_CALL_TYPES.has(rec.type)) {
+      const rawName = typeof rec.name === "string" ? rec.name.trim() : "";
       toolCalls.push({
         id: rec.id,
-        name: typeof rec.name === "string" ? rec.name : undefined,
+        name: rawName.length > 0 ? rawName : undefined,
       });
     }
   }
