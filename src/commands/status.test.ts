@@ -489,12 +489,15 @@ describe("statusCommand", () => {
       error: null,
       health: {},
       status: {},
-      presence: [{ mode: "gateway", reason: "self", host: "pi-host", version: "2026.2.21" }],
+      presence: [
+        { mode: "gateway", reason: "self", host: "pi-host", version: "0.0.0-gateway-test" },
+      ],
     });
 
     const joined = await runStatusAndGetJoinedLogs();
-    expect(joined).toContain("app 2026.2.");
-    expect(joined).toContain(`(cli ${VERSION})`);
+    expect(joined).toContain("app 0.0.0-");
+    expect(joined).toContain("gateway-test (cli");
+    expect(joined).toContain(`cli ${VERSION}`);
   });
 
   it("surfaces channel runtime errors from the gateway", async () => {
