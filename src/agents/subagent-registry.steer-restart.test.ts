@@ -196,6 +196,24 @@ describe("subagent registry steer restarts", () => {
     });
   };
 
+  const replaceRunAfterSteer = (params: {
+    previousRunId: string;
+    nextRunId: string;
+    fallback?: ReturnType<typeof listMainRuns>[number];
+  }) => {
+    const replaced = mod.replaceSubagentRunAfterSteer({
+      previousRunId: params.previousRunId,
+      nextRunId: params.nextRunId,
+      fallback: params.fallback,
+    });
+    expect(replaced).toBe(true);
+
+    const runs = listMainRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0].runId).toBe(params.nextRunId);
+    return runs[0];
+  };
+
   afterEach(async () => {
     announceSpy.mockClear();
     announceSpy.mockResolvedValue(true);
@@ -223,16 +241,11 @@ describe("subagent registry steer restarts", () => {
     expect(announceSpy).not.toHaveBeenCalled();
     expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    replaceRunAfterSteer({
       previousRunId: "run-old",
       nextRunId: "run-new",
       fallback: previous,
     });
-    expect(replaced).toBe(true);
-
-    const runs = listMainRuns();
-    expect(runs).toHaveLength(1);
-    expect(runs[0].runId).toBe("run-new");
 
     emitLifecycleEnd("run-new");
 
@@ -324,18 +337,13 @@ describe("subagent registry steer restarts", () => {
       previous.lastAnnounceRetryAt = Date.now();
     }
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const run = replaceRunAfterSteer({
       previousRunId: "run-retry-reset-old",
       nextRunId: "run-retry-reset-new",
       fallback: previous,
     });
-    expect(replaced).toBe(true);
-
-    const runs = listMainRuns();
-    expect(runs).toHaveLength(1);
-    expect(runs[0].runId).toBe("run-retry-reset-new");
-    expect(runs[0].announceRetryCount).toBeUndefined();
-    expect(runs[0].lastAnnounceRetryAt).toBeUndefined();
+    expect(run.announceRetryCount).toBeUndefined();
+    expect(run.lastAnnounceRetryAt).toBeUndefined();
   });
 
   it("clears terminal lifecycle state when replacing after steer restart", async () => {
@@ -354,18 +362,13 @@ describe("subagent registry steer restarts", () => {
       previous.outcome = { status: "ok" };
     }
 
-    const replaced = mod.replaceSubagentRunAfterSteer({
+    const run = replaceRunAfterSteer({
       previousRunId: "run-terminal-state-old",
       nextRunId: "run-terminal-state-new",
       fallback: previous,
     });
-    expect(replaced).toBe(true);
-
-    const runs = listMainRuns();
-    expect(runs).toHaveLength(1);
-    expect(runs[0].runId).toBe("run-terminal-state-new");
-    expect(runs[0].endedHookEmittedAt).toBeUndefined();
-    expect(runs[0].endedReason).toBeUndefined();
+    expect(run.endedHookEmittedAt).toBeUndefined();
+    expect(run.endedReason).toBeUndefined();
 
     emitLifecycleEnd("run-terminal-state-new");
 
