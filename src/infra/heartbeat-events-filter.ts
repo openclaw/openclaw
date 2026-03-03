@@ -39,13 +39,24 @@ export function buildCronEventPrompt(
 
 export function buildExecEventPrompt(opts?: { deliverToUser?: boolean }): string {
   const deliverToUser = opts?.deliverToUser ?? true;
+  // After sharing the exec result, check the project plan and continue or gate.
+  const continuationInstruction =
+    ` After sharing the result, check if your active project workspace contains a PROJECT-PLAN.md.` +
+    ` If it does, read the Active Workstreams section to identify the next step.` +
+    ` If the next step is marked [GATE]: append a gate entry to GATE_CHECKPOINTS.md, tell the user you are waiting for their go-ahead before proceeding, and stop.` +
+    ` If the next step has no [GATE] marker: tell the user you are proceeding to it and start it now.` +
+    ` If there is no PROJECT-PLAN.md or no clear next action in Active Workstreams: stop normally.` +
+    ` When a milestone stage changes, update WORKBOARD.md.`;
   if (!deliverToUser) {
     return (
       "An async command you ran earlier has completed. The result is shown in the system messages above. " +
       "Handle the result internally. Do not relay it to the user unless explicitly requested."
     );
   }
-  return "An async command you ran earlier has completed. Share the result briefly.";
+  return (
+    "An async command you ran earlier has completed. Share the result briefly." +
+    continuationInstruction
+  );
 }
 
 const HEARTBEAT_OK_PREFIX = HEARTBEAT_TOKEN.toLowerCase();
