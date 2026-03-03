@@ -649,9 +649,9 @@ export async function prepareSlackMessage(params: {
   const {
     threadStarterBody,
     threadHistoryBody,
-    threadSessionPreviousTimestamp,
     threadLabel,
     threadStarterMedia,
+    isEffectivelyNewSession,
   } = await resolveSlackThreadContextData({
     ctx,
     account,
@@ -705,11 +705,10 @@ export async function prepareSlackMessage(params: {
     // Preserve thread context for routed tool notifications.
     MessageThreadId: threadContext.messageThreadId,
     ParentSessionKey: threadKeys.parentSessionKey,
-    // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
-    ThreadStarterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
+    // Only include thread starter body for NEW or STALE sessions (fresh sessions already have it in their transcript)
+    ThreadStarterBody: isEffectivelyNewSession ? threadStarterBody : undefined,
     ThreadHistoryBody: threadHistoryBody,
-    IsFirstThreadTurn:
-      isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
+    IsFirstThreadTurn: isThreadReply && threadTs && isEffectivelyNewSession ? true : undefined,
     ThreadLabel: threadLabel,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
