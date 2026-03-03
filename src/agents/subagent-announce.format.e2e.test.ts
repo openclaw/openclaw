@@ -158,7 +158,6 @@ describe("subagent announce formatting", () => {
     previousFastTestEnv = process.env.BOT_TEST_FAST;
     process.env.BOT_TEST_FAST = "1";
     ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
-    previousFastTestEnv = process.env.BOT_TEST_FAST;
   });
 
   afterAll(() => {
@@ -170,7 +169,8 @@ describe("subagent announce formatting", () => {
   });
 
   beforeEach(() => {
-    vi.stubEnv("BOT_TEST_FAST", "1");
+    // BOT_TEST_FAST is set in beforeAll before module import
+    // to ensure the module-level constant picks it up.
     agentSpy
       .mockClear()
       .mockImplementation(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));

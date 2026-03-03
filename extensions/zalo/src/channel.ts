@@ -2,6 +2,7 @@ import type { ChannelAccountSnapshot, ChannelDock, ChannelPlugin, BotConfig } fr
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
+  buildTokenChannelStatusSummary,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   chunkTextForOutbound,
@@ -10,6 +11,8 @@ import {
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
   resolveChannelAccountConfigBasePath,
   setAccountEnabledInConfigSection,
 } from "bot/plugin-sdk";
@@ -51,7 +54,7 @@ function normalizeZaloMessagingTarget(raw: string): string | undefined {
 export const zaloDock: ChannelDock = {
   id: "zalo",
   capabilities: {
-    chatTypes: ["direct"],
+    chatTypes: ["direct", "group"],
     media: true,
     blockStreaming: true,
   },
@@ -77,7 +80,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   meta,
   onboarding: zaloOnboardingAdapter,
   capabilities: {
-    chatTypes: ["direct"],
+    chatTypes: ["direct", "group"],
     media: true,
     reactions: false,
     threads: false,
@@ -137,6 +140,31 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         approveHint: formatPairingApproveHint("zalo"),
         normalizeEntry: (raw) => raw.replace(/^(zalo|zl):/i, ""),
       };
+    },
+    collectWarnings: ({ account, cfg }) => {
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.zalo !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
+      if (groupPolicy !== "open") {
+        return [];
+      }
+      const explicitGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((entry) =>
+        String(entry),
+      );
+      const dmAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
+      const effectiveAllowFrom =
+        explicitGroupAllowFrom.length > 0 ? explicitGroupAllowFrom : dmAllowFrom;
+      if (effectiveAllowFrom.length > 0) {
+        return [
+          `- Zalo groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.zalo.groupPolicy="allowlist" + channels.zalo.groupAllowFrom to restrict senders.`,
+        ];
+      }
+      return [
+        `- Zalo groups: groupPolicy="open" with no groupAllowFrom/allowFrom allowlist; any member can trigger (mention-gated). Set channels.zalo.groupPolicy="allowlist" + channels.zalo.groupAllowFrom.`,
+      ];
     },
   },
   groups: {
@@ -339,17 +367,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       lastError: null,
     },
     collectStatusIssues: collectZaloStatusIssues,
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      tokenSource: snapshot.tokenSource ?? "none",
-      running: snapshot.running ?? false,
-      mode: snapshot.mode ?? null,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
       probeZalo(account.token, timeoutMs, resolveZaloProxyFetch(account.config.proxy)),
     buildAccountSnapshot: ({ account, runtime }) => {

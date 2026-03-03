@@ -121,12 +121,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       enabled: account.enabled,
       configured: account.configured,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveIMessageAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
-      ),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
+    resolveAllowFrom: ({ cfg, accountId }) => resolveIMessageConfigAllowFrom({ cfg, accountId }),
+    formatAllowFrom: ({ allowFrom }) => formatTrimmedAllowFromEntries(allowFrom),
+    resolveDefaultTo: ({ cfg, accountId }) => resolveIMessageConfigDefaultTo({ cfg, accountId }),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -201,10 +198,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
             imessage: {
               ...next.channels?.imessage,
               enabled: true,
-              ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-              ...(input.dbPath ? { dbPath: input.dbPath } : {}),
-              ...(input.service ? { service: input.service as "auto" | "imessage" | "sms" } : {}),
-              ...(input.region ? { region: input.region } : {}),
+              ...buildIMessageSetupPatch(input),
             },
           },
         } as typeof cfg;
@@ -221,10 +215,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
               [accountId]: {
                 ...next.channels?.imessage?.accounts?.[accountId],
                 enabled: true,
-                ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-                ...(input.dbPath ? { dbPath: input.dbPath } : {}),
-                ...(input.service ? { service: input.service as "auto" | "imessage" | "sms" } : {}),
-                ...(input.region ? { region: input.region } : {}),
+                ...buildIMessageSetupPatch(input),
               },
             },
           },

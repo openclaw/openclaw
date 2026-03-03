@@ -2,7 +2,7 @@ import type { BotConfig } from "../config/config.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { resolveAgentModelPrimaryValue, toAgentModelListLike } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveAgentConfig, resolveAgentModelPrimary } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { normalizeGoogleModelId } from "./models-config.providers.js";
@@ -301,11 +301,11 @@ export function resolveConfiguredModelRef(params: {
         return aliasMatch.ref;
       }
 
-      // Use the configured default provider when no provider prefix is specified.
+      // Default to anthropic if no provider is specified, but warn as this is deprecated.
       log.warn(
-        `Model "${trimmed}" specified without provider. Falling back to "${params.defaultProvider}/${trimmed}". Please use "${params.defaultProvider}/${trimmed}" in your config.`,
+        `Model "${trimmed}" specified without provider. Falling back to "anthropic/${trimmed}". Please use "anthropic/${trimmed}" in your config.`,
       );
-      return { provider: params.defaultProvider, model: trimmed };
+      return { provider: "anthropic", model: trimmed };
     }
 
     const resolved = resolveModelRefFromString({
@@ -325,7 +325,7 @@ export function resolveDefaultModelForAgent(params: {
   agentId?: string;
 }): ModelRef {
   const agentModelOverride = params.agentId
-    ? resolveAgentModelPrimary(params.cfg, params.agentId)
+    ? resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)
     : undefined;
   const cfg =
     agentModelOverride && agentModelOverride.length > 0
@@ -400,7 +400,7 @@ export function buildAllowedModelSet(params: {
   const defaultModel = params.defaultModel?.trim();
   const defaultRef =
     defaultModel && params.defaultProvider
-      ? normalizeModelRef(params.defaultProvider, defaultModel)
+      ? parseModelRef(defaultModel, params.defaultProvider)
       : null;
   const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
   const catalogKeys = new Set(params.catalog.map((entry) => modelKey(entry.provider, entry.id)));

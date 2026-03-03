@@ -25,7 +25,7 @@ export async function removeChannelConfigWizard(
       note(
         [
           "No channel config found in bot.json.",
-          `Tip: \`${formatCliCommand("hanzo-bot channels status")}\` shows what is configured and enabled.`,
+          `Tip: \`${formatCliCommand("bot channels status")}\` shows what is configured and enabled.`,
         ].join("\n"),
         "Remove channel",
       );

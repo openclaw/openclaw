@@ -6,7 +6,7 @@ import {
 } from "./credentials.js";
 
 function cfg(input: Partial<BotConfig>): BotConfig {
-  return input as BotConfig;
+  return input;
 }
 
 type ResolveFromConfigInput = Parameters<typeof resolveGatewayCredentialsFromConfig>[0];
@@ -280,10 +280,84 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     expect(resolved.token).toBeUndefined();
   });
 
-  it("reads primary BOT_ env vars regardless of includeLegacyEnv flag", () => {
-    // After rebrand, CLAWDBOT_* env vars no longer exist. includeLegacyEnv only
-    // controlled the legacy CLAWDBOT_* fallback and is now effectively a no-op.
-    // The primary BOT_GATEWAY_TOKEN / BOT_GATEWAY_PASSWORD are always read.
+  it("throws when remote token auth relies on an unresolved SecretRef", () => {
+    expect(() =>
+      resolveGatewayCredentialsFromConfig({
+        cfg: {
+          gateway: {
+            mode: "remote",
+            remote: {
+              url: "wss://gateway.example",
+              token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
+            },
+            auth: {},
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        } as unknown as BotConfig,
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+        remoteTokenFallback: "remote-only",
+      }),
+    ).toThrow("gateway.remote.token");
+  });
+
+  it("does not throw for unresolved remote token ref when password is available", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example",
+            token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
+            password: "remote-password",
+          },
+          auth: {},
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      } as unknown as BotConfig,
+      env: {} as NodeJS.ProcessEnv,
+      includeLegacyEnv: false,
+    });
+    expect(resolved).toEqual({
+      token: undefined,
+      password: "remote-password",
+    });
+  });
+
+  it("throws when remote password auth relies on an unresolved SecretRef", () => {
+    expect(() =>
+      resolveGatewayCredentialsFromConfig({
+        cfg: {
+          gateway: {
+            mode: "remote",
+            remote: {
+              url: "wss://gateway.example",
+              password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
+            },
+            auth: {},
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        } as unknown as BotConfig,
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+        remotePasswordFallback: "remote-only",
+      }),
+    ).toThrow("gateway.remote.password");
+  });
+
+  it("can disable legacy CLAWDBOT env fallback", () => {
     const resolved = resolveGatewayCredentialsFromConfig({
       cfg: cfg({
         gateway: {
@@ -291,12 +365,12 @@ describe("resolveGatewayCredentialsFromConfig", () => {
         },
       }),
       env: {
-        BOT_GATEWAY_TOKEN: "primary-token",
-        BOT_GATEWAY_PASSWORD: "primary-password",
+        CLAWDBOT_GATEWAY_TOKEN: "legacy-token",
+        CLAWDBOT_GATEWAY_PASSWORD: "legacy-password",
       } as NodeJS.ProcessEnv,
       includeLegacyEnv: false,
     });
-    expect(resolved).toEqual({ token: "primary-token", password: "primary-password" });
+    expect(resolved).toEqual({ token: undefined, password: undefined });
   });
 });
 

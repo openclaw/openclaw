@@ -45,7 +45,7 @@ export async function installChromeExtension(opts?: {
 }): Promise<{ path: string }> {
   const src = opts?.sourceDir ?? resolveBundledExtensionRootDir();
   if (!hasManifest(src)) {
-    throw new Error("Bundled Chrome extension is missing. Reinstall Hanzo Bot and try again.");
+    throw new Error("Bundled Chrome extension is missing. Reinstall Bot and try again.");
   }
 
   const stateDir = opts?.stateDir ?? resolveStateDir();
@@ -101,7 +101,7 @@ export function registerBrowserExtensionCommands(
             "Next:",
             `- Chrome → chrome://extensions → enable “Developer mode”`,
             `- “Load unpacked” → select: ${displayPath}`,
-            `- Pin “Hanzo Bot Browser Relay”, then click it on the tab (badge shows ON)`,
+            `- Pin “Bot Browser Relay”, then click it on the tab (badge shows ON)`,
             "",
             `${theme.muted("Docs:")} ${formatDocsLink("/tools/chrome-extension", "docs.hanzo.bot/tools/chrome-extension")}`,
           ].join("\n"),
@@ -119,7 +119,7 @@ export function registerBrowserExtensionCommands(
         defaultRuntime.error(
           danger(
             [
-              `Chrome extension is not installed. Run: "${formatCliCommand("hanzo-bot browser extension install")}"`,
+              `Chrome extension is not installed. Run: "${formatCliCommand("bot browser extension install")}"`,
               `Docs: ${formatDocsLink("/tools/chrome-extension", "docs.hanzo.bot/tools/chrome-extension")}`,
             ].join("\n"),
           ),

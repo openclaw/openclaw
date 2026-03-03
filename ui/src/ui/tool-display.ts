@@ -1,4 +1,5 @@
 import type { IconName } from "./icons.ts";
+import SHARED_TOOL_DISPLAY_JSON from "../../../apps/shared/BotKit/Sources/BotKit/Resources/tool-display.json" with { type: "json" };
 import {
   defaultTitle,
   formatToolDetailText,
@@ -6,7 +7,6 @@ import {
   resolveToolVerbAndDetailForArgs,
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../src/agents/tool-display-common.js";
-import SHARED_TOOL_DISPLAY_JSON from "../../../src/agents/tool-display.json" with { type: "json" };
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
   icon?: string;

@@ -2,7 +2,6 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import WebSocket from "ws";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -322,16 +321,16 @@ export async function launchBotChrome(
         name: profile.name,
         color: profile.color,
       });
-      log.info(`🤖 hanzo-bot browser profile decorated (${profile.color})`);
+      log.info(`🦞 bot browser profile decorated (${profile.color})`);
     } catch (err) {
-      log.warn(`hanzo-bot browser profile decoration failed: ${String(err)}`);
+      log.warn(`bot browser profile decoration failed: ${String(err)}`);
     }
   }
 
   try {
     ensureProfileCleanExit(userDataDir);
   } catch (err) {
-    log.warn(`hanzo-bot browser clean-exit prefs failed: ${String(err)}`);
+    log.warn(`bot browser clean-exit prefs failed: ${String(err)}`);
   }
 
   const proc = spawnOnce();
@@ -379,7 +378,7 @@ export async function launchBotChrome(
 
   const pid = proc.pid ?? -1;
   log.info(
-    `🤖 hanzo-bot browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
+    `🦞 bot browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
   );
 
   return {
@@ -392,7 +391,7 @@ export async function launchBotChrome(
   };
 }
 
-export async function stopBotChrome(running: RunningChrome, timeoutMs = 2500) {
+export async function stopBotChrome(running: RunningChrome, timeoutMs = CHROME_STOP_TIMEOUT_MS) {
   const proc = running.proc;
   if (proc.killed) {
     return;

@@ -1,15 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BotApp } from "./app.ts";
+import { describe, expect, it } from "vitest";
 import "../styles.css";
+import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
-// oxlint-disable-next-line typescript/unbound-method
-const originalConnect = BotApp.prototype.connect;
+registerAppMountHooks();
 
 function mountApp(pathname: string) {
-  window.history.replaceState({}, "", pathname);
-  const app = document.createElement("bot-app") as BotApp;
-  document.body.append(app);
-  return app;
+  return mountTestApp(pathname);
 }
 
 function nextFrame() {
@@ -17,22 +13,6 @@ function nextFrame() {
     requestAnimationFrame(() => resolve());
   });
 }
-
-beforeEach(() => {
-  BotApp.prototype.connect = () => {
-    // no-op: avoid real gateway WS connections in browser tests
-  };
-  window.__BOT_CONTROL_UI_BASE_PATH__ = undefined;
-  localStorage.clear();
-  document.body.innerHTML = "";
-});
-
-afterEach(() => {
-  BotApp.prototype.connect = originalConnect;
-  window.__BOT_CONTROL_UI_BASE_PATH__ = undefined;
-  localStorage.clear();
-  document.body.innerHTML = "";
-});
 
 describe("control UI routing", () => {
   it("hydrates the tab from the location", async () => {

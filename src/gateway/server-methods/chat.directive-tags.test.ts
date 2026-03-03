@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GatewayRequestContext } from "./types.js";
 import { GATEWAY_CLIENT_CAPS } from "../protocol/client-info.js";
 

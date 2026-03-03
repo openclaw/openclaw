@@ -14,33 +14,30 @@ type CommandOptions = Record<string, unknown>;
 
 const SANDBOX_EXAMPLES = {
   main: [
-    ["hanzo-bot sandbox list", "List all sandbox containers."],
-    ["hanzo-bot sandbox list --browser", "List only browser containers."],
-    ["hanzo-bot sandbox recreate --all", "Recreate all containers."],
-    ["hanzo-bot sandbox recreate --session main", "Recreate a specific session."],
-    ["hanzo-bot sandbox recreate --agent mybot", "Recreate agent containers."],
-    ["hanzo-bot sandbox explain", "Explain effective sandbox config."],
+    ["bot sandbox list", "List all sandbox containers."],
+    ["bot sandbox list --browser", "List only browser containers."],
+    ["bot sandbox recreate --all", "Recreate all containers."],
+    ["bot sandbox recreate --session main", "Recreate a specific session."],
+    ["bot sandbox recreate --agent mybot", "Recreate agent containers."],
+    ["bot sandbox explain", "Explain effective sandbox config."],
   ],
   list: [
-    ["hanzo-bot sandbox list", "List all sandbox containers."],
-    ["hanzo-bot sandbox list --browser", "List only browser containers."],
-    ["hanzo-bot sandbox list --json", "JSON output."],
+    ["bot sandbox list", "List all sandbox containers."],
+    ["bot sandbox list --browser", "List only browser containers."],
+    ["bot sandbox list --json", "JSON output."],
   ],
   recreate: [
-    ["hanzo-bot sandbox recreate --all", "Recreate all containers."],
-    ["hanzo-bot sandbox recreate --session main", "Recreate a specific session."],
-    [
-      "hanzo-bot sandbox recreate --agent mybot",
-      "Recreate a specific agent (includes sub-agents).",
-    ],
-    ["hanzo-bot sandbox recreate --browser --all", "Recreate only browser containers."],
-    ["hanzo-bot sandbox recreate --all --force", "Skip confirmation."],
+    ["bot sandbox recreate --all", "Recreate all containers."],
+    ["bot sandbox recreate --session main", "Recreate a specific session."],
+    ["bot sandbox recreate --agent mybot", "Recreate a specific agent (includes sub-agents)."],
+    ["bot sandbox recreate --browser --all", "Recreate only browser containers."],
+    ["bot sandbox recreate --all --force", "Skip confirmation."],
   ],
   explain: [
-    ["hanzo-bot sandbox explain", "Show effective sandbox config."],
-    ["hanzo-bot sandbox explain --session agent:main:main", "Explain a specific session."],
-    ["hanzo-bot sandbox explain --agent work", "Explain an agent sandbox."],
-    ["hanzo-bot sandbox explain --json", "JSON output."],
+    ["bot sandbox explain", "Show effective sandbox config."],
+    ["bot sandbox explain --session agent:main:main", "Explain a specific session."],
+    ["bot sandbox explain --agent work", "Explain an agent sandbox."],
+    ["bot sandbox explain --json", "JSON output."],
   ],
 } as const;
 

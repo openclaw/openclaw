@@ -47,8 +47,6 @@ export type ChannelsProps = {
   onNostrProfileSave: () => void;
   onNostrProfileImport: () => void;
   onNostrProfileToggleAdvanced: () => void;
-  expandedChannel: string | null;
-  onChannelSelect: (key: string | null) => void;
 };
 
 export type ChannelsChannelData = {

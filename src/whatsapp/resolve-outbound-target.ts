@@ -31,17 +31,13 @@ export function resolveWhatsAppOutboundTarget(params: {
     if (isWhatsAppGroupJid(normalizedTo)) {
       return { ok: true, to: normalizedTo };
     }
-    // Explicit targets bypass allowFrom enforcement.
-    if (params.mode === "explicit" || hasWildcard || allowList.length === 0) {
+    // Enforce allowFrom for all direct-message send modes (including explicit).
+    // Group destinations are handled by group policy and are allowed above.
+    if (hasWildcard || allowList.length === 0) {
       return { ok: true, to: normalizedTo };
     }
     if (allowList.includes(normalizedTo)) {
       return { ok: true, to: normalizedTo };
-    }
-    // In implicit mode (session-inherited target), reroute to the first authorized
-    // allowFrom entry rather than rejecting outright.
-    if (params.mode === "implicit" && allowList.length > 0) {
-      return { ok: true, to: allowList[0] };
     }
     return {
       ok: false,

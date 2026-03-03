@@ -3,8 +3,12 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { postMultipartFormData } from "./multipart.js";
-import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
-import { tryGetBlueBubblesRuntime, warnBlueBubbles } from "./runtime.js";
+import {
+  getCachedBlueBubblesPrivateApiStatus,
+  isBlueBubblesPrivateApiStatusEnabled,
+} from "./probe.js";
+import { resolveRequestUrl } from "./request-url.js";
+import { getBlueBubblesRuntime, warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { resolveChatGuidForTarget } from "./send.js";
 import {
@@ -58,19 +62,25 @@ function resolveAccount(params: BlueBubblesAttachmentOpts) {
   return resolveBlueBubblesServerAccount(params);
 }
 
-function resolveBlueBubblesDownloadSsrfPolicy(
-  baseUrl: string,
-  allowPrivateNetwork: boolean,
-): Record<string, unknown> {
-  if (allowPrivateNetwork) {
-    return { allowPrivateNetwork: true };
-  }
+function safeExtractHostname(url: string): string | undefined {
   try {
-    const parsed = new URL(baseUrl);
-    return { allowedHostnames: [parsed.hostname] };
+    const hostname = new URL(url).hostname.trim();
+    return hostname || undefined;
   } catch {
-    return {};
+    return undefined;
   }
+}
+
+type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
+
+function readMediaFetchErrorCode(error: unknown): MediaFetchErrorCode | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const code = (error as { code?: unknown }).code;
+  return code === "max_bytes" || code === "http_error" || code === "fetch_failed"
+    ? code
+    : undefined;
 }
 
 export async function downloadBlueBubblesAttachment(
@@ -88,42 +98,35 @@ export async function downloadBlueBubblesAttachment(
     password,
   });
   const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : DEFAULT_ATTACHMENT_MAX_BYTES;
-  const runtime = tryGetBlueBubblesRuntime();
-  if (runtime) {
-    const ssrfPolicy = resolveBlueBubblesDownloadSsrfPolicy(baseUrl, allowPrivateNetwork);
-    const fetchImpl = (input: RequestInfo | URL, init?: RequestInit) =>
-      blueBubblesFetchWithTimeout(String(input), { method: "GET", ...init }, opts.timeoutMs);
-    let result: { buffer: Buffer; contentType?: string; fileName?: string };
-    try {
-      result = await runtime.channel.media.fetchRemoteMedia({
-        url,
-        maxBytes,
-        fetchImpl,
-        ssrfPolicy,
-      });
-    } catch (err) {
-      const errAny = err as { code?: string; message?: string };
-      if (errAny.code === "max_bytes") {
-        throw new Error(`BlueBubbles attachment too large (exceeds ${maxBytes} bytes)`);
-      }
-      throw err;
+  const trustedHostname = safeExtractHostname(baseUrl);
+  try {
+    const fetched = await getBlueBubblesRuntime().channel.media.fetchRemoteMedia({
+      url,
+      filePathHint: attachment.transferName ?? attachment.guid ?? "attachment",
+      maxBytes,
+      ssrfPolicy: allowPrivateNetwork
+        ? { allowPrivateNetwork: true }
+        : trustedHostname
+          ? { allowedHostnames: [trustedHostname] }
+          : undefined,
+      fetchImpl: async (input, init) =>
+        await blueBubblesFetchWithTimeout(
+          resolveRequestUrl(input),
+          { ...init, method: init?.method ?? "GET" },
+          opts.timeoutMs,
+        ),
+    });
+    return {
+      buffer: new Uint8Array(fetched.buffer),
+      contentType: fetched.contentType ?? attachment.mimeType ?? undefined,
+    };
+  } catch (error) {
+    if (readMediaFetchErrorCode(error) === "max_bytes") {
+      throw new Error(`BlueBubbles attachment too large (limit ${maxBytes} bytes)`);
     }
-    const contentType = result.contentType ?? attachment.mimeType ?? undefined;
-    return { buffer: new Uint8Array(result.buffer), contentType };
+    const text = error instanceof Error ? error.message : String(error);
+    throw new Error(`BlueBubbles attachment download failed: ${text}`);
   }
-  const res = await blueBubblesFetchWithTimeout(url, { method: "GET" }, opts.timeoutMs);
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
-    throw new Error(
-      `BlueBubbles attachment download failed (${res.status}): ${errorText || "unknown"}`,
-    );
-  }
-  const contentType = res.headers.get("content-type") ?? undefined;
-  const buf = new Uint8Array(await res.arrayBuffer());
-  if (buf.byteLength > maxBytes) {
-    throw new Error(`BlueBubbles attachment too large (${buf.byteLength} bytes)`);
-  }
-  return { buffer: buf, contentType: contentType ?? attachment.mimeType ?? undefined };
 }
 
 export type SendBlueBubblesAttachmentResult = {
@@ -154,6 +157,7 @@ export async function sendBlueBubblesAttachment(params: {
   contentType = contentType?.trim() || undefined;
   const { baseUrl, password, accountId } = resolveAccount(opts);
   const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+  const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
 
   // Validate voice memo format when requested (BlueBubbles converts MP3 -> CAF when isAudioMessage).
   const isAudioMessage = wantsVoice;
@@ -222,20 +226,7 @@ export async function sendBlueBubblesAttachment(params: {
   addField("chatGuid", chatGuid);
   addField("name", filename);
   addField("tempGuid", `temp-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
-
-  // Resolve private API availability: true = enabled, false = disabled, null = unknown.
-  // When unknown, warn and downgrade to avoid broken messages.
-  const trimmedReplyTo = replyToMessageGuid?.trim();
-  const wantsPrivateApi = Boolean(trimmedReplyTo);
-  let canUsePrivateApi = privateApiStatus === true;
-  if (wantsPrivateApi && privateApiStatus === null) {
-    warnBlueBubbles(
-      "Private API status unknown; downgrading reply threading to plain send. " +
-        "Run `bluebubbles probe` to detect Private API availability.",
-    );
-    canUsePrivateApi = false;
-  }
-  if (canUsePrivateApi) {
+  if (privateApiEnabled) {
     addField("method", "private-api");
   }
 
@@ -244,9 +235,14 @@ export async function sendBlueBubblesAttachment(params: {
     addField("isAudioMessage", "true");
   }
 
-  if (trimmedReplyTo && canUsePrivateApi) {
+  const trimmedReplyTo = replyToMessageGuid?.trim();
+  if (trimmedReplyTo && privateApiEnabled) {
     addField("selectedMessageGuid", trimmedReplyTo);
     addField("partIndex", typeof replyToPartIndex === "number" ? String(replyToPartIndex) : "0");
+  } else if (trimmedReplyTo && privateApiStatus === null) {
+    warnBlueBubbles(
+      "Private API status unknown; sending attachment without reply threading metadata. Run a status probe to restore private-api reply features.",
+    );
   }
 
   // Add optional caption

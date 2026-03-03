@@ -46,8 +46,8 @@ export async function applyAuthChoiceMiniMax(
       normalize: normalizeApiKeyInput,
       validate: validateApiKeyInput,
       prompter: params.prompter,
-      setCredential: async (apiKey, _mode) =>
-        setMinimaxApiKey(apiKey, params.agentDir, opts.profileId),
+      setCredential: async (apiKey, mode) =>
+        setMinimaxApiKey(apiKey, params.agentDir, opts.profileId, { secretInputMode: mode }),
     });
   };
   const applyMinimaxApiVariant = async (opts: {

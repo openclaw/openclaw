@@ -68,29 +68,20 @@ describe("restartGatewayProcessWithFreshPid", () => {
   });
 
   it("returns supervised when launchd/systemd hints are present", () => {
-    process.env.LAUNCH_JOB_LABEL = "ai.hanzo.bot.gateway";
+    process.env.LAUNCH_JOB_LABEL = "ai.bot.gateway";
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("runs launchd kickstart helper on macOS when launchd label is set", () => {
-    setPlatform("darwin");
-    process.env.LAUNCH_JOB_LABEL = "ai.hanzo.bot.gateway";
-    process.env.BOT_LAUNCHD_LABEL = "ai.hanzo.bot.gateway";
-    triggerBotRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
-
-    const result = restartGatewayProcessWithFreshPid();
-
-    expect(result.mode).toBe("supervised");
-    expect(triggerBotRestartMock).toHaveBeenCalledOnce();
-    expect(spawnMock).not.toHaveBeenCalled();
+    expectLaunchdKickstartSupervised({ launchJobLabel: "ai.bot.gateway" });
   });
 
   it("returns failed when launchd kickstart helper fails", () => {
     setPlatform("darwin");
-    process.env.LAUNCH_JOB_LABEL = "ai.hanzo.bot.gateway";
-    process.env.BOT_LAUNCHD_LABEL = "ai.hanzo.bot.gateway";
+    process.env.LAUNCH_JOB_LABEL = "ai.bot.gateway";
+    process.env.BOT_LAUNCHD_LABEL = "ai.bot.gateway";
     triggerBotRestartMock.mockReturnValue({
       ok: false,
       method: "launchctl",
@@ -106,7 +97,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
   it("does not schedule kickstart on non-darwin platforms", () => {
     setPlatform("linux");
     process.env.INVOCATION_ID = "abc123";
-    process.env.BOT_LAUNCHD_LABEL = "ai.hanzo.bot.gateway";
+    process.env.BOT_LAUNCHD_LABEL = "ai.bot.gateway";
 
     const result = restartGatewayProcessWithFreshPid();
 
@@ -137,13 +128,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
   it("returns supervised when BOT_LAUNCHD_LABEL is set (stock launchd plist)", () => {
     clearSupervisorHints();
-    setPlatform("darwin");
-    process.env.BOT_LAUNCHD_LABEL = "ai.hanzo.bot.gateway";
-    triggerBotRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
-    const result = restartGatewayProcessWithFreshPid();
-    expect(result.mode).toBe("supervised");
-    expect(triggerBotRestartMock).toHaveBeenCalledOnce();
-    expect(spawnMock).not.toHaveBeenCalled();
+    expectLaunchdKickstartSupervised();
   });
 
   it("returns supervised when BOT_SYSTEMD_UNIT is set", () => {

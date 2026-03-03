@@ -2,11 +2,16 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BotConfig } from "../config/config.js";
 import {
+  hasConfiguredModelFallbacks,
   resolveAgentConfig,
   resolveAgentDir,
+  resolveAgentEffectiveModelPrimary,
+  resolveAgentExplicitModelPrimary,
+  resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
   resolveAgentModelFallbacksOverride,
   resolveAgentModelPrimary,
+  resolveRunModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
 
@@ -39,7 +44,7 @@ describe("resolveAgentConfig", () => {
             id: "main",
             name: "Main Agent",
             workspace: "~/bot",
-            agentDir: "~/.bot/agents/main",
+            agentDir: "~/.hanzo/bot/agents/main",
             model: "anthropic/claude-opus-4",
           },
         ],
@@ -49,7 +54,7 @@ describe("resolveAgentConfig", () => {
     expect(result).toEqual({
       name: "Main Agent",
       workspace: "~/bot",
-      agentDir: "~/.bot/agents/main",
+      agentDir: "~/.hanzo/bot/agents/main",
       model: "anthropic/claude-opus-4",
       identity: undefined,
       groupChat: undefined,
@@ -57,6 +62,43 @@ describe("resolveAgentConfig", () => {
       sandbox: undefined,
       tools: undefined,
     });
+  });
+
+  it("resolves explicit and effective model primary separately", () => {
+    const cfgWithStringDefault = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-sonnet-4",
+        },
+        list: [{ id: "main" }],
+      },
+    } as unknown as BotConfig;
+    expect(resolveAgentExplicitModelPrimary(cfgWithStringDefault, "main")).toBeUndefined();
+    expect(resolveAgentEffectiveModelPrimary(cfgWithStringDefault, "main")).toBe(
+      "anthropic/claude-sonnet-4",
+    );
+
+    const cfgWithObjectDefault: BotConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.2",
+            fallbacks: ["anthropic/claude-sonnet-4"],
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+    expect(resolveAgentExplicitModelPrimary(cfgWithObjectDefault, "main")).toBeUndefined();
+    expect(resolveAgentEffectiveModelPrimary(cfgWithObjectDefault, "main")).toBe("openai/gpt-5.2");
+
+    const cfgNoDefaults: BotConfig = {
+      agents: {
+        list: [{ id: "main" }],
+      },
+    };
+    expect(resolveAgentExplicitModelPrimary(cfgNoDefaults, "main")).toBeUndefined();
+    expect(resolveAgentEffectiveModelPrimary(cfgNoDefaults, "main")).toBeUndefined();
   });
 
   it("supports per-agent model primary+fallbacks", () => {
@@ -81,6 +123,8 @@ describe("resolveAgentConfig", () => {
     };
 
     expect(resolveAgentModelPrimary(cfg, "linus")).toBe("anthropic/claude-opus-4");
+    expect(resolveAgentExplicitModelPrimary(cfg, "linus")).toBe("anthropic/claude-opus-4");
+    expect(resolveAgentEffectiveModelPrimary(cfg, "linus")).toBe("anthropic/claude-opus-4");
     expect(resolveAgentModelFallbacksOverride(cfg, "linus")).toEqual(["openai/gpt-5.2"]);
 
     // If fallbacks isn't present, we don't override the global fallbacks.
@@ -167,6 +211,109 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
       }),
     ).toEqual([]);
+  });
+
+  it("resolves fallback agent id from explicit agent id first", () => {
+    expect(
+      resolveFallbackAgentId({
+        agentId: "Support",
+        sessionKey: "agent:main:session",
+      }),
+    ).toBe("support");
+  });
+
+  it("resolves fallback agent id from session key when explicit id is missing", () => {
+    expect(
+      resolveFallbackAgentId({
+        sessionKey: "agent:worker:session",
+      }),
+    ).toBe("worker");
+  });
+
+  it("resolves run fallback overrides via shared helper", () => {
+    const cfg: BotConfig = {
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: ["openai/gpt-4.1"],
+          },
+        },
+        list: [
+          {
+            id: "support",
+            model: {
+              fallbacks: ["openai/gpt-5.2"],
+            },
+          },
+        ],
+      },
+    };
+
+    expect(
+      resolveRunModelFallbacksOverride({
+        cfg,
+        agentId: "support",
+        sessionKey: "agent:main:session",
+      }),
+    ).toEqual(["openai/gpt-5.2"]);
+    expect(
+      resolveRunModelFallbacksOverride({
+        cfg,
+        agentId: undefined,
+        sessionKey: "agent:support:session",
+      }),
+    ).toEqual(["openai/gpt-5.2"]);
+  });
+
+  it("computes whether any model fallbacks are configured via shared helper", () => {
+    const cfgDefaultsOnly: BotConfig = {
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: ["openai/gpt-4.1"],
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+    expect(
+      hasConfiguredModelFallbacks({
+        cfg: cfgDefaultsOnly,
+        sessionKey: "agent:main:session",
+      }),
+    ).toBe(true);
+
+    const cfgAgentOverrideOnly: BotConfig = {
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: [],
+          },
+        },
+        list: [
+          {
+            id: "support",
+            model: {
+              fallbacks: ["openai/gpt-5.2"],
+            },
+          },
+        ],
+      },
+    };
+    expect(
+      hasConfiguredModelFallbacks({
+        cfg: cfgAgentOverrideOnly,
+        agentId: "support",
+        sessionKey: "agent:support:session",
+      }),
+    ).toBe(true);
+    expect(
+      hasConfiguredModelFallbacks({
+        cfg: cfgAgentOverrideOnly,
+        agentId: "main",
+        sessionKey: "agent:main:session",
+      }),
+    ).toBe(false);
   });
 
   it("should return agent-specific sandbox config", () => {

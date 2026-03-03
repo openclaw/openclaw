@@ -299,6 +299,29 @@ describe("createInboundDebouncer", () => {
 
     vi.useRealTimers();
   });
+
+  it("supports per-item debounce windows when default debounce is disabled", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string; windowMs: number }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      resolveDebounceMs: (item) => item.windowMs,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "forward", id: "1", windowMs: 30 });
+    await debouncer.enqueue({ key: "forward", id: "2", windowMs: 30 });
+
+    expect(calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(calls).toEqual([["1", "2"]]);
+
+    vi.useRealTimers();
+  });
 });
 
 describe("initSessionState BodyStripped", () => {
@@ -354,18 +377,18 @@ describe("mention helpers", () => {
       },
     });
     expect(regexes).toHaveLength(1);
-    expect(regexes[0]?.test("bot")).toBe(true);
+    expect(regexes[0]?.test("@hanzo/bot")).toBe(true);
   });
 
   it("normalizes zero-width characters", () => {
-    expect(normalizeMentionText("han\u200bzo")).toBe("hanzo");
+    expect(normalizeMentionText("open\u200bclaw")).toBe("@hanzo/bot");
   });
 
   it("matches patterns case-insensitively", () => {
     const regexes = buildMentionRegexes({
       messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
     });
-    expect(matchesMentionPatterns("HANZO BOT: hi", regexes)).toBe(true);
+    expect(matchesMentionPatterns("bot: hi", regexes)).toBe(true);
   });
 
   it("uses per-agent mention patterns when configured", () => {
@@ -413,6 +436,7 @@ describe("resolveGroupRequireMention", () => {
       GroupSpace: "145",
     };
     const groupResolution: GroupKeyResolution = {
+      key: "discord:group:123",
       channel: "discord",
       id: "123",
       chatType: "group",
@@ -437,6 +461,7 @@ describe("resolveGroupRequireMention", () => {
       GroupSubject: "#general",
     };
     const groupResolution: GroupKeyResolution = {
+      key: "slack:group:C123",
       channel: "slack",
       id: "C123",
       chatType: "group",

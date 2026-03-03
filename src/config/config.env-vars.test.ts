@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { BotConfig } from "./types.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
-import { applyConfigEnvVars } from "./env-vars.js";
+import { applyConfigEnvVars, collectConfigRuntimeEnvVars } from "./env-vars.js";
 import { withEnvOverride, withTempHome } from "./test-helpers.js";
 
 describe("config env vars", () => {
@@ -29,7 +29,63 @@ describe("config env vars", () => {
     });
   });
 
-  it("loads ${VAR} substitutions from ~/.bot/.env on repeated runtime loads", async () => {
+  it("blocks dangerous startup env vars from config env", async () => {
+    await withEnvOverride(
+      {
+        BASH_ENV: undefined,
+        SHELL: undefined,
+        HOME: undefined,
+        ZDOTDIR: undefined,
+        OPENROUTER_API_KEY: undefined,
+      },
+      async () => {
+        const config = {
+          env: {
+            vars: {
+              BASH_ENV: "/tmp/pwn.sh",
+              SHELL: "/tmp/evil-shell",
+              HOME: "/tmp/evil-home",
+              ZDOTDIR: "/tmp/evil-zdotdir",
+              OPENROUTER_API_KEY: "config-key",
+            },
+          },
+        };
+        const entries = collectConfigRuntimeEnvVars(config as BotConfig);
+        expect(entries.BASH_ENV).toBeUndefined();
+        expect(entries.SHELL).toBeUndefined();
+        expect(entries.HOME).toBeUndefined();
+        expect(entries.ZDOTDIR).toBeUndefined();
+        expect(entries.OPENROUTER_API_KEY).toBe("config-key");
+
+        applyConfigEnvVars(config as BotConfig);
+        expect(process.env.BASH_ENV).toBeUndefined();
+        expect(process.env.SHELL).toBeUndefined();
+        expect(process.env.HOME).toBeUndefined();
+        expect(process.env.ZDOTDIR).toBeUndefined();
+        expect(process.env.OPENROUTER_API_KEY).toBe("config-key");
+      },
+    );
+  });
+
+  it("drops non-portable env keys from config env", async () => {
+    await withEnvOverride({ OPENROUTER_API_KEY: undefined }, async () => {
+      const config = {
+        env: {
+          vars: {
+            " BAD KEY": "oops",
+            OPENROUTER_API_KEY: "config-key",
+          },
+          "NOT-PORTABLE": "bad",
+        },
+      };
+      const entries = collectConfigRuntimeEnvVars(config as BotConfig);
+      expect(entries.OPENROUTER_API_KEY).toBe("config-key");
+      expect(entries[" BAD KEY"]).toBeUndefined();
+      expect(entries["NOT-PORTABLE"]).toBeUndefined();
+    });
+  });
+
+  it("loads ${VAR} substitutions from ~/.hanzo/bot/.env on repeated runtime loads", async () => {
     await withTempHome(async (_home) => {
       await withEnvOverride({ BRAVE_API_KEY: undefined }, async () => {
         const stateDir = process.env.BOT_STATE_DIR?.trim();

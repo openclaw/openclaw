@@ -1,7 +1,7 @@
-import type { ChannelAccountSnapshot, ChannelGatewayContext, BotConfig } from "bot/plugin-sdk";
+import type { ChannelAccountSnapshot } from "bot/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
+import { createStartAccountContext } from "../../test-utils/start-account-context.js";
 
 const hoisted = vi.hoisted(() => ({
   startGoogleChatMonitor: vi.fn(),
@@ -16,32 +16,6 @@ vi.mock("./monitor.js", async () => {
 });
 
 import { googlechatPlugin } from "./channel.js";
-
-function createStartAccountCtx(params: {
-  account: ResolvedGoogleChatAccount;
-  abortSignal: AbortSignal;
-  statusPatchSink?: (next: ChannelAccountSnapshot) => void;
-}): ChannelGatewayContext<ResolvedGoogleChatAccount> {
-  const snapshot: ChannelAccountSnapshot = {
-    accountId: params.account.accountId,
-    configured: true,
-    enabled: true,
-    running: false,
-  };
-  return {
-    accountId: params.account.accountId,
-    account: params.account,
-    cfg: {} as BotConfig,
-    runtime: createRuntimeEnv(),
-    abortSignal: params.abortSignal,
-    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    getStatus: () => snapshot,
-    setStatus: (next) => {
-      Object.assign(snapshot, next);
-      params.statusPatchSink?.(snapshot);
-    },
-  };
-}
 
 describe("googlechatPlugin gateway.startAccount", () => {
   afterEach(() => {

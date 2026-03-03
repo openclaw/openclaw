@@ -20,6 +20,15 @@ import {
   withWhatsAppPrefix,
 } from "./utils.js";
 
+function withTempDirSync<T>(prefix: string, run: (dir: string) => T): T {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  try {
+    return run(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 describe("normalizePath", () => {
   it("adds leading slash when missing", () => {
     expect(normalizePath("foo")).toBe("/foo");
@@ -42,10 +51,11 @@ describe("withWhatsAppPrefix", () => {
 
 describe("ensureDir", () => {
   it("creates nested directory", async () => {
-    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "bot-test-"));
-    const target = path.join(tmp, "nested", "dir");
-    await ensureDir(target);
-    expect(fs.existsSync(target)).toBe(true);
+    await withTempDirSync("bot-test-", async (tmp) => {
+      const target = path.join(tmp, "nested", "dir");
+      await ensureDir(target);
+      expect(fs.existsSync(target)).toBe(true);
+    });
   });
 });
 
@@ -97,19 +107,19 @@ describe("jidToE164", () => {
   });
 
   it("maps @lid from authDir mapping files", () => {
-    const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "bot-auth-"));
-    const mappingPath = path.join(authDir, "lid-mapping-456_reverse.json");
-    fs.writeFileSync(mappingPath, JSON.stringify("5559876"));
-    expect(jidToE164("456@lid", { authDir })).toBe("+5559876");
-    fs.rmSync(authDir, { recursive: true, force: true });
+    withTempDirSync("bot-auth-", (authDir) => {
+      const mappingPath = path.join(authDir, "lid-mapping-456_reverse.json");
+      fs.writeFileSync(mappingPath, JSON.stringify("5559876"));
+      expect(jidToE164("456@lid", { authDir })).toBe("+5559876");
+    });
   });
 
   it("maps @hosted.lid from authDir mapping files", () => {
-    const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "bot-auth-"));
-    const mappingPath = path.join(authDir, "lid-mapping-789_reverse.json");
-    fs.writeFileSync(mappingPath, JSON.stringify(4440001));
-    expect(jidToE164("789@hosted.lid", { authDir })).toBe("+4440001");
-    fs.rmSync(authDir, { recursive: true, force: true });
+    withTempDirSync("bot-auth-", (authDir) => {
+      const mappingPath = path.join(authDir, "lid-mapping-789_reverse.json");
+      fs.writeFileSync(mappingPath, JSON.stringify(4440001));
+      expect(jidToE164("789@hosted.lid", { authDir })).toBe("+4440001");
+    });
   });
 
   it("accepts hosted PN JIDs", () => {
@@ -117,13 +127,13 @@ describe("jidToE164", () => {
   });
 
   it("falls back through lidMappingDirs in order", () => {
-    const first = fs.mkdtempSync(path.join(os.tmpdir(), "bot-lid-a-"));
-    const second = fs.mkdtempSync(path.join(os.tmpdir(), "bot-lid-b-"));
-    const mappingPath = path.join(second, "lid-mapping-321_reverse.json");
-    fs.writeFileSync(mappingPath, JSON.stringify("123321"));
-    expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe("+123321");
-    fs.rmSync(first, { recursive: true, force: true });
-    fs.rmSync(second, { recursive: true, force: true });
+    withTempDirSync("bot-lid-a-", (first) => {
+      withTempDirSync("bot-lid-b-", (second) => {
+        const mappingPath = path.join(second, "lid-mapping-321_reverse.json");
+        fs.writeFileSync(mappingPath, JSON.stringify("123321"));
+        expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe("+123321");
+      });
+    });
   });
 });
 
@@ -157,8 +167,8 @@ describe("shortenHomePath", () => {
     vi.stubEnv("BOT_HOME", "/srv/bot-home");
     vi.stubEnv("HOME", "/home/other");
 
-    expect(shortenHomePath(`${path.resolve("/srv/bot-home")}/.bot/bot.json`)).toBe(
-      "$BOT_HOME/.bot/bot.json",
+    expect(shortenHomePath(`${path.resolve("/srv/bot-home")}/.hanzoai/bot.json`)).toBe(
+      "$BOT_HOME/.hanzoai/bot.json",
     );
 
     vi.unstubAllEnvs();
@@ -170,8 +180,8 @@ describe("shortenHomeInString", () => {
     vi.stubEnv("BOT_HOME", "/srv/bot-home");
     vi.stubEnv("HOME", "/home/other");
 
-    expect(shortenHomeInString(`config: ${path.resolve("/srv/bot-home")}/.bot/bot.json`)).toBe(
-      "config: $BOT_HOME/.bot/bot.json",
+    expect(shortenHomeInString(`config: ${path.resolve("/srv/bot-home")}/.hanzoai/bot.json`)).toBe(
+      "config: $BOT_HOME/.hanzoai/bot.json",
     );
 
     vi.unstubAllEnvs();
@@ -194,6 +204,14 @@ describe("resolveJidToE164", () => {
     await expect(resolveJidToE164("888@s.whatsapp.net", { lidLookup })).resolves.toBe("+888");
     expect(lidLookup.getPNForLID).not.toHaveBeenCalled();
   });
+
+  it("returns null when lidLookup throws", async () => {
+    const lidLookup = {
+      getPNForLID: vi.fn().mockRejectedValue(new Error("lookup failed")),
+    };
+    await expect(resolveJidToE164("777@lid", { lidLookup })).resolves.toBeNull();
+    expect(lidLookup.getPNForLID).toHaveBeenCalledWith("777@lid");
+  });
 });
 
 describe("resolveUserPath", () => {
@@ -202,7 +220,7 @@ describe("resolveUserPath", () => {
   });
 
   it("expands ~/ to home dir", () => {
-    expect(resolveUserPath("~/bot")).toBe(path.resolve(os.homedir(), "bot"));
+    expect(resolveUserPath("~/bot")).toBe(path.resolve(os.homedir(), "@hanzo/bot"));
   });
 
   it("resolves relative paths", () => {
@@ -213,7 +231,7 @@ describe("resolveUserPath", () => {
     vi.stubEnv("BOT_HOME", "/srv/bot-home");
     vi.stubEnv("HOME", "/home/other");
 
-    expect(resolveUserPath("~/bot")).toBe(path.resolve("/srv/bot-home", "bot"));
+    expect(resolveUserPath("~/bot")).toBe(path.resolve("/srv/bot-home", "@hanzo/bot"));
 
     vi.unstubAllEnvs();
   });
@@ -221,5 +239,10 @@ describe("resolveUserPath", () => {
   it("keeps blank paths blank", () => {
     expect(resolveUserPath("")).toBe("");
     expect(resolveUserPath("   ")).toBe("");
+  });
+
+  it("returns empty string for undefined/null input", () => {
+    expect(resolveUserPath(undefined as unknown as string)).toBe("");
+    expect(resolveUserPath(null as unknown as string)).toBe("");
   });
 });

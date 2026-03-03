@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BotConfig } from "../config/config.js";
+import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
 import { createTempHomeHarness, makeReplyConfig } from "./reply.test-harness.js";
 
 const agentMocks = vi.hoisted(() => ({
@@ -25,8 +27,8 @@ const { withTempHome } = createTempHomeHarness({ prefix: "bot-rawbody-" });
 describe("RawBody directive parsing", () => {
   beforeEach(() => {
     vi.stubEnv("BOT_TEST_FAST", "1");
-    agentMocks.runEmbeddedPiAgent.mockReset();
-    agentMocks.loadModelCatalog.mockReset();
+    runEmbeddedPiAgentMock.mockClear();
+    agentMocks.loadModelCatalog.mockClear();
     agentMocks.loadModelCatalog.mockResolvedValue([
       { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
     ]);
@@ -60,7 +62,7 @@ describe("RawBody directive parsing", () => {
         CommandAuthorized: true,
       };
 
-      const res = await getReplyFromConfig(groupMessageCtx, {}, makeReplyConfig(home));
+      const res = await getReplyFromConfig(groupMessageCtx, {}, makeReplyConfig(home) as BotConfig);
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("ok");

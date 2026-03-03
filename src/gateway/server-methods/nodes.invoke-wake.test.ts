@@ -67,7 +67,6 @@ function makeNodeInvokeParams(overrides?: Partial<Record<string, unknown>>) {
 async function invokeNode(params: {
   nodeRegistry: {
     get: (nodeId: string) => TestNodeSession | undefined;
-    getRemoteNode: (nodeId: string) => Promise<null>;
     invoke: (payload: {
       nodeId: string;
       command: string;
@@ -107,7 +106,7 @@ function mockSuccessfulWakeConfig(nodeId: string) {
   mocks.loadApnsRegistration.mockResolvedValue({
     nodeId,
     token: "abcd1234abcd1234abcd1234abcd1234",
-    topic: "ai.hanzo.ios",
+    topic: "ai.bot.ios",
     environment: "sandbox",
     updatedAtMs: 1,
   });
@@ -123,7 +122,7 @@ function mockSuccessfulWakeConfig(nodeId: string) {
     ok: true,
     status: 200,
     tokenSuffix: "1234abcd",
-    topic: "ai.hanzo.ios",
+    topic: "ai.bot.ios",
     environment: "sandbox",
   });
 }
@@ -155,7 +154,6 @@ describe("node.invoke APNs wake path", () => {
 
     const nodeRegistry = {
       get: vi.fn(() => undefined),
-      getRemoteNode: vi.fn(() => Promise.resolve(null)),
       invoke: vi.fn().mockResolvedValue({ ok: true }),
     };
 
@@ -181,7 +179,6 @@ describe("node.invoke APNs wake path", () => {
         }
         return connected ? session : undefined;
       }),
-      getRemoteNode: vi.fn(() => Promise.resolve(null)),
       invoke: vi.fn().mockResolvedValue({
         ok: true,
         payload: { ok: true },
@@ -219,7 +216,6 @@ describe("node.invoke APNs wake path", () => {
 
     const nodeRegistry = {
       get: vi.fn(() => undefined),
-      getRemoteNode: vi.fn(() => Promise.resolve(null)),
       invoke: vi.fn().mockResolvedValue({ ok: true }),
     };
 

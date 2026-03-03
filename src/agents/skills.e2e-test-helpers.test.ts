@@ -44,13 +44,13 @@ describe("writeSkill", () => {
         dir: skillDir,
         name: "custom-skill",
         description: "Custom",
-        metadata: '{"hanzo-bot":{"always":true}}',
+        metadata: '{"@hanzo/bot":{"always":true}}',
         frontmatterExtra: "user-invocable: false",
         body: "# Custom Body\n",
       });
 
       const content = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf-8");
-      expect(content).toContain('metadata: {"hanzo-bot":{"always":true}}');
+      expect(content).toContain('metadata: {"@hanzo/bot":{"always":true}}');
       expect(content).toContain("user-invocable: false");
       expect(content).toContain("# Custom Body");
     });

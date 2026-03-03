@@ -32,11 +32,6 @@ export type AgentConfig = {
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
   params?: Record<string, unknown>;
   tools?: AgentToolsConfig;
-  /** Per-agent authentication for hub-managed instances. */
-  auth?: {
-    /** Hashed bearer token for API access to this agent. */
-    token?: string;
-  };
 };
 
 export type AgentsConfig = {

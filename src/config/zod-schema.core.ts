@@ -74,31 +74,10 @@ const ExecSecretRefSchema = z
   })
   .strict();
 
-const KMS_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
-
-const KmsSecretRefSchema = z
-  .object({
-    source: z.literal("kms"),
-    provider: z
-      .string()
-      .regex(
-        SECRET_PROVIDER_ALIAS_PATTERN,
-        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
-      ),
-    id: z
-      .string()
-      .regex(
-        KMS_SECRET_REF_ID_PATTERN,
-        'KMS secret reference id must match /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/ (example: "OPENAI_API_KEY").',
-      ),
-  })
-  .strict();
-
 export const SecretRefSchema = z.discriminatedUnion("source", [
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
-  KmsSecretRefSchema,
 ]);
 
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
@@ -162,50 +141,14 @@ const SecretsExecProviderSchema = z
   })
   .strict();
 
-const SecretsKmsProviderSchema = z
-  .object({
-    source: z.literal("kms"),
-    projectId: z.string().min(1).optional(),
-    environment: z.string().min(1).optional(),
-    secretPath: z.string().min(1).optional(),
-  })
-  .strict();
-
 export const SecretProviderSchema = z.discriminatedUnion("source", [
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
-  SecretsKmsProviderSchema,
 ]);
-
-const KmsMachineIdentitySchema = z
-  .object({
-    clientId: z.string().optional(),
-    clientSecret: z.string().optional(),
-  })
-  .strict()
-  .optional();
-
-const KmsSecretsConfigSchema = z
-  .object({
-    siteUrl: z.string().url().optional(),
-    orgSlug: z.string().optional(),
-    projectId: z.string().optional(),
-    projectSlug: z.string().optional(),
-    environment: z.string().optional(),
-    secretPath: z.string().optional(),
-    accessToken: z.string().optional(),
-    machineIdentity: KmsMachineIdentitySchema,
-    cacheTtlMs: z.number().int().nonnegative().optional(),
-    requestTimeoutMs: z.number().int().positive().max(120000).optional(),
-  })
-  .strict()
-  .optional();
 
 export const SecretsConfigSchema = z
   .object({
-    backend: z.union([z.literal("local"), z.literal("kms")]).optional(),
-    kms: KmsSecretsConfigSchema,
     providers: z
       .object({
         // Keep this as a record so users can define multiple providers per source.
@@ -217,7 +160,6 @@ export const SecretsConfigSchema = z
         env: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         file: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         exec: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
-        kms: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
       })
       .strict()
       .optional(),
@@ -236,21 +178,6 @@ export const SecretsConfigSchema = z
       .optional(),
   })
   .strict()
-  .refine(
-    (data) => {
-      if (!data) {
-        return true;
-      }
-      if (data.backend === "kms" && !data.kms) {
-        return false;
-      }
-      return true;
-    },
-    {
-      message: 'secrets.backend is "kms" but secrets.kms configuration is missing.',
-      path: ["kms"],
-    },
-  )
   .optional();
 
 export const ModelApiSchema = z.enum(MODEL_APIS);

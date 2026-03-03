@@ -2,11 +2,18 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { expectSingleNpmInstallIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
+import {
+  expectInstallUsesIgnoreScripts,
+  expectIntegrityDriftRejected,
+  expectUnsupportedNpmSpec,
+  mockNpmPackMetadataResult,
+} from "../test-utils/npm-spec-install-test-helpers.js";
 import { isAddressInUseError } from "./gmail-watcher.js";
 
 const fixtureRoot = path.join(os.tmpdir(), `bot-hook-install-${randomUUID()}`);
+const sharedArchiveDir = path.join(fixtureRoot, "_archives");
 let tempDirIndex = 0;
 const sharedArchivePathByName = new Map<string, string>();
 
@@ -67,6 +74,56 @@ function writeArchiveFixture(params: { fileName: string; contents: Buffer }) {
   };
 }
 
+function expectInstallFailureContains(
+  result: Awaited<ReturnType<typeof installHooksFromArchive>>,
+  snippets: string[],
+) {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("expected install failure");
+  }
+  for (const snippet of snippets) {
+    expect(result.error).toContain(snippet);
+  }
+}
+
+function writeHookPackManifest(params: {
+  pkgDir: string;
+  hooks: string[];
+  dependencies?: Record<string, string>;
+}) {
+  fs.writeFileSync(
+    path.join(params.pkgDir, "package.json"),
+    JSON.stringify({
+      name: "@bot/test-hooks",
+      version: "0.0.1",
+      bot: { hooks: params.hooks },
+      ...(params.dependencies ? { dependencies: params.dependencies } : {}),
+    }),
+    "utf-8",
+  );
+}
+
+async function installArchiveFixture(params: { fileName: string; contents: Buffer }) {
+  const fixture = writeArchiveFixture(params);
+  const result = await installHooksFromArchive({
+    archivePath: fixture.archivePath,
+    hooksDir: fixture.hooksDir,
+  });
+  return { fixture, result };
+}
+
+function expectPathInstallFailureContains(
+  result: Awaited<ReturnType<typeof installHooksFromPath>>,
+  snippet: string,
+) {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("expected install failure");
+  }
+  expect(result.error).toContain(snippet);
+}
+
 describe("installHooksFromArchive", () => {
   it.each([
     {
@@ -119,13 +176,7 @@ describe("installHooksFromArchive", () => {
       fileName: tc.fileName,
       contents: tc.contents,
     });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.error).toContain("failed to extract archive");
-    expect(result.error).toContain(tc.expectedDetail);
+    expectInstallFailureContains(result, ["failed to extract archive", tc.expectedDetail]);
   });
 
   it.each([
@@ -142,12 +193,7 @@ describe("installHooksFromArchive", () => {
       fileName: "hooks.tar",
       contents: tc.contents,
     });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.error).toContain("reserved path segment");
+    expectInstallFailureContains(result, ["reserved path segment"]);
   });
 });
 
@@ -157,23 +203,18 @@ describe("installHooksFromPath", () => {
     const stateDir = makeTempDir();
     const pkgDir = path.join(workDir, "package");
     fs.mkdirSync(path.join(pkgDir, "hooks", "one-hook"), { recursive: true });
-    fs.writeFileSync(
-      path.join(pkgDir, "package.json"),
-      JSON.stringify({
-        name: "@bot/test-hooks",
-        version: "0.0.1",
-        bot: { hooks: ["./hooks/one-hook"] },
-        dependencies: { "left-pad": "1.3.0" },
-      }),
-      "utf-8",
-    );
+    writeHookPackManifest({
+      pkgDir,
+      hooks: ["./hooks/one-hook"],
+      dependencies: { "left-pad": "1.3.0" },
+    });
     fs.writeFileSync(
       path.join(pkgDir, "hooks", "one-hook", "HOOK.md"),
       [
         "---",
         "name: one-hook",
         "description: One hook",
-        'metadata: {"bot":{"events":["command:new"]}}',
+        'metadata: {"@hanzo/bot":{"events":["command:new"]}}',
         "---",
         "",
         "# One Hook",
@@ -187,19 +228,13 @@ describe("installHooksFromPath", () => {
     );
 
     const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
-
-    const res = await installHooksFromPath({
-      path: pkgDir,
-      hooksDir: path.join(stateDir, "hooks"),
-    });
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expectSingleNpmInstallIgnoreScriptsCall({
-      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
-      expectedCwd: res.targetDir,
+    await expectInstallUsesIgnoreScripts({
+      run,
+      install: async () =>
+        await installHooksFromPath({
+          path: pkgDir,
+          hooksDir: path.join(stateDir, "hooks"),
+        }),
     });
   });
 
@@ -214,7 +249,7 @@ describe("installHooksFromPath", () => {
         "---",
         "name: my-hook",
         "description: My hook",
-        'metadata: {"bot":{"events":["command:new"]}}',
+        'metadata: {"@hanzo/bot":{"events":["command:new"]}}',
         "---",
         "",
         "# My Hook",
@@ -235,6 +270,56 @@ describe("installHooksFromPath", () => {
     expect(result.targetDir).toBe(path.join(stateDir, "hooks", "my-hook"));
     expect(fs.existsSync(path.join(result.targetDir, "HOOK.md"))).toBe(true);
   });
+
+  it("rejects hook pack entries that traverse outside package directory", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const pkgDir = path.join(workDir, "package");
+    const outsideHookDir = path.join(workDir, "outside");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.mkdirSync(outsideHookDir, { recursive: true });
+    writeHookPackManifest({
+      pkgDir,
+      hooks: ["../outside"],
+    });
+    fs.writeFileSync(path.join(outsideHookDir, "HOOK.md"), "---\nname: outside\n---\n", "utf-8");
+    fs.writeFileSync(path.join(outsideHookDir, "handler.ts"), "export default async () => {};\n");
+
+    const result = await installHooksFromPath({
+      path: pkgDir,
+      hooksDir: path.join(stateDir, "hooks"),
+    });
+
+    expectPathInstallFailureContains(result, "bot.hooks entry escapes package directory");
+  });
+
+  it("rejects hook pack entries that escape via symlink", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const pkgDir = path.join(workDir, "package");
+    const outsideHookDir = path.join(workDir, "outside");
+    const linkedDir = path.join(pkgDir, "linked");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.mkdirSync(outsideHookDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideHookDir, "HOOK.md"), "---\nname: outside\n---\n", "utf-8");
+    fs.writeFileSync(path.join(outsideHookDir, "handler.ts"), "export default async () => {};\n");
+    try {
+      fs.symlinkSync(outsideHookDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+    } catch {
+      return;
+    }
+    writeHookPackManifest({
+      pkgDir,
+      hooks: ["./linked"],
+    });
+
+    const result = await installHooksFromPath({
+      path: pkgDir,
+      hooksDir: path.join(stateDir, "hooks"),
+    });
+
+    expectPathInstallFailureContains(result, "bot.hooks entry resolves outside package directory");
+  });
 });
 
 describe("installHooksFromNpmSpec", () => {
@@ -246,9 +331,25 @@ describe("installHooksFromNpmSpec", () => {
     const packedName = "test-hooks-0.0.1.tgz";
     run.mockImplementation(async (argv, opts) => {
       if (argv[0] === "npm" && argv[1] === "pack") {
-        packTmpDir = String(opts?.cwd ?? "");
+        packTmpDir = String(typeof opts === "number" ? "" : (opts.cwd ?? ""));
         fs.writeFileSync(path.join(packTmpDir, packedName), npmPackHooksBuffer);
-        return { code: 0, stdout: `${packedName}\n`, stderr: "", signal: null, killed: false };
+        return {
+          code: 0,
+          stdout: JSON.stringify([
+            {
+              id: "@bot/test-hooks@0.0.1",
+              name: "@bot/test-hooks",
+              version: "0.0.1",
+              filename: packedName,
+              integrity: "sha512-hook-test",
+              shasum: "hookshasum",
+            },
+          ]),
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
       }
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     });
@@ -264,31 +365,46 @@ describe("installHooksFromNpmSpec", () => {
       return;
     }
     expect(result.hookPackId).toBe("test-hooks");
+    expect(result.npmResolution?.resolvedSpec).toBe("@bot/test-hooks@0.0.1");
+    expect(result.npmResolution?.integrity).toBe("sha512-hook-test");
     expect(fs.existsSync(path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"))).toBe(true);
 
-    const packCalls = run.mock.calls.filter(
-      (c) => Array.isArray(c[0]) && c[0][0] === "npm" && c[0][1] === "pack",
-    );
-    expect(packCalls.length).toBe(1);
-    const packCall = packCalls[0];
-    if (!packCall) {
-      throw new Error("expected npm pack call");
-    }
-    const [argv, options] = packCall;
-    expect(argv).toEqual(["npm", "pack", "@bot/test-hooks@0.0.1", "--ignore-scripts"]);
-    expect(options?.env).toMatchObject({ NPM_CONFIG_IGNORE_SCRIPTS: "true" });
+    expectSingleNpmPackIgnoreScriptsCall({
+      calls: run.mock.calls,
+      expectedSpec: "@bot/test-hooks@0.0.1",
+    });
 
     expect(packTmpDir).not.toBe("");
     expect(fs.existsSync(packTmpDir)).toBe(false);
   });
 
   it("rejects non-registry npm specs", async () => {
-    const result = await installHooksFromNpmSpec({ spec: "github:evil/evil" });
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.error).toContain("unsupported npm spec");
+    await expectUnsupportedNpmSpec((spec) => installHooksFromNpmSpec({ spec }));
+  });
+
+  it("aborts when integrity drift callback rejects the fetched artifact", async () => {
+    const run = vi.mocked(runCommandWithTimeout);
+    mockNpmPackMetadataResult(run, {
+      id: "@bot/test-hooks@0.0.1",
+      name: "@bot/test-hooks",
+      version: "0.0.1",
+      filename: "test-hooks-0.0.1.tgz",
+      integrity: "sha512-new",
+      shasum: "newshasum",
+    });
+
+    const onIntegrityDrift = vi.fn(async () => false);
+    const result = await installHooksFromNpmSpec({
+      spec: "@bot/test-hooks@0.0.1",
+      expectedIntegrity: "sha512-old",
+      onIntegrityDrift,
+    });
+    expectIntegrityDriftRejected({
+      onIntegrityDrift,
+      result,
+      expectedIntegrity: "sha512-old",
+      actualIntegrity: "sha512-new",
+    });
   });
 });
 

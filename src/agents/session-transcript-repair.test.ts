@@ -345,89 +345,146 @@ describe("sanitizeToolCallInputs", () => {
     expect(types).toEqual(["text", "toolUse"]);
   });
 
-  it("trims leading whitespace from tool names", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: " read", arguments: {} }],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = sanitizeToolCallInputs(input);
-    const toolCalls = getAssistantToolCallBlocks(out);
-
-    expect(toolCalls).toHaveLength(1);
-    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+  it.each([
+    {
+      name: "trims leading whitespace from tool names",
+      content: [{ type: "toolCall", id: "call_1", name: " read", arguments: {} }],
+      options: undefined,
+      expectedNames: ["read"],
+    },
+    {
+      name: "trims trailing whitespace from tool names",
+      content: [{ type: "toolUse", id: "call_1", name: "exec ", input: { command: "ls" } }],
+      options: undefined,
+      expectedNames: ["exec"],
+    },
+    {
+      name: "trims both leading and trailing whitespace from tool names",
+      content: [
+        { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
+        { type: "toolUse", id: "call_2", name: "  exec  ", input: {} },
+      ],
+      options: undefined,
+      expectedNames: ["read", "exec"],
+    },
+    {
+      name: "trims tool names and matches against allowlist",
+      content: [
+        { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
+        { type: "toolCall", id: "call_2", name: " write ", arguments: {} },
+      ],
+      options: { allowedToolNames: ["read"] },
+      expectedNames: ["read"],
+    },
+  ])("$name", ({ content, options, expectedNames }) => {
+    const toolCalls = sanitizeAssistantToolCalls(content, options);
+    const names = toolCalls
+      .map((toolCall) => (toolCall as { name?: unknown }).name)
+      .filter((name): name is string => typeof name === "string");
+    expect(names).toEqual(expectedNames);
   });
 
-  it("trims trailing whitespace from tool names", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [{ type: "toolUse", id: "call_1", name: "exec ", input: { command: "ls" } }],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = sanitizeToolCallInputs(input);
-    const toolCalls = getAssistantToolCallBlocks(out);
-
-    expect(toolCalls).toHaveLength(1);
-    expect((toolCalls[0] as { name?: unknown }).name).toBe("exec");
-  });
-
-  it("trims both leading and trailing whitespace from tool names", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
-          { type: "toolUse", id: "call_2", name: "  exec  ", input: {} },
-        ],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = sanitizeToolCallInputs(input);
-    const toolCalls = getAssistantToolCallBlocks(out);
-
-    expect(toolCalls).toHaveLength(2);
-    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
-    expect((toolCalls[1] as { name?: unknown }).name).toBe("exec");
-  });
-
-  it("trims tool names and matches against allowlist", () => {
-    const input = [
+  it("preserves toolUse input shape for sessions_spawn when no attachments are present", () => {
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [
-          { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
-          { type: "toolCall", id: "call_2", name: " write ", arguments: {} },
+          {
+            type: "toolUse",
+            id: "call_1",
+            name: "sessions_spawn",
+            input: { task: "hello" },
+          },
         ],
       },
-    ] as unknown as AgentMessage[];
+    ]);
 
-    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
-    const toolCalls = getAssistantToolCallBlocks(out);
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out) as Array<Record<string, unknown>>;
 
     expect(toolCalls).toHaveLength(1);
-    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+    expect(Object.hasOwn(toolCalls[0] ?? {}, "input")).toBe(true);
+    expect(Object.hasOwn(toolCalls[0] ?? {}, "arguments")).toBe(false);
+    expect((toolCalls[0] ?? {}).input).toEqual({ task: "hello" });
   });
 
+  it("redacts sessions_spawn attachments for mixed-case and padded tool names", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolUse",
+            id: "call_1",
+            name: "  SESSIONS_SPAWN  ",
+            input: {
+              task: "hello",
+              attachments: [{ name: "a.txt", content: "SECRET" }],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out) as Array<Record<string, unknown>>;
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] ?? {}).name).toBe("SESSIONS_SPAWN");
+    const inputObj = (toolCalls[0]?.input ?? {}) as Record<string, unknown>;
+    const attachments = (inputObj.attachments ?? []) as Array<Record<string, unknown>>;
+    expect(attachments[0]?.content).toBe("__BOT_REDACTED__");
+  });
   it("preserves other block properties when trimming tool names", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: " read ", arguments: { path: "/tmp/test" } },
-        ],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = sanitizeToolCallInputs(input);
-    const toolCalls = getAssistantToolCallBlocks(out);
+    const toolCalls = sanitizeAssistantToolCalls([
+      { type: "toolCall", id: "call_1", name: " read ", arguments: { path: "/tmp/test" } },
+    ]);
 
     expect(toolCalls).toHaveLength(1);
     expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
     expect((toolCalls[0] as { id?: unknown }).id).toBe("call_1");
     expect((toolCalls[0] as { arguments?: unknown }).arguments).toEqual({ path: "/tmp/test" });
+  });
+});
+
+describe("stripToolResultDetails", () => {
+  it("removes details only from toolResult messages", () => {
+    const input = castAgentMessages([
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        details: { internal: true },
+      },
+      { role: "assistant", content: [{ type: "text", text: "keep me" }], details: { no: "touch" } },
+      { role: "user", content: "hello" },
+    ]);
+
+    const out = stripToolResultDetails(input) as unknown as Array<Record<string, unknown>>;
+
+    expect(Object.hasOwn(out[0] ?? {}, "details")).toBe(false);
+    expect((out[0] ?? {}).role).toBe("toolResult");
+
+    // Non-toolResult messages are preserved as-is.
+    expect(Object.hasOwn(out[1] ?? {}, "details")).toBe(true);
+    expect((out[1] ?? {}).role).toBe("assistant");
+    expect((out[2] ?? {}).role).toBe("user");
+  });
+
+  it("returns the same array reference when there are no toolResult details", () => {
+    const input = castAgentMessages([
+      { role: "assistant", content: [{ type: "text", text: "a" }] },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+      },
+      { role: "user", content: "b" },
+    ]);
+
+    const out = stripToolResultDetails(input);
+    expect(out).toBe(input);
   });
 });

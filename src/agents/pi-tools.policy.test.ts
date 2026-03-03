@@ -1,4 +1,3 @@
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import type { BotConfig } from "../config/config.js";
 import {
@@ -6,16 +5,7 @@ import {
   isToolAllowedByPolicyName,
   resolveSubagentToolPolicy,
 } from "./pi-tools.policy.js";
-
-function createStubTool(name: string): AgentTool<unknown, unknown> {
-  return {
-    name,
-    label: name,
-    description: "",
-    parameters: {},
-    execute: async () => ({}) as AgentToolResult<unknown>,
-  };
-}
+import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
 
 describe("pi-tools.policy", () => {
   it("treats * in allow as allow-all", () => {
@@ -52,6 +42,63 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
   const leafCfg = {
     agents: { defaults: { subagents: { maxSpawnDepth: 1 } } },
   } as unknown as BotConfig;
+
+  it("applies subagent tools.alsoAllow to re-enable default-denied tools", () => {
+    const cfg = {
+      agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+      tools: { subagents: { tools: { alsoAllow: ["sessions_send"] } } },
+    } as unknown as BotConfig;
+    const policy = resolveSubagentToolPolicy(cfg, 1);
+    expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("cron", policy)).toBe(false);
+  });
+
+  it("applies subagent tools.allow to re-enable default-denied tools", () => {
+    const cfg = {
+      agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+      tools: { subagents: { tools: { allow: ["sessions_send"] } } },
+    } as unknown as BotConfig;
+    const policy = resolveSubagentToolPolicy(cfg, 1);
+    expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(true);
+  });
+
+  it("merges subagent tools.alsoAllow into tools.allow when both are set", () => {
+    const cfg = {
+      agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+      tools: {
+        subagents: { tools: { allow: ["sessions_spawn"], alsoAllow: ["sessions_send"] } },
+      },
+    } as unknown as BotConfig;
+    const policy = resolveSubagentToolPolicy(cfg, 1);
+    expect(policy.allow).toEqual(["sessions_spawn", "sessions_send"]);
+  });
+
+  it("keeps configured deny precedence over allow and alsoAllow", () => {
+    const cfg = {
+      agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+      tools: {
+        subagents: {
+          tools: {
+            allow: ["sessions_send"],
+            alsoAllow: ["sessions_send"],
+            deny: ["sessions_send"],
+          },
+        },
+      },
+    } as unknown as BotConfig;
+    const policy = resolveSubagentToolPolicy(cfg, 1);
+    expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(false);
+  });
+
+  it("does not create a restrictive allowlist when only alsoAllow is configured", () => {
+    const cfg = {
+      agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+      tools: { subagents: { tools: { alsoAllow: ["sessions_send"] } } },
+    } as unknown as BotConfig;
+    const policy = resolveSubagentToolPolicy(cfg, 1);
+    expect(policy.allow).toBeUndefined();
+    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(true);
+  });
 
   it("depth-1 orchestrator (maxSpawnDepth=2) allows sessions_spawn", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 1);

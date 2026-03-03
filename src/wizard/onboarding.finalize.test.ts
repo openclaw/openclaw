@@ -1,124 +1,167 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OnboardOptions } from "../commands/onboard-types.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "./prompts.js";
-import { finalizeOnboardingWizard } from "./onboarding.finalize.js";
+import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 
-const mocks = vi.hoisted(() => ({
-  detectBrowserOpenSupport: vi.fn(async () => ({ ok: true })),
-  openUrl: vi.fn(async () => true),
-  probeGatewayReachable: vi.fn(async () => ({ ok: true })),
-  ensureControlUiAssetsBuilt: vi.fn(async () => ({ ok: true })),
-  setupOnboardingShellCompletion: vi.fn(async () => {}),
-  runTui: vi.fn(async () => {}),
+const runTui = vi.hoisted(() => vi.fn(async () => {}));
+const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const setupOnboardingShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
+
+vi.mock("../commands/onboard-helpers.js", () => ({
+  detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
+  formatControlUiSshHint: vi.fn(() => "ssh hint"),
+  openUrl: vi.fn(async () => false),
+  probeGatewayReachable,
+  resolveControlUiLinks: vi.fn(() => ({
+    httpUrl: "http://127.0.0.1:18789",
+    wsUrl: "ws://127.0.0.1:18789",
+  })),
+  waitForGatewayReachable: vi.fn(async () => {}),
 }));
 
-vi.mock("../commands/onboard-helpers.js", async (importActual) => {
-  const actual = await importActual<typeof import("../commands/onboard-helpers.js")>();
-  return {
-    ...actual,
-    detectBrowserOpenSupport: mocks.detectBrowserOpenSupport,
-    openUrl: mocks.openUrl,
-    probeGatewayReachable: mocks.probeGatewayReachable,
-  };
-});
+vi.mock("../commands/daemon-install-helpers.js", () => ({
+  buildGatewayInstallPlan: vi.fn(async () => ({
+    programArguments: [],
+    workingDirectory: "/tmp",
+    environment: {},
+  })),
+  gatewayInstallErrorHint: vi.fn(() => "hint"),
+}));
+
+vi.mock("../commands/daemon-runtime.js", () => ({
+  DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
+  GATEWAY_DAEMON_RUNTIME_OPTIONS: [{ value: "node", label: "Node" }],
+}));
+
+vi.mock("../commands/health-format.js", () => ({
+  formatHealthCheckFailure: vi.fn(() => "health failed"),
+}));
+
+vi.mock("../commands/health.js", () => ({
+  healthCommand: vi.fn(async () => {}),
+}));
+
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: vi.fn(() => ({
+    isLoaded: vi.fn(async () => false),
+    restart: vi.fn(async () => {}),
+    uninstall: vi.fn(async () => {}),
+    install: vi.fn(async () => {}),
+  })),
+}));
+
+vi.mock("../daemon/systemd.js", () => ({
+  isSystemdUserServiceAvailable: vi.fn(async () => false),
+}));
 
 vi.mock("../infra/control-ui-assets.js", () => ({
-  ensureControlUiAssetsBuilt: mocks.ensureControlUiAssetsBuilt,
+  ensureControlUiAssetsBuilt: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock("./onboarding.completion.js", () => ({
-  setupOnboardingShellCompletion: mocks.setupOnboardingShellCompletion,
+vi.mock("../terminal/restore.js", () => ({
+  restoreTerminalState: vi.fn(),
 }));
 
 vi.mock("../tui/tui.js", () => ({
-  runTui: mocks.runTui,
+  runTui,
 }));
 
-function createPrompter(overrides?: Partial<WizardPrompter>): WizardPrompter {
-  const select: WizardPrompter["select"] = vi.fn(async (params) => {
-    if (params.message === "How do you want to hatch your bot?") {
-      return "web" as never;
-    }
-    return (params.initialValue ?? params.options[0]?.value) as never;
-  });
-  const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
+vi.mock("./onboarding.completion.js", () => ({
+  setupOnboardingShellCompletion,
+}));
 
-  return {
-    intro: vi.fn(async () => {}),
-    outro: vi.fn(async () => {}),
-    note: vi.fn(async () => {}),
-    select,
-    multiselect,
-    text: vi.fn(async () => ""),
-    confirm: vi.fn(async () => false),
-    progress: vi.fn(() => ({
-      update: vi.fn(),
-      stop: vi.fn(),
-    })),
-    ...overrides,
-  };
-}
+import { finalizeOnboardingWizard } from "./onboarding.finalize.js";
 
 function createRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
     error: vi.fn(),
-    exit: vi.fn((code: number): never => {
-      throw new Error(`exit:${code}`);
-    }),
+    exit: vi.fn(),
   };
 }
 
 describe("finalizeOnboardingWizard", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    mocks.detectBrowserOpenSupport.mockClear();
-    mocks.openUrl.mockClear();
-    mocks.probeGatewayReachable.mockClear();
-    mocks.ensureControlUiAssetsBuilt.mockClear();
-    mocks.setupOnboardingShellCompletion.mockClear();
-    mocks.runTui.mockClear();
+  beforeEach(() => {
+    runTui.mockClear();
+    probeGatewayReachable.mockClear();
+    setupOnboardingShellCompletion.mockClear();
   });
 
-  it("opens loopback webchat URL with canonical main session key when bind=lan", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-onboarding-finalize-"));
-
-    const opts: OnboardOptions = {
-      installDaemon: false,
-      skipHealth: true,
-      skipProviders: true,
-      skipSkills: true,
-    };
-    const prompter = createPrompter();
+  it("resolves gateway password SecretRef for probe and TUI", async () => {
+    const previous = process.env.BOT_GATEWAY_PASSWORD;
+    process.env.BOT_GATEWAY_PASSWORD = "resolved-gateway-password";
+    const select = vi.fn(async (params: { message: string }) => {
+      if (params.message === "How do you want to hatch your bot?") {
+        return "tui";
+      }
+      return "later";
+    });
+    const prompter = buildWizardPrompter({
+      select: select as never,
+      confirm: vi.fn(async () => false),
+    });
     const runtime = createRuntime();
 
-    await finalizeOnboardingWizard({
-      flow: "quickstart",
-      opts,
-      baseConfig: {},
-      nextConfig: {},
-      workspaceDir,
-      settings: {
-        port: 18789,
-        bind: "lan",
-        authMode: "token",
-        gatewayToken: "test token",
-        tailscaleMode: "off",
-        tailscaleResetOnExit: false,
-      },
-      prompter,
-      runtime,
-    });
+    try {
+      await finalizeOnboardingWizard({
+        flow: "quickstart",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          skipHealth: true,
+          skipUi: false,
+        },
+        baseConfig: {},
+        nextConfig: {
+          gateway: {
+            auth: {
+              mode: "password",
+              password: {
+                source: "env",
+                provider: "default",
+                id: "BOT_GATEWAY_PASSWORD",
+              },
+            },
+          },
+          tools: {
+            web: {
+              search: {
+                apiKey: "",
+              },
+            },
+          },
+        },
+        workspaceDir: "/tmp",
+        settings: {
+          port: 18789,
+          bind: "loopback",
+          authMode: "password",
+          gatewayToken: undefined,
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        },
+        prompter,
+        runtime,
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.BOT_GATEWAY_PASSWORD;
+      } else {
+        process.env.BOT_GATEWAY_PASSWORD = previous;
+      }
+    }
 
-    expect(mocks.openUrl).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/chat?session=agent%3Amain%3Amain#token=test%20token",
+    expect(probeGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        password: "resolved-gateway-password",
+      }),
     );
-
-    await fs.rm(workspaceDir, { recursive: true, force: true });
+    expect(runTui).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        password: "resolved-gateway-password",
+      }),
+    );
   });
 });

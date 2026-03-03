@@ -10,8 +10,8 @@ describe("formatPluginSourceForTable", () => {
       },
       {
         stock: "/opt/homebrew/lib/node_modules/bot/extensions",
-        global: "/Users/x/.bot/extensions",
-        workspace: "/Users/x/ws/.bot/extensions",
+        global: "/Users/x/.hanzo/bot/extensions",
+        workspace: "/Users/x/ws/.hanzo/bot/extensions",
       },
     );
     expect(out.value).toBe("stock:bluebubbles/index.ts");
@@ -22,12 +22,12 @@ describe("formatPluginSourceForTable", () => {
     const out = formatPluginSourceForTable(
       {
         origin: "workspace",
-        source: "/Users/x/ws/.bot/extensions/matrix/index.ts",
+        source: "/Users/x/ws/.hanzo/bot/extensions/matrix/index.ts",
       },
       {
         stock: "/opt/homebrew/lib/node_modules/bot/extensions",
-        global: "/Users/x/.bot/extensions",
-        workspace: "/Users/x/ws/.bot/extensions",
+        global: "/Users/x/.hanzo/bot/extensions",
+        workspace: "/Users/x/ws/.hanzo/bot/extensions",
       },
     );
     expect(out.value).toBe("workspace:matrix/index.ts");
@@ -38,12 +38,12 @@ describe("formatPluginSourceForTable", () => {
     const out = formatPluginSourceForTable(
       {
         origin: "global",
-        source: "/Users/x/.bot/extensions/zalo/index.js",
+        source: "/Users/x/.hanzo/bot/extensions/zalo/index.js",
       },
       {
         stock: "/opt/homebrew/lib/node_modules/bot/extensions",
-        global: "/Users/x/.bot/extensions",
-        workspace: "/Users/x/ws/.bot/extensions",
+        global: "/Users/x/.hanzo/bot/extensions",
+        workspace: "/Users/x/ws/.hanzo/bot/extensions",
       },
     );
     expect(out.value).toBe("global:zalo/index.js");

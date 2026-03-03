@@ -1034,7 +1034,7 @@ export function buildSubagentSystemPrompt(params: {
             'For ACP harness sessions (codex/claudecode/gemini), use `sessions_spawn` with `runtime: "acp"` (set `agentId` unless `acp.defaultAgent` is configured).',
             '`agents_list` and `subagents` apply to Bot sub-agents (`runtime: "subagent"`); ACP harness ids are controlled by `acp.allowedAgents`.',
             "Do not ask users to run slash commands or CLI when `sessions_spawn` can do it directly.",
-            "Do not use `exec` (`hanzo-bot ...`, `acpx ...`) to spawn ACP sessions.",
+            "Do not use `exec` (`bot ...`, `acpx ...`) to spawn ACP sessions.",
             'Use `subagents` only for Bot subagents (`runtime: "subagent"`).',
             "Subagent results auto-announce back to you; ACP sessions continue in their bound thread.",
             "Avoid polling loops; spawn, orchestrate, and synthesize results.",

@@ -104,11 +104,11 @@ export function extractMSTeamsPollVote(
   const pollId =
     readNestedString(value, ["botPollId"]) ??
     readNestedString(value, ["pollId"]) ??
-    readNestedString(value, ["bot", "pollId"]) ??
-    readNestedString(value, ["bot", "poll", "id"]) ??
+    readNestedString(value, ["@hanzo/bot", "pollId"]) ??
+    readNestedString(value, ["@hanzo/bot", "poll", "id"]) ??
     readNestedString(value, ["data", "botPollId"]) ??
     readNestedString(value, ["data", "pollId"]) ??
-    readNestedString(value, ["data", "bot", "pollId"]);
+    readNestedString(value, ["data", "@hanzo/bot", "pollId"]);
   if (!pollId) {
     return null;
   }
@@ -190,7 +190,7 @@ export function buildMSTeamsPollCard(params: {
         },
         msteams: {
           type: "messageBack",
-          text: "hanzo-bot poll vote",
+          text: "bot poll vote",
           displayText: "Vote recorded",
           value: { botPollId: pollId, pollId },
         },

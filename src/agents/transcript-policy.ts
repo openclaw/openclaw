@@ -16,8 +16,6 @@ export type TranscriptPolicy = {
   };
   sanitizeThinkingSignatures: boolean;
   dropThinkingBlocks: boolean;
-  /** Strip Antigravity-routed Claude thinking blocks from session history. */
-  normalizeAntigravityThinkingBlocks: boolean;
   applyGoogleTurnOrdering: boolean;
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
@@ -119,8 +117,6 @@ export function resolveTranscriptPolicy(params: {
   const sanitizeThoughtSignatures =
     isOpenRouterGemini || isGoogle ? { allowBase64Only: true, includeCamelCase: true } : undefined;
 
-  const isAntigravity = provider === "google-antigravity";
-
   return {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
     sanitizeToolCallIds:
@@ -131,7 +127,6 @@ export function resolveTranscriptPolicy(params: {
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     sanitizeThinkingSignatures: false,
     dropThinkingBlocks,
-    normalizeAntigravityThinkingBlocks: isAntigravity,
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
     validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),

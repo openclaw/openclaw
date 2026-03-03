@@ -113,8 +113,20 @@ describe("resolveSkillCommandInvocation", () => {
 });
 
 describe("listSkillCommandsForAgents", () => {
-  it("merges command names across agents and de-duplicates", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-skills-"));
+  const tempDirs: string[] = [];
+  const makeTempDir = async (prefix: string) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    tempDirs.push(dir);
+    return dir;
+  };
+  afterAll(async () => {
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
+  it("lists all agents when agentIds is omitted", async () => {
+    const baseDir = await makeTempDir("bot-skills-");
     const mainWorkspace = path.join(baseDir, "main");
     const researchWorkspace = path.join(baseDir, "research");
     await fs.mkdir(mainWorkspace, { recursive: true });

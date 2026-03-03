@@ -24,6 +24,18 @@ const COMMAND_ALIASES: Record<string, string> = {
   elev: "elevated",
 };
 
+function createLevelCompletion(
+  levels: string[],
+): NonNullable<SlashCommand["getArgumentCompletions"]> {
+  return (prefix) =>
+    levels
+      .filter((value) => value.startsWith(prefix.toLowerCase()))
+      .map((value) => ({
+        value,
+        label: value,
+      }));
+}
+
 export function parseCommand(input: string): ParsedCommand {
   const trimmed = input.replace(/^\//, "").trim();
   if (!trimmed) {
@@ -39,6 +51,11 @@ export function parseCommand(input: string): ParsedCommand {
 
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
   const thinkLevels = listThinkingLevelLabels(options.provider, options.model);
+  const verboseCompletions = createLevelCompletion(VERBOSE_LEVELS);
+  const reasoningCompletions = createLevelCompletion(REASONING_LEVELS);
+  const usageCompletions = createLevelCompletion(USAGE_FOOTER_LEVELS);
+  const elevatedCompletions = createLevelCompletion(ELEVATED_LEVELS);
+  const activationCompletions = createLevelCompletion(ACTIVATION_LEVELS);
   const commands: SlashCommand[] = [
     { name: "help", description: "Show slash command help" },
     { name: "status", description: "Show gateway status summary" },
@@ -62,56 +79,32 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     {
       name: "verbose",
       description: "Set verbose on/off",
-      getArgumentCompletions: (prefix) =>
-        VERBOSE_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: verboseCompletions,
     },
     {
       name: "reasoning",
       description: "Set reasoning on/off",
-      getArgumentCompletions: (prefix) =>
-        REASONING_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: reasoningCompletions,
     },
     {
       name: "usage",
       description: "Toggle per-response usage line",
-      getArgumentCompletions: (prefix) =>
-        USAGE_FOOTER_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: usageCompletions,
     },
     {
       name: "elevated",
       description: "Set elevated on/off/ask/full",
-      getArgumentCompletions: (prefix) =>
-        ELEVATED_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: elevatedCompletions,
     },
     {
       name: "elev",
       description: "Alias for /elevated",
-      getArgumentCompletions: (prefix) =>
-        ELEVATED_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: elevatedCompletions,
     },
     {
       name: "activation",
       description: "Set group activation",
-      getArgumentCompletions: (prefix) =>
-        ACTIVATION_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: activationCompletions,
     },
     { name: "abort", description: "Abort active run" },
     { name: "new", description: "Reset the session" },

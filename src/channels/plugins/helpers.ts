@@ -14,7 +14,7 @@ export function resolveChannelDefaultAccountId<ResolvedAccount>(params: {
 }
 
 export function formatPairingApproveHint(channelId: string): string {
-  const listCmd = formatCliCommand(`hanzo-bot pairing list ${channelId}`);
-  const approveCmd = formatCliCommand(`hanzo-bot pairing approve ${channelId} <code>`);
+  const listCmd = formatCliCommand(`bot pairing list ${channelId}`);
+  const approveCmd = formatCliCommand(`bot pairing approve ${channelId} <code>`);
   return `Approve via: ${listCmd} / ${approveCmd}`;
 }

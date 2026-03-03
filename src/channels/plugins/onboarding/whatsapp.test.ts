@@ -244,7 +244,7 @@ describe("whatsappOnboardingAdapter.configure", () => {
 
     expect(loginWebMock).not.toHaveBeenCalled();
     expect(harness.note).not.toHaveBeenCalledWith(
-      expect.stringContaining("hanzo-bot channels login"),
+      expect.stringContaining("bot channels login"),
       "WhatsApp",
     );
   });
@@ -260,7 +260,7 @@ describe("whatsappOnboardingAdapter.configure", () => {
     });
 
     expect(harness.note).toHaveBeenCalledWith(
-      expect.stringContaining("hanzo-bot channels login"),
+      expect.stringContaining("bot channels login"),
       "WhatsApp",
     );
   });

@@ -325,7 +325,7 @@ describe("preflightDiscordMessage", () => {
       accountId: "default",
       token: "token",
       runtime: {} as import("../../runtime.js").RuntimeEnv,
-      botUserId: "hanzo-bot",
+      botUserId: "bot-bot",
       guildHistories: new Map(),
       historyLimit: 0,
       mediaMaxBytes: 1_000_000,

@@ -1,6 +1,5 @@
-import type { NodeBillingMode } from "../../config/types.gateway.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import {
   approveNodePairing,
@@ -13,6 +12,7 @@ import {
 import {
   loadApnsRegistration,
   resolveApnsAuthConfigFromEnv,
+  sendApnsAlert,
   sendApnsBackgroundWake,
 } from "../../infra/push-apns.js";
 import {
@@ -25,7 +25,6 @@ import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.j
 import {
   ErrorCodes,
   errorShape,
-  validateNodeBillingSetParams,
   validateNodeDescribeParams,
   validateNodeEventParams,
   validateNodeInvokeParams,
@@ -46,10 +45,37 @@ import {
   uniqueSortedStrings,
 } from "./nodes.helpers.js";
 
-// How long to poll for a node to reconnect after an APNs background wake.
-const APNS_WAKE_WAIT_TIMEOUT_MS = 3_000;
-// Poll interval when waiting for a woken node to reconnect.
-const APNS_WAKE_POLL_INTERVAL_MS = 100;
+const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
+const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
+const NODE_WAKE_RECONNECT_POLL_MS = 150;
+const NODE_WAKE_THROTTLE_MS = 15_000;
+const NODE_WAKE_NUDGE_THROTTLE_MS = 10 * 60_000;
+
+type NodeWakeState = {
+  lastWakeAtMs: number;
+  inFlight?: Promise<NodeWakeAttempt>;
+};
+
+const nodeWakeById = new Map<string, NodeWakeState>();
+const nodeWakeNudgeById = new Map<string, number>();
+
+type NodeWakeAttempt = {
+  available: boolean;
+  throttled: boolean;
+  path: "throttled" | "no-registration" | "no-auth" | "sent" | "send-error";
+  durationMs: number;
+  apnsStatus?: number;
+  apnsReason?: string;
+};
+
+type NodeWakeNudgeAttempt = {
+  sent: boolean;
+  throttled: boolean;
+  reason: "throttled" | "no-registration" | "no-auth" | "send-error" | "apns-not-ok" | "sent";
+  durationMs: number;
+  apnsStatus?: number;
+  apnsReason?: string;
+};
 
 function isNodeEntry(entry: { role?: string; roles?: string[] }) {
   if (entry.role === "node") {
@@ -61,51 +87,181 @@ function isNodeEntry(entry: { role?: string; roles?: string[] }) {
   return false;
 }
 
-/**
- * Attempt to wake a disconnected iOS node via APNs and wait for it to
- * reconnect.  Returns the reconnected node session if it comes online within
- * `APNS_WAKE_WAIT_TIMEOUT_MS`, or `null` if it does not.  Always sends one
- * retry wake on timeout so the OS has a second chance to deliver the push.
- */
-async function tryApnsWakeAndWait(
+async function delayMs(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function maybeWakeNodeWithApns(
   nodeId: string,
-  getNode: (id: string) => unknown,
-): Promise<boolean> {
-  const [registration, authResult] = await Promise.all([
-    loadApnsRegistration(nodeId),
-    resolveApnsAuthConfigFromEnv(),
-  ]);
-  if (!registration || !authResult.ok) {
-    // No APNs config available; fall through to the standard not-connected path.
-    return false;
+  opts?: { force?: boolean },
+): Promise<NodeWakeAttempt> {
+  const state = nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 };
+  nodeWakeById.set(nodeId, state);
+
+  if (state.inFlight) {
+    return await state.inFlight;
   }
 
-  // Send the first background wake push.
-  await sendApnsBackgroundWake({
-    auth: authResult.value,
-    registration,
-    nodeId,
-    wakeReason: "node.invoke",
+  const now = Date.now();
+  const force = opts?.force === true;
+  if (!force && state.lastWakeAtMs > 0 && now - state.lastWakeAtMs < NODE_WAKE_THROTTLE_MS) {
+    return { available: true, throttled: true, path: "throttled", durationMs: 0 };
+  }
+
+  state.inFlight = (async () => {
+    const startedAtMs = Date.now();
+    const withDuration = (attempt: Omit<NodeWakeAttempt, "durationMs">): NodeWakeAttempt => ({
+      ...attempt,
+      durationMs: Math.max(0, Date.now() - startedAtMs),
+    });
+
+    try {
+      const registration = await loadApnsRegistration(nodeId);
+      if (!registration) {
+        return withDuration({ available: false, throttled: false, path: "no-registration" });
+      }
+
+      const auth = await resolveApnsAuthConfigFromEnv(process.env);
+      if (!auth.ok) {
+        return withDuration({
+          available: false,
+          throttled: false,
+          path: "no-auth",
+          apnsReason: auth.error,
+        });
+      }
+
+      state.lastWakeAtMs = Date.now();
+      const wakeResult = await sendApnsBackgroundWake({
+        auth: auth.value,
+        registration,
+        nodeId,
+        wakeReason: "node.invoke",
+      });
+      if (!wakeResult.ok) {
+        return withDuration({
+          available: true,
+          throttled: false,
+          path: "send-error",
+          apnsStatus: wakeResult.status,
+          apnsReason: wakeResult.reason,
+        });
+      }
+      return withDuration({
+        available: true,
+        throttled: false,
+        path: "sent",
+        apnsStatus: wakeResult.status,
+        apnsReason: wakeResult.reason,
+      });
+    } catch (err) {
+      // Best-effort wake only.
+      const message = err instanceof Error ? err.message : String(err);
+      if (state.lastWakeAtMs === 0) {
+        return withDuration({
+          available: false,
+          throttled: false,
+          path: "send-error",
+          apnsReason: message,
+        });
+      }
+      return withDuration({
+        available: true,
+        throttled: false,
+        path: "send-error",
+        apnsReason: message,
+      });
+    }
+  })();
+
+  try {
+    return await state.inFlight;
+  } finally {
+    state.inFlight = undefined;
+  }
+}
+
+async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNudgeAttempt> {
+  const startedAtMs = Date.now();
+  const withDuration = (
+    attempt: Omit<NodeWakeNudgeAttempt, "durationMs">,
+  ): NodeWakeNudgeAttempt => ({
+    ...attempt,
+    durationMs: Math.max(0, Date.now() - startedAtMs),
   });
 
-  // Poll for the node to come back online.
-  const deadline = Date.now() + APNS_WAKE_WAIT_TIMEOUT_MS;
+  const lastNudgeAtMs = nodeWakeNudgeById.get(nodeId) ?? 0;
+  if (lastNudgeAtMs > 0 && Date.now() - lastNudgeAtMs < NODE_WAKE_NUDGE_THROTTLE_MS) {
+    return withDuration({ sent: false, throttled: true, reason: "throttled" });
+  }
+
+  const registration = await loadApnsRegistration(nodeId);
+  if (!registration) {
+    return withDuration({ sent: false, throttled: false, reason: "no-registration" });
+  }
+  const auth = await resolveApnsAuthConfigFromEnv(process.env);
+  if (!auth.ok) {
+    return withDuration({
+      sent: false,
+      throttled: false,
+      reason: "no-auth",
+      apnsReason: auth.error,
+    });
+  }
+
+  try {
+    const result = await sendApnsAlert({
+      auth: auth.value,
+      registration,
+      nodeId,
+      title: "Bot needs a quick reopen",
+      body: "Tap to reopen Bot and restore the node connection.",
+    });
+    if (!result.ok) {
+      return withDuration({
+        sent: false,
+        throttled: false,
+        reason: "apns-not-ok",
+        apnsStatus: result.status,
+        apnsReason: result.reason,
+      });
+    }
+    nodeWakeNudgeById.set(nodeId, Date.now());
+    return withDuration({
+      sent: true,
+      throttled: false,
+      reason: "sent",
+      apnsStatus: result.status,
+      apnsReason: result.reason,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return withDuration({
+      sent: false,
+      throttled: false,
+      reason: "send-error",
+      apnsReason: message,
+    });
+  }
+}
+
+async function waitForNodeReconnect(params: {
+  nodeId: string;
+  context: { nodeRegistry: { get: (nodeId: string) => unknown } };
+  timeoutMs?: number;
+  pollMs?: number;
+}): Promise<boolean> {
+  const timeoutMs = Math.max(250, params.timeoutMs ?? NODE_WAKE_RECONNECT_WAIT_MS);
+  const pollMs = Math.max(50, params.pollMs ?? NODE_WAKE_RECONNECT_POLL_MS);
+  const deadline = Date.now() + timeoutMs;
+
   while (Date.now() < deadline) {
-    await new Promise<void>((r) => setTimeout(r, APNS_WAKE_POLL_INTERVAL_MS));
-    if (getNode(nodeId)) {
+    if (params.context.nodeRegistry.get(params.nodeId)) {
       return true;
     }
+    await delayMs(pollMs);
   }
-
-  // Node did not reconnect in time; send one retry wake so the OS has a
-  // second chance, then report not connected to the caller.
-  await sendApnsBackgroundWake({
-    auth: authResult.value,
-    registration,
-    nodeId,
-    wakeReason: "node.invoke.retry",
-  });
-  return false;
+  return Boolean(params.context.nodeRegistry.get(params.nodeId));
 }
 
 export const nodeHandlers: GatewayRequestHandlers = {
@@ -272,57 +428,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(true, { nodeId: updated.nodeId, displayName: updated.displayName }, undefined);
     });
   },
-  "node.billing.set": async ({ params, respond, context }) => {
-    if (!validateNodeBillingSetParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.billing.set",
-        validator: validateNodeBillingSetParams,
-      });
-      return;
-    }
-    const p = params as {
-      nodeId: string;
-      billingMode: NodeBillingMode;
-      budgetCents?: number;
-    };
-    await respondUnavailableOnThrow(respond, async () => {
-      const cfg = loadConfig();
-      const gwCfg = cfg.gateway ?? {};
-      const nodesCfg = gwCfg.nodes ?? {};
-      const billing = nodesCfg.billing ?? {};
-      billing[p.nodeId] = {
-        mode: p.billingMode,
-        budgetCents: p.billingMode === "dedicated" ? (p.budgetCents ?? 0) : undefined,
-        spentCents: billing[p.nodeId]?.spentCents ?? 0,
-      };
-      const nextConfig = {
-        ...cfg,
-        gateway: { ...gwCfg, nodes: { ...nodesCfg, billing } },
-      };
-      await writeConfigFile(nextConfig);
-
-      // Update in-memory node session if connected.
-      const session = context.nodeRegistry.get(p.nodeId);
-      if (session) {
-        session.billingMode = p.billingMode;
-        if (p.billingMode === "dedicated") {
-          session.dedicatedBudgetCents = p.budgetCents ?? 0;
-        }
-      }
-
-      respond(
-        true,
-        {
-          nodeId: p.nodeId,
-          billingMode: p.billingMode,
-          budgetCents: billing[p.nodeId].budgetCents ?? 0,
-          spentCents: billing[p.nodeId].spentCents ?? 0,
-        },
-        undefined,
-      );
-    });
-  },
   "node.list": async ({ params, respond, context }) => {
     if (!validateNodeListParams(params)) {
       respondInvalidParams({
@@ -332,11 +437,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const p = params as { connectedOnly?: boolean };
     await respondUnavailableOnThrow(respond, async () => {
       const list = await listDevicePairing();
-      const cfg = loadConfig();
-      const billingCfg = cfg.gateway?.nodes?.billing ?? {};
       const pairedById = new Map(
         list.paired
           .filter((entry) => isNodeEntry(entry))
@@ -358,15 +460,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
             },
           ]),
       );
-      // listAll() includes nodes from all pods via KV sync (falls back to local-only).
-      const allNodes = await context.nodeRegistry.listAll();
-      const connectedById = new Map(allNodes.map((n) => [n.nodeId, n]));
+      const connected = context.nodeRegistry.listConnected();
+      const connectedById = new Map(connected.map((n) => [n.nodeId, n]));
       const nodeIds = new Set<string>([...pairedById.keys(), ...connectedById.keys()]);
 
-      let nodes = [...nodeIds].map((nodeId) => {
+      const nodes = [...nodeIds].map((nodeId) => {
         const paired = pairedById.get(nodeId);
         const live = connectedById.get(nodeId);
-        const nodeBilling = billingCfg[nodeId];
 
         const caps = uniqueSortedStrings([...(live?.caps ?? paired?.caps ?? [])]);
         const commands = uniqueSortedStrings([...(live?.commands ?? paired?.commands ?? [])]);
@@ -388,16 +488,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
           connectedAtMs: live?.connectedAtMs,
           paired: Boolean(paired),
           connected: Boolean(live),
-          billingMode: live?.billingMode ?? nodeBilling?.mode ?? "global",
-          dedicatedBudgetCents: live?.dedicatedBudgetCents ?? nodeBilling?.budgetCents ?? 0,
-          dedicatedSpentCents: live?.dedicatedSpentCents ?? nodeBilling?.spentCents ?? 0,
         };
       });
-
-      // When connectedOnly is set, exclude offline (paired-but-disconnected) nodes.
-      if (p.connectedOnly) {
-        nodes = nodes.filter((n) => n.connected);
-      }
 
       nodes.sort((a, b) => {
         if (a.connected !== b.connected) {
@@ -435,8 +527,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const list = await listDevicePairing();
       const paired = list.paired.find((n) => n.deviceId === id && isNodeEntry(n));
-      const allNodes = await context.nodeRegistry.listAll();
-      const live = allNodes.find((n) => n.nodeId === id);
+      const connected = context.nodeRegistry.listConnected();
+      const live = connected.find((n) => n.nodeId === id);
 
       if (!paired && !live) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
@@ -516,7 +608,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "node.invoke": async ({ params, respond, context, client }) => {
+  "node.invoke": async ({ params, respond, context, client, req }) => {
     if (!validateNodeInvokeParams(params)) {
       respondInvalidParams({
         respond,
@@ -556,17 +648,72 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
 
     await respondUnavailableOnThrow(respond, async () => {
-      // Check both local and remote nodes. Local session is authoritative
-      // when available; remote node info from KV is used for cross-pod routing.
       let nodeSession = context.nodeRegistry.get(nodeId);
-      const remoteNode = !nodeSession ? await context.nodeRegistry.getRemoteNode(nodeId) : null;
-      if (!nodeSession && !remoteNode) {
-        // Attempt APNs background wake and wait for the node to reconnect.
-        const reconnected = await tryApnsWakeAndWait(nodeId, (id) => context.nodeRegistry.get(id));
-        if (reconnected) {
+      if (!nodeSession) {
+        const wakeReqId = req.id;
+        const wakeFlowStartedAtMs = Date.now();
+        context.logGateway.info(
+          `node wake start node=${nodeId} req=${wakeReqId} command=${command}`,
+        );
+
+        const wake = await maybeWakeNodeWithApns(nodeId);
+        context.logGateway.info(
+          `node wake stage=wake1 node=${nodeId} req=${wakeReqId} ` +
+            `available=${wake.available} throttled=${wake.throttled} ` +
+            `path=${wake.path} durationMs=${wake.durationMs} ` +
+            `apnsStatus=${wake.apnsStatus ?? -1} apnsReason=${wake.apnsReason ?? "-"}`,
+        );
+        if (wake.available) {
+          const waitStartedAtMs = Date.now();
+          const waitTimeoutMs = NODE_WAKE_RECONNECT_WAIT_MS;
+          const reconnected = await waitForNodeReconnect({
+            nodeId,
+            context,
+            timeoutMs: waitTimeoutMs,
+          });
+          const waitDurationMs = Math.max(0, Date.now() - waitStartedAtMs);
+          context.logGateway.info(
+            `node wake stage=wait1 node=${nodeId} req=${wakeReqId} ` +
+              `reconnected=${reconnected} timeoutMs=${waitTimeoutMs} durationMs=${waitDurationMs}`,
+          );
+        }
+        nodeSession = context.nodeRegistry.get(nodeId);
+        if (!nodeSession && wake.available) {
+          const retryWake = await maybeWakeNodeWithApns(nodeId, { force: true });
+          context.logGateway.info(
+            `node wake stage=wake2 node=${nodeId} req=${wakeReqId} force=true ` +
+              `available=${retryWake.available} throttled=${retryWake.throttled} ` +
+              `path=${retryWake.path} durationMs=${retryWake.durationMs} ` +
+              `apnsStatus=${retryWake.apnsStatus ?? -1} apnsReason=${retryWake.apnsReason ?? "-"}`,
+          );
+          if (retryWake.available) {
+            const waitStartedAtMs = Date.now();
+            const waitTimeoutMs = NODE_WAKE_RECONNECT_RETRY_WAIT_MS;
+            const reconnected = await waitForNodeReconnect({
+              nodeId,
+              context,
+              timeoutMs: waitTimeoutMs,
+            });
+            const waitDurationMs = Math.max(0, Date.now() - waitStartedAtMs);
+            context.logGateway.info(
+              `node wake stage=wait2 node=${nodeId} req=${wakeReqId} ` +
+                `reconnected=${reconnected} timeoutMs=${waitTimeoutMs} durationMs=${waitDurationMs}`,
+            );
+          }
           nodeSession = context.nodeRegistry.get(nodeId);
         }
         if (!nodeSession) {
+          const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
+          const nudge = await maybeSendNodeWakeNudge(nodeId);
+          context.logGateway.info(
+            `node wake nudge node=${nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
+              `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
+              `apnsStatus=${nudge.apnsStatus ?? -1} apnsReason=${nudge.apnsReason ?? "-"}`,
+          );
+          context.logGateway.warn(
+            `node wake done node=${nodeId} req=${wakeReqId} connected=false ` +
+              `reason=not_connected totalMs=${totalDurationMs}`,
+          );
           respond(
             false,
             undefined,
@@ -576,25 +723,25 @@ export const nodeHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+
+        const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
+        context.logGateway.info(
+          `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
+        );
       }
-      const declaredCommands = nodeSession?.commands ?? remoteNode?.commands ?? [];
       const cfg = loadConfig();
-      const allowlist = resolveNodeCommandAllowlist(
-        cfg,
-        nodeSession ?? {
-          platform: remoteNode?.platform,
-        },
-      );
+      const allowlist = resolveNodeCommandAllowlist(cfg, nodeSession);
       const allowed = isNodeCommandAllowed({
         command,
-        declaredCommands,
+        declaredCommands: nodeSession.commands,
         allowlist,
       });
       if (!allowed.ok) {
+        const hint = buildNodeCommandRejectionHint(allowed.reason, command, nodeSession);
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "node command not allowed", {
+          errorShape(ErrorCodes.INVALID_REQUEST, hint, {
             details: { reason: allowed.reason, command },
           }),
         );
@@ -689,3 +836,21 @@ export const nodeHandlers: GatewayRequestHandlers = {
     });
   },
 };
+
+function buildNodeCommandRejectionHint(
+  reason: string,
+  command: string,
+  node: { platform?: string } | undefined,
+): string {
+  const platform = node?.platform ?? "unknown";
+  if (reason === "command not declared by node") {
+    return `node command not allowed: the node (platform: ${platform}) does not support "${command}"`;
+  }
+  if (reason === "command not allowlisted") {
+    return `node command not allowed: "${command}" is not in the allowlist for platform "${platform}"`;
+  }
+  if (reason === "node did not declare commands") {
+    return `node command not allowed: the node did not declare any supported commands`;
+  }
+  return `node command not allowed: ${reason}`;
+}

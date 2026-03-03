@@ -6,7 +6,6 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun } from "./queue.js";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -20,16 +19,18 @@ import {
 } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
+import {
+  buildEmbeddedRunBaseParams,
+  buildEmbeddedRunContexts,
+  resolveModelFallbackOptions,
+} from "./agent-runner-utils.js";
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
@@ -96,6 +97,106 @@ function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalize
   return undefined;
 }
 
+function resolveSessionLogPath(
+  sessionId?: string,
+  sessionEntry?: SessionEntry,
+  sessionKey?: string,
+  opts?: { storePath?: string },
+): string | undefined {
+  if (!sessionId) {
+    return undefined;
+  }
+
+  try {
+    const transcriptPath = (
+      sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined
+    )?.transcriptPath?.trim();
+    const sessionFile = sessionEntry?.sessionFile?.trim() || transcriptPath;
+    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const pathOpts = resolveSessionFilePathOptions({
+      agentId,
+      storePath: opts?.storePath,
+    });
+    // Normalize sessionFile through resolveSessionFilePath so relative entries
+    // are resolved against the sessions dir/store layout, not process.cwd().
+    return resolveSessionFilePath(
+      sessionId,
+      sessionFile ? { sessionFile } : sessionEntry,
+      pathOpts,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function deriveTranscriptUsageSnapshot(
+  usage: ReturnType<typeof normalizeUsage> | undefined,
+): SessionTranscriptUsageSnapshot | undefined {
+  if (!usage) {
+    return undefined;
+  }
+  const promptTokens = derivePromptTokens(usage);
+  const outputRaw = usage.output;
+  const outputTokens =
+    typeof outputRaw === "number" && Number.isFinite(outputRaw) && outputRaw > 0
+      ? outputRaw
+      : undefined;
+  if (!(typeof promptTokens === "number") && !(typeof outputTokens === "number")) {
+    return undefined;
+  }
+  return {
+    promptTokens,
+    outputTokens,
+  };
+}
+
+type SessionLogSnapshot = {
+  byteSize?: number;
+  usage?: SessionTranscriptUsageSnapshot;
+};
+
+async function readSessionLogSnapshot(params: {
+  sessionId?: string;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+  opts?: { storePath?: string };
+  includeByteSize: boolean;
+  includeUsage: boolean;
+}): Promise<SessionLogSnapshot> {
+  const logPath = resolveSessionLogPath(
+    params.sessionId,
+    params.sessionEntry,
+    params.sessionKey,
+    params.opts,
+  );
+  if (!logPath) {
+    return {};
+  }
+
+  const snapshot: SessionLogSnapshot = {};
+
+  if (params.includeByteSize) {
+    try {
+      const stat = await fs.promises.stat(logPath);
+      const size = Math.floor(stat.size);
+      snapshot.byteSize = Number.isFinite(size) && size >= 0 ? size : undefined;
+    } catch {
+      snapshot.byteSize = undefined;
+    }
+  }
+
+  if (params.includeUsage) {
+    try {
+      const lastUsage = await readLastNonzeroUsageFromSessionLog(logPath);
+      snapshot.usage = deriveTranscriptUsageSnapshot(lastUsage);
+    } catch {
+      snapshot.usage = undefined;
+    }
+  }
+
+  return snapshot;
+}
+
 async function readLastNonzeroUsageFromSessionLog(logPath: string) {
   const handle = await fs.promises.open(logPath, "r");
   try {
@@ -134,51 +235,15 @@ export async function readPromptTokensFromSessionLog(
   sessionKey?: string,
   opts?: { storePath?: string },
 ): Promise<SessionTranscriptUsageSnapshot | undefined> {
-  if (!sessionId) {
-    return undefined;
-  }
-
-  try {
-    const transcriptPath = (
-      sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined
-    )?.transcriptPath?.trim();
-    const sessionFile = sessionEntry?.sessionFile?.trim() || transcriptPath;
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const pathOpts = resolveSessionFilePathOptions({
-      agentId,
-      storePath: opts?.storePath,
-    });
-    // Normalize sessionFile through resolveSessionFilePath so relative entries
-    // are resolved against the sessions dir/store layout, not process.cwd().
-    const logPath = resolveSessionFilePath(
-      sessionId,
-      sessionFile ? { sessionFile } : sessionEntry,
-      pathOpts,
-    );
-
-    const lastUsage = await readLastNonzeroUsageFromSessionLog(logPath);
-    if (!lastUsage) {
-      return undefined;
-    }
-
-    const promptTokens = derivePromptTokens(lastUsage);
-    const outputRaw = lastUsage.output;
-    const outputTokens =
-      typeof outputRaw === "number" && Number.isFinite(outputRaw) && outputRaw > 0
-        ? outputRaw
-        : undefined;
-
-    if (!(typeof promptTokens === "number") && !(typeof outputTokens === "number")) {
-      return undefined;
-    }
-
-    return {
-      promptTokens,
-      outputTokens,
-    };
-  } catch {
-    return undefined;
-  }
+  const snapshot = await readSessionLogSnapshot({
+    sessionId,
+    sessionEntry,
+    sessionKey,
+    opts,
+    includeByteSize: false,
+    includeUsage: true,
+  });
+  return snapshot.usage;
 }
 
 export async function runMemoryFlushIfNeeded(params: {
@@ -259,17 +324,33 @@ export async function runMemoryFlushIfNeeded(params: {
     (persistedPromptTokens ?? 0) + promptTokenEstimate >=
       flushThreshold - TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS;
 
-  const shouldReadTranscript =
-    canAttemptFlush && entry && (!hasFreshPersistedPromptTokens || shouldReadTranscriptForOutput);
+  const shouldReadTranscript = Boolean(
+    canAttemptFlush && entry && (!hasFreshPersistedPromptTokens || shouldReadTranscriptForOutput),
+  );
 
-  const transcriptUsageSnapshot = shouldReadTranscript
-    ? await readPromptTokensFromSessionLog(
-        params.followupRun.run.sessionId,
-        entry,
-        params.sessionKey ?? params.followupRun.run.sessionKey,
-        { storePath: params.storePath },
-      )
+  const forceFlushTranscriptBytes = memoryFlushSettings.forceFlushTranscriptBytes;
+  const shouldCheckTranscriptSizeForForcedFlush = Boolean(
+    canAttemptFlush &&
+    entry &&
+    Number.isFinite(forceFlushTranscriptBytes) &&
+    forceFlushTranscriptBytes > 0,
+  );
+  const shouldReadSessionLog = shouldReadTranscript || shouldCheckTranscriptSizeForForcedFlush;
+  const sessionLogSnapshot = shouldReadSessionLog
+    ? await readSessionLogSnapshot({
+        sessionId: params.followupRun.run.sessionId,
+        sessionEntry: entry,
+        sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+        opts: { storePath: params.storePath },
+        includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
+        includeUsage: shouldReadTranscript,
+      })
     : undefined;
+  const transcriptByteSize = sessionLogSnapshot?.byteSize;
+  const shouldForceFlushByTranscriptSize =
+    typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
+
+  const transcriptUsageSnapshot = sessionLogSnapshot?.usage;
   const transcriptPromptTokens = transcriptUsageSnapshot?.promptTokens;
   const transcriptOutputTokens = transcriptUsageSnapshot?.outputTokens;
   const hasReliableTranscriptPromptTokens =
@@ -341,21 +422,25 @@ export async function runMemoryFlushIfNeeded(params: {
       `compactionCount=${entry?.compactionCount ?? 0} memoryFlushCompactionCount=${entry?.memoryFlushCompactionCount ?? "undefined"} ` +
       `persistedPromptTokens=${persistedPromptTokens ?? "undefined"} persistedFresh=${entry?.totalTokensFresh === true} ` +
       `promptTokensEst=${promptTokenEstimate ?? "undefined"} transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} transcriptOutputTokens=${transcriptOutputTokens ?? "undefined"} ` +
-      `projectedTokenCount=${projectedTokenCount ?? "undefined"}`,
+      `projectedTokenCount=${projectedTokenCount ?? "undefined"} transcriptBytes=${transcriptByteSize ?? "undefined"} ` +
+      `forceFlushTranscriptBytes=${forceFlushTranscriptBytes} forceFlushByTranscriptSize=${shouldForceFlushByTranscriptSize}`,
   );
 
   const shouldFlushMemory =
-    memoryFlushSettings &&
-    memoryFlushWritable &&
-    !params.isHeartbeat &&
-    !isCli &&
-    shouldRunMemoryFlush({
-      entry,
-      tokenCount: tokenCountForFlush,
-      contextWindowTokens,
-      reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,
-      softThresholdTokens: memoryFlushSettings.softThresholdTokens,
-    });
+    (memoryFlushSettings &&
+      memoryFlushWritable &&
+      !params.isHeartbeat &&
+      !isCli &&
+      shouldRunMemoryFlush({
+        entry,
+        tokenCount: tokenCountForFlush,
+        contextWindowTokens,
+        reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,
+        softThresholdTokens: memoryFlushSettings.softThresholdTokens,
+      })) ||
+    (shouldForceFlushByTranscriptSize &&
+      entry != null &&
+      !hasAlreadyFlushedForCurrentCompaction(entry));
 
   if (!shouldFlushMemory) {
     return entry ?? params.sessionEntry;
@@ -383,62 +468,31 @@ export async function runMemoryFlushIfNeeded(params: {
     .join("\n\n");
   try {
     await runWithModelFallback({
-      cfg: params.followupRun.run.config,
-      provider: params.followupRun.run.provider,
-      model: params.followupRun.run.model,
-      agentDir: params.followupRun.run.agentDir,
-      fallbacksOverride: resolveAgentModelFallbacksOverride(
-        params.followupRun.run.config,
-        resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
-      ),
+      ...resolveModelFallbackOptions(params.followupRun.run),
       run: (provider, model) => {
-        const authProfileId =
-          provider === params.followupRun.run.provider
-            ? params.followupRun.run.authProfileId
-            : undefined;
+        const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
+          run: params.followupRun.run,
+          sessionCtx: params.sessionCtx,
+          hasRepliedRef: params.opts?.hasRepliedRef,
+          provider,
+        });
+        const runBaseParams = buildEmbeddedRunBaseParams({
+          run: params.followupRun.run,
+          provider,
+          model,
+          runId: flushRunId,
+          authProfile,
+        });
         return runEmbeddedPiAgent({
-          sessionId: params.followupRun.run.sessionId,
-          sessionKey: params.sessionKey,
-          agentId: params.followupRun.run.agentId,
-          messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
-          agentAccountId: params.sessionCtx.AccountId,
-          messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
-          messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
-          // Provider threading context for tool auto-injection
-          ...buildThreadingToolContext({
-            sessionCtx: params.sessionCtx,
-            config: params.followupRun.run.config,
-            hasRepliedRef: params.opts?.hasRepliedRef,
-          }),
-          senderId: params.sessionCtx.SenderId?.trim() || undefined,
-          senderName: params.sessionCtx.SenderName?.trim() || undefined,
-          senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
-          senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
-          sessionFile: params.followupRun.run.sessionFile,
-          workspaceDir: params.followupRun.run.workspaceDir,
-          agentDir: params.followupRun.run.agentDir,
-          config: params.followupRun.run.config,
-          skillsSnapshot: params.followupRun.run.skillsSnapshot,
+          ...embeddedContext,
+          ...senderContext,
+          ...runBaseParams,
+          trigger: "memory",
           prompt: resolveMemoryFlushPromptForRun({
             prompt: memoryFlushSettings.prompt,
             cfg: params.cfg,
           }),
           extraSystemPrompt: flushSystemPrompt,
-          ownerNumbers: params.followupRun.run.ownerNumbers,
-          enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
-          provider,
-          model,
-          authProfileId,
-          authProfileIdSource: authProfileId
-            ? params.followupRun.run.authProfileIdSource
-            : undefined,
-          thinkLevel: params.followupRun.run.thinkLevel,
-          verboseLevel: params.followupRun.run.verboseLevel,
-          reasoningLevel: params.followupRun.run.reasoningLevel,
-          execOverrides: params.followupRun.run.execOverrides,
-          bashElevated: params.followupRun.run.bashElevated,
-          timeoutMs: params.followupRun.run.timeoutMs,
-          runId: flushRunId,
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";

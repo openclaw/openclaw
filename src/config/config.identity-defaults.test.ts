@@ -6,6 +6,24 @@ import { loadConfig } from "./config.js";
 import { withTempHome } from "./home-env.test-harness.js";
 
 describe("config identity defaults", () => {
+  const defaultIdentity = {
+    name: "Samantha",
+    theme: "helpful sloth",
+    emoji: "🦥",
+  };
+
+  const configWithDefaultIdentity = (messages: Record<string, unknown>) => ({
+    agents: {
+      list: [
+        {
+          id: "main",
+          identity: defaultIdentity,
+        },
+      ],
+    },
+    messages,
+  });
+
   const writeAndLoadConfig = async (home: string, config: Record<string, unknown>) => {
     const configDir = path.join(home, ".bot");
     await fs.mkdir(configDir, { recursive: true });
@@ -15,21 +33,7 @@ describe("config identity defaults", () => {
 
   it("does not derive mention defaults and only sets ackReactionScope when identity is present", async () => {
     await withTempHome("bot-config-identity-", async (home) => {
-      const cfg = await writeAndLoadConfig(home, {
-        agents: {
-          list: [
-            {
-              id: "main",
-              identity: {
-                name: "Samantha",
-                theme: "helpful sloth",
-                emoji: "🦥",
-              },
-            },
-          ],
-        },
-        messages: {},
-      });
+      const cfg = await writeAndLoadConfig(home, configWithDefaultIdentity({}));
 
       expect(cfg.messages?.responsePrefix).toBeUndefined();
       expect(cfg.messages?.groupChat?.mentionPatterns).toBeUndefined();
@@ -62,8 +66,8 @@ describe("config identity defaults", () => {
               id: "main",
               identity: {
                 name: "Samantha Sloth",
-                theme: "autonomous workforce assistant",
-                emoji: "B",
+                theme: "space lobster",
+                emoji: "🦞",
               },
               groupChat: { mentionPatterns: ["@bot"] },
             },
@@ -84,7 +88,7 @@ describe("config identity defaults", () => {
       const cfg = await writeAndLoadConfig(home, {
         messages: {
           messagePrefix: "[bot]",
-          responsePrefix: "B",
+          responsePrefix: "🦞",
         },
         channels: {
           whatsapp: { allowFrom: ["+15555550123"], textChunkLimit: 4444 },
@@ -148,21 +152,7 @@ describe("config identity defaults", () => {
 
   it("respects empty responsePrefix to disable identity defaults", async () => {
     await withTempHome("bot-config-identity-", async (home) => {
-      const cfg = await writeAndLoadConfig(home, {
-        agents: {
-          list: [
-            {
-              id: "main",
-              identity: {
-                name: "Samantha",
-                theme: "helpful sloth",
-                emoji: "🦥",
-              },
-            },
-          ],
-        },
-        messages: { responsePrefix: "" },
-      });
+      const cfg = await writeAndLoadConfig(home, configWithDefaultIdentity({ responsePrefix: "" }));
 
       expect(cfg.messages?.responsePrefix).toBe("");
     });

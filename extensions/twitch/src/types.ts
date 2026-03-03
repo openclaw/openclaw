@@ -2,7 +2,7 @@
  * Twitch channel plugin types.
  *
  * This file defines Twitch-specific types. Generic channel types are imported
- * from Hanzo Bot core.
+ * from Bot core.
  */
 
 import type {

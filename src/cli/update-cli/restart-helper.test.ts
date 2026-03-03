@@ -72,7 +72,7 @@ describe("restart-helper", () => {
       });
       expect(scriptPath.endsWith(".sh")).toBe(true);
       expect(content).toContain("#!/bin/sh");
-      expect(content).toContain("systemctl --user restart 'hanzo-bot-gateway.service'");
+      expect(content).toContain("systemctl --user restart 'bot-gateway.service'");
       // Script should self-cleanup
       expect(content).toContain('rm -f "$0"');
       await cleanupScript(scriptPath);
@@ -108,7 +108,7 @@ describe("restart-helper", () => {
 
       const { scriptPath, content } = await prepareAndReadScript({
         BOT_PROFILE: "default",
-        BOT_LAUNCHD_LABEL: "com.custom.hanzo/bot",
+        BOT_LAUNCHD_LABEL: "com.custom.bot",
       });
       expect(content).toContain("launchctl kickstart -k 'gui/501/com.custom.bot'");
       await cleanupScript(scriptPath);
@@ -124,6 +124,7 @@ describe("restart-helper", () => {
       expect(content).toContain("@echo off");
       expect(content).toContain('schtasks /End /TN "Bot Gateway"');
       expect(content).toContain('schtasks /Run /TN "Bot Gateway"');
+      expectWindowsRestartWaitOrdering(content);
       // Batch self-cleanup
       expect(content).toContain('del "%~f0"');
       await cleanupScript(scriptPath);
@@ -138,6 +139,25 @@ describe("restart-helper", () => {
       });
       expect(content).toContain('schtasks /End /TN "Bot Gateway (custom)"');
       expect(content).toContain('schtasks /Run /TN "Bot Gateway (custom)"');
+      expectWindowsRestartWaitOrdering(content);
+      await cleanupScript(scriptPath);
+    });
+
+    it("uses passed gateway port for port polling on Windows", async () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const customPort = 9999;
+
+      const { scriptPath, content } = await prepareAndReadScript(
+        {
+          BOT_PROFILE: "default",
+        },
+        customPort,
+      );
+      expect(content).toContain(`netstat -ano | findstr /R /C:":${customPort} .*LISTENING" >nul`);
+      expect(content).toContain(
+        `for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":${customPort} .*LISTENING"') do (`,
+      );
+      expectWindowsRestartWaitOrdering(content, customPort);
       await cleanupScript(scriptPath);
     });
 
@@ -146,7 +166,7 @@ describe("restart-helper", () => {
       const { scriptPath, content } = await prepareAndReadScript({
         BOT_PROFILE: "production",
       });
-      expect(content).toContain("hanzo-bot-gateway-production.service");
+      expect(content).toContain("bot-gateway-production.service");
       await cleanupScript(scriptPath);
     });
 
@@ -168,6 +188,7 @@ describe("restart-helper", () => {
         BOT_PROFILE: "production",
       });
       expect(content).toContain('schtasks /End /TN "Bot Gateway (production)"');
+      expectWindowsRestartWaitOrdering(content);
       await cleanupScript(scriptPath);
     });
 

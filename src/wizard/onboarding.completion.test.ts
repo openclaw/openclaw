@@ -9,18 +9,19 @@ function createPrompter(confirmValue = false) {
 }
 
 function createDeps() {
-  return {
-    resolveCliName: () => "bot",
-    checkShellCompletionStatus: vi.fn(async () => ({
-      shell: "zsh",
+  const deps: NonNullable<Parameters<typeof setupOnboardingShellCompletion>[0]["deps"]> = {
+    resolveCliName: () => "@hanzo/bot",
+    checkShellCompletionStatus: vi.fn(async (_binName: string) => ({
+      shell: "zsh" as const,
       profileInstalled: false,
       cacheExists: false,
       cachePath: "/tmp/bot.zsh",
       usesSlowPattern: false,
     })),
-    ensureCompletionCacheExists: vi.fn(async () => true),
+    ensureCompletionCacheExists: vi.fn(async (_binName: string) => true),
     installCompletion: vi.fn(async () => {}),
   };
+  return deps;
 }
 
 describe("setupOnboardingShellCompletion", () => {
@@ -31,8 +32,8 @@ describe("setupOnboardingShellCompletion", () => {
     await setupOnboardingShellCompletion({ flow: "quickstart", prompter, deps });
 
     expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(deps.ensureCompletionCacheExists).toHaveBeenCalledWith("bot");
-    expect(deps.installCompletion).toHaveBeenCalledWith("zsh", true, "bot");
+    expect(deps.ensureCompletionCacheExists).toHaveBeenCalledWith("@hanzo/bot");
+    expect(deps.installCompletion).toHaveBeenCalledWith("zsh", true, "@hanzo/bot");
     expect(prompter.note).toHaveBeenCalled();
   });
 

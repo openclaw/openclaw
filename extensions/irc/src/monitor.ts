@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "bot/plugin-sdk";
+import { createLoggerBackedRuntime, type RuntimeEnv } from "bot/plugin-sdk";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
@@ -39,13 +39,12 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
     accountId: opts.accountId,
   });
 
-  const runtime: RuntimeEnv = opts.runtime ?? {
-    log: (...args: unknown[]) => core.logging.getChildLogger().info(String(args[0])),
-    error: (...args: unknown[]) => core.logging.getChildLogger().error(String(args[0])),
-    exit: () => {
-      throw new Error("Runtime exit not available");
-    },
-  };
+  const runtime: RuntimeEnv =
+    opts.runtime ??
+    createLoggerBackedRuntime({
+      logger: core.logging.getChildLogger(),
+      exitError: () => new Error("Runtime exit not available"),
+    });
 
   if (!account.configured) {
     throw new Error(

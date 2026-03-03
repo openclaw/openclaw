@@ -41,8 +41,8 @@ export {
   sendMessageDiscord,
   sendPollDiscord,
   sendStickerDiscord,
-  sendVoiceMessageDiscord,
   sendWebhookMessageDiscord,
+  sendVoiceMessageDiscord,
 } from "./send.outbound.js";
 export { sendDiscordComponentMessage } from "./send.components.js";
 export {

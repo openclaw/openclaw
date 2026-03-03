@@ -1238,5 +1238,3 @@ export abstract class MemoryManagerSyncOps {
     return metaSources.some((source, index) => source !== configuredSources[index]);
   }
 }
-
-export const memoryManagerSyncOps = MemoryManagerSyncOps.prototype;

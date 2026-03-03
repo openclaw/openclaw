@@ -3,6 +3,7 @@ import type { BotConfig } from "../../config/config.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
 import { reparseProgramFromActionArgs } from "./action-reparse.js";
+import { removeCommand, removeCommandByName } from "./command-tree.js";
 
 type SubCliRegistrar = (program: Command) => Promise<void> | void;
 
@@ -164,7 +165,7 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "docs",
-    description: "Search the live Hanzo Bot docs",
+    description: "Search the live Bot docs",
     hasSubcommands: false,
     register: async (program) => {
       const mod = await import("../docs-cli.js");
@@ -199,12 +200,12 @@ const entries: SubCliEntry[] = [
     },
   },
   {
-    name: "bot",
-    description: "Legacy bot command aliases",
+    name: "clawbot",
+    description: "Legacy clawbot command aliases",
     hasSubcommands: true,
     register: async (program) => {
-      const mod = await import("../bot-cli.js");
-      mod.registerBotCli(program);
+      const mod = await import("../clawbot-cli.js");
+      mod.registerClawbotCli(program);
     },
   },
   {
@@ -223,7 +224,7 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "plugins",
-    description: "Manage Hanzo Bot plugins and extensions",
+    description: "Manage Bot plugins and extensions",
     hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../plugins-cli.js");
@@ -260,6 +261,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "secrets",
+    description: "Secrets runtime reload controls",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../secrets-cli.js");
+      mod.registerSecretsCli(program);
+    },
+  },
+  {
     name: "skills",
     description: "List and inspect available skills",
     hasSubcommands: true,
@@ -270,7 +280,7 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "update",
-    description: "Update Hanzo Bot and inspect update channel status",
+    description: "Update Bot and inspect update channel status",
     hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../update-cli.js");
@@ -296,23 +306,12 @@ export function getSubCliCommandsWithSubcommands(): string[] {
   return entries.filter((entry) => entry.hasSubcommands).map((entry) => entry.name);
 }
 
-function removeCommand(program: Command, command: Command) {
-  const commands = program.commands as Command[];
-  const index = commands.indexOf(command);
-  if (index >= 0) {
-    commands.splice(index, 1);
-  }
-}
-
 export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
   const entry = entries.find((candidate) => candidate.name === name);
   if (!entry) {
     return false;
   }
-  const existing = program.commands.find((cmd) => cmd.name() === entry.name);
-  if (existing) {
-    removeCommand(program, existing);
-  }
+  removeCommandByName(program, entry.name);
   await entry.register(program);
   return true;
 }

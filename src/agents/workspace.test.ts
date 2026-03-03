@@ -25,11 +25,11 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
       HOME: "/home/other",
     } as NodeJS.ProcessEnv);
 
-    expect(dir).toBe(path.join(path.resolve("/srv/bot-home"), ".hanzo/bot", "workspace"));
+    expect(dir).toBe(path.join(path.resolve("/srv/bot-home"), ".bot", "workspace"));
   });
 });
 
-const WORKSPACE_STATE_PATH_SEGMENTS = [".hanzo/bot", "workspace-state.json"] as const;
+const WORKSPACE_STATE_PATH_SEGMENTS = [".bot", "workspace-state.json"] as const;
 
 async function readOnboardingState(dir: string): Promise<{
   version: number;

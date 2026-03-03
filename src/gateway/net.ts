@@ -439,25 +439,3 @@ export function isSecureWebSocketUrl(
   }
   return false;
 }
-
-// ---------------------------------------------------------------------------
-// Aliases for names used in auth.ts / server-http.ts that were renamed
-// during the upstream fork to hanzo merge.  Keeps existing call-sites working.
-// ---------------------------------------------------------------------------
-
-/** @deprecated Use `resolveClientIp` */
-export const resolveGatewayClientIp = resolveClientIp;
-
-/**
- * Extract the first valid IP from an X-Forwarded-For header value.
- * Used by tailscale whois verification which doesn't need proxy stripping.
- */
-export function parseForwardedForClientIp(forwardedFor: string): string | undefined {
-  for (const entry of forwardedFor.split(",")) {
-    const ip = parseIpLiteral(entry);
-    if (ip) {
-      return ip;
-    }
-  }
-  return undefined;
-}

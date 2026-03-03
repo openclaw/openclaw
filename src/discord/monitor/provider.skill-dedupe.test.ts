@@ -16,12 +16,12 @@ describe("dedupeSkillCommandsForDiscord", () => {
 
   it("treats skillName case-insensitively", () => {
     const input = [
-      { name: "BotHub", skillName: "BotHub", description: "BotHub" },
-      { name: "bothub_2", skillName: "bothub", description: "BotHub" },
+      { name: "ClawHub", skillName: "ClawHub", description: "ClawHub" },
+      { name: "clawhub_2", skillName: "clawhub", description: "ClawHub" },
     ];
     const output = __testing.dedupeSkillCommandsForDiscord(input);
     expect(output).toHaveLength(1);
-    expect(output[0]?.name).toBe("BotHub");
+    expect(output[0]?.name).toBe("ClawHub");
   });
 });
 

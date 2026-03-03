@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { BotConfig } from "../config/config.js";
-import { prependSystemEvents } from "../auto-reply/reply/session-updates.js";
+import { buildQueuedSystemPrompt } from "../auto-reply/reply/session-updates.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
 import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
@@ -53,6 +53,36 @@ describe("system events (session routing)", () => {
     expect(first).toBe(true);
     expect(second).toBe(false);
   });
+
+  it("filters heartbeat/noise lines from queued system prompt", async () => {
+    const key = "agent:main:test-heartbeat-filter";
+    enqueueSystemEvent("Read HEARTBEAT.md before continuing", { sessionKey: key });
+    enqueueSystemEvent("heartbeat poll: pending", { sessionKey: key });
+    enqueueSystemEvent("reason periodic: 5m", { sessionKey: key });
+
+    const prompt = await buildQueuedSystemPrompt({
+      cfg,
+      sessionKey: key,
+      isMainSession: false,
+      isNewSession: false,
+    });
+    expect(prompt).toBeUndefined();
+    expect(peekSystemEvents(key)).toEqual([]);
+  });
+
+  it("scrubs node last-input suffix in queued system prompt", async () => {
+    const key = "agent:main:test-node-scrub";
+    enqueueSystemEvent("Node: Mac Studio · last input /tmp/secret.txt", { sessionKey: key });
+
+    const prompt = await buildQueuedSystemPrompt({
+      cfg,
+      sessionKey: key,
+      isMainSession: false,
+      isNewSession: false,
+    });
+    expect(prompt).toContain("Node: Mac Studio");
+    expect(prompt).not.toContain("last input");
+  });
 });
 
 describe("isCronSystemEvent", () => {
@@ -63,7 +93,7 @@ describe("isCronSystemEvent", () => {
 
   it("returns false for heartbeat ack markers", () => {
     expect(isCronSystemEvent("HEARTBEAT_OK")).toBe(false);
-    expect(isCronSystemEvent("HEARTBEAT_OK B")).toBe(false);
+    expect(isCronSystemEvent("HEARTBEAT_OK 🦞")).toBe(false);
     expect(isCronSystemEvent("heartbeat_ok")).toBe(false);
     expect(isCronSystemEvent("HEARTBEAT_OK:")).toBe(false);
     expect(isCronSystemEvent("HEARTBEAT_OK, continue")).toBe(false);

@@ -40,32 +40,6 @@ const formatAccountLabel = (params: { accountId: string; name?: string }) => {
 const accountLine = (label: string, details: string[]) =>
   `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
 
-const resolveAccountEnabled = (
-  plugin: ChannelPlugin,
-  account: unknown,
-  cfg: BotConfig,
-): boolean => {
-  if (plugin.config.isEnabled) {
-    return plugin.config.isEnabled(account, cfg);
-  }
-  if (!account || typeof account !== "object") {
-    return true;
-  }
-  const enabled = (account as { enabled?: boolean }).enabled;
-  return enabled !== false;
-};
-
-const resolveAccountConfigured = async (
-  plugin: ChannelPlugin,
-  account: unknown,
-  cfg: BotConfig,
-): Promise<boolean> => {
-  if (plugin.config.isConfigured) {
-    return await plugin.config.isConfigured(account, cfg);
-  }
-  return true;
-};
-
 const buildAccountDetails = (params: {
   entry: ChannelAccountEntry;
   plugin: ChannelPlugin;

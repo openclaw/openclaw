@@ -258,6 +258,14 @@ describe("monitorDiscordProvider", () => {
       },
     }) as BotConfig;
 
+  const getConstructedEventQueue = (): { listenerTimeout?: number } | undefined => {
+    expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
+    const opts = clientConstructorOptionsMock.mock.calls[0]?.[0] as {
+      eventQueue?: { listenerTimeout?: number };
+    };
+    return opts.eventQueue;
+  };
+
   beforeEach(() => {
     clientConstructorOptionsMock.mockClear();
     clientFetchUserMock.mockClear().mockResolvedValue({ id: "bot-1" });

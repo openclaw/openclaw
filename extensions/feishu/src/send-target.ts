@@ -1,10 +1,10 @@
-import type { BotConfig } from "bot/plugin-sdk";
+import type { ClawdbotConfig } from "bot/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
 
 export function resolveFeishuSendTarget(params: {
-  cfg: BotConfig;
+  cfg: ClawdbotConfig;
   to: string;
   accountId?: string;
 }) {

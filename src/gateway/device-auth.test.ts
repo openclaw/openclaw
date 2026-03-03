@@ -5,7 +5,7 @@ describe("device-auth payload vectors", () => {
   it("builds canonical v3 payload", () => {
     const payload = buildDeviceAuthPayloadV3({
       deviceId: "dev-1",
-      clientId: "hanzo-bot-macos",
+      clientId: "bot-macos",
       clientMode: "ui",
       role: "operator",
       scopes: ["operator.admin", "operator.read"],
@@ -17,7 +17,7 @@ describe("device-auth payload vectors", () => {
     });
 
     expect(payload).toBe(
-      "v3|dev-1|hanzo-bot-macos|ui|operator|operator.admin,operator.read|1700000000000|tok-123|nonce-abc|ios|iphone",
+      "v3|dev-1|bot-macos|ui|operator|operator.admin,operator.read|1700000000000|tok-123|nonce-abc|ios|iphone",
     );
   });
 

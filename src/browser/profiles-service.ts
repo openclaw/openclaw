@@ -20,7 +20,7 @@ export type CreateProfileParams = {
   name: string;
   color?: string;
   cdpUrl?: string;
-  driver?: "bot" | "extension";
+  driver?: "@hanzo/bot" | "extension";
 };
 
 export type CreateProfileResult = {

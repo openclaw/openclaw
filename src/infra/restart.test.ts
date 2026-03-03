@@ -46,7 +46,7 @@ describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => 
         `p${process.pid}`,
         "cbot",
         "p4100",
-        "chanzo-bot-gateway",
+        "cbot-gateway",
         "p4200",
         "cnode",
         "p4300",
@@ -81,7 +81,7 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
     spawnSyncMock.mockReturnValue({
       error: undefined,
       status: 0,
-      stdout: ["p6001", "cbot", "p6002", "chanzo-bot-gateway"].join("\n"),
+      stdout: ["p6001", "cbot", "p6002", "cbot-gateway"].join("\n"),
     });
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 

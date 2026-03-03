@@ -18,11 +18,7 @@ import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
-import {
-  listConfiguredMessageChannels,
-  resolveMessageChannelSelection,
-} from "../../infra/outbound/channel-selection.js";
-import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
+import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -365,7 +361,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     // Inject timestamp into user-authored messages that don't already have one.
     // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
     // formatting in a separate code path — they never reach this handler.
-    // See: https://github.com/hanzoai/bot/issues/3658
+    // See: https://github.com/moltbot/moltbot/issues/3658
     if (!skipTimestampInjection) {
       message = injectTimestamp(message, timestampOptsFromConfig(cfg));
     }
@@ -547,50 +543,9 @@ export const agentHandlers: GatewayRequestHandlers = {
           deliveryTargetMode,
           resolvedAccountId,
         };
-      } catch {
-        // Multiple channels configured — try to find one with a resolvable
-        // outbound target (e.g. via allowFrom) so delivery can proceed.
-        // Guard against plugin initialization errors (e.g. runtime not initialized)
-        // so they produce INVALID_REQUEST rather than UNAVAILABLE.
-        let configured: Awaited<ReturnType<typeof listConfiguredMessageChannels>> = [];
-        try {
-          configured = await listConfiguredMessageChannels(cfgResolved);
-        } catch {
-          // Channel plugin not initialized or unavailable; treat as no configured channels.
-        }
-        let picked = false;
-        for (const candidate of configured) {
-          const probe = resolveOutboundTarget({
-            channel: candidate,
-            cfg: cfgResolved,
-            mode: "implicit",
-          });
-          if (probe.ok) {
-            resolvedChannel = candidate;
-            resolvedTo = probe.to;
-            deliveryTargetMode = deliveryTargetMode ?? "implicit";
-            effectivePlan = {
-              ...deliveryPlan,
-              resolvedChannel,
-              resolvedTo,
-              deliveryTargetMode,
-              resolvedAccountId,
-            };
-            picked = true;
-            break;
-          }
-        }
-        if (!picked) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
-            ),
-          );
-          return;
-        }
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        return;
       }
     }
 

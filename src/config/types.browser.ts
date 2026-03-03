@@ -4,13 +4,31 @@ export type BrowserProfileConfig = {
   /** CDP URL for this profile (use for remote Chrome). */
   cdpUrl?: string;
   /** Profile driver (default: bot). */
-  driver?: "bot" | "extension";
+  driver?: "@hanzo/bot" | "extension";
+  /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
+  attachOnly?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
   mode?: "efficient";
+};
+export type BrowserSsrFPolicyConfig = {
+  /** Legacy alias for private-network access. Prefer dangerouslyAllowPrivateNetwork. */
+  allowPrivateNetwork?: boolean;
+  /** If true, permit browser navigation to private/internal networks. Default: true */
+  dangerouslyAllowPrivateNetwork?: boolean;
+  /**
+   * Explicitly allowed hostnames (exact-match), including blocked names like localhost.
+   * Example: ["localhost", "metadata.internal"]
+   */
+  allowedHostnames?: string[];
+  /**
+   * Hostname allowlist patterns for browser navigation.
+   * Supports exact hosts and "*.example.com" wildcard subdomains.
+   */
+  hostnameAllowlist?: string[];
 };
 export type BrowserConfig = {
   enabled?: boolean;
@@ -22,7 +40,7 @@ export type BrowserConfig = {
   remoteCdpTimeoutMs?: number;
   /** Remote CDP WebSocket handshake timeout (ms). Default: max(remoteCdpTimeoutMs * 2, 2000). */
   remoteCdpHandshakeTimeoutMs?: number;
-  /** Accent color for the hanzo-bot browser profile (hex). Default: #FF4500 */
+  /** Accent color for the bot browser profile (hex). Default: #FF4500 */
   color?: string;
   /** Override the browser executable path (all platforms). */
   executablePath?: string;
@@ -40,17 +58,12 @@ export type BrowserConfig = {
   profiles?: Record<string, BrowserProfileConfig>;
   /** Default snapshot options (applied by the browser tool/CLI when unset). */
   snapshotDefaults?: BrowserSnapshotDefaults;
+  /** SSRF policy for browser navigation/open-tab operations. */
+  ssrfPolicy?: BrowserSsrFPolicyConfig;
   /**
    * Additional Chrome launch arguments.
    * Useful for stealth flags, window size overrides, or custom user-agent strings.
    * Example: ["--window-size=1920,1080", "--disable-infobars"]
    */
   extraArgs?: string[];
-  /** SSRF policy for browser navigation and network requests. */
-  ssrfPolicy?: {
-    allowPrivateNetwork?: boolean;
-    dangerouslyAllowPrivateNetwork?: boolean;
-    allowedHostnames?: string[];
-    hostnameAllowlist?: string[];
-  };
 };

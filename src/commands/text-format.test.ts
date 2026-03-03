@@ -3,7 +3,7 @@ import { shortenText } from "./text-format.js";
 
 describe("shortenText", () => {
   it("returns original text when it fits", () => {
-    expect(shortenText("hanzo-bot", 16)).toBe("hanzo-bot");
+    expect(shortenText("@hanzo/bot", 16)).toBe("@hanzo/bot");
   });
 
   it("truncates and appends ellipsis when over limit", () => {

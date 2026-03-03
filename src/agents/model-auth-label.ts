@@ -19,16 +19,13 @@ function formatApiKeySnippet(apiKey: string): string {
 
 function formatCredentialSnippet(params: {
   value: string | undefined;
-  ref: { source: string; id: string } | string | undefined;
+  ref: { source: string; id: string } | undefined;
 }): string {
   const value = typeof params.value === "string" ? params.value.trim() : "";
   if (value) {
     return formatApiKeySnippet(value);
   }
   if (params.ref) {
-    if (typeof params.ref === "string") {
-      return `ref(${params.ref})`;
-    }
     return `ref(${params.ref.source}:${params.ref.id})`;
   }
   return "unknown";

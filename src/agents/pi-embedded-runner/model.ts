@@ -1,4 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { BotConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveBotAgentDir } from "../agent-paths.js";
@@ -7,14 +8,12 @@ import { buildModelAliasLines } from "../model-alias-lines.js";
 import { normalizeModelCompat } from "../model-compat.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { normalizeProviderId } from "../model-selection.js";
-import {
-  discoverAuthStorage,
-  discoverModels,
-  AuthStorage,
-  ModelRegistry,
-} from "../pi-model-discovery.js";
+import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 
-type InlineModelEntry = ModelDefinitionConfig & { provider: string; baseUrl?: string };
+type InlineModelEntry = ModelDefinitionConfig & {
+  provider: string;
+  baseUrl?: string;
+};
 type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
@@ -48,13 +47,14 @@ export function resolveModel(
 ): {
   model?: Model<Api>;
   error?: string;
-  authStorage: InstanceType<typeof AuthStorage>;
-  modelRegistry: InstanceType<typeof ModelRegistry>;
+  authStorage: AuthStorage;
+  modelRegistry: ModelRegistry;
 } {
   const resolvedAgentDir = agentDir ?? resolveBotAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+
   if (!model) {
     const providers = cfg?.models?.providers ?? {};
     const inlineModels = buildInlineProviderModels(providers);
@@ -75,6 +75,24 @@ export function resolveModel(
     const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
     if (forwardCompat) {
       return { model: forwardCompat, authStorage, modelRegistry };
+    }
+    // OpenRouter is a pass-through proxy — any model ID available on OpenRouter
+    // should work without being pre-registered in the local catalog.
+    if (normalizedProvider === "openrouter") {
+      const fallbackModel: Model<Api> = normalizeModelCompat({
+        id: modelId,
+        name: modelId,
+        api: "openai-completions",
+        provider,
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: DEFAULT_CONTEXT_TOKENS,
+        // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
+        maxTokens: 8192,
+      } as Model<Api>);
+      return { model: fallbackModel, authStorage, modelRegistry };
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {
@@ -100,10 +118,38 @@ export function resolveModel(
       return { model: fallbackModel, authStorage, modelRegistry };
     }
     return {
-      error: `Unknown model: ${provider}/${modelId}`,
+      error: buildUnknownModelError(provider, modelId),
       authStorage,
       modelRegistry,
     };
   }
   return { model: normalizeModelCompat(model), authStorage, modelRegistry };
+}
+
+/**
+ * Build a more helpful error when the model is not found.
+ *
+ * Local providers (ollama, vllm) need a dummy API key to be registered.
+ * Users often configure `agents.defaults.model.primary: "ollama/…"` but
+ * forget to set `OLLAMA_API_KEY`, resulting in a confusing "Unknown model"
+ * error.  This detects known providers that require opt-in auth and adds
+ * a hint.
+ *
+ * See: https://github.com/hanzoai/bot/issues/17328
+ */
+const LOCAL_PROVIDER_HINTS: Record<string, string> = {
+  ollama:
+    "Ollama requires authentication to be registered as a provider. " +
+    'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "bot configure". ' +
+    "See: https://docs.hanzo.bot/providers/ollama",
+  vllm:
+    "vLLM requires authentication to be registered as a provider. " +
+    'Set VLLM_API_KEY (any value works) or run "bot configure". ' +
+    "See: https://docs.hanzo.bot/providers/vllm",
+};
+
+function buildUnknownModelError(provider: string, modelId: string): string {
+  const base = `Unknown model: ${provider}/${modelId}`;
+  const hint = LOCAL_PROVIDER_HINTS[provider.toLowerCase()];
+  return hint ? `${base}. ${hint}` : base;
 }

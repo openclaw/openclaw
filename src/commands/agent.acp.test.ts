@@ -38,11 +38,15 @@ function createAcpEnabledConfig(home: string, storePath: string): BotConfig {
       defaults: {
         model: { primary: "openai/gpt-5.3-codex" },
         models: { "openai/gpt-5.3-codex": {} },
-        workspace: path.join(home, "hanzo-bot"),
+        workspace: path.join(home, "@hanzo/bot"),
       },
     },
     session: { store: storePath, mainKey: "main" },
-  } satisfies BotConfig;
+  };
+}
+
+function mockConfig(home: string, storePath: string) {
+  loadConfigSpy.mockReturnValue(createAcpEnabledConfig(home, storePath));
 }
 
 function mockConfigWithAcpOverrides(
@@ -50,23 +54,12 @@ function mockConfigWithAcpOverrides(
   storePath: string,
   acpOverrides: Partial<NonNullable<BotConfig["acp"]>>,
 ) {
-  loadConfigSpy.mockReturnValue({
-    acp: {
-      enabled: true,
-      backend: "acpx",
-      allowedAgents: ["codex"],
-      dispatch: { enabled: true },
-      ...acpOverrides,
-    },
-    agents: {
-      defaults: {
-        model: { primary: "openai/gpt-5.3-codex" },
-        models: { "openai/gpt-5.3-codex": {} },
-        workspace: path.join(home, "hanzo-bot"),
-      },
-    },
-    session: { store: storePath, mainKey: "main" },
-  } satisfies BotConfig);
+  const cfg = createAcpEnabledConfig(home, storePath);
+  cfg.acp = {
+    ...cfg.acp,
+    ...acpOverrides,
+  };
+  loadConfigSpy.mockReturnValue(cfg);
 }
 
 function writeAcpSessionStore(storePath: string, agent = "codex") {

@@ -12,7 +12,7 @@ describe("createTempHomeEnv", () => {
     const tempHome = await createTempHomeEnv("bot-temp-home-");
     expect(process.env.HOME).toBe(tempHome.home);
     expect(process.env.USERPROFILE).toBe(tempHome.home);
-    expect(process.env.BOT_STATE_DIR).toBe(path.join(tempHome.home, ".hanzo/bot"));
+    expect(process.env.BOT_STATE_DIR).toBe(path.join(tempHome.home, ".bot"));
     await expect(fs.stat(tempHome.home)).resolves.toMatchObject({
       isDirectory: expect.any(Function),
     });

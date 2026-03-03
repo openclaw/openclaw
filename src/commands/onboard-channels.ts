@@ -5,7 +5,9 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import type { ChannelChoice } from "./onboard-types.js";
 import type {
+  ChannelOnboardingConfiguredResult,
   ChannelOnboardingDmPolicy,
+  ChannelOnboardingResult,
   ChannelOnboardingStatus,
   SetupChannelsOptions,
 } from "./onboarding/types.js";
@@ -192,12 +194,12 @@ async function noteChannelPrimer(
   await prompter.note(
     [
       "DM security: default is pairing; unknown DMs get a pairing code.",
-      `Approve with: ${formatCliCommand("hanzo-bot pairing approve <channel> <code>")}`,
+      `Approve with: ${formatCliCommand("bot pairing approve <channel> <code>")}`,
       'Public DMs require dmPolicy="open" + allowFrom=["*"].',
       "Multi-user DMs: run: " +
         formatCliCommand('bot config set session.dmScope "per-channel-peer"') +
         ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
-      `Docs: ${formatDocsLink("/start/pairing", "start/pairing")}`,
+      `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
       "",
       ...channelLines,
     ].join("\n"),
@@ -247,13 +249,13 @@ async function maybeConfigureDmPolicies(params: {
     await prompter.note(
       [
         "Default: pairing (unknown DMs get a pairing code).",
-        `Approve: ${formatCliCommand(`hanzo-bot pairing approve ${policy.channel} <code>`)}`,
+        `Approve: ${formatCliCommand(`bot pairing approve ${policy.channel} <code>`)}`,
         `Allowlist DMs: ${policy.policyKey}="allowlist" + ${policy.allowFromKey} entries.`,
         `Public DMs: ${policy.policyKey}="open" + ${policy.allowFromKey} includes "*".`,
         "Multi-user DMs: run: " +
           formatCliCommand('bot config set session.dmScope "per-channel-peer"') +
           ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
-        `Docs: ${formatDocsLink("/start/pairing", "start/pairing")}`,
+        `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
       ].join("\n"),
       `${policy.label} DM access`,
     );
@@ -467,10 +469,44 @@ export async function setupChannels(
       workspaceDir,
     });
     if (!getChannelPlugin(channel)) {
+      // Some installs/environments can fail to populate the plugin registry during onboarding,
+      // even for built-in channels. If the channel supports onboarding, proceed with config
+      // so setup isn't blocked; the gateway can still load plugins on startup.
+      const adapter = getChannelOnboardingAdapter(channel);
+      if (adapter) {
+        await prompter.note(
+          `${channel} plugin not available (continuing with onboarding). If the channel still doesn't work after setup, run \`${formatCliCommand(
+            "bot plugins list",
+          )}\` and \`${formatCliCommand("bot plugins enable " + channel)}\`, then restart the gateway.`,
+          "Channel setup",
+        );
+        await refreshStatus(channel);
+        return true;
+      }
       await prompter.note(`${channel} plugin not available.`, "Channel setup");
       return false;
     }
     await refreshStatus(channel);
+    return true;
+  };
+
+  const applyOnboardingResult = async (channel: ChannelChoice, result: ChannelOnboardingResult) => {
+    next = result.cfg;
+    if (result.accountId) {
+      recordAccount(channel, result.accountId);
+    }
+    addSelection(channel);
+    await refreshStatus(channel);
+  };
+
+  const applyCustomOnboardingResult = async (
+    channel: ChannelChoice,
+    result: ChannelOnboardingConfiguredResult,
+  ) => {
+    if (result === "skip") {
+      return false;
+    }
+    await applyOnboardingResult(channel, result);
     return true;
   };
 
@@ -489,17 +525,29 @@ export async function setupChannels(
       shouldPromptAccountIds,
       forceAllowFrom: forceAllowFromChannels.has(channel),
     });
-    next = result.cfg;
-    if (result.accountId) {
-      recordAccount(channel, result.accountId);
-    }
-    addSelection(channel);
-    await refreshStatus(channel);
+    await applyOnboardingResult(channel, result);
   };
 
   const handleConfiguredChannel = async (channel: ChannelChoice, label: string) => {
     const plugin = getChannelPlugin(channel);
     const adapter = getChannelOnboardingAdapter(channel);
+    if (adapter?.configureWhenConfigured) {
+      const custom = await adapter.configureWhenConfigured({
+        cfg: next,
+        runtime,
+        prompter,
+        options,
+        accountOverrides,
+        shouldPromptAccountIds,
+        forceAllowFrom: forceAllowFromChannels.has(channel),
+        configured: true,
+        label,
+      });
+      if (!(await applyCustomOnboardingResult(channel, custom))) {
+        return;
+      }
+      return;
+    }
     const supportsDisable = Boolean(
       options?.allowDisable && (plugin?.config.setAccountEnabled || adapter?.disable),
     );
@@ -601,9 +649,27 @@ export async function setupChannels(
     }
 
     const plugin = getChannelPlugin(channel);
+    const adapter = getChannelOnboardingAdapter(channel);
     const label = plugin?.meta.label ?? catalogEntry?.meta.label ?? channel;
     const status = statusByChannel.get(channel);
     const configured = status?.configured ?? false;
+    if (adapter?.configureInteractive) {
+      const custom = await adapter.configureInteractive({
+        cfg: next,
+        runtime,
+        prompter,
+        options,
+        accountOverrides,
+        shouldPromptAccountIds,
+        forceAllowFrom: forceAllowFromChannels.has(channel),
+        configured,
+        label,
+      });
+      if (!(await applyCustomOnboardingResult(channel, custom))) {
+        return;
+      }
+      return;
+    }
     if (configured) {
       await handleConfiguredChannel(channel, label);
       return;
@@ -620,7 +686,7 @@ export async function setupChannels(
         {
           value: "__skip__",
           label: "Skip for now",
-          hint: `You can add channels later via \`${formatCliCommand("hanzo-bot channels add")}\``,
+          hint: `You can add channels later via \`${formatCliCommand("bot channels add")}\``,
         },
       ],
       initialValue: quickstartDefault,

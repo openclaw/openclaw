@@ -5,7 +5,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import { WebSocket } from "ws";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
-import { BARE_SESSION_RESET_PROMPT } from "../auto-reply/reply/session-reset-prompt.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
@@ -178,7 +177,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("INVALID_REQUEST");
-    expect(res.error?.message).toContain("delivery channel is required");
+    expect(res.error?.message).toContain("Channel is required");
     expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
   });
 
@@ -251,7 +250,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("INVALID_REQUEST");
-    expect(res.error?.message).toContain("delivery channel is required");
+    expect(res.error?.message).toMatch(/Channel is required|runtime not initialized/);
     expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
   });
 

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveAgentModelFallbackValues, resolveAgentModelPrimaryValue } from "./model-input.js";
 
 const { loadConfig, migrateLegacyConfig, readConfigFileSnapshot, validateConfigObject } =
   await vi.importActual<typeof import("./config.js")>("./config.js");
@@ -26,6 +27,22 @@ async function expectLoadRejectionPreservesField(params: {
   });
 }
 
+type ConfigSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+
+async function withSnapshotForConfig(
+  config: unknown,
+  run: (params: { snapshot: ConfigSnapshot; parsed: unknown; configPath: string }) => Promise<void>,
+) {
+  await withTempHome(async (home) => {
+    const configPath = path.join(home, ".bot", "bot.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+    const snapshot = await readConfigFileSnapshot();
+    const parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
+    await run({ snapshot, parsed, configPath });
+  });
+}
+
 function expectValidConfigValue(params: {
   config: unknown;
   readValue: (config: unknown) => unknown;
@@ -45,6 +62,20 @@ function expectInvalidIssuePath(config: unknown, expectedPath: string) {
   if (!res.ok) {
     expect(res.issues[0]?.path).toBe(expectedPath);
   }
+}
+
+function expectRoutingAllowFromLegacySnapshot(
+  ctx: { snapshot: ConfigSnapshot; parsed: unknown },
+  expectedAllowFrom: string[],
+) {
+  expect(ctx.snapshot.valid).toBe(false);
+  expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "routing.allowFrom")).toBe(true);
+  const parsed = ctx.parsed as {
+    routing?: { allowFrom?: string[] };
+    channels?: unknown;
+  };
+  expect(parsed.routing?.allowFrom).toEqual(expectedAllowFrom);
+  expect(parsed.channels).toBeUndefined();
 }
 
 describe("legacy config detection", () => {
@@ -98,7 +129,7 @@ describe("legacy config detection", () => {
           ?.groupPolicy,
       "allowlist",
     ],
-  ])("%s", (_name, config, readValue, expectedValue) => {
+  ])("defaults: %s", (_name, config, readValue, expectedValue) => {
     expectValidConfigValue({ config, readValue, expectedValue });
   });
   it("rejects unsafe executable config values", async () => {
@@ -149,7 +180,7 @@ describe("legacy config detection", () => {
       { channels: { slack: { dmPolicy: "open", allowFrom: ["U123"] } } },
       "channels.slack.allowFrom",
     ],
-  ])("%s", (_name, config, expectedPath) => {
+  ])("rejects: %s", (_name, config, expectedPath) => {
     expectInvalidIssuePath(config, expectedPath);
   });
 
@@ -187,7 +218,9 @@ describe("legacy config detection", () => {
       'Moved telegram.requireMention → channels.telegram.groups."*".requireMention.',
     );
     expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
-    expect(res.config?.channels?.telegram?.requireMention).toBeUndefined();
+    expect(
+      (res.config?.channels?.telegram as { requireMention?: boolean } | undefined)?.requireMention,
+    ).toBeUndefined();
   });
   it("migrates messages.tts.enabled to messages.tts.auto", async () => {
     const res = migrateLegacyConfig({
@@ -209,56 +242,49 @@ describe("legacy config detection", () => {
       },
     });
 
-    expect(res.config?.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
-    expect(res.config?.agents?.defaults?.model?.fallbacks).toEqual(["openai/gpt-4.1-mini"]);
-    expect(res.config?.agents?.defaults?.imageModel?.primary).toBe("openai/gpt-4.1-mini");
-    expect(res.config?.agents?.defaults?.imageModel?.fallbacks).toEqual([
+    expect(resolveAgentModelPrimaryValue(res.config?.agents?.defaults?.model)).toBe(
+      "anthropic/claude-opus-4-5",
+    );
+    expect(resolveAgentModelFallbackValues(res.config?.agents?.defaults?.model)).toEqual([
+      "openai/gpt-4.1-mini",
+    ]);
+    expect(resolveAgentModelPrimaryValue(res.config?.agents?.defaults?.imageModel)).toBe(
+      "openai/gpt-4.1-mini",
+    );
+    expect(resolveAgentModelFallbackValues(res.config?.agents?.defaults?.imageModel)).toEqual([
       "anthropic/claude-opus-4-5",
     ]);
     expect(res.config?.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]).toMatchObject({
       alias: "Opus",
     });
     expect(res.config?.agents?.defaults?.models?.["openai/gpt-4.1-mini"]).toBeTruthy();
-    expect(res.config?.agent).toBeUndefined();
+    expect((res.config as { agent?: unknown } | undefined)?.agent).toBeUndefined();
   });
   it("flags legacy config in snapshot", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".bot", "bot.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ routing: { allowFrom: ["+15555550123"] } }),
-        "utf-8",
-      );
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues.some((issue) => issue.path === "routing.allowFrom")).toBe(true);
-
-      const raw = await fs.readFile(configPath, "utf-8");
-      const parsed = JSON.parse(raw) as {
-        routing?: { allowFrom?: string[] };
-        channels?: unknown;
-      };
-      expect(parsed.routing?.allowFrom).toEqual(["+15555550123"]);
-      expect(parsed.channels).toBeUndefined();
+    await withSnapshotForConfig({ routing: { allowFrom: ["+15555550123"] } }, async (ctx) => {
+      expectRoutingAllowFromLegacySnapshot(ctx, ["+15555550123"]);
     });
   });
   it("flags top-level memorySearch as legacy in snapshot", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".bot", "bot.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ memorySearch: { provider: "local", fallback: "none" } }),
-        "utf-8",
-      );
+    await withSnapshotForConfig(
+      { memorySearch: { provider: "local", fallback: "none" } },
+      async (ctx) => {
+        expect(ctx.snapshot.valid).toBe(false);
+        expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
+      },
+    );
+  });
+  it("flags legacy provider sections in snapshot", async () => {
+    await withSnapshotForConfig({ whatsapp: { allowFrom: ["+1555"] } }, async (ctx) => {
+      expect(ctx.snapshot.valid).toBe(false);
+      expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "whatsapp")).toBe(true);
 
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
+      const parsed = ctx.parsed as {
+        channels?: unknown;
+        whatsapp?: unknown;
+      };
+      expect(parsed.channels).toBeUndefined();
+      expect(parsed.whatsapp).toBeTruthy();
     });
   });
   it("does not auto-migrate claude-cli auth profile mode on load", async () => {
@@ -291,52 +317,9 @@ describe("legacy config detection", () => {
       expect(parsed.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("token");
     });
   });
-  it("flags legacy provider sections in snapshot", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".bot", "bot.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ whatsapp: { allowFrom: ["+1555"] } }, null, 2),
-        "utf-8",
-      );
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues.some((issue) => issue.path === "whatsapp")).toBe(true);
-
-      const raw = await fs.readFile(configPath, "utf-8");
-      const parsed = JSON.parse(raw) as {
-        channels?: unknown;
-        whatsapp?: unknown;
-      };
-      expect(parsed.channels).toBeUndefined();
-      expect(parsed.whatsapp).toBeTruthy();
-    });
-  });
   it("flags routing.allowFrom in snapshot", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".bot", "bot.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ routing: { allowFrom: ["+1666"] } }, null, 2),
-        "utf-8",
-      );
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues.some((issue) => issue.path === "routing.allowFrom")).toBe(true);
-
-      const raw = await fs.readFile(configPath, "utf-8");
-      const parsed = JSON.parse(raw) as {
-        channels?: unknown;
-        routing?: { allowFrom?: string[] };
-      };
-      expect(parsed.channels).toBeUndefined();
-      expect(parsed.routing?.allowFrom).toEqual(["+1666"]);
+    await withSnapshotForConfig({ routing: { allowFrom: ["+1666"] } }, async (ctx) => {
+      expectRoutingAllowFromLegacySnapshot(ctx, ["+1666"]);
     });
   });
   it("rejects bindings[].match.provider on load", async () => {
@@ -361,62 +344,51 @@ describe("legacy config detection", () => {
       expectedValue: "work",
     });
   });
-  it("rejects session.sendPolicy.rules[].match.provider on load", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".bot", "bot.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
-          {
-            session: {
-              sendPolicy: {
-                rules: [{ action: "deny", match: { provider: "telegram" } }],
-              },
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expect(snap.issues.length).toBeGreaterThan(0);
-
-      const raw = await fs.readFile(configPath, "utf-8");
-      const parsed = JSON.parse(raw) as {
-        session?: { sendPolicy?: { rules?: Array<{ match?: { provider?: string } }> } };
-      };
-      expect(parsed.session?.sendPolicy?.rules?.[0]?.match?.provider).toBe("telegram");
+  it("accepts bindings[].comment on load", () => {
+    expectValidConfigValue({
+      config: {
+        bindings: [{ agentId: "main", comment: "primary route", match: { channel: "telegram" } }],
+      },
+      readValue: (config) =>
+        (config as { bindings?: Array<{ comment?: string }> }).bindings?.[0]?.comment,
+      expectedValue: "primary route",
     });
   });
+  it("rejects session.sendPolicy.rules[].match.provider on load", async () => {
+    await withSnapshotForConfig(
+      {
+        session: {
+          sendPolicy: {
+            rules: [{ action: "deny", match: { provider: "telegram" } }],
+          },
+        },
+      },
+      async (ctx) => {
+        expect(ctx.snapshot.valid).toBe(false);
+        expect(ctx.snapshot.issues.length).toBeGreaterThan(0);
+        const parsed = ctx.parsed as {
+          session?: { sendPolicy?: { rules?: Array<{ match?: { provider?: string } }> } };
+        };
+        expect(parsed.session?.sendPolicy?.rules?.[0]?.match?.provider).toBe("telegram");
+      },
+    );
+  });
   it("rejects messages.queue.byProvider on load", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".bot", "bot.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ messages: { queue: { byProvider: { whatsapp: "queue" } } } }, null, 2),
-        "utf-8",
-      );
+    await withSnapshotForConfig(
+      { messages: { queue: { byProvider: { whatsapp: "queue" } } } },
+      async (ctx) => {
+        expect(ctx.snapshot.valid).toBe(false);
+        expect(ctx.snapshot.issues.length).toBeGreaterThan(0);
 
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expect(snap.issues.length).toBeGreaterThan(0);
-
-      const raw = await fs.readFile(configPath, "utf-8");
-      const parsed = JSON.parse(raw) as {
-        messages?: {
-          queue?: {
-            byProvider?: Record<string, unknown>;
+        const parsed = ctx.parsed as {
+          messages?: {
+            queue?: {
+              byProvider?: Record<string, unknown>;
+            };
           };
         };
-      };
-      expect(parsed.messages?.queue?.byProvider?.whatsapp).toBe("queue");
-    });
+        expect(parsed.messages?.queue?.byProvider?.whatsapp).toBe("queue");
+      },
+    );
   });
 });

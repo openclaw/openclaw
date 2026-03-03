@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BotConfig } from "../config/config.js";
+import type { WorkspaceBootstrapFile } from "./workspace.js";
 import {
   buildBootstrapContextFiles,
   DEFAULT_BOOTSTRAP_MAX_CHARS,
@@ -16,6 +17,12 @@ const makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstra
   missing: false,
   ...overrides,
 });
+
+const createLargeBootstrapFiles = (): WorkspaceBootstrapFile[] => [
+  makeFile({ name: "AGENTS.md", content: "a".repeat(10_000) }),
+  makeFile({ name: "SOUL.md", path: "/tmp/SOUL.md", content: "b".repeat(10_000) }),
+  makeFile({ name: "USER.md", path: "/tmp/USER.md", content: "c".repeat(10_000) }),
+];
 describe("buildBootstrapContextFiles", () => {
   it("keeps missing markers", () => {
     const files = [makeFile({ missing: true, content: undefined })];
@@ -59,11 +66,7 @@ describe("buildBootstrapContextFiles", () => {
   });
 
   it("keeps total injected bootstrap characters under the new default total cap", () => {
-    const files = [
-      makeFile({ name: "AGENTS.md", content: "a".repeat(10_000) }),
-      makeFile({ name: "SOUL.md", path: "/tmp/SOUL.md", content: "b".repeat(10_000) }),
-      makeFile({ name: "USER.md", path: "/tmp/USER.md", content: "c".repeat(10_000) }),
-    ];
+    const files = createLargeBootstrapFiles();
     const result = buildBootstrapContextFiles(files);
     const totalChars = result.reduce((sum, entry) => sum + entry.content.length, 0);
     expect(totalChars).toBeLessThanOrEqual(DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
@@ -72,11 +75,7 @@ describe("buildBootstrapContextFiles", () => {
   });
 
   it("caps total injected bootstrap characters when totalMaxChars is configured", () => {
-    const files = [
-      makeFile({ name: "AGENTS.md", content: "a".repeat(10_000) }),
-      makeFile({ name: "SOUL.md", path: "/tmp/SOUL.md", content: "b".repeat(10_000) }),
-      makeFile({ name: "USER.md", path: "/tmp/USER.md", content: "c".repeat(10_000) }),
-    ];
+    const files = createLargeBootstrapFiles();
     const result = buildBootstrapContextFiles(files, { totalMaxChars: 24_000 });
     const totalChars = result.reduce((sum, entry) => sum + entry.content.length, 0);
     expect(totalChars).toBeLessThanOrEqual(24_000);
@@ -115,40 +114,83 @@ describe("buildBootstrapContextFiles", () => {
     expect(result[0]?.content.length).toBeLessThanOrEqual(20);
     expect(result[0]?.content.startsWith("[MISSING]")).toBe(true);
   });
+
+  it("skips files with missing or invalid paths and emits warnings", () => {
+    const malformedMissingPath = {
+      name: "SKILL-SECURITY.md",
+      missing: false,
+      content: "secret",
+    } as unknown as WorkspaceBootstrapFile;
+    const malformedNonStringPath = {
+      name: "SKILL-SECURITY.md",
+      path: 123,
+      missing: false,
+      content: "secret",
+    } as unknown as WorkspaceBootstrapFile;
+    const malformedWhitespacePath = {
+      name: "SKILL-SECURITY.md",
+      path: "   ",
+      missing: false,
+      content: "secret",
+    } as unknown as WorkspaceBootstrapFile;
+    const good = makeFile({ content: "hello" });
+    const warnings: string[] = [];
+    const result = buildBootstrapContextFiles(
+      [malformedMissingPath, malformedNonStringPath, malformedWhitespacePath, good],
+      {
+        warn: (msg) => warnings.push(msg),
+      },
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]?.path).toBe("/tmp/AGENTS.md");
+    expect(warnings).toHaveLength(3);
+    expect(warnings.every((warning) => warning.includes('missing or invalid "path" field'))).toBe(
+      true,
+    );
+  });
 });
 
-describe("resolveBootstrapMaxChars", () => {
-  it("returns default when unset", () => {
-    expect(resolveBootstrapMaxChars()).toBe(DEFAULT_BOOTSTRAP_MAX_CHARS);
-  });
-  it("uses configured value when valid", () => {
-    const cfg = {
-      agents: { defaults: { bootstrapMaxChars: 12345 } },
-    } as BotConfig;
-    expect(resolveBootstrapMaxChars(cfg)).toBe(12345);
-  });
-  it("falls back when invalid", () => {
-    const cfg = {
-      agents: { defaults: { bootstrapMaxChars: -1 } },
-    } as BotConfig;
-    expect(resolveBootstrapMaxChars(cfg)).toBe(DEFAULT_BOOTSTRAP_MAX_CHARS);
-  });
-});
+type BootstrapLimitResolverCase = {
+  name: "bootstrapMaxChars" | "bootstrapTotalMaxChars";
+  resolve: (cfg?: BotConfig) => number;
+  defaultValue: number;
+};
 
-describe("resolveBootstrapTotalMaxChars", () => {
-  it("returns default when unset", () => {
-    expect(resolveBootstrapTotalMaxChars()).toBe(DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
+const BOOTSTRAP_LIMIT_RESOLVERS: BootstrapLimitResolverCase[] = [
+  {
+    name: "bootstrapMaxChars",
+    resolve: resolveBootstrapMaxChars,
+    defaultValue: DEFAULT_BOOTSTRAP_MAX_CHARS,
+  },
+  {
+    name: "bootstrapTotalMaxChars",
+    resolve: resolveBootstrapTotalMaxChars,
+    defaultValue: DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+  },
+];
+
+describe("bootstrap limit resolvers", () => {
+  it("return defaults when unset", () => {
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      expect(resolver.resolve()).toBe(resolver.defaultValue);
+    }
   });
-  it("uses configured value when valid", () => {
-    const cfg = {
-      agents: { defaults: { bootstrapTotalMaxChars: 12345 } },
-    } as BotConfig;
-    expect(resolveBootstrapTotalMaxChars(cfg)).toBe(12345);
+
+  it("use configured values when valid", () => {
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      const cfg = {
+        agents: { defaults: { [resolver.name]: 12345 } },
+      } as BotConfig;
+      expect(resolver.resolve(cfg)).toBe(12345);
+    }
   });
-  it("falls back when invalid", () => {
-    const cfg = {
-      agents: { defaults: { bootstrapTotalMaxChars: -1 } },
-    } as BotConfig;
-    expect(resolveBootstrapTotalMaxChars(cfg)).toBe(DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
+
+  it("fall back when values are invalid", () => {
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      const cfg = {
+        agents: { defaults: { [resolver.name]: -1 } },
+      } as BotConfig;
+      expect(resolver.resolve(cfg)).toBe(resolver.defaultValue);
+    }
   });
 });

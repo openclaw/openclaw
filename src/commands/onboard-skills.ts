@@ -188,7 +188,7 @@ export async function setupSkills(
         runtime.log(result.stdout.trim());
       }
       runtime.log(
-        `Tip: run \`${formatCliCommand("hanzo-bot doctor")}\` to review skills + requirements.`,
+        `Tip: run \`${formatCliCommand("bot doctor")}\` to review skills + requirements.`,
       );
       runtime.log("Docs: https://docs.hanzo.bot/skills");
     }

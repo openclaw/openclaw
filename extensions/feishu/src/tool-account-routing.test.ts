@@ -25,6 +25,7 @@ function createConfig(params: {
     drive?: boolean;
     perm?: boolean;
   };
+  defaultAccount?: string;
 }): BotPluginApi["config"] {
   return {
     channels: {

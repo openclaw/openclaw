@@ -3,6 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 import {
+  formatSessionArchiveTimestamp,
+  parseSessionArchiveTimestamp,
+  type SessionArchiveReason,
   resolveSessionFilePath,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
@@ -10,6 +13,7 @@ import {
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
 
@@ -159,10 +163,19 @@ export function resolveSessionTranscriptCandidates(
   return Array.from(new Set(candidates));
 }
 
-export type ArchiveFileReason = "bak" | "reset" | "deleted";
+export type ArchiveFileReason = SessionArchiveReason;
+
+function canonicalizePathForComparison(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
 
 export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
-  const ts = new Date().toISOString().replaceAll(":", "-");
+  const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
   return archived;
@@ -178,19 +191,35 @@ export function archiveSessionTranscripts(opts: {
   sessionFile?: string;
   agentId?: string;
   reason: "reset" | "deleted";
+  /**
+   * When true, only archive files resolved under the session store directory.
+   * This prevents maintenance operations from mutating paths outside the agent sessions dir.
+   */
+  restrictToStoreDir?: boolean;
 }): string[] {
   const archived: string[] = [];
+  const storeDir =
+    opts.restrictToStoreDir && opts.storePath
+      ? canonicalizePathForComparison(path.dirname(opts.storePath))
+      : null;
   for (const candidate of resolveSessionTranscriptCandidates(
     opts.sessionId,
     opts.storePath,
     opts.sessionFile,
     opts.agentId,
   )) {
-    if (!fs.existsSync(candidate)) {
+    const candidatePath = canonicalizePathForComparison(candidate);
+    if (storeDir) {
+      const relative = path.relative(storeDir, candidatePath);
+      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+        continue;
+      }
+    }
+    if (!fs.existsSync(candidatePath)) {
       continue;
     }
     try {
-      archived.push(archiveFileOnDisk(candidate, opts.reason));
+      archived.push(archiveFileOnDisk(candidatePath, opts.reason));
     } catch {
       // Best-effort.
     }
@@ -198,46 +227,43 @@ export function archiveSessionTranscripts(opts: {
   return archived;
 }
 
-/**
- * Cleans up archived session transcripts older than a given age.
- * Scans the given directories for `.reset.*` and `.deleted.*` archive files
- * and removes those whose mtime is older than `olderThanMs`.
- */
 export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
-  olderThanMs?: number;
-  reason?: "reset" | "deleted";
-}): Promise<void> {
-  const olderThanMs = opts.olderThanMs ?? 7 * 24 * 60 * 60 * 1000;
-  const now = Date.now();
-  const reasonSuffix = opts.reason ? `.${opts.reason}.` : null;
+  olderThanMs: number;
+  reason?: ArchiveFileReason;
+  nowMs?: number;
+}): Promise<{ removed: number; scanned: number }> {
+  if (!Number.isFinite(opts.olderThanMs) || opts.olderThanMs < 0) {
+    return { removed: 0, scanned: 0 };
+  }
+  const now = opts.nowMs ?? Date.now();
+  const reason: ArchiveFileReason = opts.reason ?? "deleted";
+  const directories = Array.from(new Set(opts.directories.map((dir) => path.resolve(dir))));
+  let removed = 0;
+  let scanned = 0;
 
-  for (const dir of opts.directories) {
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(dir);
-    } catch {
-      continue;
-    }
+  for (const dir of directories) {
+    const entries = await fs.promises.readdir(dir).catch(() => []);
     for (const entry of entries) {
-      const isArchive = entry.includes(".reset.") || entry.includes(".deleted.");
-      if (!isArchive) {
+      const timestamp = parseSessionArchiveTimestamp(entry, reason);
+      if (timestamp == null) {
         continue;
       }
-      if (reasonSuffix && !entry.includes(reasonSuffix)) {
+      scanned += 1;
+      if (now - timestamp <= opts.olderThanMs) {
         continue;
       }
-      const filePath = path.join(dir, entry);
-      try {
-        const stat = fs.statSync(filePath);
-        if (now - stat.mtimeMs > olderThanMs) {
-          fs.unlinkSync(filePath);
-        }
-      } catch {
-        // Best-effort cleanup.
+      const fullPath = path.join(dir, entry);
+      const stat = await fs.promises.stat(fullPath).catch(() => null);
+      if (!stat?.isFile()) {
+        continue;
       }
+      await fs.promises.rm(fullPath).catch(() => undefined);
+      removed += 1;
     }
   }
+
+  return { removed, scanned };
 }
 
 export function capArrayByJsonBytes<T>(
@@ -256,36 +282,6 @@ export function capArrayByJsonBytes<T>(
   }
   const next = start > 0 ? items.slice(start) : items;
   return { items: next, bytes };
-}
-
-const OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
-
-/**
- * Replace individual messages whose JSON serialization exceeds `perMessageMaxBytes`
- * with a lightweight placeholder stub preserving the message role and timestamp.
- */
-export function truncateOversizedMessages(
-  messages: unknown[],
-  perMessageMaxBytes: number,
-): unknown[] {
-  if (messages.length === 0) {
-    return messages;
-  }
-  let changed = false;
-  const next = messages.map((msg) => {
-    const bytes = jsonUtf8Bytes(msg);
-    if (bytes <= perMessageMaxBytes) {
-      return msg;
-    }
-    changed = true;
-    const entry = msg && typeof msg === "object" ? (msg as Record<string, unknown>) : {};
-    return {
-      role: entry.role ?? "assistant",
-      timestamp: entry.timestamp,
-      content: [{ type: "text", text: OVERSIZED_PLACEHOLDER }],
-    };
-  });
-  return changed ? next : messages;
 }
 
 const MAX_LINES_TO_SCAN = 10;
@@ -370,7 +366,8 @@ export function readSessionTitleFieldsFromTranscript(
 
 function extractTextFromContent(content: TranscriptMessage["content"]): string | null {
   if (typeof content === "string") {
-    return content.trim() || null;
+    const normalized = stripInlineDirectiveTagsForDisplay(content).text.trim();
+    return normalized || null;
   }
   if (!Array.isArray(content)) {
     return null;
@@ -380,9 +377,9 @@ function extractTextFromContent(content: TranscriptMessage["content"]): string |
       continue;
     }
     if (part.type === "text" || part.type === "output_text" || part.type === "input_text") {
-      const trimmed = part.text.trim();
-      if (trimmed) {
-        return trimmed;
+      const normalized = stripInlineDirectiveTagsForDisplay(part.text).text.trim();
+      if (normalized) {
+        return normalized;
       }
     }
   }
@@ -427,27 +424,21 @@ function extractFirstUserMessageFromTranscriptChunk(
   return null;
 }
 
-export function readFirstUserMessageFromTranscript(
+function findExistingTranscriptPath(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
-  opts?: { includeInterSession?: boolean },
 ): string | null {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  const filePath = candidates.find((p) => fs.existsSync(p));
-  if (!filePath) {
-    return null;
-  }
+  return candidates.find((p) => fs.existsSync(p)) ?? null;
+}
 
+function withOpenTranscriptFd<T>(filePath: string, read: (fd: number) => T | null): T | null {
   let fd: number | null = null;
   try {
     fd = fs.openSync(filePath, "r");
-    const chunk = readTranscriptHeadChunk(fd);
-    if (!chunk) {
-      return null;
-    }
-    return extractFirstUserMessageFromTranscriptChunk(chunk, opts);
+    return read(fd);
   } catch {
     // file read error
   } finally {
@@ -456,6 +447,27 @@ export function readFirstUserMessageFromTranscript(
     }
   }
   return null;
+}
+
+export function readFirstUserMessageFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+  opts?: { includeInterSession?: boolean },
+): string | null {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  return withOpenTranscriptFd(filePath, (fd) => {
+    const chunk = readTranscriptHeadChunk(fd);
+    if (!chunk) {
+      return null;
+    }
+    return extractFirstUserMessageFromTranscriptChunk(chunk, opts);
+  });
 }
 
 const LAST_MSG_MAX_BYTES = 16384;
@@ -499,29 +511,19 @@ export function readLastMessagePreviewFromTranscript(
   sessionFile?: string,
   agentId?: string,
 ): string | null {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  const filePath = candidates.find((p) => fs.existsSync(p));
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
   if (!filePath) {
     return null;
   }
 
-  let fd: number | null = null;
-  try {
-    fd = fs.openSync(filePath, "r");
+  return withOpenTranscriptFd(filePath, (fd) => {
     const stat = fs.fstatSync(fd);
     const size = stat.size;
     if (size === 0) {
       return null;
     }
     return readLastMessagePreviewFromOpenTranscript({ fd, size });
-  } catch {
-    // file error
-  } finally {
-    if (fd !== null) {
-      fs.closeSync(fd);
-    }
-  }
-  return null;
+  });
 }
 
 const PREVIEW_READ_SIZES = [64 * 1024, 256 * 1024, 1024 * 1024];
@@ -571,20 +573,22 @@ function truncatePreviewText(text: string, maxChars: number): string {
 
 function extractPreviewText(message: TranscriptPreviewMessage): string | null {
   if (typeof message.content === "string") {
-    const trimmed = message.content.trim();
-    return trimmed ? trimmed : null;
+    const normalized = stripInlineDirectiveTagsForDisplay(message.content).text.trim();
+    return normalized ? normalized : null;
   }
   if (Array.isArray(message.content)) {
     const parts = message.content
-      .map((entry) => (typeof entry?.text === "string" ? entry.text : ""))
+      .map((entry) =>
+        typeof entry?.text === "string" ? stripInlineDirectiveTagsForDisplay(entry.text).text : "",
+      )
       .filter((text) => text.trim().length > 0);
     if (parts.length > 0) {
       return parts.join("\n").trim();
     }
   }
   if (typeof message.text === "string") {
-    const trimmed = message.text.trim();
-    return trimmed ? trimmed : null;
+    const normalized = stripInlineDirectiveTagsForDisplay(message.text).text.trim();
+    return normalized ? normalized : null;
   }
   return null;
 }

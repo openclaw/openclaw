@@ -41,6 +41,7 @@ export const DEFAULT_SANDBOX_COMMON_IMAGE = "bot-sandbox-common:bookworm-slim";
 export const SANDBOX_BROWSER_SECURITY_HASH_EPOCH = "2026-02-28-no-sandbox-env";
 
 export const DEFAULT_SANDBOX_BROWSER_PREFIX = "bot-sbx-browser-";
+export const DEFAULT_SANDBOX_BROWSER_NETWORK = "bot-sandbox-browser";
 export const DEFAULT_SANDBOX_BROWSER_CDP_PORT = 9222;
 export const DEFAULT_SANDBOX_BROWSER_VNC_PORT = 5900;
 export const DEFAULT_SANDBOX_BROWSER_NOVNC_PORT = 6080;

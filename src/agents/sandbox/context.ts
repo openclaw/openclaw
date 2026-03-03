@@ -73,7 +73,7 @@ export async function resolveSandboxDockerUser(params: {
   if (configuredUser) {
     return params.docker;
   }
-  const stat = params.stat ?? ((dir: string) => fs.stat(dir));
+  const stat = params.stat ?? ((workspaceDir: string) => fs.stat(workspaceDir));
   try {
     const workspaceStat = await stat(params.workspaceDir);
     const uid = Number.isInteger(workspaceStat.uid) ? workspaceStat.uid : null;
@@ -125,11 +125,17 @@ export async function resolveSandboxContext(params: {
     workspaceDir: params.workspaceDir,
   });
 
+  const docker = await resolveSandboxDockerUser({
+    docker: cfg.docker,
+    workspaceDir,
+  });
+  const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
+
   const containerName = await ensureSandboxContainer({
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,
-    cfg,
+    cfg: resolvedCfg,
   });
 
   const evaluateEnabled =
@@ -155,7 +161,7 @@ export async function resolveSandboxContext(params: {
     scopeKey,
     workspaceDir,
     agentWorkspaceDir,
-    cfg,
+    cfg: resolvedCfg,
     evaluateEnabled,
     bridgeAuth,
   });
@@ -165,12 +171,12 @@ export async function resolveSandboxContext(params: {
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,
-    workspaceAccess: cfg.workspaceAccess,
+    workspaceAccess: resolvedCfg.workspaceAccess,
     containerName,
-    containerWorkdir: cfg.docker.workdir,
-    docker: cfg.docker,
-    tools: cfg.tools,
-    browserAllowHostControl: cfg.browser.allowHostControl,
+    containerWorkdir: resolvedCfg.docker.workdir,
+    docker: resolvedCfg.docker,
+    tools: resolvedCfg.tools,
+    browserAllowHostControl: resolvedCfg.browser.allowHostControl,
     browser: browser ?? undefined,
   };
 

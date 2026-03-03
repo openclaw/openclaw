@@ -38,7 +38,7 @@ describe("resolveRequestedLoginProviderOrThrow", () => {
     expect(() =>
       resolveRequestedLoginProviderOrThrow(loadedProviders, "google-antigravity"),
     ).toThrowError(
-      'Unknown provider "google-antigravity". Loaded providers: google-gemini-cli, qwen-portal. Verify plugins via `hanzo-bot plugins list --json`.',
+      'Unknown provider "google-antigravity". Loaded providers: google-gemini-cli, qwen-portal. Verify plugins via `bot plugins list --json`.',
     );
   });
 });

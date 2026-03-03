@@ -1,10 +1,10 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { BotConfig } from "../../config/config.js";
 import type { OutboundChannel } from "./targets.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { generateSecureUuid } from "../secure-random.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";
@@ -18,21 +18,6 @@ const BACKOFF_MS: readonly number[] = [
   600_000, // retry 4: 10m
 ];
 
-/**
- * Patterns that indicate a permanent delivery failure that will not resolve
- * on retry. Entries matching these are moved directly to failed/ without
- * consuming retry budget.
- */
-const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
-  /no conversation reference found/i,
-  /chat not found/i,
-  /user not found/i,
-  /bot was blocked by the user/i,
-  /bot was kicked from the/i,
-  /chat_id is empty/i,
-  /outbound not configured for channel/i,
-];
-
 type DeliveryMirrorPayload = {
   sessionKey: string;
   agentId?: string;
@@ -40,9 +25,7 @@ type DeliveryMirrorPayload = {
   mediaUrls?: string[];
 };
 
-export interface QueuedDelivery {
-  id: string;
-  enqueuedAt: number;
+type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
@@ -58,10 +41,22 @@ export interface QueuedDelivery {
   gifPlayback?: boolean;
   silent?: boolean;
   mirror?: DeliveryMirrorPayload;
+};
+
+export interface QueuedDelivery extends QueuedDeliveryPayload {
+  id: string;
+  enqueuedAt: number;
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
 }
+
+export type RecoverySummary = {
+  recovered: number;
+  failed: number;
+  skippedMaxRetries: number;
+  deferredBackoff: number;
+};
 
 function resolveQueueDir(stateDir?: string): string {
   const base = stateDir ?? resolveStateDir();
@@ -81,25 +76,14 @@ export async function ensureQueueDir(stateDir?: string): Promise<string> {
 }
 
 /** Persist a delivery entry to disk before attempting send. Returns the entry ID. */
-type QueuedDeliveryParams = {
-  channel: Exclude<OutboundChannel, "none">;
-  to: string;
-  accountId?: string;
-  payloads: ReplyPayload[];
-  threadId?: string | number | null;
-  replyToId?: string | null;
-  bestEffort?: boolean;
-  gifPlayback?: boolean;
-  silent?: boolean;
-  mirror?: DeliveryMirrorPayload;
-};
+type QueuedDeliveryParams = QueuedDeliveryPayload;
 
 export async function enqueueDelivery(
   params: QueuedDeliveryParams,
   stateDir?: string,
 ): Promise<string> {
   const queueDir = await ensureQueueDir(stateDir);
-  const id = crypto.randomUUID();
+  const id = generateSecureUuid();
   const entry: QueuedDelivery = {
     id,
     enqueuedAt: Date.now(),
@@ -156,11 +140,6 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   await fs.promises.rename(tmp, filePath);
 }
 
-/** Detect delivery errors that are permanent and should not be retried. */
-export function isPermanentDeliveryError(message: string): boolean {
-  return PERMANENT_ERROR_PATTERNS.some((pattern) => pattern.test(message));
-}
-
 /** Load all pending delivery entries from the queue directory. */
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
   const queueDir = resolveQueueDir(stateDir);
@@ -189,10 +168,9 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
         continue;
       }
       const raw = await fs.promises.readFile(filePath, "utf-8");
-      const entry: QueuedDelivery = JSON.parse(raw);
-      // Backfill lastAttemptAt for legacy entries that have retries but no timestamp.
-      if (entry.retryCount > 0 && entry.lastAttemptAt == null) {
-        entry.lastAttemptAt = entry.enqueuedAt;
+      const parsed = JSON.parse(raw) as QueuedDelivery;
+      const { entry, migrated } = normalizeLegacyQueuedDeliveryEntry(parsed);
+      if (migrated) {
         const tmp = `${filePath}.${process.pid}.tmp`;
         await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
           encoding: "utf-8",
@@ -226,26 +204,57 @@ export function computeBackoffMs(retryCount: number): number {
   return BACKOFF_MS[Math.min(retryCount - 1, BACKOFF_MS.length - 1)] ?? BACKOFF_MS.at(-1) ?? 0;
 }
 
-/**
- * Check whether a queued entry is eligible for a recovery retry at the given
- * wall-clock time. First-attempt entries (retryCount=0) are always eligible.
- * Retry entries must wait until the backoff window has elapsed since their last
- * attempt.
- */
 export function isEntryEligibleForRecoveryRetry(
   entry: QueuedDelivery,
   now: number,
 ): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
-  if (entry.retryCount === 0) {
+  const backoff = computeBackoffMs(entry.retryCount + 1);
+  if (backoff <= 0) {
     return { eligible: true };
   }
-  const backoffMs = computeBackoffMs(entry.retryCount);
-  const lastAttempt = entry.lastAttemptAt ?? entry.enqueuedAt;
-  const elapsed = now - lastAttempt;
-  if (elapsed >= backoffMs) {
+  const firstReplayAfterCrash = entry.retryCount === 0 && entry.lastAttemptAt === undefined;
+  if (firstReplayAfterCrash) {
     return { eligible: true };
   }
-  return { eligible: false, remainingBackoffMs: backoffMs - elapsed };
+  const hasAttemptTimestamp =
+    typeof entry.lastAttemptAt === "number" &&
+    Number.isFinite(entry.lastAttemptAt) &&
+    entry.lastAttemptAt > 0;
+  const baseAttemptAt = hasAttemptTimestamp
+    ? (entry.lastAttemptAt ?? entry.enqueuedAt)
+    : entry.enqueuedAt;
+  const nextEligibleAt = baseAttemptAt + backoff;
+  if (now >= nextEligibleAt) {
+    return { eligible: true };
+  }
+  return { eligible: false, remainingBackoffMs: nextEligibleAt - now };
+}
+
+function normalizeLegacyQueuedDeliveryEntry(entry: QueuedDelivery): {
+  entry: QueuedDelivery;
+  migrated: boolean;
+} {
+  const hasAttemptTimestamp =
+    typeof entry.lastAttemptAt === "number" &&
+    Number.isFinite(entry.lastAttemptAt) &&
+    entry.lastAttemptAt > 0;
+  if (hasAttemptTimestamp || entry.retryCount <= 0) {
+    return { entry, migrated: false };
+  }
+  const hasEnqueuedTimestamp =
+    typeof entry.enqueuedAt === "number" &&
+    Number.isFinite(entry.enqueuedAt) &&
+    entry.enqueuedAt > 0;
+  if (!hasEnqueuedTimestamp) {
+    return { entry, migrated: false };
+  }
+  return {
+    entry: {
+      ...entry,
+      lastAttemptAt: entry.enqueuedAt,
+    },
+    migrated: true,
+  };
 }
 
 export type DeliverFn = (
@@ -265,7 +274,6 @@ export interface RecoveryLogger {
 /**
  * On gateway startup, scan the delivery queue and retry any pending entries.
  * Uses exponential backoff and moves entries that exceed MAX_RETRIES to failed/.
- * Entries whose backoff window has not yet elapsed are deferred to the next restart.
  */
 export async function recoverPendingDeliveries(opts: {
   deliver: DeliverFn;
@@ -274,12 +282,7 @@ export async function recoverPendingDeliveries(opts: {
   stateDir?: string;
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next restart. Default: 60 000. */
   maxRecoveryMs?: number;
-}): Promise<{
-  recovered: number;
-  failed: number;
-  skippedMaxRetries: number;
-  deferredBackoff: number;
-}> {
+}): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
     return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
@@ -300,10 +303,8 @@ export async function recoverPendingDeliveries(opts: {
   for (const entry of pending) {
     const now = Date.now();
     if (now >= deadline) {
-      const remaining = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
-      opts.log.warn(
-        `Recovery time budget exceeded — ${remaining} entries deferred to next restart`,
-      );
+      const deferred = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
+      opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
       break;
     }
     if (entry.retryCount >= MAX_RETRIES) {
@@ -319,12 +320,12 @@ export async function recoverPendingDeliveries(opts: {
       continue;
     }
 
-    const eligibility = isEntryEligibleForRecoveryRetry(entry, now);
-    if (!eligibility.eligible) {
-      opts.log.info(
-        `Delivery ${entry.id} not ready for retry yet (${eligibility.remainingBackoffMs}ms remaining)`,
-      );
+    const retryEligibility = isEntryEligibleForRecoveryRetry(entry, now);
+    if (!retryEligibility.eligible) {
       deferredBackoff += 1;
+      opts.log.info(
+        `Delivery ${entry.id} not ready for retry yet — backoff ${retryEligibility.remainingBackoffMs}ms remaining`,
+      );
       continue;
     }
 
@@ -347,11 +348,9 @@ export async function recoverPendingDeliveries(opts: {
       recovered += 1;
       opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      if (isPermanentDeliveryError(errorMessage)) {
-        opts.log.warn(
-          `Delivery ${entry.id} failed with permanent error — moving to failed/: ${errorMessage}`,
-        );
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (isPermanentDeliveryError(errMsg)) {
+        opts.log.warn(`Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`);
         try {
           await moveToFailed(entry.id, opts.stateDir);
         } catch (moveErr) {
@@ -361,12 +360,12 @@ export async function recoverPendingDeliveries(opts: {
         continue;
       }
       try {
-        await failDelivery(entry.id, errorMessage, opts.stateDir);
+        await failDelivery(entry.id, errMsg, opts.stateDir);
       } catch {
         // Best-effort update.
       }
       failed += 1;
-      opts.log.warn(`Retry failed for delivery ${entry.id}: ${errorMessage}`);
+      opts.log.warn(`Retry failed for delivery ${entry.id}: ${errMsg}`);
     }
   }
 
@@ -377,3 +376,19 @@ export async function recoverPendingDeliveries(opts: {
 }
 
 export { MAX_RETRIES };
+
+const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
+  /no conversation reference found/i,
+  /chat not found/i,
+  /user not found/i,
+  /bot was blocked by the user/i,
+  /forbidden: bot was kicked/i,
+  /chat_id is empty/i,
+  /recipient is not a valid/i,
+  /outbound not configured for channel/i,
+  /ambiguous discord recipient/i,
+];
+
+export function isPermanentDeliveryError(error: string): boolean {
+  return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
+}

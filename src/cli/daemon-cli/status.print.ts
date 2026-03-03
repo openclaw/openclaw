@@ -13,13 +13,14 @@ import {
 import { isWSLEnv } from "../../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
-import { colorize, theme } from "../../terminal/theme.js";
+import { colorize } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   createCliStatusTextStyles,
   filterDaemonEnv,
   formatRuntimeStatus,
+  resolveRuntimeStatusColor,
   renderRuntimeHints,
   safeDaemonEnv,
 } from "./shared.js";
@@ -99,7 +100,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     }
     defaultRuntime.error(
       warnText(
-        `Recommendation: run "${formatCliCommand("hanzo-bot doctor")}" (or "${formatCliCommand("hanzo-bot doctor --repair")}").`,
+        `Recommendation: run "${formatCliCommand("bot doctor")}" (or "${formatCliCommand("bot doctor --repair")}").`,
       ),
     );
   }
@@ -133,7 +134,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       );
       defaultRuntime.error(
         errorText(
-          `Fix: rerun \`${formatCliCommand("hanzo-bot gateway install --force")}\` from the same --profile / BOT_STATE_DIR you expect.`,
+          `Fix: rerun \`${formatCliCommand("bot gateway install --force")}\` from the same --profile / BOT_STATE_DIR you expect.`,
         ),
       );
     }
@@ -166,15 +167,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
 
   const runtimeLine = formatRuntimeStatus(service.runtime);
   if (runtimeLine) {
-    const runtimeStatus = service.runtime?.status ?? "unknown";
-    const runtimeColor =
-      runtimeStatus === "running"
-        ? theme.success
-        : runtimeStatus === "stopped"
-          ? theme.error
-          : runtimeStatus === "unknown"
-            ? theme.muted
-            : theme.warn;
+    const runtimeColor = resolveRuntimeStatusColor(service.runtime?.status);
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
   }
 
@@ -230,16 +223,14 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   if (service.runtime?.cachedLabel) {
-    const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
+    const env = service.command?.environment ?? process.env;
     const labelValue = resolveGatewayLaunchAgentLabel(env.BOT_PROFILE);
     defaultRuntime.error(
       errorText(
         `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${labelValue}`,
       ),
     );
-    defaultRuntime.error(
-      errorText(`Then reinstall: ${formatCliCommand("hanzo-bot gateway install")}`),
-    );
+    defaultRuntime.error(errorText(`Then reinstall: ${formatCliCommand("bot gateway install")}`));
     spacer();
   }
 
@@ -273,7 +264,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
     }
     if (process.platform === "linux") {
-      const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
+      const env = service.command?.environment ?? process.env;
       const unit = resolveGatewaySystemdServiceName(env.BOT_PROFILE);
       defaultRuntime.error(
         errorText(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`),
@@ -311,6 +302,6 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
-  defaultRuntime.log(`${label("Troubles:")} run ${formatCliCommand("hanzo-bot status")}`);
+  defaultRuntime.log(`${label("Troubles:")} run ${formatCliCommand("bot status")}`);
   defaultRuntime.log(`${label("Troubleshooting:")} https://docs.hanzo.bot/troubleshooting`);
 }

@@ -221,7 +221,7 @@ async function ensureThreadBindingForSubagentSpawn(params: {
       },
     );
     if (result?.status === "error") {
-      const error = (result.error ?? "").trim();
+      const error = result.error.trim();
       return {
         status: "error",
         error: error || "Failed to prepare thread binding for this subagent session.",

@@ -70,8 +70,11 @@ function mockGatewaySuccessReply(text = "hello") {
 
 function mockLocalAgentReply(text = "local") {
   vi.mocked(agentCommand).mockImplementationOnce(async (_opts, rt) => {
-    rt.log?.(text);
-    return { payloads: [{ text }], meta: { stub: true } };
+    rt?.log?.(text);
+    return {
+      payloads: [{ text }],
+      meta: { durationMs: 1, agentMeta: { sessionId: "s", provider: "p", model: "m" } },
+    } as unknown as Awaited<ReturnType<typeof agentCommand>>;
   });
 }
 

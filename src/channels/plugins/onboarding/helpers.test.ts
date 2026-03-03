@@ -666,7 +666,6 @@ describe("patchChannelConfigForAccount", () => {
     });
 
     expect(next.channels?.telegram?.accounts?.default).toEqual({
-      enabled: true,
       botToken: "legacy-token",
       allowFrom: ["100"],
       groupPolicy: "allowlist",

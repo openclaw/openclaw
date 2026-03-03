@@ -22,7 +22,16 @@ import type {
 } from "./types.core.js";
 
 export type ChannelSetupAdapter = {
-  resolveAccountId?: (params: { cfg: BotConfig; accountId?: string }) => string;
+  resolveAccountId?: (params: {
+    cfg: BotConfig;
+    accountId?: string;
+    input?: ChannelSetupInput;
+  }) => string;
+  resolveBindingAccountId?: (params: {
+    cfg: BotConfig;
+    agentId: string;
+    accountId?: string;
+  }) => string | undefined;
   applyAccountName?: (params: { cfg: BotConfig; accountId: string; name?: string }) => BotConfig;
   applyAccountConfig: (params: {
     cfg: BotConfig;
@@ -54,7 +63,7 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
   resolveAllowFrom?: (params: {
     cfg: BotConfig;
     accountId?: string | null;
-  }) => string[] | undefined;
+  }) => Array<string | number> | undefined;
   formatAllowFrom?: (params: {
     cfg: BotConfig;
     accountId?: string | null;
@@ -289,47 +298,37 @@ export type ChannelHeartbeatAdapter = {
   };
 };
 
+type ChannelDirectorySelfParams = {
+  cfg: BotConfig;
+  accountId?: string | null;
+  runtime: RuntimeEnv;
+};
+
+type ChannelDirectoryListParams = {
+  cfg: BotConfig;
+  accountId?: string | null;
+  query?: string | null;
+  limit?: number | null;
+  runtime: RuntimeEnv;
+};
+
+type ChannelDirectoryListGroupMembersParams = {
+  cfg: BotConfig;
+  accountId?: string | null;
+  groupId: string;
+  limit?: number | null;
+  runtime: RuntimeEnv;
+};
+
 export type ChannelDirectoryAdapter = {
-  self?: (params: {
-    cfg: BotConfig;
-    accountId?: string | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry | null>;
-  listPeers?: (params: {
-    cfg: BotConfig;
-    accountId?: string | null;
-    query?: string | null;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
-  listPeersLive?: (params: {
-    cfg: BotConfig;
-    accountId?: string | null;
-    query?: string | null;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
-  listGroups?: (params: {
-    cfg: BotConfig;
-    accountId?: string | null;
-    query?: string | null;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
-  listGroupsLive?: (params: {
-    cfg: BotConfig;
-    accountId?: string | null;
-    query?: string | null;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
-  listGroupMembers?: (params: {
-    cfg: BotConfig;
-    accountId?: string | null;
-    groupId: string;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
+  self?: (params: ChannelDirectorySelfParams) => Promise<ChannelDirectoryEntry | null>;
+  listPeers?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  listPeersLive?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  listGroups?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  listGroupsLive?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  listGroupMembers?: (
+    params: ChannelDirectoryListGroupMembersParams,
+  ) => Promise<ChannelDirectoryEntry[]>;
 };
 
 export type ChannelResolveKind = "user" | "group";

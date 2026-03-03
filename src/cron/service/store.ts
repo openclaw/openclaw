@@ -273,6 +273,12 @@ export async function ensureLoaded(
       mutated = true;
     }
 
+    if (typeof raw.schedule === "string") {
+      const expr = raw.schedule.trim();
+      raw.schedule = { kind: "cron", expr };
+      mutated = true;
+    }
+
     const nameRaw = raw.name;
     if (typeof nameRaw !== "string" || nameRaw.trim().length === 0) {
       raw.name = inferLegacyName({

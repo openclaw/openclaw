@@ -13,7 +13,9 @@ import {
 } from "./status.js";
 
 const { listPluginCommands } = vi.hoisted(() => ({
-  listPluginCommands: vi.fn(() => []),
+  listPluginCommands: vi.fn(
+    (): Array<{ name: string; description: string; pluginId: string }> => [],
+  ),
 }));
 
 vi.mock("../plugins/commands.js", () => ({
@@ -46,7 +48,7 @@ describe("buildStatusMessage", () => {
             },
           },
         },
-      } as BotConfig,
+      } as unknown as BotConfig,
       agent: {
         model: "anthropic/pi:opus",
         contextTokens: 32_000,
@@ -110,6 +112,66 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Reasoning: on");
   });
 
+  it("notes channel model overrides in status output", () => {
+    const text = buildStatusMessage({
+      config: {
+        channels: {
+          modelByChannel: {
+            discord: {
+              "123": "openai/gpt-4.1",
+            },
+          },
+        },
+      } as unknown as BotConfig,
+      agent: {
+        model: "openai/gpt-4.1",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        channel: "discord",
+        groupId: "123",
+      },
+      sessionKey: "agent:main:discord:channel:123",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Model: openai/gpt-4.1");
+    expect(normalized).toContain("channel override");
+  });
+
+  it("shows 1M context window when anthropic context1m is enabled", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: { context1m: true },
+              },
+            },
+          },
+        },
+      } as unknown as BotConfig,
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "ctx1m",
+        updatedAt: 0,
+        totalTokens: 200_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Context: 200k/1.0m");
+  });
+
   it("uses per-agent sandbox config when config and session key are provided", () => {
     const text = buildStatusMessage({
       config: {
@@ -119,7 +181,7 @@ describe("buildStatusMessage", () => {
             { id: "discord", sandbox: { mode: "all" } },
           ],
         },
-      } as BotConfig,
+      } as unknown as BotConfig,
       agent: {},
       sessionKey: "agent:discord:discord:channel:1456350065223270435",
       sessionScope: "per-sender",
@@ -152,7 +214,9 @@ describe("buildStatusMessage", () => {
       sessionKey: "agent:main:main",
       queue: { mode: "none" },
       mediaDecisions: [
-        createSuccessfulImageMediaDecision(),
+        createSuccessfulImageMediaDecision() as unknown as NonNullable<
+          Parameters<typeof buildStatusMessage>[0]["mediaDecisions"]
+        >[number],
         {
           capability: "audio",
           outcome: "skipped",
@@ -208,7 +272,7 @@ describe("buildStatusMessage", () => {
     expect(optionsLine).not.toContain("elevated");
   });
 
-  it("prefers model overrides over last-run model", () => {
+  it("shows selected model and active runtime model when they differ", () => {
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/claude-opus-4-5",
@@ -221,7 +285,67 @@ describe("buildStatusMessage", () => {
         modelOverride: "gpt-4.1-mini",
         modelProvider: "anthropic",
         model: "claude-haiku-4-5",
+        fallbackNoticeSelectedModel: "openai/gpt-4.1-mini",
+        fallbackNoticeActiveModel: "anthropic/claude-haiku-4-5",
+        fallbackNoticeReason: "rate limit",
         contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key di_123…abc (deepinfra:default)",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-4.1-mini");
+    expect(normalized).toContain("Fallback: anthropic/claude-haiku-4-5");
+    expect(normalized).toContain("(rate limit)");
+    expect(normalized).not.toContain(" - Reason:");
+    expect(normalized).not.toContain("Active:");
+    expect(normalized).toContain("di_123...abc");
+  });
+
+  it("omits active fallback details when runtime drift does not match fallback state", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-4.1-mini",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "runtime-drift-only",
+        updatedAt: 0,
+        modelProvider: "anthropic",
+        model: "claude-haiku-4-5",
+        fallbackNoticeSelectedModel: "fireworks/minimax-m2p5",
+        fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
+        fallbackNoticeReason: "rate limit",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key di_123…abc (deepinfra:default)",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-4.1-mini");
+    expect(normalized).not.toContain("Fallback:");
+    expect(normalized).not.toContain("(rate limit)");
+  });
+
+  it("omits active lines when runtime matches selected model", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-4.1-mini",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "selected-active-same",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-4.1-mini",
+        fallbackNoticeReason: "unknown",
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -229,7 +353,8 @@ describe("buildStatusMessage", () => {
       modelAuth: "api-key",
     });
 
-    expect(normalizeTestText(text)).toContain("Model: openai/gpt-4.1-mini");
+    const normalized = normalizeTestText(text);
+    expect(normalized).not.toContain("Fallback:");
   });
 
   it("keeps provider prefix from configured model", () => {
@@ -334,7 +459,7 @@ describe("buildStatusMessage", () => {
             },
           },
         },
-      } as BotConfig,
+      } as unknown as BotConfig,
       agent: { model: "anthropic/claude-opus-4-5" },
       sessionEntry: { sessionId: "c1", updatedAt: 0, inputTokens: 10 },
       sessionKey: "agent:main:main",
@@ -360,8 +485,7 @@ describe("buildStatusMessage", () => {
   }) {
     const logPath = path.join(
       params.dir,
-      ".hanzo",
-      "bot",
+      ".bot",
       "agents",
       params.agentId,
       "sessions",
@@ -512,7 +636,7 @@ describe("buildCommandsMessage", () => {
   it("lists commands with aliases and hints", () => {
     const text = buildCommandsMessage({
       commands: { config: false, debug: false },
-    } as BotConfig);
+    } as unknown as BotConfig);
     expect(text).toContain("ℹ️ Slash commands");
     expect(text).toContain("Status");
     expect(text).toContain("/commands - List all slash commands.");
@@ -527,7 +651,7 @@ describe("buildCommandsMessage", () => {
     const text = buildCommandsMessage(
       {
         commands: { config: false, debug: false },
-      } as BotConfig,
+      } as unknown as BotConfig,
       [
         {
           name: "demo_skill",
@@ -544,7 +668,7 @@ describe("buildHelpMessage", () => {
   it("hides config/debug when disabled", () => {
     const text = buildHelpMessage({
       commands: { config: false, debug: false },
-    } as BotConfig);
+    } as unknown as BotConfig);
     expect(text).toContain("Skills");
     expect(text).toContain("/skill <name> [input]");
     expect(text).not.toContain("/config");
@@ -557,7 +681,7 @@ describe("buildCommandsMessagePaginated", () => {
     const result = buildCommandsMessagePaginated(
       {
         commands: { config: false, debug: false },
-      } as BotConfig,
+      } as unknown as BotConfig,
       undefined,
       { surface: "telegram", page: 1 },
     );
@@ -573,7 +697,7 @@ describe("buildCommandsMessagePaginated", () => {
     const result = buildCommandsMessagePaginated(
       {
         commands: { config: false, debug: false },
-      } as BotConfig,
+      } as unknown as BotConfig,
       undefined,
       { surface: "telegram", page: 99 },
     );

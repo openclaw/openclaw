@@ -374,25 +374,6 @@ describe("memory index", () => {
     );
   });
 
-  it("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
-    const cfg = createCfg({
-      storePath: indexMainPath,
-      minScore: 0.35,
-      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
-    });
-    const manager = await getPersistentManager(cfg);
-
-    const status = manager.status();
-    if (!status.fts?.available) {
-      return;
-    }
-
-    await manager.sync({ reason: "test" });
-    const results = await manager.search("zebra");
-    expect(results.length).toBeGreaterThan(0);
-    expect(results[0]?.path).toContain("memory/2026-01-12.md");
-  });
-
   it("reports vector availability after probe", async () => {
     const cfg = createCfg({ storePath: indexVectorPath, vectorEnabled: true });
     const manager = await getPersistentManager(cfg);

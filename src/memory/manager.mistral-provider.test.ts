@@ -10,6 +10,7 @@ import type {
   OllamaEmbeddingClient,
   OpenAiEmbeddingClient,
 } from "./embeddings.js";
+import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
 const { createEmbeddingProviderMock } = vi.hoisted(() => ({
@@ -37,7 +38,7 @@ function buildConfig(params: {
   workspaceDir: string;
   indexPath: string;
   provider: "openai" | "mistral";
-  fallback?: "none" | "mistral";
+  fallback?: "none" | "mistral" | "ollama";
 }): BotConfig {
   return {
     agents: {

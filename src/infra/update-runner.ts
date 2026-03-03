@@ -24,6 +24,7 @@ import {
   cleanupGlobalRenameDirs,
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
+  globalInstallFallbackArgs,
 } from "./update-global.js";
 
 export type UpdateStepResult = {
@@ -84,7 +85,7 @@ const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 const MAX_LOG_CHARS = 8000;
 const PREFLIGHT_MAX_COMMITS = 10;
 const START_DIRS = ["cwd", "argv1", "process"];
-const DEFAULT_PACKAGE_NAME = "bot";
+const DEFAULT_PACKAGE_NAME = "@hanzo/bot";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
 function normalizeDir(value?: string | null) {
@@ -313,17 +314,7 @@ function managerInstallArgs(manager: "pnpm" | "bun" | "npm") {
 }
 
 function normalizeTag(tag?: string) {
-  const trimmed = tag?.trim();
-  if (!trimmed) {
-    return "latest";
-  }
-  if (trimmed.startsWith("bot@")) {
-    return trimmed.slice("bot@".length);
-  }
-  if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
-    return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
-  }
-  return trimmed;
+  return normalizePackageTagInput(tag, ["@hanzo/bot", DEFAULT_PACKAGE_NAME]) ?? "latest";
 }
 
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
@@ -707,14 +698,47 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     const depsStep = await runStep(step("deps install", managerInstallArgs(manager), gitRoot));
     steps.push(depsStep);
+    if (depsStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "deps-install-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
     const buildStep = await runStep(step("build", managerScriptArgs(manager, "build"), gitRoot));
     steps.push(buildStep);
+    if (buildStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "build-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
     const uiBuildStep = await runStep(
       step("ui:build", managerScriptArgs(manager, "ui:build"), gitRoot),
     );
     steps.push(uiBuildStep);
+    if (uiBuildStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "ui-build-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
     const doctorEntry = path.join(gitRoot, "bot.mjs");
     const doctorEntryExists = await fs
@@ -723,7 +747,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       .catch(() => false);
     if (!doctorEntryExists) {
       steps.push({
-        name: "hanzo-bot doctor entry",
+        name: "bot doctor entry",
         command: `verify ${doctorEntry}`,
         cwd: gitRoot,
         durationMs: 0,
@@ -741,9 +765,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       };
     }
 
-    const doctorArgv = [process.execPath, doctorEntry, "doctor", "--non-interactive"];
+    // Use --fix so that doctor auto-strips unknown config keys introduced by
+    // schema changes between versions, preventing a startup validation crash.
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
     const doctorStep = await runStep(
-      step("hanzo-bot doctor", doctorArgv, gitRoot, { BOT_UPDATE_IN_PROGRESS: "1" }),
+      step("bot doctor", doctorArgv, gitRoot, { BOT_UPDATE_IN_PROGRESS: "1" }),
     );
     steps.push(doctorStep);
 
@@ -842,6 +869,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
     const spec = `${packageName}@${tag}`;
+    const steps: UpdateStepResult[] = [];
     const updateStep = await runStep({
       runCommand,
       name: "global update",
@@ -852,13 +880,33 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       stepIndex: 0,
       totalSteps: 1,
     });
-    const steps = [updateStep];
+    steps.push(updateStep);
+
+    let finalStep = updateStep;
+    if (updateStep.exitCode !== 0) {
+      const fallbackArgv = globalInstallFallbackArgs(globalManager, spec);
+      if (fallbackArgv) {
+        const fallbackStep = await runStep({
+          runCommand,
+          name: "global update (omit optional)",
+          argv: fallbackArgv,
+          cwd: pkgRoot,
+          timeoutMs,
+          progress,
+          stepIndex: 0,
+          totalSteps: 1,
+        });
+        steps.push(fallbackStep);
+        finalStep = fallbackStep;
+      }
+    }
+
     const afterVersion = await readPackageVersion(pkgRoot);
     return {
-      status: updateStep.exitCode === 0 ? "ok" : "error",
+      status: finalStep.exitCode === 0 ? "ok" : "error",
       mode: globalManager,
       root: pkgRoot,
-      reason: updateStep.exitCode === 0 ? undefined : updateStep.name,
+      reason: finalStep.exitCode === 0 ? undefined : finalStep.name,
       before: { version: beforeVersion },
       after: { version: afterVersion },
       steps,

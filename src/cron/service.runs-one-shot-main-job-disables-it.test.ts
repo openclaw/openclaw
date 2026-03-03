@@ -566,7 +566,7 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
-  it("passes agentId and preserves scoped session for wakeMode now main jobs", async () => {
+  it("rejects sessionTarget main for non-default agents at creation time", async () => {
     const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
 
     const { store, cron } = await createWakeModeNowMainHarness({

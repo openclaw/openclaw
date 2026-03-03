@@ -84,6 +84,7 @@ function buildPluginGroups(params: {
     },
     existingToolNames: params.existingToolNames,
     toolAllowlist: ["group:plugins"],
+    suppressNameConflicts: true,
   });
   const groups = new Map<string, ToolCatalogGroup>();
   for (const tool of pluginTools) {

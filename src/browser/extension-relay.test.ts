@@ -226,9 +226,9 @@ describe("chrome extension relay server", () => {
 
     const sharedUrl = await ensureSharedRelayServer();
 
-    const headers = getChromeExtensionRelayAuthHeaders(cdpUrl);
-    expect(Object.keys(headers)).toContain("x-hanzo-bot-relay-token");
-    expect(headers["x-hanzo-bot-relay-token"]).not.toBe(TEST_GATEWAY_TOKEN);
+    const headers = getChromeExtensionRelayAuthHeaders(sharedUrl);
+    expect(Object.keys(headers)).toContain("x-bot-relay-token");
+    expect(headers["x-bot-relay-token"]).not.toBe(TEST_GATEWAY_TOKEN);
   });
 
   it("rejects CDP access without relay auth token", async () => {
@@ -273,15 +273,13 @@ describe("chrome extension relay server", () => {
       headers: {
         Origin: origin,
         "Access-Control-Request-Method": "GET",
-        "Access-Control-Request-Headers": "x-hanzo-bot-relay-token",
+        "Access-Control-Request-Headers": "x-bot-relay-token",
       },
     });
 
     expect(res.status).toBe(204);
     expect(res.headers.get("access-control-allow-origin")).toBe(origin);
-    expect(res.headers.get("access-control-allow-headers") ?? "").toContain(
-      "x-hanzo-bot-relay-token",
-    );
+    expect(res.headers.get("access-control-allow-headers") ?? "").toContain("x-bot-relay-token");
   });
 
   it("rejects CORS preflight from non-extension origins", async () => {
@@ -531,7 +529,53 @@ describe("chrome extension relay server", () => {
   it("stops advertising websocket endpoint after reconnect grace expires", async () => {
     process.env.BOT_EXTENSION_RELAY_RECONNECT_GRACE_MS = "120";
 
-    const token = relayAuthHeaders(`ws://127.0.0.1:${port}/extension`)["x-hanzo-bot-relay-token"];
+    const { ext } = await startRelayWithExtension();
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "cb-tab-grace-expire",
+            targetInfo: {
+              targetId: "t-grace-expire",
+              type: "page",
+              title: "Grace expire",
+              url: "https://example.com",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    await waitForListMatch(
+      async () =>
+        (await fetch(`${cdpUrl}/json/list`, {
+          headers: relayAuthHeaders(cdpUrl),
+        }).then((r) => r.json())) as Array<{ id?: string }>,
+      (list) => list.some((entry) => entry.id === "t-grace-expire"),
+    );
+
+    ext.close();
+    await expect
+      .poll(
+        async () => {
+          const version = (await fetch(`${cdpUrl}/json/version`, {
+            headers: relayAuthHeaders(cdpUrl),
+          }).then((r) => r.json())) as { webSocketDebuggerUrl?: string };
+          return version.webSocketDebuggerUrl === undefined;
+        },
+        { timeout: 800, interval: 20 },
+      )
+      .toBe(true);
+  });
+
+  it("accepts extension websocket access with relay token query param", async () => {
+    const sharedUrl = await ensureSharedRelayServer();
+    const sharedPort = new URL(sharedUrl).port;
+
+    const token = relayAuthHeaders(`ws://127.0.0.1:${sharedPort}/extension`)["x-bot-relay-token"];
     expect(token).toBeTruthy();
     const ext = new WebSocket(
       `ws://127.0.0.1:${sharedPort}/extension?token=${encodeURIComponent(String(token))}`,
@@ -543,7 +587,7 @@ describe("chrome extension relay server", () => {
   it("accepts /json endpoints with relay token query param", async () => {
     const sharedUrl = await ensureSharedRelayServer();
 
-    const token = relayAuthHeaders(cdpUrl)["x-hanzo-bot-relay-token"];
+    const token = relayAuthHeaders(sharedUrl)["x-bot-relay-token"];
     expect(token).toBeTruthy();
     const versionRes = await fetch(
       `${sharedUrl}/json/version?token=${encodeURIComponent(String(token))}`,
@@ -555,8 +599,8 @@ describe("chrome extension relay server", () => {
     const sharedUrl = await ensureSharedRelayServer();
     const sharedPort = new URL(sharedUrl).port;
 
-    const versionRes = await fetch(`${cdpUrl}/json/version`, {
-      headers: { "x-hanzo-bot-relay-token": TEST_GATEWAY_TOKEN },
+    const versionRes = await fetch(`${sharedUrl}/json/version`, {
+      headers: { "x-bot-relay-token": TEST_GATEWAY_TOKEN },
     });
     expect(versionRes.status).toBe(200);
 
@@ -896,7 +940,7 @@ describe("chrome extension relay server", () => {
     let probeToken: string | undefined;
     const fakeRelay = createServer((req, res) => {
       if (req.url?.startsWith("/json/version")) {
-        const header = req.headers["x-hanzo-bot-relay-token"];
+        const header = req.headers["x-bot-relay-token"];
         probeToken = Array.isArray(header) ? header[0] : header;
         if (!probeToken) {
           res.writeHead(401);
@@ -935,7 +979,176 @@ describe("chrome extension relay server", () => {
     }
   });
 
-  it("does not swallow EADDRINUSE when occupied port is not an hanzo-bot relay", async () => {
+  it(
+    "restores tabs after extension reconnects and re-announces",
+    async () => {
+      process.env.BOT_EXTENSION_RELAY_RECONNECT_GRACE_MS = "200";
+
+      const { port, ext: ext1 } = await startRelayWithExtension();
+
+      ext1.send(
+        JSON.stringify({
+          method: "forwardCDPEvent",
+          params: {
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: "cb-tab-10",
+              targetInfo: {
+                targetId: "t10",
+                type: "page",
+                title: "My Page",
+                url: "https://example.com",
+              },
+              waitingForDebugger: false,
+            },
+          },
+        }),
+      );
+
+      await waitForListMatch(
+        async () =>
+          (await fetch(`${cdpUrl}/json/list`, {
+            headers: relayAuthHeaders(cdpUrl),
+          }).then((r) => r.json())) as Array<{ id?: string }>,
+        (list) => list.some((t) => t.id === "t10"),
+      );
+
+      // Disconnect extension and wait for grace period cleanup.
+      const ext1Closed = waitForClose(ext1, 2_000);
+      ext1.close();
+      await ext1Closed;
+      await waitForListMatch(
+        async () =>
+          (await fetch(`${cdpUrl}/json/list`, {
+            headers: relayAuthHeaders(cdpUrl),
+          }).then((r) => r.json())) as Array<{ id?: string }>,
+        (list) => list.length === 0,
+      );
+
+      // Reconnect and re-announce the same tab (simulates reannounceAttachedTabs).
+      const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
+        headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+      });
+      await waitForOpen(ext2);
+
+      ext2.send(
+        JSON.stringify({
+          method: "forwardCDPEvent",
+          params: {
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: "cb-tab-10",
+              targetInfo: {
+                targetId: "t10",
+                type: "page",
+                title: "My Page",
+                url: "https://example.com",
+              },
+              waitingForDebugger: false,
+            },
+          },
+        }),
+      );
+
+      const list2 = await waitForListMatch(
+        async () =>
+          (await fetch(`${cdpUrl}/json/list`, {
+            headers: relayAuthHeaders(cdpUrl),
+          }).then((r) => r.json())) as Array<{ id?: string; title?: string }>,
+        (list) => list.some((t) => t.id === "t10"),
+      );
+      expect(list2.some((t) => t.id === "t10" && t.title === "My Page")).toBe(true);
+
+      ext2.close();
+    },
+    RELAY_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "preserves tab across a fast extension reconnect within grace period",
+    async () => {
+      process.env.BOT_EXTENSION_RELAY_RECONNECT_GRACE_MS = "2000";
+
+      const { port, ext: ext1 } = await startRelayWithExtension();
+
+      ext1.send(
+        JSON.stringify({
+          method: "forwardCDPEvent",
+          params: {
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: "cb-tab-20",
+              targetInfo: {
+                targetId: "t20",
+                type: "page",
+                title: "Persistent",
+                url: "https://example.org",
+              },
+              waitingForDebugger: false,
+            },
+          },
+        }),
+      );
+
+      await waitForListMatch(
+        async () =>
+          (await fetch(`${cdpUrl}/json/list`, {
+            headers: relayAuthHeaders(cdpUrl),
+          }).then((r) => r.json())) as Array<{ id?: string }>,
+        (list) => list.some((t) => t.id === "t20"),
+      );
+
+      // Disconnect briefly (within grace period).
+      const ext1Closed = waitForClose(ext1, 2_000);
+      ext1.close();
+      await ext1Closed;
+
+      // Tab should still be listed during grace period.
+      const listDuringGrace = (await fetch(`${cdpUrl}/json/list`, {
+        headers: relayAuthHeaders(cdpUrl),
+      }).then((r) => r.json())) as Array<{ id?: string }>;
+      expect(listDuringGrace.some((t) => t.id === "t20")).toBe(true);
+
+      // Reconnect within grace and re-announce with updated info.
+      const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
+        headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+      });
+      await waitForOpen(ext2);
+
+      ext2.send(
+        JSON.stringify({
+          method: "forwardCDPEvent",
+          params: {
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: "cb-tab-20",
+              targetInfo: {
+                targetId: "t20",
+                type: "page",
+                title: "Persistent Updated",
+                url: "https://example.org/new",
+              },
+              waitingForDebugger: false,
+            },
+          },
+        }),
+      );
+
+      const list2 = await waitForListMatch(
+        async () =>
+          (await fetch(`${cdpUrl}/json/list`, {
+            headers: relayAuthHeaders(cdpUrl),
+          }).then((r) => r.json())) as Array<{ id?: string; title?: string; url?: string }>,
+        (list) => list.some((t) => t.id === "t20" && t.title === "Persistent Updated"),
+      );
+      expect(list2.some((t) => t.id === "t20" && t.url === "https://example.org/new")).toBe(true);
+
+      ext2.close();
+    },
+    RELAY_TEST_TIMEOUT_MS,
+  );
+
+  it("does not swallow EADDRINUSE when occupied port is not an bot relay", async () => {
     const port = await getFreePort();
     const blocker = createServer((_, res) => {
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });

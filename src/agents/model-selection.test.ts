@@ -8,6 +8,7 @@ import {
   buildModelAliasIndex,
   normalizeModelSelection,
   normalizeProviderId,
+  normalizeProviderIdForAuth,
   modelKey,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
@@ -272,7 +273,7 @@ describe("model-selection", () => {
       };
 
       const index = buildModelAliasIndex({
-        cfg: cfg as BotConfig,
+        cfg: cfg,
         defaultProvider: "anthropic",
       });
 
@@ -287,22 +288,6 @@ describe("model-selection", () => {
 
   describe("buildAllowedModelSet", () => {
     it("keeps explicitly allowlisted models even when missing from bundled catalog", () => {
-      const cfg: BotConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.2" },
-            models: {
-              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            },
-          },
-        },
-      } as BotConfig;
-
-      const catalog = [
-        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-        { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
-      ];
-
       const result = buildAllowedModelSet({
         cfg: EXPLICIT_ALLOWLIST_CONFIG,
         catalog: BUNDLED_ALLOWLIST_CATALOG,
@@ -319,22 +304,6 @@ describe("model-selection", () => {
 
   describe("resolveAllowedModelRef", () => {
     it("accepts explicit allowlist refs absent from bundled catalog", () => {
-      const cfg: BotConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.2" },
-            models: {
-              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            },
-          },
-        },
-      } as BotConfig;
-
-      const catalog = [
-        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-        { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
-      ];
-
       const result = resolveAllowedModelRef({
         cfg: EXPLICIT_ALLOWLIST_CONFIG,
         catalog: BUNDLED_ALLOWLIST_CATALOG,
@@ -488,14 +457,14 @@ describe("model-selection", () => {
         };
 
         const result = resolveConfiguredModelRef({
-          cfg: cfg as BotConfig,
+          cfg: cfg,
           defaultProvider: "google",
           defaultModel: "gemini-pro",
         });
 
-        expect(result).toEqual({ provider: "google", model: "claude-3-5-sonnet" });
+        expect(result).toEqual({ provider: "anthropic", model: "claude-3-5-sonnet" });
         expect(warnSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Falling back to "google/claude-3-5-sonnet"'),
+          expect.stringContaining('Falling back to "anthropic/claude-3-5-sonnet"'),
         );
       } finally {
         setLoggerOverride(null);
@@ -506,7 +475,7 @@ describe("model-selection", () => {
     it("should use default provider/model if config is empty", () => {
       const cfg: Partial<BotConfig> = {};
       const result = resolveConfiguredModelRef({
-        cfg: cfg as BotConfig,
+        cfg: cfg,
         defaultProvider: "openai",
         defaultModel: "gpt-4",
       });
@@ -569,34 +538,6 @@ describe("model-selection", () => {
         }),
       ).toBe("adaptive");
     });
-  });
-});
-
-describe("normalizeModelSelection", () => {
-  it("returns trimmed string for string input", () => {
-    expect(normalizeModelSelection("ollama/llama3.2:3b")).toBe("ollama/llama3.2:3b");
-  });
-
-  it("returns undefined for empty/whitespace string", () => {
-    expect(normalizeModelSelection("")).toBeUndefined();
-    expect(normalizeModelSelection("   ")).toBeUndefined();
-  });
-
-  it("extracts primary from object", () => {
-    expect(normalizeModelSelection({ primary: "google/gemini-2.5-flash" })).toBe(
-      "google/gemini-2.5-flash",
-    );
-  });
-
-  it("returns undefined for object without primary", () => {
-    expect(normalizeModelSelection({ fallbacks: ["a"] })).toBeUndefined();
-    expect(normalizeModelSelection({})).toBeUndefined();
-  });
-
-  it("returns undefined for null/undefined/number", () => {
-    expect(normalizeModelSelection(undefined)).toBeUndefined();
-    expect(normalizeModelSelection(null)).toBeUndefined();
-    expect(normalizeModelSelection(42)).toBeUndefined();
   });
 });
 

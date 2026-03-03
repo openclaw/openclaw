@@ -116,14 +116,7 @@ describe("hooks workspace", () => {
       return;
     }
 
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "bot-hooks-workspace-hardlink-"));
-    const hooksRoot = path.join(root, "hooks");
-    fs.mkdirSync(hooksRoot, { recursive: true });
-
-    const hookDir = path.join(hooksRoot, "hardlink-hook");
-    const outsideDir = path.join(root, "outside");
-    fs.mkdirSync(hookDir, { recursive: true });
-    fs.mkdirSync(outsideDir, { recursive: true });
+    const { hooksRoot, hookDir, outsideDir } = setupHardlinkHookWorkspace("hardlink-hook");
     fs.writeFileSync(path.join(hookDir, "handler.js"), "export default async () => {};\n");
     const outsideHookMd = path.join(outsideDir, "HOOK.md");
     const linkedHookMd = path.join(hookDir, "HOOK.md");
@@ -144,14 +137,7 @@ describe("hooks workspace", () => {
       return;
     }
 
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "bot-hooks-workspace-hardlink-"));
-    const hooksRoot = path.join(root, "hooks");
-    fs.mkdirSync(hooksRoot, { recursive: true });
-
-    const hookDir = path.join(hooksRoot, "hardlink-handler-hook");
-    const outsideDir = path.join(root, "outside");
-    fs.mkdirSync(hookDir, { recursive: true });
-    fs.mkdirSync(outsideDir, { recursive: true });
+    const { hooksRoot, hookDir, outsideDir } = setupHardlinkHookWorkspace("hardlink-handler-hook");
     fs.writeFileSync(path.join(hookDir, "HOOK.md"), "---\nname: hardlink-handler-hook\n---\n");
     const outsideHandler = path.join(outsideDir, "handler.js");
     const linkedHandler = path.join(hookDir, "handler.js");

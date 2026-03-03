@@ -2,6 +2,7 @@ import type { TranslationMap } from "../lib/types.ts";
 
 export const zh_CN: TranslationMap = {
   common: {
+    version: "版本",
     health: "健康状况",
     ok: "正常",
     offline: "离线",
@@ -31,8 +32,6 @@ export const zh_CN: TranslationMap = {
     cron: "定时任务",
     skills: "技能",
     nodes: "节点",
-    screen: "远程桌面",
-    marketplace: "市场",
     chat: "聊天",
     config: "配置",
     debug: "调试",
@@ -48,10 +47,8 @@ export const zh_CN: TranslationMap = {
     cron: "安排唤醒和重复的代理运行。",
     skills: "管理技能可用性和 API 密钥注入。",
     nodes: "配对设备、功能和命令公开。",
-    screen: "通过 VNC 屏幕共享进行远程桌面访问。",
-    marketplace: "P2P 计算共享——闲置 Claude 资源供买家使用。",
     chat: "用于快速干预的直接网关聊天会话。",
-    config: "安全地编辑 ~/.bot/bot.json。",
+    config: "安全地编辑 ~/.hanzoai/bot.json。",
     debug: "网关快照、事件和手动 RPC 调用。",
     logs: "网关文件日志的实时追踪。",
   },
@@ -65,6 +62,7 @@ export const zh_CN: TranslationMap = {
       sessionKey: "默认会话密钥",
       language: "语言",
       connectHint: "点击连接以应用连接更改。",
+      trustedProxy: "通过受信任代理认证。",
     },
     snapshot: {
       title: "快照",
@@ -97,22 +95,14 @@ export const zh_CN: TranslationMap = {
       required: "此网关需要身份验证。添加令牌或密码，然后点击连接。",
       failed: "身份验证失败。请使用 {command} 重新复制令牌化 URL，或更新令牌，然后点击连接。",
     },
+    pairing: {
+      hint: "此设备需要网关主机的配对批准。",
+      mobileHint: "在手机上？从桌面运行 bot dashboard --no-open 复制完整 URL（包括 #token=...）。",
+    },
     insecure: {
       hint: "此页面为 HTTP，因此浏览器阻止设备标识。请使用 HTTPS (Tailscale Serve) 或在网关主机上打开 {url}。",
       stayHttp: "如果您必须保持 HTTP，请设置 {config} (仅限令牌)。",
     },
-    iam: {
-      subtitle: "使用您的 Hanzo 账户登录以访问此网关。",
-      signIn: "使用 Hanzo 登录",
-      signingIn: "登录中\u2026",
-      createAccount: "创建账户",
-      signOut: "退出登录",
-    },
-  },
-  screen: {
-    disconnected: "连接到网关以访问远程桌面。",
-    openNewTab: "在新标签页中打开",
-    hint: "需要 macOS 屏幕共享或端口 5900 上的 VNC 服务器。",
   },
   chat: {
     disconnected: "已断开与网关的连接。",

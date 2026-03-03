@@ -43,7 +43,7 @@ describe("buildProgram", () => {
   });
 
   it("wires context/help/preaction/command registration with shared context", () => {
-    const argv = ["node", "hanzo-bot", "status"];
+    const argv = ["node", "@hanzo/bot", "status"];
     const originalArgv = process.argv;
     process.argv = argv;
     try {

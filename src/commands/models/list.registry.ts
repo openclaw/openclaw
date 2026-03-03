@@ -1,7 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import { type ModelRegistry as ModelRegistryClass } from "../../agents/pi-model-discovery.js";
-type ModelRegistry = InstanceType<typeof ModelRegistryClass>;
 import type { BotConfig } from "../../config/config.js";
 import type { ModelRow } from "./list.types.js";
 import { resolveBotAgentDir } from "../../agents/agent-paths.js";
@@ -11,10 +10,6 @@ import {
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
-import {
-  ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES,
-  resolveForwardCompatModel,
-} from "../../agents/model-forward-compat.js";
 import { ensureBotModelsJson } from "../../agents/models-config.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import {
@@ -100,20 +95,13 @@ export async function loadModelRegistry(cfg: BotConfig) {
   const agentDir = resolveBotAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);
-  const appended = appendAntigravityForwardCompatModels(registry.getAll(), registry);
-  const models = appended.models;
-  const synthesizedForwardCompat = appended.synthesizedForwardCompat;
+  const models = registry.getAll();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
 
   try {
     const availableModels = loadAvailableModels(registry);
     availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
-    for (const synthesized of synthesizedForwardCompat) {
-      if (hasAvailableTemplate(availableKeys, synthesized.templatePrefixes)) {
-        availableKeys.add(synthesized.key);
-      }
-    }
   } catch (err) {
     if (!shouldFallbackToAuthHeuristics(err)) {
       throw err;
@@ -127,52 +115,6 @@ export async function loadModelRegistry(cfg: BotConfig) {
     }
   }
   return { registry, models, availableKeys, availabilityErrorMessage };
-}
-
-type SynthesizedForwardCompat = {
-  key: string;
-  templatePrefixes: readonly string[];
-};
-
-function appendAntigravityForwardCompatModels(
-  models: Model<Api>[],
-  modelRegistry: ModelRegistry,
-): { models: Model<Api>[]; synthesizedForwardCompat: SynthesizedForwardCompat[] } {
-  const nextModels = [...models];
-  const synthesizedForwardCompat: SynthesizedForwardCompat[] = [];
-
-  for (const candidate of ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES) {
-    const key = modelKey("google-antigravity", candidate.id);
-    const hasForwardCompat = nextModels.some((model) => modelKey(model.provider, model.id) === key);
-    if (hasForwardCompat) {
-      continue;
-    }
-
-    const fallback = resolveForwardCompatModel("google-antigravity", candidate.id, modelRegistry);
-    if (!fallback) {
-      continue;
-    }
-
-    nextModels.push(fallback);
-    synthesizedForwardCompat.push({
-      key,
-      templatePrefixes: candidate.templatePrefixes,
-    });
-  }
-
-  return { models: nextModels, synthesizedForwardCompat };
-}
-
-function hasAvailableTemplate(
-  availableKeys: Set<string>,
-  templatePrefixes: readonly string[],
-): boolean {
-  for (const key of availableKeys) {
-    if (templatePrefixes.some((prefix) => key.startsWith(prefix))) {
-      return true;
-    }
-  }
-  return false;
 }
 
 export function toModelRow(params: {

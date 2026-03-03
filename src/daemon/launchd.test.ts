@@ -1,6 +1,5 @@
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS } from "./launchd-plist.js";
 import {
   LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS,
   LAUNCH_AGENT_UMASK_DECIMAL,
@@ -10,24 +9,19 @@ import {
   isLaunchAgentListed,
   parseLaunchctlPrint,
   repairLaunchAgentBootstrap,
-  resolveLaunchAgentPlistPath,
   restartLaunchAgent,
+  resolveLaunchAgentPlistPath,
 } from "./launchd.js";
-
-function createDefaultLaunchdEnv(): Record<string, string | undefined> {
-  return { HOME: "/Users/test", BOT_PROFILE: "default" };
-}
-
-const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
 
 const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
   listOutput: "",
   printOutput: "",
-  bootstrapError: "" as string | undefined,
+  bootstrapError: "",
   dirs: new Set<string>(),
   files: new Map<string, string>(),
 }));
+const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
 
 function normalizeLaunchctlArgs(file: string, args: string[]): string[] {
   if (file === "launchctl") {
@@ -87,7 +81,7 @@ beforeEach(() => {
   state.launchctlCalls.length = 0;
   state.listOutput = "";
   state.printOutput = "";
-  state.bootstrapError = undefined;
+  state.bootstrapError = "";
   state.dirs.clear();
   state.files.clear();
   vi.clearAllMocks();
@@ -112,7 +106,7 @@ describe("launchd runtime parsing", () => {
 
 describe("launchctl list detection", () => {
   it("detects the resolved label in launchctl list", async () => {
-    state.listOutput = "123 0 ai.hanzo.bot.gateway\n";
+    state.listOutput = "123 0 ai.bot.gateway\n";
     const listed = await isLaunchAgentListed({
       env: { HOME: "/Users/test", BOT_PROFILE: "default" },
     });
@@ -138,7 +132,7 @@ describe("launchd bootstrap repair", () => {
     expect(repair.ok).toBe(true);
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const label = "ai.hanzo.bot.gateway";
+    const label = "ai.bot.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
 
     expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, plistPath]);
@@ -147,19 +141,23 @@ describe("launchd bootstrap repair", () => {
 });
 
 describe("launchd install", () => {
-  it("enables service before bootstrap (clears persisted disabled state)", async () => {
-    const env: Record<string, string | undefined> = {
+  function createDefaultLaunchdEnv(): Record<string, string | undefined> {
+    return {
       HOME: "/Users/test",
       BOT_PROFILE: "default",
     };
+  }
+
+  it("enables service before bootstrap (clears persisted disabled state)", async () => {
+    const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
       env,
       stdout: new PassThrough(),
-      programArguments: ["node", "-e", "process.exit(0)"],
+      programArguments: defaultProgramArguments,
     });
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const label = "ai.hanzo.bot.gateway";
+    const label = "ai.bot.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
     const serviceId = `${domain}/${label}`;
 
@@ -173,6 +171,7 @@ describe("launchd install", () => {
     expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
     expect(enableIndex).toBeLessThan(bootstrapIndex);
   });
+
   it("writes TMPDIR to LaunchAgent environment when provided", async () => {
     const env = createDefaultLaunchdEnv();
     const tmpDir = "/var/folders/xy/abc123/T/";
@@ -217,7 +216,7 @@ describe("launchd install", () => {
     });
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const label = "ai.hanzo.bot.gateway";
+    const label = "ai.bot.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
     const bootoutIndex = state.launchctlCalls.findIndex(
       (c) => c[0] === "bootout" && c[1] === `${domain}/${label}`,
@@ -258,7 +257,7 @@ describe("launchd install", () => {
       await restartPromise;
       expect(killSpy).toHaveBeenCalledWith(4242, 0);
       const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-      const label = "ai.hanzo.bot.gateway";
+      const label = "ai.bot.gateway";
       const bootoutIndex = state.launchctlCalls.findIndex(
         (c) => c[0] === "bootout" && c[1] === `${domain}/${label}`,
       );
@@ -305,49 +304,44 @@ describe("launchd install", () => {
 });
 
 describe("resolveLaunchAgentPlistPath", () => {
-  it("uses default label when BOT_PROFILE is unset", () => {
-    const env = { HOME: "/Users/test" };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.hanzo.bot.gateway.plist",
-    );
-  });
-
-  it("uses profile-specific label when BOT_PROFILE is set to a custom value", () => {
-    const env = { HOME: "/Users/test", BOT_PROFILE: "jbphoenix" };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.hanzo.bot.jbphoenix.plist",
-    );
-  });
-
-  it("prefers BOT_LAUNCHD_LABEL over BOT_PROFILE", () => {
-    const env = {
-      HOME: "/Users/test",
-      BOT_PROFILE: "jbphoenix",
-      BOT_LAUNCHD_LABEL: "com.custom.label",
-    };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/com.custom.label.plist",
-    );
-  });
-
-  it("trims whitespace from BOT_LAUNCHD_LABEL", () => {
-    const env = {
-      HOME: "/Users/test",
-      BOT_LAUNCHD_LABEL: "  com.custom.label  ",
-    };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/com.custom.label.plist",
-    );
-  });
-
-  it("ignores empty BOT_LAUNCHD_LABEL and falls back to profile", () => {
-    const env = {
-      HOME: "/Users/test",
-      BOT_PROFILE: "myprofile",
-      BOT_LAUNCHD_LABEL: "   ",
-    };
-    expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.hanzo.bot.myprofile.plist",
-    );
+  it.each([
+    {
+      name: "uses default label when BOT_PROFILE is unset",
+      env: { HOME: "/Users/test" },
+      expected: "/Users/test/Library/LaunchAgents/ai.bot.gateway.plist",
+    },
+    {
+      name: "uses profile-specific label when BOT_PROFILE is set to a custom value",
+      env: { HOME: "/Users/test", BOT_PROFILE: "jbphoenix" },
+      expected: "/Users/test/Library/LaunchAgents/ai.bot.jbphoenix.plist",
+    },
+    {
+      name: "prefers BOT_LAUNCHD_LABEL over BOT_PROFILE",
+      env: {
+        HOME: "/Users/test",
+        BOT_PROFILE: "jbphoenix",
+        BOT_LAUNCHD_LABEL: "com.custom.label",
+      },
+      expected: "/Users/test/Library/LaunchAgents/com.custom.label.plist",
+    },
+    {
+      name: "trims whitespace from BOT_LAUNCHD_LABEL",
+      env: {
+        HOME: "/Users/test",
+        BOT_LAUNCHD_LABEL: "  com.custom.label  ",
+      },
+      expected: "/Users/test/Library/LaunchAgents/com.custom.label.plist",
+    },
+    {
+      name: "ignores empty BOT_LAUNCHD_LABEL and falls back to profile",
+      env: {
+        HOME: "/Users/test",
+        BOT_PROFILE: "myprofile",
+        BOT_LAUNCHD_LABEL: "   ",
+      },
+      expected: "/Users/test/Library/LaunchAgents/ai.bot.myprofile.plist",
+    },
+  ])("$name", ({ env, expected }) => {
+    expect(resolveLaunchAgentPlistPath(env)).toBe(expected);
   });
 });

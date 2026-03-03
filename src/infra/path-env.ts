@@ -58,10 +58,10 @@ function candidateBinDirs(opts: EnsureBotPathOpts): { prepend: string[]; append:
   const prepend: string[] = [];
   const append: string[] = [];
 
-  // Bundled macOS app: `hanzo-bot` lives next to the executable (process.execPath).
+  // Bundled macOS app: `bot` lives next to the executable (process.execPath).
   try {
     const execDir = path.dirname(execPath);
-    const siblingCli = path.join(execDir, "hanzo-bot");
+    const siblingCli = path.join(execDir, "@hanzo/bot");
     if (isExecutable(siblingCli)) {
       prepend.push(execDir);
     }
@@ -75,7 +75,7 @@ function candidateBinDirs(opts: EnsureBotPathOpts): { prepend: string[]; append:
     opts.allowProjectLocalBin === true || isTruthyEnvValue(process.env.BOT_ALLOW_PROJECT_LOCAL_BIN);
   if (allowProjectLocalBin) {
     const localBinDir = path.join(cwd, "node_modules", ".bin");
-    if (isExecutable(path.join(localBinDir, "hanzo-bot"))) {
+    if (isExecutable(path.join(localBinDir, "@hanzo/bot"))) {
       append.push(localBinDir);
     }
   }
@@ -105,7 +105,7 @@ function candidateBinDirs(opts: EnsureBotPathOpts): { prepend: string[]; append:
 }
 
 /**
- * Best-effort PATH bootstrap so skills that require the `hanzo-bot` CLI can run
+ * Best-effort PATH bootstrap so skills that require the `bot` CLI can run
  * under launchd/minimal environments (and inside the macOS app bundle).
  */
 export function ensureBotCliOnPath(opts: EnsureBotPathOpts = {}) {

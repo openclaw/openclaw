@@ -76,25 +76,21 @@ describe("extension-relay-auth", () => {
     expect(tokens[0]).toBe(resolveRelayAuthTokenForPort(18790));
   });
 
-  it("accepts authenticated hanzo-bot relay probe responses", async () => {
+  it("accepts authenticated bot relay probe responses", async () => {
     let seenToken: string | undefined;
     await withRelayServer(
       (req, res) => {
         if (handleNonVersionRequest(req, res)) {
           return;
         }
-        const header = req.headers["x-hanzo-bot-relay-token"];
+        const header = req.headers["x-bot-relay-token"];
         seenToken = Array.isArray(header) ? header[0] : header;
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ Browser: "Bot/extension-relay" }));
       },
       async ({ port }) => {
         const token = resolveRelayAuthTokenForPort(port);
-        const ok = await probeAuthenticatedBotRelay({
-          baseUrl: `http://127.0.0.1:${port}`,
-          relayAuthHeader: "x-hanzo-bot-relay-token",
-          relayAuthToken: token,
-        });
+        const ok = await probeRelay(`http://127.0.0.1:${port}`, token);
         expect(ok).toBe(true);
         expect(seenToken).toBe(token);
       },
@@ -111,11 +107,7 @@ describe("extension-relay-auth", () => {
         res.end("Unauthorized");
       },
       async ({ port }) => {
-        const ok = await probeAuthenticatedBotRelay({
-          baseUrl: `http://127.0.0.1:${port}`,
-          relayAuthHeader: "x-hanzo-bot-relay-token",
-          relayAuthToken: "irrelevant",
-        });
+        const ok = await probeRelay(`http://127.0.0.1:${port}`, "irrelevant");
         expect(ok).toBe(false);
       },
     );
@@ -131,11 +123,7 @@ describe("extension-relay-auth", () => {
         res.end(JSON.stringify({ Browser: "FakeRelay" }));
       },
       async ({ port }) => {
-        const ok = await probeAuthenticatedBotRelay({
-          baseUrl: `http://127.0.0.1:${port}`,
-          relayAuthHeader: "x-hanzo-bot-relay-token",
-          relayAuthToken: "irrelevant",
-        });
+        const ok = await probeRelay(`http://127.0.0.1:${port}`, "irrelevant");
         expect(ok).toBe(false);
       },
     );

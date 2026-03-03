@@ -29,6 +29,7 @@ export type PluginLogger = {
 export type PluginConfigUiHint = {
   label?: string;
   help?: string;
+  tags?: string[];
   advanced?: boolean;
   sensitive?: boolean;
   placeholder?: string;
@@ -155,7 +156,7 @@ export type PluginCommandContext = {
   args?: string;
   /** The full normalized command body */
   commandBody: string;
-  /** Current Hanzo Bot configuration */
+  /** Current Bot configuration */
   config: BotConfig;
   /** Raw "From" value (channel-scoped id) */
   from?: string;
@@ -195,15 +196,21 @@ export type BotPluginCommandDefinition = {
   handler: PluginCommandHandler;
 };
 
-export type BotPluginHttpHandler = (
-  req: IncomingMessage,
-  res: ServerResponse,
-) => Promise<boolean | void> | boolean | void;
+export type BotPluginHttpRouteAuth = "gateway" | "plugin";
+export type BotPluginHttpRouteMatch = "exact" | "prefix";
 
 export type BotPluginHttpRouteHandler = (
   req: IncomingMessage,
   res: ServerResponse,
-) => Promise<void> | void;
+) => Promise<boolean | void> | boolean | void;
+
+export type BotPluginHttpRouteParams = {
+  path: string;
+  handler: BotPluginHttpRouteHandler;
+  auth: BotPluginHttpRouteAuth;
+  match?: BotPluginHttpRouteMatch;
+  replaceExisting?: boolean;
+};
 
 export type BotPluginCliContext = {
   program: Command;
@@ -261,8 +268,7 @@ export type BotPluginApi = {
     handler: InternalHookHandler,
     opts?: BotPluginHookOptions,
   ) => void;
-  registerHttpHandler: (handler: BotPluginHttpHandler) => void;
-  registerHttpRoute: (params: { path: string; handler: BotPluginHttpRouteHandler }) => void;
+  registerHttpRoute: (params: BotPluginHttpRouteParams) => void;
   registerChannel: (registration: BotPluginChannelRegistration | ChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: BotPluginCliRegistrar, opts?: { commands?: string[] }) => void;
@@ -297,10 +303,9 @@ export type PluginDiagnostic = {
 // ============================================================================
 
 export type PluginHookName =
-  | "before_agent_start"
   | "before_model_resolve"
   | "before_prompt_build"
-  | "before_message_write"
+  | "before_agent_start"
   | "llm_input"
   | "llm_output"
   | "agent_end"
@@ -313,98 +318,15 @@ export type PluginHookName =
   | "before_tool_call"
   | "after_tool_call"
   | "tool_result_persist"
+  | "before_message_write"
   | "session_start"
   | "session_end"
   | "subagent_spawning"
+  | "subagent_delivery_target"
   | "subagent_spawned"
   | "subagent_ended"
-  | "subagent_delivery_target"
   | "gateway_start"
   | "gateway_stop";
-
-// Subagent context shared across subagent hooks
-export type PluginHookSubagentContext = {
-  agentId?: string;
-  parentAgentId?: string;
-  sessionKey?: string;
-  childSessionKey?: string;
-  requesterSessionKey?: string;
-  runId?: string;
-};
-
-// subagent_spawning hook
-export type PluginHookSubagentSpawningEvent = {
-  agentId?: string;
-  childSessionKey?: string;
-  label?: string;
-  mode?: string;
-  threadRequested?: boolean;
-  requester?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
-};
-
-export type PluginHookSubagentSpawningResult = {
-  status?: "ok" | "error";
-  error?: string;
-  threadBindingReady?: boolean;
-};
-
-// subagent_spawned hook
-export type PluginHookSubagentSpawnedEvent = {
-  agentId?: string;
-  childSessionKey?: string;
-  runId?: string;
-  label?: string;
-  mode?: string;
-  threadRequested?: boolean;
-  requester?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
-};
-
-// subagent_ended hook
-export type PluginHookSubagentEndedEvent = {
-  agentId?: string;
-  targetSessionKey?: string;
-  accountId?: string;
-  targetKind?: string;
-  reason?: string;
-  sendFarewell?: boolean;
-  runId?: string;
-  outcome?: string;
-  endedAt?: number;
-  error?: string;
-};
-
-// subagent_delivery_target hook
-export type PluginHookSubagentDeliveryTargetEvent = {
-  childSessionKey?: string;
-  childRunId?: string;
-  spawnMode?: string;
-  expectsCompletionMessage?: boolean;
-  requesterSessionKey?: string;
-  requesterOrigin?: {
-    channel?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-};
-
-export type PluginHookSubagentDeliveryTargetResult = {
-  origin?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string;
-  };
-};
 
 // Agent context shared across agent hooks
 export type PluginHookAgentContext = {
@@ -419,20 +341,40 @@ export type PluginHookAgentContext = {
   channelId?: string;
 };
 
-// before_agent_start hook
-export type PluginHookBeforeAgentStartEvent = {
+// before_model_resolve hook
+export type PluginHookBeforeModelResolveEvent = {
+  /** User prompt for this run. No session messages are available yet in this phase. */
   prompt: string;
-  messages?: unknown[];
 };
 
-export type PluginHookBeforeAgentStartResult = {
-  systemPrompt?: string;
-  prependContext?: string;
+export type PluginHookBeforeModelResolveResult = {
   /** Override the model for this agent run. E.g. "llama3.3:8b" */
   modelOverride?: string;
   /** Override the provider for this agent run. E.g. "ollama" */
   providerOverride?: string;
 };
+
+// before_prompt_build hook
+export type PluginHookBeforePromptBuildEvent = {
+  prompt: string;
+  /** Session messages prepared for this run. */
+  messages: unknown[];
+};
+
+export type PluginHookBeforePromptBuildResult = {
+  systemPrompt?: string;
+  prependContext?: string;
+};
+
+// before_agent_start hook (legacy compatibility: combines both phases)
+export type PluginHookBeforeAgentStartEvent = {
+  prompt: string;
+  /** Optional because legacy hook can run in pre-session phase. */
+  messages?: unknown[];
+};
+
+export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
+  PluginHookBeforeModelResolveResult;
 
 // llm_input hook
 export type PluginHookLlmInputEvent = {
@@ -603,6 +545,18 @@ export type PluginHookToolResultPersistResult = {
   message?: AgentMessage;
 };
 
+// before_message_write hook
+export type PluginHookBeforeMessageWriteEvent = {
+  message: AgentMessage;
+  sessionKey?: string;
+  agentId?: string;
+};
+
+export type PluginHookBeforeMessageWriteResult = {
+  block?: boolean; // If true, message is NOT written to JSONL
+  message?: AgentMessage; // Optional: modified message to write instead
+};
+
 // Session context
 export type PluginHookSessionContext = {
   agentId?: string;
@@ -625,6 +579,84 @@ export type PluginHookSessionEndEvent = {
   durationMs?: number;
 };
 
+// Subagent context
+export type PluginHookSubagentContext = {
+  runId?: string;
+  childSessionKey?: string;
+  requesterSessionKey?: string;
+};
+
+export type PluginHookSubagentTargetKind = "subagent" | "acp";
+
+type PluginHookSubagentSpawnBase = {
+  childSessionKey: string;
+  agentId: string;
+  label?: string;
+  mode: "run" | "session";
+  requester?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+  threadRequested: boolean;
+};
+
+// subagent_spawning hook
+export type PluginHookSubagentSpawningEvent = PluginHookSubagentSpawnBase;
+
+export type PluginHookSubagentSpawningResult =
+  | {
+      status: "ok";
+      threadBindingReady?: boolean;
+    }
+  | {
+      status: "error";
+      error: string;
+    };
+
+// subagent_delivery_target hook
+export type PluginHookSubagentDeliveryTargetEvent = {
+  childSessionKey: string;
+  requesterSessionKey: string;
+  requesterOrigin?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+  childRunId?: string;
+  spawnMode?: "run" | "session";
+  expectsCompletionMessage: boolean;
+};
+
+export type PluginHookSubagentDeliveryTargetResult = {
+  origin?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+};
+
+// subagent_spawned hook
+export type PluginHookSubagentSpawnedEvent = PluginHookSubagentSpawnBase & {
+  runId: string;
+};
+
+// subagent_ended hook
+export type PluginHookSubagentEndedEvent = {
+  targetSessionKey: string;
+  targetKind: PluginHookSubagentTargetKind;
+  reason: string;
+  sendFarewell?: boolean;
+  accountId?: string;
+  runId?: string;
+  endedAt?: number;
+  outcome?: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
+  error?: string;
+};
+
 // Gateway context
 export type PluginHookGatewayContext = {
   port?: number;
@@ -640,46 +672,8 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
-// before_model_resolve hook
-export type PluginHookBeforeModelResolveEvent = {
-  prompt?: string;
-  model?: string;
-  provider?: string;
-};
-
-export type PluginHookBeforeModelResolveResult = {
-  modelOverride?: string;
-  providerOverride?: string;
-};
-
-// before_prompt_build hook
-export type PluginHookBeforePromptBuildEvent = {
-  prompt: string;
-  messages?: unknown[];
-};
-
-export type PluginHookBeforePromptBuildResult = {
-  systemPrompt?: string;
-  prependContext?: string;
-};
-
-// before_message_write hook
-export type PluginHookBeforeMessageWriteEvent = {
-  message: AgentMessage;
-  sessionFile?: string;
-};
-
-export type PluginHookBeforeMessageWriteResult = {
-  message?: AgentMessage;
-  block?: boolean;
-};
-
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
-  before_agent_start: (
-    event: PluginHookBeforeAgentStartEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
   before_model_resolve: (
     event: PluginHookBeforeModelResolveEvent,
     ctx: PluginHookAgentContext,
@@ -691,6 +685,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void;
+  before_agent_start: (
+    event: PluginHookBeforeAgentStartEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
   llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,
@@ -749,6 +747,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookSubagentSpawningEvent,
     ctx: PluginHookSubagentContext,
   ) => Promise<PluginHookSubagentSpawningResult | void> | PluginHookSubagentSpawningResult | void;
+  subagent_delivery_target: (
+    event: PluginHookSubagentDeliveryTargetEvent,
+    ctx: PluginHookSubagentContext,
+  ) =>
+    | Promise<PluginHookSubagentDeliveryTargetResult | void>
+    | PluginHookSubagentDeliveryTargetResult
+    | void;
   subagent_spawned: (
     event: PluginHookSubagentSpawnedEvent,
     ctx: PluginHookSubagentContext,
@@ -757,13 +762,6 @@ export type PluginHookHandlerMap = {
     event: PluginHookSubagentEndedEvent,
     ctx: PluginHookSubagentContext,
   ) => Promise<void> | void;
-  subagent_delivery_target: (
-    event: PluginHookSubagentDeliveryTargetEvent,
-    ctx: PluginHookSubagentContext,
-  ) =>
-    | Promise<PluginHookSubagentDeliveryTargetResult | void>
-    | PluginHookSubagentDeliveryTargetResult
-    | void;
   gateway_start: (
     event: PluginHookGatewayStartEvent,
     ctx: PluginHookGatewayContext,

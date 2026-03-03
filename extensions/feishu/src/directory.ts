@@ -1,4 +1,4 @@
-import type { BotConfig } from "bot/plugin-sdk";
+import type { ClawdbotConfig } from "bot/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { normalizeFeishuTarget } from "./targets.js";
@@ -16,7 +16,7 @@ export type FeishuDirectoryGroup = {
 };
 
 export async function listFeishuDirectoryPeers(params: {
-  cfg: BotConfig;
+  cfg: ClawdbotConfig;
   query?: string;
   limit?: number;
   accountId?: string;
@@ -50,7 +50,7 @@ export async function listFeishuDirectoryPeers(params: {
 }
 
 export async function listFeishuDirectoryGroups(params: {
-  cfg: BotConfig;
+  cfg: ClawdbotConfig;
   query?: string;
   limit?: number;
   accountId?: string;
@@ -83,7 +83,7 @@ export async function listFeishuDirectoryGroups(params: {
 }
 
 export async function listFeishuDirectoryPeersLive(params: {
-  cfg: BotConfig;
+  cfg: ClawdbotConfig;
   query?: string;
   limit?: number;
   accountId?: string;
@@ -130,7 +130,7 @@ export async function listFeishuDirectoryPeersLive(params: {
 }
 
 export async function listFeishuDirectoryGroupsLive(params: {
-  cfg: BotConfig;
+  cfg: ClawdbotConfig;
   query?: string;
   limit?: number;
   accountId?: string;

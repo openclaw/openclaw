@@ -1,5 +1,4 @@
 import type { BotConfig } from "../../config/config.js";
-import type { ReasoningLevel } from "../thinking.js";
 import type { ThinkLevel } from "./directives.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { lookupContextTokens } from "../../agents/context.js";
@@ -11,6 +10,7 @@ import {
   modelKey,
   normalizeProviderId,
   resolveModelRefFromString,
+  resolveReasoningDefault,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
@@ -33,7 +33,8 @@ type ModelSelectionState = {
   allowedModelCatalog: ModelCatalog;
   resetModelOverride: boolean;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
-  resolveDefaultReasoningLevel: () => Promise<ReasoningLevel>;
+  /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
+  resolveDefaultReasoningLevel: () => Promise<"on" | "off">;
   needsModelCatalog: boolean;
 };
 
@@ -399,21 +400,17 @@ export async function createModelSelectionState(params: {
     return defaultThinkingLevel;
   };
 
-  let defaultReasoningLevel: ReasoningLevel | undefined;
-  const resolveDefaultReasoningLevel = async (): Promise<ReasoningLevel> => {
-    if (defaultReasoningLevel) {
-      return defaultReasoningLevel;
-    }
+  const resolveDefaultReasoningLevel = async (): Promise<"on" | "off"> => {
     let catalogForReasoning = modelCatalog ?? allowedModelCatalog;
     if (!catalogForReasoning || catalogForReasoning.length === 0) {
       modelCatalog = await loadModelCatalog({ config: cfg });
       catalogForReasoning = modelCatalog;
     }
-    const candidate = catalogForReasoning.find(
-      (entry) => entry.provider === provider && entry.id === model,
-    );
-    defaultReasoningLevel = candidate?.reasoning ? "on" : "off";
-    return defaultReasoningLevel;
+    return resolveReasoningDefault({
+      provider,
+      model,
+      catalog: catalogForReasoning,
+    });
   };
 
   return {

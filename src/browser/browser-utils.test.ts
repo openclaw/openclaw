@@ -4,9 +4,14 @@ import { appendCdpPath, getHeadersWithAuth } from "./cdp.helpers.js";
 import { __test } from "./client-fetch.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { shouldRejectBrowserMutation } from "./csrf.js";
+import {
+  ensureChromeExtensionRelayServer,
+  stopChromeExtensionRelayServer,
+} from "./extension-relay.js";
 import { toBoolean } from "./routes/utils.js";
 import { listKnownProfileNames } from "./server-context.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
+import { getFreePort } from "./test-port.js";
 
 describe("toBoolean", () => {
   it("parses yes/no and 1/0", () => {
@@ -161,6 +166,31 @@ describe("cdp.helpers", () => {
     });
     expect(headers.Authorization).toBe("Bearer token");
   });
+
+  it("does not add relay header for unknown loopback ports", () => {
+    const headers = getHeadersWithAuth("http://127.0.0.1:19444/json/version");
+    expect(headers["x-bot-relay-token"]).toBeUndefined();
+  });
+
+  it("adds relay header for known relay ports", async () => {
+    const port = await getFreePort();
+    const cdpUrl = `http://127.0.0.1:${port}`;
+    const prev = process.env.BOT_GATEWAY_TOKEN;
+    process.env.BOT_GATEWAY_TOKEN = "test-gateway-token";
+    try {
+      await ensureChromeExtensionRelayServer({ cdpUrl });
+      const headers = getHeadersWithAuth(`${cdpUrl}/json/version`);
+      expect(headers["x-bot-relay-token"]).toBeTruthy();
+      expect(headers["x-bot-relay-token"]).not.toBe("test-gateway-token");
+    } finally {
+      await stopChromeExtensionRelayServer({ cdpUrl }).catch(() => {});
+      if (prev === undefined) {
+        delete process.env.BOT_GATEWAY_TOKEN;
+      } else {
+        process.env.BOT_GATEWAY_TOKEN = prev;
+      }
+    }
+  });
 });
 
 describe("fetchBrowserJson loopback auth (bridge auth registry)", () => {
@@ -183,12 +213,12 @@ describe("fetchBrowserJson loopback auth (bridge auth registry)", () => {
 describe("browser server-context listKnownProfileNames", () => {
   it("includes configured and runtime-only profile names", () => {
     const resolved = resolveBrowserConfig({
-      defaultProfile: "bot",
+      defaultProfile: "@hanzo/bot",
       profiles: {
         bot: { cdpPort: 18800, color: "#FF4500" },
       },
     });
-    const bot = resolveProfile(resolved, "bot");
+    const bot = resolveProfile(resolved, "@hanzo/bot");
     if (!bot) {
       throw new Error("expected bot profile");
     }
@@ -208,6 +238,10 @@ describe("browser server-context listKnownProfileNames", () => {
       ]),
     };
 
-    expect(listKnownProfileNames(state).toSorted()).toEqual(["bot", "chrome", "stale-removed"]);
+    expect(listKnownProfileNames(state).toSorted()).toEqual([
+      "chrome",
+      "@hanzo/bot",
+      "stale-removed",
+    ]);
   });
 });

@@ -32,7 +32,7 @@ function createContainer(overrides: Partial<SandboxContainerInfo> = {}): Sandbox
   return {
     containerName: "bot-sandbox-test",
     sessionKey: "test-session",
-    image: "hanzoai/bot-sandbox:latest",
+    image: "bot/sandbox:latest",
     imageMatch: true,
     running: true,
     createdAtMs: NOW - 3600000,
@@ -45,7 +45,7 @@ function createBrowser(overrides: Partial<SandboxBrowserInfo> = {}): SandboxBrow
   return {
     containerName: "bot-browser-test",
     sessionKey: "test-session",
-    image: "hanzoai/bot-browser:latest",
+    image: "bot/browser:latest",
     imageMatch: true,
     running: true,
     createdAtMs: NOW - 3600000,
@@ -205,7 +205,7 @@ describe("sandboxRecreateCommand", () => {
       mocks.listSandboxContainers.mockResolvedValue([match, noMatch]);
 
       await sandboxRecreateCommand(
-        { session: "target-session", browser: false, force: true },
+        { session: "target-session", all: false, browser: false, force: true },
         runtime as never,
       );
 
@@ -220,7 +220,7 @@ describe("sandboxRecreateCommand", () => {
       mocks.listSandboxContainers.mockResolvedValue([agent, agentSub, other]);
 
       await sandboxRecreateCommand(
-        { agent: "work", browser: false, force: true },
+        { agent: "work", all: false, browser: false, force: true },
         runtime as never,
       );
 

@@ -74,9 +74,7 @@ export function formatElevatedUnavailableText(params: {
     );
   }
   if (params.sessionKey) {
-    lines.push(
-      `See: ${formatCliCommand(`hanzo-bot sandbox explain --session ${params.sessionKey}`)}`,
-    );
+    lines.push(`See: ${formatCliCommand(`bot sandbox explain --session ${params.sessionKey}`)}`);
   }
   return lines.join("\n");
 }

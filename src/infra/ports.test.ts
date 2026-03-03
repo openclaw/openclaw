@@ -22,7 +22,7 @@ const describeUnix = process.platform === "win32" ? describe.skip : describe;
 describe("ports helpers", () => {
   it("ensurePortAvailable rejects when port busy", async () => {
     const server = net.createServer();
-    await new Promise((resolve) => server.listen(0, resolve));
+    await new Promise<void>((resolve) => server.listen(0, () => resolve()));
     const port = (server.address() as net.AddressInfo).port;
     await expect(ensurePortAvailable(port)).rejects.toBeInstanceOf(PortInUseError);
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -44,7 +44,7 @@ describe("ports helpers", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("prints a Hanzo Bot-specific hint when port details look like another instance", async () => {
+  it("prints an Bot-specific hint when port details look like another Bot instance", async () => {
     const runtime = {
       error: vi.fn(),
       log: vi.fn(),
@@ -59,7 +59,7 @@ describe("ports helpers", () => {
     ).catch(() => {});
 
     const messages = runtime.error.mock.calls.map((call) => stripAnsi(String(call[0] ?? "")));
-    expect(messages.join("\n")).toContain("another Hanzo Bot instance is already running");
+    expect(messages.join("\n")).toContain("another Bot instance is already running");
   });
 
   it("classifies ssh and gateway listeners", () => {
@@ -91,7 +91,7 @@ describe("ports helpers", () => {
 
 describeUnix("inspectPortUsage", () => {
   beforeEach(() => {
-    runCommandWithTimeoutMock.mockReset();
+    runCommandWithTimeoutMock.mockClear();
   });
 
   it("reports busy when lsof is missing but loopback listener exists", async () => {

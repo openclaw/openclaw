@@ -47,7 +47,7 @@ export async function runNonInteractiveOnboardingRemote(params: {
     runtime.log(`Remote gateway: ${remoteUrl}`);
     runtime.log(`Auth: ${payload.auth}`);
     runtime.log(
-      `Tip: run \`${formatCliCommand("hanzo-bot configure --section web")}\` to store your Brave API key for web_search. Docs: https://docs.hanzo.bot/tools/web`,
+      `Tip: run \`${formatCliCommand("bot configure --section web")}\` to store your Brave API key for web_search. Docs: https://docs.hanzo.bot/tools/web`,
     );
   }
 }

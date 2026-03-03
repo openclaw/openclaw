@@ -1,4 +1,4 @@
-import type { BotConfig } from "bot/plugin-sdk";
+import type { ClawdbotConfig } from "bot/plugin-sdk";
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,32 @@ vi.mock("./probe.js", () => ({
 vi.mock("./client.js", () => ({
   createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
   createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
+}));
+
+vi.mock("./runtime.js", () => ({
+  getFeishuRuntime: () => ({
+    channel: {
+      debounce: {
+        resolveInboundDebounceMs: () => 0,
+        createInboundDebouncer: () => ({
+          enqueue: async () => {},
+          flushKey: async () => {},
+        }),
+      },
+      text: {
+        hasControlCommand: () => false,
+      },
+    },
+  }),
+}));
+
+vi.mock("@larksuiteoapi/node-sdk", () => ({
+  adaptDefault: vi.fn(
+    () => (_req: unknown, res: { statusCode?: number; end: (s: string) => void }) => {
+      res.statusCode = 200;
+      res.end("ok");
+    },
+  ),
 }));
 
 import {
@@ -53,7 +79,7 @@ function buildConfig(params: {
   path: string;
   port: number;
   verificationToken?: string;
-}): BotConfig {
+}): ClawdbotConfig {
   return {
     channels: {
       feishu: {
@@ -72,7 +98,7 @@ function buildConfig(params: {
         },
       },
     },
-  } as BotConfig;
+  } as ClawdbotConfig;
 }
 
 async function withRunningWebhookMonitor(

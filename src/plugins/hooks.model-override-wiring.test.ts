@@ -10,16 +10,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeModelResolveEvent,
+  PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
+  PluginHookBeforePromptBuildResult,
   PluginHookRegistration,
 } from "./types.js";
 import { createHookRunner } from "./hooks.js";
+import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 
 function addBeforeModelResolveHook(
   registry: PluginRegistry,
   pluginId: string,
-  handler: (event: PluginHookBeforeModelResolveEvent, ctx: PluginHookAgentContext) => unknown,
+  handler: (
+    event: PluginHookBeforeModelResolveEvent,
+    ctx: PluginHookAgentContext,
+  ) => PluginHookBeforeModelResolveResult | Promise<PluginHookBeforeModelResolveResult>,
   priority?: number,
 ) {
   addTestHook({
@@ -34,7 +40,10 @@ function addBeforeModelResolveHook(
 function addBeforePromptBuildHook(
   registry: PluginRegistry,
   pluginId: string,
-  handler: (event: PluginHookBeforePromptBuildEvent, ctx: PluginHookAgentContext) => unknown,
+  handler: (
+    event: PluginHookBeforePromptBuildEvent,
+    ctx: PluginHookAgentContext,
+  ) => PluginHookBeforePromptBuildResult | Promise<PluginHookBeforePromptBuildResult>,
   priority?: number,
 ) {
   addTestHook({

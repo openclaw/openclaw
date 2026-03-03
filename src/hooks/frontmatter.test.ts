@@ -41,7 +41,7 @@ name: session-memory
 description: "Save session context"
 metadata:
   {
-    "bot": {
+    "@hanzo/bot": {
       "emoji": "💾",
       "events": ["command:new"]
     }
@@ -68,7 +68,7 @@ name: command-logger
 description: "Log all command events"
 metadata:
   {
-    "bot":
+    "@hanzo/bot":
       {
         "emoji": "📝",
         "events": ["command"],
@@ -92,12 +92,12 @@ metadata:
   it("handles single-line metadata (inline JSON)", () => {
     const content = `---
 name: simple-hook
-metadata: {"bot": {"events": ["test"]}}
+metadata: {"@hanzo/bot": {"events": ["test"]}}
 ---
 `;
     const result = parseFrontmatter(content);
     expect(result.name).toBe("simple-hook");
-    expect(result.metadata).toBe('{"bot": {"events": ["test"]}}');
+    expect(result.metadata).toBe('{"@hanzo/bot": {"events": ["test"]}}');
   });
 
   it("handles mixed single-line and multi-line values", () => {
@@ -107,7 +107,7 @@ description: "A hook with mixed values"
 homepage: https://example.com
 metadata:
   {
-    "bot": {
+    "@hanzo/bot": {
       "events": ["command:new"]
     }
   }
@@ -232,14 +232,14 @@ describe("resolveBotMetadata", () => {
     // This is the actual format used in the bundled hooks
     const content = `---
 name: session-memory
-description: "Save session context to memory when /new command is issued"
+description: "Save session context to memory when /new or /reset command is issued"
 homepage: https://docs.hanzo.bot/automation/hooks#session-memory
 metadata:
   {
-    "bot":
+    "@hanzo/bot":
       {
         "emoji": "💾",
-        "events": ["command:new"],
+        "events": ["command:new", "command:reset"],
         "requires": { "config": ["workspace.dir"] },
         "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with Bot" }],
       },
@@ -256,7 +256,7 @@ metadata:
     const bot = resolveBotMetadata(frontmatter);
     expect(bot).toBeDefined();
     expect(bot?.emoji).toBe("💾");
-    expect(bot?.events).toEqual(["command:new"]);
+    expect(bot?.events).toEqual(["command:new", "command:reset"]);
     expect(bot?.requires?.config).toEqual(["workspace.dir"]);
     expect(bot?.install?.[0].kind).toBe("bundled");
   });

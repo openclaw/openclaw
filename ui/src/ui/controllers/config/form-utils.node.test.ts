@@ -122,13 +122,10 @@ describe("form-utils preserves numeric types", () => {
     const cloned = cloneConfigObject(form);
     setPathValue(cloned, ["gateway", "auth", "token"], "new-token");
     const first = getFirstXaiModel(cloned);
-    const cost = first.cost as Record<string, unknown>;
 
-    expect(typeof first.maxTokens).toBe("number");
-    expect(first.maxTokens).toBe(8192);
-    expect(typeof first.contextWindow).toBe("number");
-    expect(typeof cost).toBe("object");
-    expect(typeof cost.input).toBe("number");
+    expectNumericModelCore(first);
+    expect(typeof first.cost).toBe("object");
+    expect(typeof (first.cost as Record<string, unknown>).input).toBe("number");
   });
 });
 

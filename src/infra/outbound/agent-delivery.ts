@@ -61,16 +61,16 @@ export function resolveAgentDeliveryPlan(params: {
   const normalizedTurnSource = params.turnSourceChannel
     ? normalizeMessageChannel(params.turnSourceChannel)
     : undefined;
-  const _turnSourceChannel =
+  const turnSourceChannel =
     normalizedTurnSource && isDeliverableMessageChannel(normalizedTurnSource)
       ? normalizedTurnSource
       : undefined;
-  const _turnSourceTo =
+  const turnSourceTo =
     typeof params.turnSourceTo === "string" && params.turnSourceTo.trim()
       ? params.turnSourceTo.trim()
       : undefined;
-  const _turnSourceAccountId = normalizeAccountId(params.turnSourceAccountId);
-  const _turnSourceThreadId =
+  const turnSourceAccountId = normalizeAccountId(params.turnSourceAccountId);
+  const turnSourceThreadId =
     params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
       ? params.turnSourceThreadId
       : undefined;
@@ -80,6 +80,10 @@ export function resolveAgentDeliveryPlan(params: {
     requestedChannel: requestedChannel === INTERNAL_MESSAGE_CHANNEL ? "last" : requestedChannel,
     explicitTo,
     explicitThreadId: params.explicitThreadId,
+    turnSourceChannel,
+    turnSourceTo,
+    turnSourceAccountId,
+    turnSourceThreadId,
   });
 
   const resolvedChannel = (() => {

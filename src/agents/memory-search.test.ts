@@ -6,7 +6,7 @@ const asConfig = (cfg: BotConfig): BotConfig => cfg;
 
 describe("memory search config", () => {
   function configWithDefaultProvider(
-    provider: "openai" | "local" | "gemini" | "mistral",
+    provider: "openai" | "local" | "gemini" | "mistral" | "ollama",
   ): BotConfig {
     return asConfig({
       agents: {

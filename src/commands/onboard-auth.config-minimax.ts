@@ -1,5 +1,6 @@
 import type { BotConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { toAgentModelListLike } from "../config/model-input.js";
 import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
@@ -90,9 +91,6 @@ export function applyMinimaxConfig(cfg: BotConfig): BotConfig {
 
 export function applyMinimaxHostedConfig(cfg: BotConfig, params?: { baseUrl?: string }): BotConfig {
   const next = applyMinimaxHostedProviderConfig(cfg, params);
-  const existingModel = next.agents?.defaults?.model;
-  const modelBase =
-    typeof existingModel === "object" && existingModel !== null ? existingModel : {};
   return {
     ...next,
     agents: {
@@ -100,7 +98,7 @@ export function applyMinimaxHostedConfig(cfg: BotConfig, params?: { baseUrl?: st
       defaults: {
         ...next.agents?.defaults,
         model: {
-          ...modelBase,
+          ...toAgentModelListLike(next.agents?.defaults?.model),
           primary: MINIMAX_HOSTED_MODEL_REF,
         },
       },

@@ -1038,6 +1038,21 @@ export function renderCron(props: CronProps) {
                 <span class="field-checkbox__label">${t("cron.form.clearAgentOverride")}</span>
                 <div class="cron-help">${t("cron.form.clearAgentHelp")}</div>
               </label>
+              <label class="field cron-span-2">
+                ${renderFieldLabel("Session key")}
+                <input
+                  id="cron-session-key"
+                  .value=${props.form.sessionKey}
+                  @input=${(e: Event) =>
+                    props.onFormChange({
+                      sessionKey: (e.target as HTMLInputElement).value,
+                    })}
+                  placeholder="agent:main:main"
+                />
+                <div class="cron-help">
+                  Optional routing key for job delivery and wake routing.
+                </div>
+              </label>
               ${
                 isCronSchedule
                   ? html`
@@ -1263,6 +1278,31 @@ export function renderCron(props: CronProps) {
                                 <div class="cron-help">
                                   Optional recipient override for failure alerts.
                                 </div>
+                              </label>
+                              <label class="field">
+                                ${renderFieldLabel("Alert mode")}
+                                <select
+                                  .value=${props.form.failureAlertDeliveryMode || "announce"}
+                                  @change=${(e: Event) =>
+                                    props.onFormChange({
+                                      failureAlertDeliveryMode: (e.target as HTMLSelectElement)
+                                        .value as CronFormState["failureAlertDeliveryMode"],
+                                    })}
+                                >
+                                  <option value="announce">Announce (via channel)</option>
+                                  <option value="webhook">Webhook (HTTP POST)</option>
+                                </select>
+                              </label>
+                              <label class="field">
+                                ${renderFieldLabel("Alert account ID")}
+                                <input
+                                  .value=${props.form.failureAlertAccountId}
+                                  @input=${(e: Event) =>
+                                    props.onFormChange({
+                                      failureAlertAccountId: (e.target as HTMLInputElement).value,
+                                    })}
+                                  placeholder="Account ID for multi-account setups"
+                                />
                               </label>
                             `
                           : nothing
@@ -1513,6 +1553,16 @@ function renderJob(job: CronJob, props: CronProps) {
             }}
           >
             ${t("cron.jobList.run")}
+          </button>
+          <button
+            class="btn"
+            ?disabled=${props.busy}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              selectAnd(() => props.onRun(job, "due"));
+            }}
+          >
+            Run if due
           </button>
           <button
             class="btn"

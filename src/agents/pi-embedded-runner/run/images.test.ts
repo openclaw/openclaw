@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
+import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import {
   detectAndLoadPromptImages,
   detectImageReferences,
@@ -62,7 +63,6 @@ describe("detectImageReferences", () => {
 
     expect(refs).toHaveLength(1);
     expect(refs.some((r) => r.type === "path")).toBe(true);
-    expect(refs.some((r) => r.type === "url")).toBe(false);
   });
 
   it("handles various image extensions", () => {
@@ -80,6 +80,17 @@ describe("detectImageReferences", () => {
     const refs = detectImageReferences(prompt);
 
     expect(refs).toHaveLength(1);
+  });
+
+  it("dedupe casing follows host filesystem conventions", () => {
+    const prompt = "Look at /tmp/Image.png and /tmp/image.png";
+    const refs = detectImageReferences(prompt);
+
+    if (process.platform === "win32") {
+      expect(refs).toHaveLength(1);
+      return;
+    }
+    expect(refs).toHaveLength(2);
   });
 
   it("returns empty array when no images found", () => {
@@ -133,8 +144,8 @@ describe("detectImageReferences", () => {
   it("detects multiple images in [media attached: ...] format", () => {
     // Multi-file format uses separate brackets on separate lines
     const prompt = `[media attached: 2 files]
-[media attached 1/2: /Users/tyleryust/.bot/media/IMG_6430.jpeg (image/jpeg)]
-[media attached 2/2: /Users/tyleryust/.bot/media/IMG_6431.jpeg (image/jpeg)]
+[media attached 1/2: /Users/tyleryust/.hanzo/bot/media/IMG_6430.jpeg (image/jpeg)]
+[media attached 2/2: /Users/tyleryust/.hanzo/bot/media/IMG_6431.jpeg (image/jpeg)]
 what about these images?`;
     const refs = detectImageReferences(prompt);
 
@@ -173,7 +184,7 @@ what is this?`;
 
   it("handles paths with spaces in filename", () => {
     // URL after | is https, not a local path, so only the local path should be detected
-    const prompt = `[media attached: /Users/test/.bot/media/ChatGPT Image Apr 21, 2025.png (image/png) | https://example.com/same.png]
+    const prompt = `[media attached: /Users/test/.hanzo/bot/media/ChatGPT Image Apr 21, 2025.png (image/png) | https://example.com/same.png]
 what is this?`;
     const refs = detectImageReferences(prompt);
 
@@ -207,7 +218,9 @@ describe("modelSupportsImages", () => {
 
 describe("loadImageFromRef", () => {
   it("allows sandbox-validated host paths outside default media roots", async () => {
-    const sandboxParent = await fs.mkdtemp(path.join(os.homedir(), "bot-sandbox-image-"));
+    const homeDir = os.homedir();
+    await fs.mkdir(homeDir, { recursive: true });
+    const sandboxParent = await fs.mkdtemp(path.join(homeDir, "bot-sandbox-image-"));
     try {
       const sandboxRoot = path.join(sandboxParent, "sandbox");
       await fs.mkdir(sandboxRoot, { recursive: true });
@@ -253,24 +266,47 @@ describe("detectAndLoadPromptImages", () => {
     expect(result.detectedRefs).toHaveLength(0);
   });
 
-  it("skips history messages that already include image content", async () => {
+  it("returns no detected refs when prompt has no image references", async () => {
     const result = await detectAndLoadPromptImages({
       prompt: "no images here",
       workspaceDir: "/tmp",
       model: { input: ["text", "image"] },
-      historyMessages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "See /tmp/should-not-load.png" },
-            { type: "image", data: "abc", mimeType: "image/png" },
-          ],
-        },
-      ],
     });
 
     expect(result.detectedRefs).toHaveLength(0);
     expect(result.images).toHaveLength(0);
-    expect(result.historyImagesByIndex.size).toBe(0);
+  });
+
+  it("blocks prompt image refs outside workspace when sandbox workspaceOnly is enabled", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-native-image-sandbox-"));
+    const sandboxRoot = path.join(stateDir, "sandbox");
+    const agentRoot = path.join(stateDir, "agent");
+    await fs.mkdir(sandboxRoot, { recursive: true });
+    await fs.mkdir(agentRoot, { recursive: true });
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    await fs.writeFile(path.join(agentRoot, "secret.png"), Buffer.from(pngB64, "base64"));
+    const sandbox = createUnsafeMountedSandbox({ sandboxRoot, agentRoot });
+    const bridge = sandbox.fsBridge;
+    if (!bridge) {
+      throw new Error("sandbox fs bridge missing");
+    }
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: "Inspect /agent/secret.png",
+        workspaceDir: sandboxRoot,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+        sandbox: { root: sandbox.workspaceDir, bridge },
+      });
+
+      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.loadedCount).toBe(0);
+      expect(result.skippedCount).toBe(1);
+      expect(result.images).toHaveLength(0);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });

@@ -13,7 +13,7 @@ async function withPresenceModule<T>(
 }
 
 describe("system-presence version fallback", () => {
-  it("uses BOT_SERVICE_VERSION when BOT_VERSION is not set", async () => {
+  it("uses runtime VERSION when BOT_VERSION is not set", async () => {
     await withPresenceModule(
       {
         BOT_SERVICE_VERSION: "2.4.6-service",
@@ -27,7 +27,7 @@ describe("system-presence version fallback", () => {
     );
   });
 
-  it("prefers BOT_VERSION over BOT_SERVICE_VERSION", async () => {
+  it("prefers BOT_VERSION over runtime VERSION", async () => {
     await withPresenceModule(
       {
         BOT_VERSION: "9.9.9-cli",
@@ -41,7 +41,7 @@ describe("system-presence version fallback", () => {
     );
   });
 
-  it("uses npm_package_version when BOT_VERSION and BOT_SERVICE_VERSION are blank", async () => {
+  it("uses runtime VERSION when BOT_VERSION and BOT_SERVICE_VERSION are blank", async () => {
     await withPresenceModule(
       {
         BOT_VERSION: " ",

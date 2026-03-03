@@ -70,7 +70,7 @@ export async function minimaxUnderstandImage(params: {
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "MM-API-Source": "Hanzo Bot",
+      "MM-API-Source": "Bot",
     },
     body: JSON.stringify({
       prompt,

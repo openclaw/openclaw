@@ -401,98 +401,56 @@ describe("channel-health-monitor", () => {
 
     it("restarts a channel with no events past the stale threshold", async () => {
       const now = Date.now();
-      const manager = createSnapshotManager({
-        slack: {
-          default: {
-            running: true,
-            connected: true,
-            enabled: true,
-            configured: true,
-            lastStartAt: now - STALE_THRESHOLD - 60_000,
-            lastEventAt: now - STALE_THRESHOLD - 30_000,
-          },
-        },
-      });
-      const monitor = await startAndRunCheck(manager);
-      expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
-      expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
-      monitor.stop();
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - STALE_THRESHOLD - 60_000,
+          lastEventAt: now - STALE_THRESHOLD - 30_000,
+        }),
+      );
+      await expectRestartedChannel(manager, "slack");
     });
 
     it("skips channels with recent events", async () => {
       const now = Date.now();
-      const manager = createSnapshotManager({
-        slack: {
-          default: {
-            running: true,
-            connected: true,
-            enabled: true,
-            configured: true,
-            lastStartAt: now - STALE_THRESHOLD - 60_000,
-            lastEventAt: now - 5_000,
-          },
-        },
-      });
-      const monitor = await startAndRunCheck(manager);
-      expect(manager.stopChannel).not.toHaveBeenCalled();
-      expect(manager.startChannel).not.toHaveBeenCalled();
-      monitor.stop();
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - STALE_THRESHOLD - 60_000,
+          lastEventAt: now - 5_000,
+        }),
+      );
+      await expectNoRestart(manager);
     });
 
     it("skips channels still within the startup grace window for stale detection", async () => {
       const now = Date.now();
-      const manager = createSnapshotManager({
-        slack: {
-          default: {
-            running: true,
-            connected: true,
-            enabled: true,
-            configured: true,
-            lastStartAt: now - 5_000,
-            lastEventAt: null,
-          },
-        },
-      });
-      const monitor = await startAndRunCheck(manager);
-      expect(manager.stopChannel).not.toHaveBeenCalled();
-      expect(manager.startChannel).not.toHaveBeenCalled();
-      monitor.stop();
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - 5_000,
+          lastEventAt: null,
+        }),
+      );
+      await expectNoRestart(manager);
     });
 
     it("restarts a channel that never received any event past the stale threshold", async () => {
       const now = Date.now();
-      const manager = createSnapshotManager({
-        slack: {
-          default: {
-            running: true,
-            connected: true,
-            enabled: true,
-            configured: true,
-            lastStartAt: now - STALE_THRESHOLD - 60_000,
-          },
-        },
-      });
-      const monitor = await startAndRunCheck(manager);
-      expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
-      expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
-      monitor.stop();
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - STALE_THRESHOLD - 60_000,
+        }),
+      );
+      await expectRestartedChannel(manager, "slack");
     });
 
     it("respects custom staleEventThresholdMs", async () => {
       const customThreshold = 10 * 60_000;
       const now = Date.now();
-      const manager = createSnapshotManager({
-        slack: {
-          default: {
-            running: true,
-            connected: true,
-            enabled: true,
-            configured: true,
-            lastStartAt: now - customThreshold - 60_000,
-            lastEventAt: now - customThreshold - 30_000,
-          },
-        },
-      });
+      const manager = createSlackSnapshotManager(
+        runningConnectedSlackAccount({
+          lastStartAt: now - customThreshold - 60_000,
+          lastEventAt: now - customThreshold - 30_000,
+        }),
+      );
       const monitor = await startAndRunCheck(manager, {
         staleEventThresholdMs: customThreshold,
       });

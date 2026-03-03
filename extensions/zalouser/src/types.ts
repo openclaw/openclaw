@@ -1,16 +1,3 @@
-export type ZcaRunOptions = {
-  profile?: string;
-  timeout?: number;
-  cwd?: string;
-};
-
-export type ZcaResult = {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-};
-
 export type ZcaFriend = {
   userId: string;
   displayName: string;

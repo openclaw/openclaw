@@ -17,9 +17,11 @@ export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean 
 
 export const isNixMode = resolveIsNixMode();
 
-const STATE_DIR_SEGMENTS = [".hanzo", "bot"];
-const LEGACY_STATE_DIRNAME = ".bot";
+// Support historical (and occasionally misspelled) legacy state dirs.
+const LEGACY_STATE_DIRNAMES = [".clawdbot", ".moldbot", ".moltbot"] as const;
+const NEW_STATE_DIRNAME = ".bot";
 const CONFIG_FILENAME = "bot.json";
+const LEGACY_CONFIG_FILENAMES = ["clawdbot.json", "moldbot.json", "moltbot.json"] as const;
 
 function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
@@ -30,46 +32,20 @@ function envHomedir(env: NodeJS.ProcessEnv): () => string {
   return () => resolveRequiredHomeDir(env, os.homedir);
 }
 
-/** New canonical state dir: ~/.hanzo/bot */
+function legacyStateDirs(homedir: () => string = resolveDefaultHomeDir): string[] {
+  return LEGACY_STATE_DIRNAMES.map((dir) => path.join(homedir(), dir));
+}
+
 function newStateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  return path.join(homedir(), ...STATE_DIR_SEGMENTS);
-}
-
-/** Legacy state dir: ~/.bot */
-function legacyStateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  return path.join(homedir(), LEGACY_STATE_DIRNAME);
-}
-
-/**
- * Resolve the state directory, preferring ~/.hanzo/bot but falling back
- * to ~/.bot if it exists and the new location does not.
- */
-function stateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  const newDir = newStateDir(homedir);
-  try {
-    if (fs.existsSync(newDir)) {
-      return newDir;
-    }
-  } catch {
-    // fall through
-  }
-  const oldDir = legacyStateDir(homedir);
-  try {
-    if (fs.existsSync(oldDir)) {
-      return oldDir;
-    }
-  } catch {
-    // fall through
-  }
-  return newDir;
+  return path.join(homedir(), NEW_STATE_DIRNAME);
 }
 
 export function resolveLegacyStateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  return legacyStateDir(homedir);
+  return legacyStateDirs(homedir)[0] ?? newStateDir(homedir);
 }
 
 export function resolveLegacyStateDirs(homedir: () => string = resolveDefaultHomeDir): string[] {
-  return [legacyStateDir(homedir), newStateDir(homedir)];
+  return legacyStateDirs(homedir);
 }
 
 export function resolveNewStateDir(homedir: () => string = resolveDefaultHomeDir): string {
@@ -79,18 +55,37 @@ export function resolveNewStateDir(homedir: () => string = resolveDefaultHomeDir
 /**
  * State directory for mutable data (sessions, logs, caches).
  * Can be overridden via BOT_STATE_DIR.
- * Default: ~/.hanzo/bot (legacy fallback: ~/.bot)
+ * Default: ~/.bot
  */
 export function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
 ): string {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const override = env.BOT_STATE_DIR?.trim();
+  const override = env.BOT_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, effectiveHomedir);
   }
-  return stateDir(effectiveHomedir);
+  const newDir = newStateDir(effectiveHomedir);
+  if (env.BOT_TEST_FAST === "1") {
+    return newDir;
+  }
+  const legacyDirs = legacyStateDirs(effectiveHomedir);
+  const hasNew = fs.existsSync(newDir);
+  if (hasNew) {
+    return newDir;
+  }
+  const existingLegacy = legacyDirs.find((dir) => {
+    try {
+      return fs.existsSync(dir);
+    } catch {
+      return false;
+    }
+  });
+  if (existingLegacy) {
+    return existingLegacy;
+  }
+  return newDir;
 }
 
 function resolveUserPath(
@@ -116,23 +111,24 @@ function resolveUserPath(
 export const STATE_DIR = resolveStateDir();
 
 /**
- * Config file path.
+ * Config file path (JSON5).
  * Can be overridden via BOT_CONFIG_PATH.
- * Default: ~/.hanzo/bot/bot.json (or $BOT_STATE_DIR/bot.json)
+ * Default: ~/.hanzoai/bot.json (or $BOT_STATE_DIR/bot.json)
  */
 export function resolveCanonicalConfigPath(
   env: NodeJS.ProcessEnv = process.env,
-  dir: string = resolveStateDir(env, envHomedir(env)),
+  stateDir: string = resolveStateDir(env, envHomedir(env)),
 ): string {
-  const override = env.BOT_CONFIG_PATH?.trim();
+  const override = env.BOT_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override, env, envHomedir(env));
   }
-  return path.join(dir, CONFIG_FILENAME);
+  return path.join(stateDir, CONFIG_FILENAME);
 }
 
 /**
- * Resolve the active config path, checking if it exists on disk.
+ * Resolve the active config path by preferring existing config candidates
+ * before falling back to the canonical path.
  */
 export function resolveConfigPathCandidate(
   env: NodeJS.ProcessEnv = process.env,
@@ -156,72 +152,74 @@ export function resolveConfigPathCandidate(
 }
 
 /**
- * Active config path.
+ * Active config path (prefers existing config files).
  */
 export function resolveConfigPath(
   env: NodeJS.ProcessEnv = process.env,
-  dir: string = resolveStateDir(env, envHomedir(env)),
+  stateDir: string = resolveStateDir(env, envHomedir(env)),
   homedir: () => string = envHomedir(env),
 ): string {
   const override = env.BOT_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
-  const configPath = path.join(dir, CONFIG_FILENAME);
-  try {
-    if (fs.existsSync(configPath)) {
-      return configPath;
-    }
-  } catch {
-    // fall through
+  if (env.BOT_TEST_FAST === "1") {
+    return path.join(stateDir, CONFIG_FILENAME);
   }
   const stateOverride = env.BOT_STATE_DIR?.trim();
-  if (stateOverride) {
-    return configPath;
+  const candidates = [
+    path.join(stateDir, CONFIG_FILENAME),
+    ...LEGACY_CONFIG_FILENAMES.map((name) => path.join(stateDir, name)),
+  ];
+  const existing = candidates.find((candidate) => {
+    try {
+      return fs.existsSync(candidate);
+    } catch {
+      return false;
+    }
+  });
+  if (existing) {
+    return existing;
   }
-  const defaultDir = resolveStateDir(env, homedir);
-  if (path.resolve(dir) === path.resolve(defaultDir)) {
+  if (stateOverride) {
+    return path.join(stateDir, CONFIG_FILENAME);
+  }
+  const defaultStateDir = resolveStateDir(env, homedir);
+  if (path.resolve(stateDir) === path.resolve(defaultStateDir)) {
     return resolveConfigPathCandidate(env, homedir);
   }
-  return configPath;
+  return path.join(stateDir, CONFIG_FILENAME);
 }
 
-/**
- * @deprecated Use resolveConfigPathCandidate() instead. This constant is evaluated
- * at module load time and does not respect BOT_HOME set after import.
- */
 export const CONFIG_PATH = resolveConfigPathCandidate();
 
 /**
- * Runtime-evaluated config path that respects BOT_HOME.
- * Use this instead of CONFIG_PATH when BOT_HOME may be set dynamically.
- */
-export function getConfigPath(env: NodeJS.ProcessEnv = process.env): string {
-  return resolveConfigPathCandidate(env, envHomedir(env));
-}
-
-/**
- * Resolve default config path candidates.
- * Order: explicit config path → state dir config → default.
+ * Resolve default config path candidates across default locations.
+ * Order: explicit config path → state-dir-derived paths → new default.
  */
 export function resolveDefaultConfigCandidates(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
 ): string[] {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const explicit = env.BOT_CONFIG_PATH?.trim();
+  const explicit = env.BOT_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
   if (explicit) {
     return [resolveUserPath(explicit, env, effectiveHomedir)];
   }
 
   const candidates: string[] = [];
-  const botStateDir = env.BOT_STATE_DIR?.trim();
+  const botStateDir = env.BOT_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (botStateDir) {
     const resolved = resolveUserPath(botStateDir, env, effectiveHomedir);
     candidates.push(path.join(resolved, CONFIG_FILENAME));
+    candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(resolved, name)));
   }
 
-  candidates.push(path.join(stateDir(effectiveHomedir), CONFIG_FILENAME));
+  const defaultDirs = [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)];
+  for (const dir of defaultDirs) {
+    candidates.push(path.join(dir, CONFIG_FILENAME));
+    candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(dir, name)));
+  }
   return candidates;
 }
 
@@ -234,7 +232,7 @@ export const DEFAULT_GATEWAY_PORT = 18789;
 export function resolveGatewayLockDir(tmpdir: () => string = os.tmpdir): string {
   const base = tmpdir();
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  const suffix = uid != null ? `bot-${uid}` : "bot";
+  const suffix = uid != null ? `bot-${uid}` : "@hanzo/bot";
   return path.join(base, suffix);
 }
 
@@ -245,50 +243,39 @@ const OAUTH_FILENAME = "oauth.json";
  *
  * Precedence:
  * - `BOT_OAUTH_DIR` (explicit override)
- * - `$BOT_STATE_DIR/credentials` (canonical default)
+ * - `$*_STATE_DIR/credentials` (canonical server/default)
  */
 export function resolveOAuthDir(
   env: NodeJS.ProcessEnv = process.env,
-  dir: string = resolveStateDir(env, envHomedir(env)),
+  stateDir: string = resolveStateDir(env, envHomedir(env)),
 ): string {
   const override = env.BOT_OAUTH_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, envHomedir(env));
   }
-  return path.join(dir, "credentials");
+  return path.join(stateDir, "credentials");
 }
 
 export function resolveOAuthPath(
   env: NodeJS.ProcessEnv = process.env,
-  dir: string = resolveStateDir(env, envHomedir(env)),
+  stateDir: string = resolveStateDir(env, envHomedir(env)),
 ): string {
-  return path.join(resolveOAuthDir(env, dir), OAUTH_FILENAME);
+  return path.join(resolveOAuthDir(env, stateDir), OAUTH_FILENAME);
 }
 
 export function resolveGatewayPort(cfg?: BotConfig, env: NodeJS.ProcessEnv = process.env): number {
-  const isIsolatedInstance = Boolean(env.BOT_HOME?.trim());
-
-  const configPort = cfg?.gateway?.port;
-  if (
-    isIsolatedInstance &&
-    typeof configPort === "number" &&
-    Number.isFinite(configPort) &&
-    configPort > 0
-  ) {
-    return configPort;
-  }
-
-  const envRaw = env.BOT_GATEWAY_PORT?.trim();
+  const envRaw = env.BOT_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim();
   if (envRaw) {
     const parsed = Number.parseInt(envRaw, 10);
     if (Number.isFinite(parsed) && parsed > 0) {
       return parsed;
     }
   }
-
-  if (typeof configPort === "number" && Number.isFinite(configPort) && configPort > 0) {
-    return configPort;
+  const configPort = cfg?.gateway?.port;
+  if (typeof configPort === "number" && Number.isFinite(configPort)) {
+    if (configPort > 0) {
+      return configPort;
+    }
   }
-
   return DEFAULT_GATEWAY_PORT;
 }

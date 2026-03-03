@@ -10,7 +10,11 @@ const runtime = {
   exit: vi.fn(),
 };
 
-const defaultSessions = { path: "/tmp/sessions.json", count: 0, recent: [] };
+const defaultSessions: HealthSummary["sessions"] = {
+  path: "/tmp/sessions.json",
+  count: 0,
+  recent: [],
+};
 
 const createMainAgentSummary = (sessions = defaultSessions) => ({
   agentId: "main",

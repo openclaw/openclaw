@@ -7,7 +7,11 @@ import type { BotConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
-import { findExtraGatewayServices, renderGatewayServiceCleanupHints } from "../daemon/inspect.js";
+import {
+  findExtraGatewayServices,
+  renderGatewayServiceCleanupHints,
+  type ExtraGatewayService,
+} from "../daemon/inspect.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import {
   auditGatewayServiceConfig,
@@ -15,6 +19,7 @@ import {
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { uninstallLegacySystemdUnits } from "../daemon/systemd.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -48,6 +53,16 @@ function findGatewayEntrypoint(programArguments?: string[]): string | null {
 
 function normalizeExecutablePath(value: string): string {
   return path.resolve(value);
+}
+
+function resolveGatewayAuthToken(cfg: BotConfig, env: NodeJS.ProcessEnv): string | undefined {
+  const configToken = cfg.gateway?.auth?.token?.trim();
+  if (configToken) {
+    return configToken;
+  }
+  const envToken = env.BOT_GATEWAY_TOKEN ?? env.CLAWDBOT_GATEWAY_TOKEN;
+  const trimmedEnvToken = envToken?.trim();
+  return trimmedEnvToken || undefined;
 }
 
 function extractDetailPath(detail: string, prefix: string): string | null {
@@ -88,6 +103,95 @@ async function cleanupLegacyLaunchdService(params: {
   }
 }
 
+function classifyLegacyServices(legacyServices: ExtraGatewayService[]): {
+  darwinUserServices: ExtraGatewayService[];
+  linuxUserServices: ExtraGatewayService[];
+  failed: string[];
+} {
+  const darwinUserServices: ExtraGatewayService[] = [];
+  const linuxUserServices: ExtraGatewayService[] = [];
+  const failed: string[] = [];
+
+  for (const svc of legacyServices) {
+    if (svc.platform === "darwin") {
+      if (svc.scope === "user") {
+        darwinUserServices.push(svc);
+      } else {
+        failed.push(`${svc.label} (${svc.scope})`);
+      }
+      continue;
+    }
+
+    if (svc.platform === "linux") {
+      if (svc.scope === "user") {
+        linuxUserServices.push(svc);
+      } else {
+        failed.push(`${svc.label} (${svc.scope})`);
+      }
+      continue;
+    }
+
+    failed.push(`${svc.label} (${svc.platform})`);
+  }
+
+  return { darwinUserServices, linuxUserServices, failed };
+}
+
+async function cleanupLegacyDarwinServices(
+  services: ExtraGatewayService[],
+): Promise<{ removed: string[]; failed: string[] }> {
+  const removed: string[] = [];
+  const failed: string[] = [];
+
+  for (const svc of services) {
+    const plistPath = extractDetailPath(svc.detail, "plist:");
+    if (!plistPath) {
+      failed.push(`${svc.label} (missing plist path)`);
+      continue;
+    }
+    const dest = await cleanupLegacyLaunchdService({
+      label: svc.label,
+      plistPath,
+    });
+    removed.push(dest ? `${svc.label} -> ${dest}` : svc.label);
+  }
+
+  return { removed, failed };
+}
+
+async function cleanupLegacyLinuxUserServices(
+  services: ExtraGatewayService[],
+  runtime: RuntimeEnv,
+): Promise<{ removed: string[]; failed: string[] }> {
+  const removed: string[] = [];
+  const failed: string[] = [];
+
+  try {
+    const removedUnits = await uninstallLegacySystemdUnits({
+      env: process.env,
+      stdout: process.stdout,
+    });
+    const removedByLabel: Map<string, (typeof removedUnits)[number]> = new Map(
+      removedUnits.map((unit) => [`${unit.name}.service`, unit] as const),
+    );
+    for (const svc of services) {
+      const removedUnit = removedByLabel.get(svc.label);
+      if (!removedUnit) {
+        failed.push(`${svc.label} (legacy unit name not recognized)`);
+        continue;
+      }
+      removed.push(`${svc.label} -> ${removedUnit.unitPath}`);
+    }
+  } catch (err) {
+    runtime.error(`Legacy Linux gateway cleanup failed: ${String(err)}`);
+    for (const svc of services) {
+      failed.push(`${svc.label} (linux cleanup failed)`);
+    }
+  }
+
+  return { removed, failed };
+}
+
 export async function maybeRepairGatewayServiceConfig(
   cfg: BotConfig,
   mode: "local" | "remote",
@@ -115,10 +219,11 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
 
+  const expectedGatewayToken = resolveGatewayAuthToken(cfg, process.env);
   const audit = await auditGatewayServiceConfig({
     env: process.env,
     command,
-    expectedGatewayToken: cfg.gateway?.auth?.token,
+    expectedGatewayToken,
   });
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
   const systemNodeInfo = needsNodeRuntime
@@ -141,7 +246,7 @@ export async function maybeRepairGatewayServiceConfig(
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token: cfg.gateway?.auth?.token ?? process.env.BOT_GATEWAY_TOKEN,
+    token: expectedGatewayToken,
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
     warn: (message, title) => note(message, title),
@@ -230,32 +335,26 @@ export async function maybeScanExtraGatewayServices(
   const legacyServices = extraServices.filter((svc) => svc.legacy === true);
   if (legacyServices.length > 0) {
     const shouldRemove = await prompter.confirmSkipInNonInteractive({
-      message: "Remove legacy gateway services now?",
+      message: "Remove legacy gateway services (clawdbot/moltbot) now?",
       initialValue: true,
     });
     if (shouldRemove) {
       const removed: string[] = [];
-      const failed: string[] = [];
-      for (const svc of legacyServices) {
-        if (svc.platform !== "darwin") {
-          failed.push(`${svc.label} (${svc.platform})`);
-          continue;
-        }
-        if (svc.scope !== "user") {
-          failed.push(`${svc.label} (${svc.scope})`);
-          continue;
-        }
-        const plistPath = extractDetailPath(svc.detail, "plist:");
-        if (!plistPath) {
-          failed.push(`${svc.label} (missing plist path)`);
-          continue;
-        }
-        const dest = await cleanupLegacyLaunchdService({
-          label: svc.label,
-          plistPath,
-        });
-        removed.push(dest ? `${svc.label} -> ${dest}` : svc.label);
+      const { darwinUserServices, linuxUserServices, failed } =
+        classifyLegacyServices(legacyServices);
+
+      if (darwinUserServices.length > 0) {
+        const result = await cleanupLegacyDarwinServices(darwinUserServices);
+        removed.push(...result.removed);
+        failed.push(...result.failed);
       }
+
+      if (linuxUserServices.length > 0) {
+        const result = await cleanupLegacyLinuxUserServices(linuxUserServices, runtime);
+        removed.push(...result.removed);
+        failed.push(...result.failed);
+      }
+
       if (removed.length > 0) {
         note(removed.map((line) => `- ${line}`).join("\n"), "Legacy gateway removed");
       }
@@ -263,7 +362,7 @@ export async function maybeScanExtraGatewayServices(
         note(failed.map((line) => `- ${line}`).join("\n"), "Legacy gateway cleanup skipped");
       }
       if (removed.length > 0) {
-        runtime.log("Legacy gateway services removed. Installing Hanzo Bot gateway next.");
+        runtime.log("Legacy gateway services removed. Installing Bot gateway next.");
       }
     }
   }

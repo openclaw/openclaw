@@ -12,7 +12,7 @@ describe("resolveTailnetDnsHint", () => {
   beforeEach(() => {
     prevTailnetDns.value = process.env.BOT_TAILNET_DNS;
     delete process.env.BOT_TAILNET_DNS;
-    getTailnetHostname.mockReset();
+    getTailnetHostname.mockClear();
   });
 
   afterEach(() => {

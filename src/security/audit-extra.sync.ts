@@ -11,12 +11,20 @@ import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
+import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
-import { resolveNodeCommandAllowlist } from "../gateway/node-command-policy.js";
+import {
+  DEFAULT_DANGEROUS_NODE_COMMANDS,
+  resolveNodeCommandAllowlist,
+} from "../gateway/node-command-policy.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
@@ -101,38 +109,22 @@ function addModel(models: ModelRef[], raw: unknown, source: string) {
   models.push({ id, source });
 }
 
-function extractModelPrimary(model: unknown): string | undefined {
-  if (typeof model === "string") {
-    return model;
-  }
-  if (model && typeof model === "object") {
-    return (model as { primary?: string }).primary;
-  }
-  return undefined;
-}
-
-function extractModelFallbacks(model: unknown): string[] {
-  if (model && typeof model === "object") {
-    const fallbacks = (model as { fallbacks?: unknown[] }).fallbacks;
-    return Array.isArray(fallbacks)
-      ? fallbacks.filter((v): v is string => typeof v === "string")
-      : [];
-  }
-  return [];
-}
-
 function collectModels(cfg: BotConfig): ModelRef[] {
   const out: ModelRef[] = [];
-  addModel(out, extractModelPrimary(cfg.agents?.defaults?.model), "agents.defaults.model.primary");
-  for (const f of extractModelFallbacks(cfg.agents?.defaults?.model)) {
+  addModel(
+    out,
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+    "agents.defaults.model.primary",
+  );
+  for (const f of resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)) {
     addModel(out, f, "agents.defaults.model.fallbacks");
   }
   addModel(
     out,
-    extractModelPrimary(cfg.agents?.defaults?.imageModel),
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel),
     "agents.defaults.imageModel.primary",
   );
-  for (const f of extractModelFallbacks(cfg.agents?.defaults?.imageModel)) {
+  for (const f of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
     addModel(out, f, "agents.defaults.imageModel.fallbacks");
   }
 
@@ -347,6 +339,137 @@ function listGroupPolicyOpen(cfg: BotConfig): string[] {
   return out;
 }
 
+function hasConfiguredGroupTargets(section: Record<string, unknown>): boolean {
+  const groupKeys = ["groups", "guilds", "channels", "rooms"];
+  return groupKeys.some((key) => {
+    const value = section[key];
+    return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
+  });
+}
+
+function listPotentialMultiUserSignals(cfg: BotConfig): string[] {
+  const out = new Set<string>();
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  if (!channels || typeof channels !== "object") {
+    return [];
+  }
+
+  const inspectSection = (section: Record<string, unknown>, basePath: string) => {
+    const groupPolicy = typeof section.groupPolicy === "string" ? section.groupPolicy : null;
+    if (groupPolicy === "open") {
+      out.add(`${basePath}.groupPolicy="open"`);
+    } else if (groupPolicy === "allowlist" && hasConfiguredGroupTargets(section)) {
+      out.add(`${basePath}.groupPolicy="allowlist" with configured group targets`);
+    }
+
+    const dmPolicy = typeof section.dmPolicy === "string" ? section.dmPolicy : null;
+    if (dmPolicy === "open") {
+      out.add(`${basePath}.dmPolicy="open"`);
+    }
+
+    const allowFrom = Array.isArray(section.allowFrom) ? section.allowFrom : [];
+    if (allowFrom.some((entry) => String(entry).trim() === "*")) {
+      out.add(`${basePath}.allowFrom includes "*"`);
+    }
+
+    const groupAllowFrom = Array.isArray(section.groupAllowFrom) ? section.groupAllowFrom : [];
+    if (groupAllowFrom.some((entry) => String(entry).trim() === "*")) {
+      out.add(`${basePath}.groupAllowFrom includes "*"`);
+    }
+
+    const dm = section.dm;
+    if (dm && typeof dm === "object") {
+      const dmSection = dm as Record<string, unknown>;
+      const dmLegacyPolicy = typeof dmSection.policy === "string" ? dmSection.policy : null;
+      if (dmLegacyPolicy === "open") {
+        out.add(`${basePath}.dm.policy="open"`);
+      }
+      const dmAllowFrom = Array.isArray(dmSection.allowFrom) ? dmSection.allowFrom : [];
+      if (dmAllowFrom.some((entry) => String(entry).trim() === "*")) {
+        out.add(`${basePath}.dm.allowFrom includes "*"`);
+      }
+    }
+  };
+
+  for (const [channelId, value] of Object.entries(channels)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    const section = value as Record<string, unknown>;
+    inspectSection(section, `channels.${channelId}`);
+    const accounts = section.accounts;
+    if (!accounts || typeof accounts !== "object") {
+      continue;
+    }
+    for (const [accountId, accountValue] of Object.entries(accounts)) {
+      if (!accountValue || typeof accountValue !== "object") {
+        continue;
+      }
+      inspectSection(
+        accountValue as Record<string, unknown>,
+        `channels.${channelId}.accounts.${accountId}`,
+      );
+    }
+  }
+
+  return Array.from(out);
+}
+
+function collectRiskyToolExposureContexts(cfg: BotConfig): {
+  riskyContexts: string[];
+  hasRuntimeRisk: boolean;
+} {
+  const contexts: Array<{
+    label: string;
+    agentId?: string;
+    tools?: AgentToolsConfig;
+  }> = [{ label: "agents.defaults" }];
+  for (const agent of cfg.agents?.list ?? []) {
+    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
+      continue;
+    }
+    contexts.push({
+      label: `agents.list.${agent.id}`,
+      agentId: agent.id,
+      tools: agent.tools,
+    });
+  }
+
+  const riskyContexts: string[] = [];
+  let hasRuntimeRisk = false;
+  for (const context of contexts) {
+    const sandboxMode = resolveSandboxConfigForAgent(cfg, context.agentId).mode;
+    const policies = resolveToolPolicies({
+      cfg,
+      agentTools: context.tools,
+      sandboxMode,
+      agentId: context.agentId ?? null,
+    });
+    const runtimeTools = ["exec", "process"].filter((tool) =>
+      isToolAllowedByPolicies(tool, policies),
+    );
+    const fsTools = ["read", "write", "edit", "apply_patch"].filter((tool) =>
+      isToolAllowedByPolicies(tool, policies),
+    );
+    const fsWorkspaceOnly = context.tools?.fs?.workspaceOnly ?? cfg.tools?.fs?.workspaceOnly;
+    const runtimeUnguarded = runtimeTools.length > 0 && sandboxMode !== "all";
+    const fsUnguarded = fsTools.length > 0 && sandboxMode !== "all" && fsWorkspaceOnly !== true;
+    if (!runtimeUnguarded && !fsUnguarded) {
+      continue;
+    }
+    if (runtimeUnguarded) {
+      hasRuntimeRisk = true;
+    }
+    riskyContexts.push(
+      `${context.label} (sandbox=${sandboxMode}; runtime=[${runtimeTools.join(", ") || "off"}]; fs=[${fsTools.join(", ") || "off"}]; fs.workspaceOnly=${
+        fsWorkspaceOnly === true ? "true" : "false"
+      })`,
+    );
+  }
+
+  return { riskyContexts, hasRuntimeRisk };
+}
+
 // --------------------------------------------------------------------------
 // Exported collectors
 // --------------------------------------------------------------------------
@@ -367,7 +490,9 @@ export function collectAttackSurfaceSummaryFindings(cfg: BotConfig): SecurityAud
     `\n` +
     `hooks.internal: ${internalHooksEnabled ? "enabled" : "disabled"}` +
     `\n` +
-    `browser control: ${browserEnabled ? "enabled" : "disabled"}`;
+    `browser control: ${browserEnabled ? "enabled" : "disabled"}` +
+    `\n` +
+    "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway";
 
   return [
     {
@@ -464,7 +589,7 @@ export function collectHooksHardeningFindings(
   if (token && gatewayToken && token === gatewayToken) {
     findings.push({
       checkId: "hooks.token_reuse_gateway_token",
-      severity: "warn",
+      severity: "critical",
       title: "Hooks token reuses the Gateway token",
       detail:
         "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.",
@@ -553,6 +678,40 @@ export function collectGatewayHttpSessionKeyOverrideFindings(
     detail:
       `${enabledEndpoints.join(", ")} accept x-bot-session-key for per-request session routing. ` +
       "Treat API credential holders as trusted principals.",
+  });
+
+  return findings;
+}
+
+export function collectGatewayHttpNoAuthFindings(
+  cfg: BotConfig,
+  env: NodeJS.ProcessEnv,
+): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
+  if (auth.mode !== "none") {
+    return findings;
+  }
+
+  const chatCompletionsEnabled = cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
+  const responsesEnabled = cfg.gateway?.http?.endpoints?.responses?.enabled === true;
+  const enabledEndpoints = [
+    "/tools/invoke",
+    chatCompletionsEnabled ? "/v1/chat/completions" : null,
+    responsesEnabled ? "/v1/responses" : null,
+  ].filter((entry): entry is string => Boolean(entry));
+
+  const remoteExposure = isGatewayRemotelyExposed(cfg);
+  findings.push({
+    checkId: "gateway.http.no_auth",
+    severity: remoteExposure ? "critical" : "warn",
+    title: "Gateway HTTP APIs are reachable without auth",
+    detail:
+      `gateway.auth.mode="none" leaves ${enabledEndpoints.join(", ")} callable without a shared secret. ` +
+      "Treat this as trusted-local only and avoid exposing the gateway beyond loopback.",
+    remediation:
+      "Set gateway.auth.mode to token/password (recommended). If you intentionally keep mode=none, keep gateway.bind=loopback and disable optional HTTP endpoints.",
   });
 
   return findings;
@@ -655,46 +814,37 @@ export function collectSandboxDangerousConfigFindings(cfg: BotConfig): SecurityA
         });
         continue;
       }
-      if (blocked.kind === "targets" || blocked.kind === "covers") {
-        const verb = blocked.kind === "covers" ? "covers" : "targets";
-        findings.push({
-          checkId: "sandbox.dangerous_bind_mount",
-          severity: "critical",
-          title: "Dangerous bind mount in sandbox config",
-          detail:
-            `${source}.binds contains "${bind}" which ${verb} blocked path "${blocked.blockedPath}". ` +
-            "This can expose host system directories or the Docker socket to sandbox containers.",
-          remediation: `Remove "${bind}" from ${source}.binds. Use project-specific paths instead.`,
-        });
-      } else if (blocked.kind === "outside_allowed_roots") {
-        findings.push({
-          checkId: "sandbox.bind_mount_outside_allowed_roots",
-          severity: "warn",
-          title: "Sandbox bind mount source is outside allowed roots",
-          detail:
-            `${source}.binds contains "${bind}" with source path "${blocked.sourcePath}" ` +
-            `which is outside the allowed roots: ${blocked.allowedRoots.join(", ")}.`,
-          remediation: `Move the bind source inside an allowed root or add the path to the allowed roots list.`,
-        });
-      } else if (blocked.kind === "reserved_target") {
-        findings.push({
-          checkId: "sandbox.bind_mount_reserved_target",
-          severity: "critical",
-          title: "Sandbox bind mount targets a reserved path",
-          detail: `${source}.binds contains "${bind}" which targets reserved path "${blocked.reservedPath}".`,
-          remediation: `Remove "${bind}" from ${source}.binds. Choose a non-reserved container target path.`,
-        });
+      if (blocked.kind !== "covers" && blocked.kind !== "targets") {
+        continue;
       }
+      const verb = blocked.kind === "covers" ? "covers" : "targets";
+      findings.push({
+        checkId: "sandbox.dangerous_bind_mount",
+        severity: "critical",
+        title: "Dangerous bind mount in sandbox config",
+        detail:
+          `${source}.binds contains "${bind}" which ${verb} blocked path "${blocked.blockedPath}". ` +
+          "This can expose host system directories or the Docker socket to sandbox containers.",
+        remediation: `Remove "${bind}" from ${source}.binds. Use project-specific paths instead.`,
+      });
     }
 
     const network = typeof docker.network === "string" ? docker.network : undefined;
-    if (network && network.trim().toLowerCase() === "host") {
+    const normalizedNetwork = normalizeNetworkMode(network);
+    if (isDangerousNetworkMode(network)) {
+      const modeLabel = normalizedNetwork === "host" ? '"host"' : `"${network}"`;
+      const detail =
+        normalizedNetwork === "host"
+          ? `${source}.network is "host" which bypasses container network isolation entirely.`
+          : `${source}.network is ${modeLabel} which joins another container namespace and can bypass sandbox network isolation.`;
       findings.push({
         checkId: "sandbox.dangerous_network_mode",
         severity: "critical",
-        title: "Network host mode in sandbox config",
-        detail: `${source}.network is "host" which bypasses container network isolation entirely.`,
-        remediation: `Set ${source}.network to "bridge" or "none".`,
+        title: "Dangerous network mode in sandbox config",
+        detail,
+        remediation:
+          `Set ${source}.network to "bridge", "none", or a custom bridge network name.` +
+          ` Use ${source}.dangerouslyAllowContainerNamespaceJoin=true only as a break-glass override when you fully trust this runtime.`,
       });
     }
 
@@ -721,6 +871,45 @@ export function collectSandboxDangerousConfigFindings(cfg: BotConfig): SecurityA
         remediation: `Remove ${source}.apparmorProfile or use a named AppArmor profile.`,
       });
     }
+  }
+
+  const browserExposurePaths: string[] = [];
+  const defaultBrowser = resolveSandboxConfigForAgent(cfg).browser;
+  if (
+    defaultBrowser.enabled &&
+    defaultBrowser.network.trim().toLowerCase() === "bridge" &&
+    !defaultBrowser.cdpSourceRange?.trim()
+  ) {
+    browserExposurePaths.push("agents.defaults.sandbox.browser");
+  }
+  for (const entry of agents) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
+      continue;
+    }
+    const browser = resolveSandboxConfigForAgent(cfg, entry.id).browser;
+    if (!browser.enabled) {
+      continue;
+    }
+    if (browser.network.trim().toLowerCase() !== "bridge") {
+      continue;
+    }
+    if (browser.cdpSourceRange?.trim()) {
+      continue;
+    }
+    browserExposurePaths.push(`agents.list.${entry.id}.sandbox.browser`);
+  }
+  if (browserExposurePaths.length > 0) {
+    findings.push({
+      checkId: "sandbox.browser_cdp_bridge_unrestricted",
+      severity: "warn",
+      title: "Sandbox browser CDP may be reachable by peer containers",
+      detail:
+        "These sandbox browser configs use Docker bridge networking with no CDP source restriction:\n" +
+        browserExposurePaths.map((entry) => `- ${entry}`).join("\n"),
+      remediation:
+        "Set sandbox.browser.network to a dedicated bridge network (recommended default: bot-sandbox-browser), " +
+        "or set sandbox.browser.cdpSourceRange (for example 172.21.0.1/32) to restrict container-edge CDP ingress.",
+    });
   }
 
   return findings;
@@ -765,11 +954,46 @@ export function collectNodeDenyCommandPatternFindings(cfg: BotConfig): SecurityA
     severity: "warn",
     title: "Some gateway.nodes.denyCommands entries are ineffective",
     detail:
-      "gateway.nodes.denyCommands uses exact command-name matching only.\n" +
+      "gateway.nodes.denyCommands uses exact node command-name matching only (for example `system.run`), not shell-text filtering inside a command payload.\n" +
       detailParts.map((entry) => `- ${entry}`).join("\n"),
     remediation:
       `Use exact command names (for example: ${examples.join(", ")}). ` +
-      "If you need broader restrictions, remove risky commands from allowCommands/default workflows.",
+      "If you need broader restrictions, remove risky command IDs from allowCommands/default workflows and tighten tools.exec policy.",
+  });
+
+  return findings;
+}
+
+export function collectNodeDangerousAllowCommandFindings(cfg: BotConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const allowRaw = cfg.gateway?.nodes?.allowCommands;
+  if (!Array.isArray(allowRaw) || allowRaw.length === 0) {
+    return findings;
+  }
+
+  const allow = new Set(allowRaw.map(normalizeNodeCommand).filter(Boolean));
+  if (allow.size === 0) {
+    return findings;
+  }
+
+  const deny = new Set((cfg.gateway?.nodes?.denyCommands ?? []).map(normalizeNodeCommand));
+  const dangerousAllowed = DEFAULT_DANGEROUS_NODE_COMMANDS.filter(
+    (cmd) => allow.has(cmd) && !deny.has(cmd),
+  );
+  if (dangerousAllowed.length === 0) {
+    return findings;
+  }
+
+  findings.push({
+    checkId: "gateway.nodes.allow_commands_dangerous",
+    severity: isGatewayRemotelyExposed(cfg) ? "critical" : "warn",
+    title: "Dangerous node commands explicitly enabled",
+    detail:
+      `gateway.nodes.allowCommands includes: ${dangerousAllowed.join(", ")}. ` +
+      "These commands can trigger high-impact device actions (camera/screen/contacts/calendar/reminders/SMS).",
+    remediation:
+      "Remove these entries from gateway.nodes.allowCommands (recommended). " +
+      "If you keep them, treat gateway auth as full operator access and keep gateway exposure local/tailnet-only.",
   });
 
   return findings;
@@ -1011,127 +1235,52 @@ export function collectExposureMatrixFindings(cfg: BotConfig): SecurityAuditFind
     });
   }
 
-  return findings;
-}
+  const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg);
 
-export function collectGatewayHttpNoAuthFindings(cfg: BotConfig): SecurityAuditFinding[] {
-  const findings: SecurityAuditFinding[] = [];
-  const chatCompletionsEnabled = cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
-  const responsesEnabled = cfg.gateway?.http?.endpoints?.responses?.enabled === true;
-  if (!chatCompletionsEnabled && !responsesEnabled) {
-    return findings;
+  if (riskyContexts.length > 0) {
+    findings.push({
+      checkId: "security.exposure.open_groups_with_runtime_or_fs",
+      severity: hasRuntimeRisk ? "critical" : "warn",
+      title: "Open groupPolicy with runtime/filesystem tools exposed",
+      detail:
+        `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
+        `Risky tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}\n` +
+        "Prompt injection in open groups can trigger command/file actions in these contexts.",
+      remediation:
+        'For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
+    });
   }
-
-  const auth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
-    tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
-  });
-  const hasToken = Boolean(auth.token);
-  const hasPassword = Boolean(auth.password);
-  if (hasToken || hasPassword) {
-    return findings;
-  }
-
-  const enabledEndpoints = [
-    chatCompletionsEnabled ? "/v1/chat/completions" : null,
-    responsesEnabled ? "/v1/responses" : null,
-  ].filter((entry): entry is string => Boolean(entry));
-
-  findings.push({
-    checkId: "gateway.http.no_auth",
-    severity: "critical",
-    title: "Gateway HTTP API endpoints enabled without authentication",
-    detail:
-      `${enabledEndpoints.join(", ")} are enabled but no gateway auth token or password is set. ` +
-      "Anyone who can reach the gateway port can invoke the API.",
-    remediation:
-      "Set gateway.auth.token or gateway.auth.password to require authentication for HTTP API access.",
-  });
 
   return findings;
 }
 
 export function collectLikelyMultiUserSetupFindings(cfg: BotConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const dmScope = cfg.session?.dmScope ?? "main";
-  if (dmScope !== "main") {
+  const signals = listPotentialMultiUserSignals(cfg);
+  if (signals.length === 0) {
     return findings;
   }
 
-  const channels = cfg.channels ?? {};
-  let openPolicyCount = 0;
-  let wildcardAllowCount = 0;
-
-  const checkAllowFrom = (allowFrom?: Array<string | number> | null): void => {
-    if (!Array.isArray(allowFrom)) {
-      return;
-    }
-    const normalized = allowFrom.map((v) => String(v).trim()).filter(Boolean);
-    if (normalized.includes("*")) {
-      wildcardAllowCount += 1;
-    }
-  };
-
-  const checkDmPolicy = (dmPolicy?: string): void => {
-    if (dmPolicy === "open") {
-      openPolicyCount += 1;
-    }
-  };
-
-  checkDmPolicy(channels.telegram?.dmPolicy);
-  checkAllowFrom(channels.telegram?.allowFrom);
-  checkDmPolicy(channels.discord?.dmPolicy);
-  checkAllowFrom(channels.discord?.allowFrom);
-  checkDmPolicy(channels.slack?.dmPolicy);
-  checkAllowFrom(channels.slack?.allowFrom);
-  checkDmPolicy(channels.imessage?.dmPolicy);
-  checkAllowFrom(channels.imessage?.allowFrom);
-
-  const isLikelyMultiUser = openPolicyCount >= 2 || wildcardAllowCount >= 2;
-  if (!isLikelyMultiUser) {
-    return findings;
-  }
+  const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg);
+  const impactLine = hasRuntimeRisk
+    ? "Runtime/process tools are exposed without full sandboxing in at least one context."
+    : "No unguarded runtime/process tools were detected by this heuristic.";
+  const riskyContextsDetail =
+    riskyContexts.length > 0
+      ? `Potential high-impact tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}`
+      : "No unguarded runtime/filesystem contexts detected.";
 
   findings.push({
-    checkId: "session.likely_multi_user",
+    checkId: "security.trust_model.multi_user_heuristic",
     severity: "warn",
-    title: "Config looks like a multi-user setup without per-user sessions",
+    title: "Potential multi-user setup detected (personal-assistant model warning)",
     detail:
-      `Found ${openPolicyCount} channel(s) with dmPolicy="open" and ${wildcardAllowCount} channel(s) with wildcard allowFrom. ` +
-      `session.dmScope="${dmScope}" means all DM users share a single conversation context.`,
+      "Heuristic signals indicate this gateway may be reachable by multiple users:\n" +
+      signals.map((signal) => `- ${signal}`).join("\n") +
+      `\n${impactLine}\n${riskyContextsDetail}\n` +
+      "Bot's default security model is personal-assistant (one trusted operator boundary), not hostile multi-tenant isolation on one shared gateway.",
     remediation:
-      'Set session.dmScope="per-user" so each DM sender gets their own session, or narrow allowFrom to a single trusted user.',
-  });
-
-  return findings;
-}
-
-export function collectNodeDangerousAllowCommandFindings(cfg: BotConfig): SecurityAuditFinding[] {
-  const findings: SecurityAuditFinding[] = [];
-  const allowCommands = cfg.gateway?.nodes?.allowCommands;
-  if (!Array.isArray(allowCommands) || allowCommands.length === 0) {
-    return findings;
-  }
-
-  const dangerousPatterns = new Set(["*", "system.*", "system.run"]);
-  const dangerous = allowCommands
-    .map(normalizeNodeCommand)
-    .filter(Boolean)
-    .filter((cmd) => dangerousPatterns.has(cmd));
-
-  if (dangerous.length === 0) {
-    return findings;
-  }
-
-  findings.push({
-    checkId: "gateway.nodes.dangerous_allow_commands",
-    severity: "critical",
-    title: "Node allowCommands contains dangerous entries",
-    detail:
-      `gateway.nodes.allowCommands includes: ${dangerous.join(", ")}. ` +
-      "These entries allow arbitrary command execution from any connected node.",
-    remediation:
-      "Remove wildcard and system.run from allowCommands. Use specific command names and rely on exec security policies for system.run access.",
+      'If users may be mutually untrusted, split trust boundaries (separate gateways + credentials, ideally separate OS users/hosts). If you intentionally run shared-user access, set agents.defaults.sandbox.mode="all", keep tools.fs.workspaceOnly=true, deny runtime/fs/web tools unless required, and keep personal/private identities + credentials off that runtime.',
   });
 
   return findings;

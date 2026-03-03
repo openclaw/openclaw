@@ -13,7 +13,7 @@ import {
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 
-export async function prependSystemEvents(params: {
+export async function buildQueuedSystemPrompt(params: {
   cfg: BotConfig;
   sessionKey: string;
   isMainSession: boolean;
@@ -272,6 +272,8 @@ export async function incrementCompactionCount(params: {
     // Clear input/output breakdown since we only have the total estimate after compaction
     updates.inputTokens = undefined;
     updates.outputTokens = undefined;
+    updates.cacheRead = undefined;
+    updates.cacheWrite = undefined;
   }
   sessionStore[sessionKey] = {
     ...entry,

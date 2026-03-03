@@ -134,22 +134,9 @@ describe("resolveWhatsAppOutboundTarget", () => {
       expectAllowedForTarget({ allowFrom: [PRIMARY_TARGET], mode: "implicit" });
     });
 
-    it("reroutes to first allowFrom entry when target is not in allowList (implicit)", () => {
-      // normalizeWhatsAppTarget is called first for allowFrom entries, then for the `to` param.
-      vi.mocked(normalize.normalizeWhatsAppTarget)
-        .mockReturnValueOnce("+19876543210") // allowFrom[0]
-        .mockReturnValueOnce("+11234567890"); // to
-      vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
-
-      const result = resolveWhatsAppOutboundTarget({
-        to: "+11234567890",
-        allowFrom: ["+19876543210"],
-        mode: "implicit",
-      });
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.to).toBe("+19876543210");
-      }
+    it("denies message when target is not in allowList", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
+      expectDeniedForTarget({ allowFrom: [SECONDARY_TARGET], mode: "implicit" });
     });
 
     it("handles mixed numeric and string allowList entries", () => {

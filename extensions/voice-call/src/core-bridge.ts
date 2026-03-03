@@ -109,7 +109,7 @@ function resolveBotRoot(): string {
   }
 
   for (const start of candidates) {
-    for (const name of ["bot"]) {
+    for (const name of ["@hanzo/bot"]) {
       const found = findPackageRoot(start, name);
       if (found) {
         coreRootCache = found;

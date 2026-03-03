@@ -221,7 +221,7 @@ describe("gateway server models + voicewake", () => {
       await withTempHome(async (homeDir) => {
         const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
         expect(initial.ok).toBe(true);
-        expect(initial.payload?.triggers).toEqual(["bot", "claude", "computer"]);
+        expect(initial.payload?.triggers).toEqual(["@hanzo/bot", "claude", "computer"]);
 
         const changedP = onceMessage(
           ws,
@@ -246,7 +246,7 @@ describe("gateway server models + voicewake", () => {
         expect(after.payload?.triggers).toEqual(["hi", "there"]);
 
         const onDisk = JSON.parse(
-          await fs.readFile(path.join(homeDir, ".hanzo/bot", "settings", "voicewake.json"), "utf8"),
+          await fs.readFile(path.join(homeDir, ".bot", "settings", "voicewake.json"), "utf8"),
         ) as { triggers?: unknown; updatedAtMs?: unknown };
         expect(onDisk.triggers).toEqual(["hi", "there"]);
         expect(typeof onDisk.updatedAtMs).toBe("number");
@@ -276,7 +276,7 @@ describe("gateway server models + voicewake", () => {
       const first = (await firstEventP) as { event?: string; payload?: unknown };
       expect(first.event).toBe("voicewake.changed");
       expect((first.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
-        "bot",
+        "@hanzo/bot",
         "claude",
         "computer",
       ]);
@@ -286,14 +286,14 @@ describe("gateway server models + voicewake", () => {
         (o) => o.type === "event" && o.event === "voicewake.changed",
       );
       const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
-        triggers: ["hanzo-bot", "computer"],
+        triggers: ["@hanzo/bot", "computer"],
       });
       expect(setRes.ok).toBe(true);
 
       const broadcast = (await broadcastP) as { event?: string; payload?: unknown };
       expect(broadcast.event).toBe("voicewake.changed");
       expect((broadcast.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
-        "hanzo-bot",
+        "@hanzo/bot",
         "computer",
       ]);
 
@@ -449,13 +449,10 @@ describe("gateway server misc", () => {
     const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
     const channels = updated.channels as Record<string, unknown> | undefined;
     const discord = channels?.discord as Record<string, unknown> | undefined;
-    // applyPluginAutoEnable writes enabled=true to plugins.entries.discord, not channels.discord
-    expect(discord).toMatchObject({ token: "token-123" });
-    const pluginEntries = (updated.plugins as Record<string, unknown> | undefined)?.entries as
-      | Record<string, unknown>
-      | undefined;
-    const discordEntry = pluginEntries?.discord as Record<string, unknown> | undefined;
-    expect(discordEntry?.enabled).toBe(true);
+    expect(discord).toMatchObject({
+      token: "token-123",
+      enabled: true,
+    });
   });
 
   test("refuses to start when port already bound", async () => {

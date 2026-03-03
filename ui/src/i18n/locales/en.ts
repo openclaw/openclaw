@@ -2,6 +2,7 @@ import type { TranslationMap } from "../lib/types.ts";
 
 export const en: TranslationMap = {
   common: {
+    version: "Version",
     health: "Health",
     ok: "OK",
     offline: "Offline",
@@ -20,7 +21,6 @@ export const en: TranslationMap = {
     settings: "Settings",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
-    topUp: "Billing & Top Up",
   },
   tabs: {
     agents: "Agents",
@@ -32,8 +32,6 @@ export const en: TranslationMap = {
     cron: "Cron Jobs",
     skills: "Skills",
     nodes: "Nodes",
-    screen: "Screen",
-    marketplace: "Marketplace",
     chat: "Chat",
     config: "Config",
     debug: "Debug",
@@ -49,10 +47,8 @@ export const en: TranslationMap = {
     cron: "Schedule wakeups and recurring agent runs.",
     skills: "Manage skill availability and API key injection.",
     nodes: "Paired devices, capabilities, and command exposure.",
-    screen: "Remote desktop access via VNC screen sharing.",
-    marketplace: "P2P compute sharing — idle Claude capacity for buyers.",
     chat: "Direct gateway chat session for quick interventions.",
-    config: "Edit ~/.bot/bot.json safely.",
+    config: "Edit ~/.hanzoai/bot.json safely.",
     debug: "Gateway snapshots, events, and manual RPC calls.",
     logs: "Live tail of the gateway file logs.",
   },
@@ -66,6 +62,7 @@ export const en: TranslationMap = {
       sessionKey: "Default Session Key",
       language: "Language",
       connectHint: "Click Connect to apply connection changes.",
+      trustedProxy: "Authenticated via trusted proxy.",
     },
     snapshot: {
       title: "Snapshot",
@@ -99,23 +96,15 @@ export const en: TranslationMap = {
       failed:
         "Auth failed. Re-copy a tokenized URL with {command}, or update the token, then click Connect.",
     },
+    pairing: {
+      hint: "This device needs pairing approval from the gateway host.",
+      mobileHint:
+        "On mobile? Copy the full URL (including #token=...) from bot dashboard --no-open on your desktop.",
+    },
     insecure: {
       hint: "This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open {url} on the gateway host.",
       stayHttp: "If you must stay on HTTP, set {config} (token-only).",
     },
-    iam: {
-      subtitle: "Sign in with your Hanzo account to access this gateway.",
-      signIn: "Sign in with Hanzo",
-      signingIn: "Signing in\u2026",
-      createAccount: "Create Account",
-      signOut: "Sign Out",
-      connectedAs: "Authenticated as {name}.",
-    },
-  },
-  screen: {
-    disconnected: "Connect to the gateway to access remote desktop.",
-    openNewTab: "Open in new tab",
-    hint: "Requires macOS Screen Sharing or a VNC server on port 5900.",
   },
   chat: {
     disconnected: "Disconnected from gateway.",
@@ -126,26 +115,6 @@ export const en: TranslationMap = {
     showCronSessions: "Show cron sessions",
     showCronSessionsHidden: "Show cron sessions ({count} hidden)",
     onboardingDisabled: "Disabled during onboarding",
-  },
-  nodes: {
-    billing: {
-      title: "Billing",
-      mode: "Billing Mode",
-      global: "Global Balance",
-      globalDesc: "Uses your account balance",
-      dedicated: "Dedicated Budget",
-      dedicatedDesc: "Node has its own credit budget",
-      local: "Local Only",
-      localDesc: "No cloud billing, uses local API keys",
-      budget: "Budget",
-      spent: "Spent",
-      remaining: "Remaining",
-      topUp: "Buy Credits",
-    },
-    usage: {
-      title: "Usage",
-      totalSpent: "Total spent",
-    },
   },
   languages: {
     en: "English",

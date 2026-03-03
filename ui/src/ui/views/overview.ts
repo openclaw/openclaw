@@ -1,9 +1,12 @@
 import { html } from "lit";
 import type { GatewayHelloOk } from "../gateway.ts";
 import type { UiSettings } from "../storage.ts";
+import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
 import { t, i18n, SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import { formatNextRun } from "../presenter.ts";
+import { shouldShowPairingHint } from "./overview-hints.ts";
 
 export type OverviewProps = {
   connected: boolean;
@@ -11,58 +14,111 @@ export type OverviewProps = {
   settings: UiSettings;
   password: string;
   lastError: string | null;
+  lastErrorCode: string | null;
   presenceCount: number;
   sessionsCount: number | null;
   cronEnabled: boolean | null;
   cronNext: number | null;
   lastChannelsRefresh: number | null;
-  authMode: string | null;
-  iamUser: { email?: string; name?: string; avatar?: string } | null;
-  iamLoggingIn: boolean;
   onSettingsChange: (next: UiSettings) => void;
   onPasswordChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
   onConnect: () => void;
   onRefresh: () => void;
-  onIamLogin: () => void;
-  onIamSignup: () => void;
-  onIamLogout: () => void;
 };
 
 export function renderOverview(props: OverviewProps) {
   const snapshot = props.hello?.snapshot as
-    | { uptimeMs?: number; policy?: { tickIntervalMs?: number } }
+    | {
+        uptimeMs?: number;
+        policy?: { tickIntervalMs?: number };
+        authMode?: "none" | "token" | "password" | "trusted-proxy";
+      }
     | undefined;
   const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
   const tick = snapshot?.policy?.tickIntervalMs
     ? `${snapshot.policy.tickIntervalMs}ms`
     : t("common.na");
+  const authMode = snapshot?.authMode;
+  const isTrustedProxy = authMode === "trusted-proxy";
+
+  const pairingHint = (() => {
+    if (!shouldShowPairingHint(props.connected, props.lastError, props.lastErrorCode)) {
+      return null;
+    }
+    return html`
+      <div class="muted" style="margin-top: 8px">
+        ${t("overview.pairing.hint")}
+        <div style="margin-top: 6px">
+          <span class="mono">bot devices list</span><br />
+          <span class="mono">bot devices approve &lt;requestId&gt;</span>
+        </div>
+        <div style="margin-top: 6px; font-size: 12px;">
+          ${t("overview.pairing.mobileHint")}
+        </div>
+        <div style="margin-top: 6px">
+          <a
+            class="session-link"
+            href="https://docs.hanzo.bot/web/control-ui#device-pairing-first-connection"
+            target=${EXTERNAL_LINK_TARGET}
+            rel=${buildExternalLinkRel()}
+            title="Device pairing docs (opens in new tab)"
+            >Docs: Device pairing</a
+          >
+        </div>
+      </div>
+    `;
+  })();
 
   const authHint = (() => {
     if (props.connected || !props.lastError) {
       return null;
     }
     const lower = props.lastError.toLowerCase();
-    const authFailed = lower.includes("unauthorized") || lower.includes("connect failed");
+    const authRequiredCodes = new Set<string>([
+      ConnectErrorDetailCodes.AUTH_REQUIRED,
+      ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
+      ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
+      ConnectErrorDetailCodes.AUTH_TOKEN_NOT_CONFIGURED,
+      ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED,
+    ]);
+    const authFailureCodes = new Set<string>([
+      ...authRequiredCodes,
+      ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
+      ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+      ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+      ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
+      ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
+      ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISSING,
+      ConnectErrorDetailCodes.AUTH_TAILSCALE_PROXY_MISSING,
+      ConnectErrorDetailCodes.AUTH_TAILSCALE_WHOIS_FAILED,
+      ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISMATCH,
+    ]);
+    const authFailed = props.lastErrorCode
+      ? authFailureCodes.has(props.lastErrorCode)
+      : lower.includes("unauthorized") || lower.includes("connect failed");
     if (!authFailed) {
       return null;
     }
     const hasToken = Boolean(props.settings.token.trim());
     const hasPassword = Boolean(props.password.trim());
-    if (!hasToken && !hasPassword) {
+    const isAuthRequired = props.lastErrorCode
+      ? authRequiredCodes.has(props.lastErrorCode)
+      : !hasToken && !hasPassword;
+    if (isAuthRequired) {
       return html`
         <div class="muted" style="margin-top: 8px">
           ${t("overview.auth.required")}
           <div style="margin-top: 6px">
-            <span class="mono">bot dashboard --no-open</span> → open the Control UI<br />
+            <span class="mono">bot dashboard --no-open</span> → tokenized URL<br />
             <span class="mono">bot doctor --generate-gateway-token</span> → set token
           </div>
           <div style="margin-top: 6px">
             <a
               class="session-link"
               href="https://docs.hanzo.bot/web/dashboard"
-              target="_blank"
-              rel="noreferrer"
+              target=${EXTERNAL_LINK_TARGET}
+              rel=${buildExternalLinkRel()}
               title="Control UI auth docs (opens in new tab)"
               >Docs: Control UI auth</a
             >
@@ -77,8 +133,8 @@ export function renderOverview(props: OverviewProps) {
           <a
             class="session-link"
             href="https://docs.hanzo.bot/web/dashboard"
-            target="_blank"
-            rel="noreferrer"
+            target=${EXTERNAL_LINK_TARGET}
+            rel=${buildExternalLinkRel()}
             title="Control UI auth docs (opens in new tab)"
             >Docs: Control UI auth</a
           >
@@ -96,7 +152,14 @@ export function renderOverview(props: OverviewProps) {
       return null;
     }
     const lower = props.lastError.toLowerCase();
-    if (!lower.includes("secure context") && !lower.includes("device identity required")) {
+    const insecureContextCode =
+      props.lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
+      props.lastErrorCode === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED;
+    if (
+      !insecureContextCode &&
+      !lower.includes("secure context") &&
+      !lower.includes("device identity required")
+    ) {
       return null;
     }
     return html`
@@ -109,8 +172,8 @@ export function renderOverview(props: OverviewProps) {
           <a
             class="session-link"
             href="https://docs.hanzo.bot/gateway/tailscale"
-            target="_blank"
-            rel="noreferrer"
+            target=${EXTERNAL_LINK_TARGET}
+            rel=${buildExternalLinkRel()}
             title="Tailscale Serve docs (opens in new tab)"
             >Docs: Tailscale Serve</a
           >
@@ -118,8 +181,8 @@ export function renderOverview(props: OverviewProps) {
           <a
             class="session-link"
             href="https://docs.hanzo.bot/web/control-ui#insecure-http"
-            target="_blank"
-            rel="noreferrer"
+            target=${EXTERNAL_LINK_TARGET}
+            rel=${buildExternalLinkRel()}
             title="Insecure HTTP docs (opens in new tab)"
             >Docs: Insecure HTTP</a
           >
@@ -129,9 +192,6 @@ export function renderOverview(props: OverviewProps) {
   })();
 
   const currentLocale = i18n.getLocale();
-  const authMode = props.authMode ?? (snapshot as { authMode?: string } | undefined)?.authMode;
-  const isTrustedProxy = authMode === "trusted-proxy";
-  const isIam = authMode === "iam";
 
   return html`
     <section class="grid grid-cols-2">
@@ -139,62 +199,44 @@ export function renderOverview(props: OverviewProps) {
         <div class="card-title">${t("overview.access.title")}</div>
         <div class="card-sub">${t("overview.access.subtitle")}</div>
         <div class="form-grid" style="margin-top: 16px;">
+          <label class="field">
+            <span>${t("overview.access.wsUrl")}</span>
+            <input
+              .value=${props.settings.gatewayUrl}
+              @input=${(e: Event) => {
+                const v = (e.target as HTMLInputElement).value;
+                props.onSettingsChange({ ...props.settings, gatewayUrl: v });
+              }}
+              placeholder="ws://100.x.y.z:18789"
+            />
+          </label>
           ${
-            isIam
-              ? html`
-                <div class="field" style="padding: 8px 0;">
-                  <div class="muted" style="font-size: 13px;">
-                    ${
-                      props.iamUser
-                        ? t("overview.iam.connectedAs", {
-                            name: props.iamUser.name || props.iamUser.email || "User",
-                          })
-                        : t("overview.iam.subtitle")
-                    }
-                  </div>
-                </div>
-              `
+            isTrustedProxy
+              ? ""
               : html`
                 <label class="field">
-                  <span>${t("overview.access.wsUrl")}</span>
+                  <span>${t("overview.access.token")}</span>
                   <input
-                    .value=${props.settings.gatewayUrl}
+                    .value=${props.settings.token}
                     @input=${(e: Event) => {
                       const v = (e.target as HTMLInputElement).value;
-                      props.onSettingsChange({ ...props.settings, gatewayUrl: v });
+                      props.onSettingsChange({ ...props.settings, token: v });
                     }}
-                    placeholder="ws://100.x.y.z:18789"
+                    placeholder="BOT_GATEWAY_TOKEN"
                   />
                 </label>
-                ${
-                  isTrustedProxy
-                    ? ""
-                    : html`
-                      <label class="field">
-                        <span>${t("overview.access.token")}</span>
-                        <input
-                          .value=${props.settings.token}
-                          @input=${(e: Event) => {
-                            const v = (e.target as HTMLInputElement).value;
-                            props.onSettingsChange({ ...props.settings, token: v });
-                          }}
-                          placeholder="BOT_GATEWAY_TOKEN"
-                        />
-                      </label>
-                      <label class="field">
-                        <span>${t("overview.access.password")}</span>
-                        <input
-                          type="password"
-                          .value=${props.password}
-                          @input=${(e: Event) => {
-                            const v = (e.target as HTMLInputElement).value;
-                            props.onPasswordChange(v);
-                          }}
-                          placeholder="system or shared password"
-                        />
-                      </label>
-                    `
-                }
+                <label class="field">
+                  <span>${t("overview.access.password")}</span>
+                  <input
+                    type="password"
+                    .value=${props.password}
+                    @input=${(e: Event) => {
+                      const v = (e.target as HTMLInputElement).value;
+                      props.onPasswordChange(v);
+                    }}
+                    placeholder="system or shared password"
+                  />
+                </label>
               `
           }
           <label class="field">
@@ -224,17 +266,13 @@ export function renderOverview(props: OverviewProps) {
             </select>
           </label>
         </div>
-        ${
-          isIam
-            ? ""
-            : html`
-              <div class="row" style="margin-top: 14px;">
-                <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
-                <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
-                <span class="muted">${t("overview.access.connectHint")}</span>
-              </div>
-            `
-        }
+        <div class="row" style="margin-top: 14px;">
+          <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
+          <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
+          <span class="muted">${
+            isTrustedProxy ? t("overview.access.trustedProxy") : t("overview.access.connectHint")
+          }</span>
+        </div>
       </div>
 
       <div class="card">
@@ -266,6 +304,7 @@ export function renderOverview(props: OverviewProps) {
           props.lastError
             ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>
+              ${pairingHint ?? ""}
               ${authHint ?? ""}
               ${insecureContextHint ?? ""}
             </div>`

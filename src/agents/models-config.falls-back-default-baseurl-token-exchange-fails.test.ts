@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_COPILOT_API_BASE_URL } from "../providers/github-copilot-token.js";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   installModelsConfigTestHooks,
   mockCopilotTokenExchangeSuccess,
@@ -13,31 +13,28 @@ import { ensureBotModelsJson } from "./models-config.js";
 
 installModelsConfigTestHooks({ restoreFetch: true });
 
+async function readCopilotBaseUrl(agentDir: string) {
+  const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
+  const parsed = JSON.parse(raw) as {
+    providers: Record<string, { baseUrl?: string }>;
+  };
+  return parsed.providers["github-copilot"]?.baseUrl;
+}
+
 describe("models-config", () => {
   it("falls back to default baseUrl when token exchange fails", async () => {
     await withTempHome(async () => {
-      const envSnapshot = captureEnv(["COPILOT_GITHUB_TOKEN"]);
-      process.env.COPILOT_GITHUB_TOKEN = "gh-token";
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-        json: async () => ({ message: "boom" }),
+      await withEnvAsync({ COPILOT_GITHUB_TOKEN: "gh-token" }, async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+          ok: false,
+          status: 500,
+          json: async () => ({ message: "boom" }),
+        });
+        globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+        const { agentDir } = await ensureBotModelsJson({ models: { providers: {} } });
+        expect(await readCopilotBaseUrl(agentDir)).toBe(DEFAULT_COPILOT_API_BASE_URL);
       });
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-      try {
-        await ensureBotModelsJson({ models: { providers: {} } });
-
-        const agentDir = path.join(process.env.HOME ?? "", ".bot", "agents", "main", "agent");
-        const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
-        const parsed = JSON.parse(raw) as {
-          providers: Record<string, { baseUrl?: string }>;
-        };
-
-        expect(parsed.providers["github-copilot"]?.baseUrl).toBe(DEFAULT_COPILOT_API_BASE_URL);
-      } finally {
-        envSnapshot.restore();
-      }
     });
   });
 
@@ -67,12 +64,7 @@ describe("models-config", () => {
 
         await ensureBotModelsJson({ models: { providers: {} } }, agentDir);
 
-        const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
-        const parsed = JSON.parse(raw) as {
-          providers: Record<string, { baseUrl?: string }>;
-        };
-
-        expect(parsed.providers["github-copilot"]?.baseUrl).toBe("https://api.copilot.example");
+        expect(await readCopilotBaseUrl(agentDir)).toBe("https://api.copilot.example");
       });
     });
   });

@@ -60,7 +60,7 @@ async function ensureDevWorkspace(dir: string) {
   const [agents, soul, tools, identity, user] = await Promise.all([
     loadDevTemplate(
       "AGENTS.dev.md",
-      `# AGENTS.md - Hanzo Bot Dev Workspace\n\nDefault dev workspace for hanzo-bot gateway --dev.\n`,
+      `# AGENTS.md - Bot Dev Workspace\n\nDefault dev workspace for bot gateway --dev.\n`,
     ),
     loadDevTemplate(
       "SOUL.dev.md",

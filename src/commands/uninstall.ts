@@ -6,7 +6,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveHomeDir } from "../utils.js";
 import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
-import { removePath } from "./cleanup-utils.js";
+import { removePath, removeStateAndLinkedPaths, removeWorkspaceDirs } from "./cleanup-utils.js";
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
 
@@ -86,9 +86,9 @@ async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean) {
   if (process.platform !== "darwin") {
     return;
   }
-  await removePath("/Applications/Hanzo Bot.app", runtime, {
+  await removePath("/Applications/Bot.app", runtime, {
     dryRun,
-    label: "/Applications/Hanzo Bot.app",
+    label: "/Applications/Bot.app",
   });
 }
 
@@ -115,12 +115,12 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
           label: "Gateway service",
           hint: "launchd / systemd / schtasks",
         },
-        { value: "state", label: "State + config", hint: "~/.hanzo/bot" },
+        { value: "state", label: "State + config", hint: "~/.bot" },
         { value: "workspace", label: "Workspace", hint: "agent files" },
         {
           value: "app",
           label: "macOS app",
-          hint: "/Applications/Hanzo Bot.app",
+          hint: "/Applications/Bot.app",
         },
       ],
       initialValues: ["service", "state", "workspace"],
@@ -164,19 +164,15 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   }
 
   if (scopes.has("state")) {
-    await removePath(stateDir, runtime, { dryRun, label: stateDir });
-    if (!configInsideState) {
-      await removePath(configPath, runtime, { dryRun, label: configPath });
-    }
-    if (!oauthInsideState) {
-      await removePath(oauthDir, runtime, { dryRun, label: oauthDir });
-    }
+    await removeStateAndLinkedPaths(
+      { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
+      runtime,
+      { dryRun },
+    );
   }
 
   if (scopes.has("workspace")) {
-    for (const workspace of workspaceDirs) {
-      await removePath(workspace, runtime, { dryRun, label: workspace });
-    }
+    await removeWorkspaceDirs(workspaceDirs, runtime, { dryRun });
   }
 
   if (scopes.has("app")) {

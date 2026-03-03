@@ -379,7 +379,7 @@ export const ircOnboardingAdapter: ChannelOnboardingAdapter = {
       const username = String(
         await prompter.text({
           message: "IRC username",
-          initialValue: resolved.config.username || nick || "bot",
+          initialValue: resolved.config.username || nick || "@hanzo/bot",
           validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
         }),
       ).trim();
@@ -387,7 +387,7 @@ export const ircOnboardingAdapter: ChannelOnboardingAdapter = {
       const realname = String(
         await prompter.text({
           message: "IRC real name",
-          initialValue: resolved.config.realname || "Hanzo Bot",
+          initialValue: resolved.config.realname || "Bot",
           validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
         }),
       ).trim();
@@ -457,7 +457,7 @@ export const ircOnboardingAdapter: ChannelOnboardingAdapter = {
     await prompter.note(
       [
         "Next: restart gateway and verify status.",
-        "Command: hanzo-bot channels status --probe",
+        "Command: bot channels status --probe",
         `Docs: ${formatDocsLink("/channels/irc", "channels/irc")}`,
       ].join("\n"),
       "IRC next steps",

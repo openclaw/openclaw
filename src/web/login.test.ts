@@ -37,7 +37,9 @@ describe("web login", () => {
   });
 
   it("loginWeb waits for connection and closes", async () => {
-    const sock = await createWaSocket();
+    const sock = await (
+      createWaSocket as unknown as () => Promise<{ ws: { close: () => void } }>
+    )();
     const close = vi.spyOn(sock.ws, "close");
     const waiter: typeof waitForWaConnection = vi.fn().mockResolvedValue(undefined);
     await loginWeb(false, waiter);
@@ -53,7 +55,7 @@ describe("web login", () => {
 
 describe("renderQrPngBase64", () => {
   it("renders a PNG data payload", async () => {
-    const b64 = await renderQrPngBase64("bot");
+    const b64 = await renderQrPngBase64("@hanzo/bot");
     const buf = Buffer.from(b64, "base64");
     expect(buf.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
   });

@@ -25,11 +25,24 @@ const { registerSubCliByName, registerSubCliCommands } = await import("./registe
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;
-  const originalEnv = { ...process.env };
+  const originalDisableLazySubcommands = process.env.BOT_DISABLE_LAZY_SUBCOMMANDS;
+
+  const createRegisteredProgram = (argv: string[], name?: string) => {
+    process.argv = argv;
+    const program = new Command();
+    if (name) {
+      program.name(name);
+    }
+    registerSubCliCommands(program, process.argv);
+    return program;
+  };
 
   beforeEach(() => {
-    process.env = { ...originalEnv };
-    delete process.env.BOT_DISABLE_LAZY_SUBCOMMANDS;
+    if (originalDisableLazySubcommands === undefined) {
+      delete process.env.BOT_DISABLE_LAZY_SUBCOMMANDS;
+    } else {
+      process.env.BOT_DISABLE_LAZY_SUBCOMMANDS = originalDisableLazySubcommands;
+    }
     registerAcpCli.mockClear();
     acpAction.mockClear();
     registerNodesCli.mockClear();
@@ -38,39 +51,36 @@ describe("registerSubCliCommands", () => {
 
   afterEach(() => {
     process.argv = originalArgv;
-    process.env = { ...originalEnv };
+    if (originalDisableLazySubcommands === undefined) {
+      delete process.env.BOT_DISABLE_LAZY_SUBCOMMANDS;
+    } else {
+      process.env.BOT_DISABLE_LAZY_SUBCOMMANDS = originalDisableLazySubcommands;
+    }
   });
 
   it("registers only the primary placeholder and dispatches", async () => {
-    process.argv = ["node", "bot", "acp"];
-    const program = new Command();
-    registerSubCliCommands(program, process.argv);
+    const program = createRegisteredProgram(["node", "@hanzo/bot", "acp"]);
 
     expect(program.commands.map((cmd) => cmd.name())).toEqual(["acp"]);
 
-    await program.parseAsync(process.argv);
+    await program.parseAsync(["acp"], { from: "user" });
 
     expect(registerAcpCli).toHaveBeenCalledTimes(1);
     expect(acpAction).toHaveBeenCalledTimes(1);
   });
 
   it("registers placeholders for all subcommands when no primary", () => {
-    process.argv = ["node", "bot"];
-    const program = new Command();
-    registerSubCliCommands(program, process.argv);
+    const program = createRegisteredProgram(["node", "@hanzo/bot"]);
 
     const names = program.commands.map((cmd) => cmd.name());
     expect(names).toContain("acp");
     expect(names).toContain("gateway");
-    expect(names).toContain("bot");
+    expect(names).toContain("clawbot");
     expect(registerAcpCli).not.toHaveBeenCalled();
   });
 
   it("re-parses argv for lazy subcommands", async () => {
-    process.argv = ["node", "bot", "nodes", "list"];
-    const program = new Command();
-    program.name("bot");
-    registerSubCliCommands(program, process.argv);
+    const program = createRegisteredProgram(["node", "@hanzo/bot", "nodes", "list"], "@hanzo/bot");
 
     expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes"]);
 
@@ -81,17 +91,14 @@ describe("registerSubCliCommands", () => {
   });
 
   it("replaces placeholder when registering a subcommand by name", async () => {
-    process.argv = ["node", "bot", "acp", "--help"];
-    const program = new Command();
-    program.name("bot");
-    registerSubCliCommands(program, process.argv);
+    const program = createRegisteredProgram(["node", "@hanzo/bot", "acp", "--help"], "@hanzo/bot");
 
     await registerSubCliByName(program, "acp");
 
     const names = program.commands.map((cmd) => cmd.name());
     expect(names.filter((name) => name === "acp")).toHaveLength(1);
 
-    await program.parseAsync(["node", "bot", "acp"], { from: "user" });
+    await program.parseAsync(["acp"], { from: "user" });
     expect(registerAcpCli).toHaveBeenCalledTimes(1);
     expect(acpAction).toHaveBeenCalledTimes(1);
   });

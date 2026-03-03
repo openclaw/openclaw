@@ -3,7 +3,6 @@ import path from "node:path";
 import type { BotConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveSecretReferenceValue } from "../infra/secrets/kms.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import {
   normalizeOptionalSecretInput,
@@ -54,17 +53,6 @@ export function getCustomProviderApiKey(
 ): string | undefined {
   const entry = resolveProviderConfig(cfg, provider);
   return normalizeOptionalSecretInput(entry?.apiKey);
-}
-
-async function resolveCustomProviderApiKey(
-  cfg: BotConfig | undefined,
-  provider: string,
-): Promise<string | undefined> {
-  const entry = resolveProviderConfig(cfg, provider);
-  return await resolveSecretReferenceValue({
-    value: normalizeOptionalSecretInput(entry?.apiKey),
-    cfg,
-  });
 }
 
 function resolveProviderAuthOverride(
@@ -214,7 +202,7 @@ export async function resolveApiKeyForProvider(params: {
     };
   }
 
-  const customKey = await resolveCustomProviderApiKey(cfg, provider);
+  const customKey = getCustomProviderApiKey(cfg, provider);
   if (customKey) {
     return { apiKey: customKey, source: "models.json", mode: "api-key" };
   }
@@ -239,7 +227,7 @@ export async function resolveApiKeyForProvider(params: {
     [
       `No API key found for provider "${provider}".`,
       `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
-      `Configure auth for this agent (${formatCliCommand("hanzo-bot agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
+      `Configure auth for this agent (${formatCliCommand("bot agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
     ].join(" "),
   );
 }
@@ -291,6 +279,13 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("QWEN_OAUTH_TOKEN") ?? pick("QWEN_PORTAL_API_KEY");
   }
 
+  if (normalized === "volcengine" || normalized === "volcengine-plan") {
+    return pick("VOLCANO_ENGINE_API_KEY");
+  }
+
+  if (normalized === "byteplus" || normalized === "byteplus-plan") {
+    return pick("BYTEPLUS_API_KEY");
+  }
   if (normalized === "minimax-portal") {
     return pick("MINIMAX_OAUTH_TOKEN") ?? pick("MINIMAX_API_KEY");
   }
@@ -301,14 +296,6 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
 
   if (normalized === "huggingface") {
     return pick("HUGGINGFACE_HUB_TOKEN") ?? pick("HF_TOKEN");
-  }
-
-  if (normalized === "hanzo") {
-    return pick("HANZO_API_KEY");
-  }
-
-  if (normalized === "digitalocean") {
-    return pick("DIGITALOCEAN_ACCESS_TOKEN") ?? pick("GRADIENT_MODEL_ACCESS_KEY");
   }
 
   const envMap: Record<string, string> = {
@@ -335,6 +322,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     qianfan: "QIANFAN_API_KEY",
     ollama: "OLLAMA_API_KEY",
     vllm: "VLLM_API_KEY",
+    kilocode: "KILOCODE_API_KEY",
   };
   const envVar = envMap[normalized];
   if (!envVar) {

@@ -93,7 +93,7 @@ describe("buildWorkspaceSkillStatus", () => {
   it("marks bundled skills blocked by allowlist", async () => {
     const entry = makeEntry({
       name: "peekaboo",
-      source: "hanzo-bot-bundled",
+      source: "bot-bundled",
     });
 
     const report = buildWorkspaceSkillStatus("/tmp/ws", {

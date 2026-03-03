@@ -6,9 +6,9 @@ import type {
 import type { NodesProps } from "./nodes.ts";
 import { clampText, formatRelativeTimestamp } from "../format.ts";
 import {
-  type NodeTargetOption,
   resolveConfigAgents as resolveSharedConfigAgents,
   resolveNodeTargets,
+  type NodeTargetOption,
 } from "./nodes-shared.ts";
 
 type ExecSecurity = "deny" | "allowlist" | "full";

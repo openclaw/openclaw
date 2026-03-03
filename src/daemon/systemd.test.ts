@@ -11,12 +11,14 @@ import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isSystemdUserServiceAvailable,
   parseSystemdShow,
+  restartSystemdService,
   resolveSystemdUserUnitPath,
+  stopSystemdService,
 } from "./systemd.js";
 
 describe("systemd availability", () => {
   beforeEach(() => {
-    execFileMock.mockReset();
+    execFileMock.mockClear();
   });
 
   it("returns true when systemctl --user succeeds", async () => {
@@ -109,49 +111,44 @@ describe("systemd runtime parsing", () => {
 });
 
 describe("resolveSystemdUserUnitPath", () => {
-  it("uses default service name when BOT_PROFILE is unset", () => {
-    const env = { HOME: "/home/test" };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/bot-gateway.service",
-    );
-  });
-
-  it("uses profile-specific service name when BOT_PROFILE is set to a custom value", () => {
-    const env = { HOME: "/home/test", BOT_PROFILE: "jbphoenix" };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/bot-gateway-jbphoenix.service",
-    );
-  });
-
-  it("prefers BOT_SYSTEMD_UNIT over BOT_PROFILE", () => {
-    const env = {
-      HOME: "/home/test",
-      BOT_PROFILE: "jbphoenix",
-      BOT_SYSTEMD_UNIT: "custom-unit",
-    };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/custom-unit.service",
-    );
-  });
-
-  it("handles BOT_SYSTEMD_UNIT with .service suffix", () => {
-    const env = {
-      HOME: "/home/test",
-      BOT_SYSTEMD_UNIT: "custom-unit.service",
-    };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/custom-unit.service",
-    );
-  });
-
-  it("trims whitespace from BOT_SYSTEMD_UNIT", () => {
-    const env = {
-      HOME: "/home/test",
-      BOT_SYSTEMD_UNIT: "  custom-unit  ",
-    };
-    expect(resolveSystemdUserUnitPath(env)).toBe(
-      "/home/test/.config/systemd/user/custom-unit.service",
-    );
+  it.each([
+    {
+      name: "uses default service name when BOT_PROFILE is unset",
+      env: { HOME: "/home/test" },
+      expected: "/home/test/.config/systemd/user/bot-gateway.service",
+    },
+    {
+      name: "uses profile-specific service name when BOT_PROFILE is set to a custom value",
+      env: { HOME: "/home/test", BOT_PROFILE: "jbphoenix" },
+      expected: "/home/test/.config/systemd/user/bot-gateway-jbphoenix.service",
+    },
+    {
+      name: "prefers BOT_SYSTEMD_UNIT over BOT_PROFILE",
+      env: {
+        HOME: "/home/test",
+        BOT_PROFILE: "jbphoenix",
+        BOT_SYSTEMD_UNIT: "custom-unit",
+      },
+      expected: "/home/test/.config/systemd/user/custom-unit.service",
+    },
+    {
+      name: "handles BOT_SYSTEMD_UNIT with .service suffix",
+      env: {
+        HOME: "/home/test",
+        BOT_SYSTEMD_UNIT: "custom-unit.service",
+      },
+      expected: "/home/test/.config/systemd/user/custom-unit.service",
+    },
+    {
+      name: "trims whitespace from BOT_SYSTEMD_UNIT",
+      env: {
+        HOME: "/home/test",
+        BOT_SYSTEMD_UNIT: "  custom-unit  ",
+      },
+      expected: "/home/test/.config/systemd/user/custom-unit.service",
+    },
+  ])("$name", ({ env, expected }) => {
+    expect(resolveSystemdUserUnitPath(env)).toBe(expected);
   });
 });
 
@@ -171,7 +168,7 @@ describe("splitArgsPreservingQuotes", () => {
       splitArgsPreservingQuotes('bot --name "My \\"Bot\\"" --foo bar', {
         escapeMode: "backslash",
       }),
-    ).toEqual(["bot", "--name", 'My "Bot"', "--foo", "bar"]);
+    ).toEqual(["@hanzo/bot", "--name", 'My "Bot"', "--foo", "bar"]);
   });
 
   it("supports schtasks-style escaped quotes while preserving other backslashes", () => {
@@ -179,13 +176,13 @@ describe("splitArgsPreservingQuotes", () => {
       splitArgsPreservingQuotes('bot --path "C:\\\\Program Files\\\\Bot"', {
         escapeMode: "backslash-quote-only",
       }),
-    ).toEqual(["bot", "--path", "C:\\\\Program Files\\\\Bot"]);
+    ).toEqual(["@hanzo/bot", "--path", "C:\\\\Program Files\\\\Bot"]);
 
     expect(
       splitArgsPreservingQuotes('bot --label "My \\"Quoted\\" Name"', {
         escapeMode: "backslash-quote-only",
       }),
-    ).toEqual(["bot", "--label", 'My "Quoted" Name']);
+    ).toEqual(["@hanzo/bot", "--label", 'My "Quoted" Name']);
   });
 });
 
@@ -199,5 +196,60 @@ describe("parseSystemdExecStart", () => {
       "--name",
       "My Bot",
     ]);
+  });
+});
+
+describe("systemd service control", () => {
+  beforeEach(() => {
+    execFileMock.mockClear();
+  });
+
+  it("stops the resolved user unit", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "stop", "bot-gateway.service"]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await stopSystemdService({ stdout, env: {} });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Stopped systemd service");
+  });
+
+  it("restarts a profile-specific user unit", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "restart", "bot-gateway-work.service"]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await restartSystemdService({ stdout, env: { BOT_PROFILE: "work" } });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+  });
+
+  it("surfaces stop failures with systemctl detail", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        const err = new Error("stop failed") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "permission denied");
+      });
+
+    await expect(
+      stopSystemdService({
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        env: {},
+      }),
+    ).rejects.toThrow("systemctl stop failed: permission denied");
   });
 });

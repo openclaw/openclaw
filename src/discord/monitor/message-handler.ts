@@ -1,7 +1,6 @@
 import type { Client } from "@buape/carbon";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
-import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,

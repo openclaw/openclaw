@@ -42,12 +42,14 @@ describe("rewriteUpdateFlagArgv", () => {
 
 describe("shouldRegisterPrimarySubcommand", () => {
   it("skips eager primary registration for help/version invocations", () => {
-    expect(shouldRegisterPrimarySubcommand(["node", "bot", "status", "--help"])).toBe(false);
-    expect(shouldRegisterPrimarySubcommand(["node", "bot", "-V"])).toBe(false);
+    expect(shouldRegisterPrimarySubcommand(["node", "@hanzo/bot", "status", "--help"])).toBe(false);
+    expect(shouldRegisterPrimarySubcommand(["node", "@hanzo/bot", "-V"])).toBe(false);
+    expect(shouldRegisterPrimarySubcommand(["node", "@hanzo/bot", "-v"])).toBe(false);
   });
 
   it("keeps eager primary registration for regular command runs", () => {
-    expect(shouldRegisterPrimarySubcommand(["node", "bot", "status"])).toBe(true);
+    expect(shouldRegisterPrimarySubcommand(["node", "@hanzo/bot", "status"])).toBe(true);
+    expect(shouldRegisterPrimarySubcommand(["node", "@hanzo/bot", "acp", "-v"])).toBe(true);
   });
 });
 
@@ -55,7 +57,7 @@ describe("shouldSkipPluginCommandRegistration", () => {
   it("skips plugin registration for root help/version", () => {
     expect(
       shouldSkipPluginCommandRegistration({
-        argv: ["node", "bot", "--help"],
+        argv: ["node", "@hanzo/bot", "--help"],
         primary: null,
         hasBuiltinPrimary: false,
       }),
@@ -65,7 +67,7 @@ describe("shouldSkipPluginCommandRegistration", () => {
   it("skips plugin registration for builtin subcommand help", () => {
     expect(
       shouldSkipPluginCommandRegistration({
-        argv: ["node", "bot", "config", "--help"],
+        argv: ["node", "@hanzo/bot", "config", "--help"],
         primary: "config",
         hasBuiltinPrimary: true,
       }),
@@ -75,7 +77,7 @@ describe("shouldSkipPluginCommandRegistration", () => {
   it("skips plugin registration for builtin command runs", () => {
     expect(
       shouldSkipPluginCommandRegistration({
-        argv: ["node", "bot", "sessions", "--json"],
+        argv: ["node", "@hanzo/bot", "sessions", "--json"],
         primary: "sessions",
         hasBuiltinPrimary: true,
       }),
@@ -85,7 +87,7 @@ describe("shouldSkipPluginCommandRegistration", () => {
   it("keeps plugin registration for non-builtin help", () => {
     expect(
       shouldSkipPluginCommandRegistration({
-        argv: ["node", "bot", "voicecall", "--help"],
+        argv: ["node", "@hanzo/bot", "voicecall", "--help"],
         primary: "voicecall",
         hasBuiltinPrimary: false,
       }),
@@ -95,7 +97,7 @@ describe("shouldSkipPluginCommandRegistration", () => {
   it("keeps plugin registration for non-builtin command runs", () => {
     expect(
       shouldSkipPluginCommandRegistration({
-        argv: ["node", "bot", "voicecall", "status"],
+        argv: ["node", "@hanzo/bot", "voicecall", "status"],
         primary: "voicecall",
         hasBuiltinPrimary: false,
       }),
@@ -105,19 +107,24 @@ describe("shouldSkipPluginCommandRegistration", () => {
 
 describe("shouldEnsureCliPath", () => {
   it("skips path bootstrap for help/version invocations", () => {
-    expect(shouldEnsureCliPath(["node", "bot", "--help"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "bot", "-V"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "@hanzo/bot", "--help"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "@hanzo/bot", "-V"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "@hanzo/bot", "-v"])).toBe(false);
   });
 
   it("skips path bootstrap for read-only fast paths", () => {
-    expect(shouldEnsureCliPath(["node", "bot", "status"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "bot", "sessions", "--json"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "bot", "config", "get", "update"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "bot", "models", "status", "--json"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "@hanzo/bot", "status"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "@hanzo/bot", "--log-level", "debug", "status"])).toBe(
+      false,
+    );
+    expect(shouldEnsureCliPath(["node", "@hanzo/bot", "sessions", "--json"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "@hanzo/bot", "config", "get", "update"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "@hanzo/bot", "models", "status", "--json"])).toBe(false);
   });
 
   it("keeps path bootstrap for mutating or unknown commands", () => {
-    expect(shouldEnsureCliPath(["node", "bot", "message", "send"])).toBe(true);
-    expect(shouldEnsureCliPath(["node", "bot", "voicecall", "status"])).toBe(true);
+    expect(shouldEnsureCliPath(["node", "@hanzo/bot", "message", "send"])).toBe(true);
+    expect(shouldEnsureCliPath(["node", "@hanzo/bot", "voicecall", "status"])).toBe(true);
+    expect(shouldEnsureCliPath(["node", "@hanzo/bot", "acp", "-v"])).toBe(true);
   });
 });

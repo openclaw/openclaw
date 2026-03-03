@@ -3,6 +3,7 @@ import type { SandboxConfig } from "./types.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resetNoVncObserverTokensForTests } from "./novnc-auth.js";
+import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
 
 const dockerMocks = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -49,10 +50,10 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
     mode: "all",
     scope: "session",
     workspaceAccess: "none",
-    workspaceRoot: "/tmp/hanzo-bot-sandboxes",
+    workspaceRoot: "/tmp/bot-sandboxes",
     docker: {
-      image: "hanzo-bot-sandbox:bookworm-slim",
-      containerPrefix: "hanzo-bot-sbx-",
+      image: "bot-sandbox:bookworm-slim",
+      containerPrefix: "bot-sbx-",
       workdir: "/workspace",
       readOnlyRoot: true,
       tmpfs: ["/tmp", "/var/tmp", "/run"],
@@ -62,9 +63,9 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
     },
     browser: {
       enabled: true,
-      image: "hanzo-bot-sandbox-browser:bookworm-slim",
-      containerPrefix: "hanzo-bot-sbx-browser-",
-      network: "hanzo-bot-sandbox-browser",
+      image: "bot-sandbox-browser:bookworm-slim",
+      containerPrefix: "bot-sbx-browser-",
+      network: "bot-sandbox-browser",
       cdpPort: 9222,
       vncPort: 5900,
       noVncPort: 6080,
@@ -134,7 +135,7 @@ describe("ensureSandboxBrowser create args", () => {
   });
 
   it("publishes noVNC on loopback and injects noVNC password env", async () => {
-    const _result = await ensureSandboxBrowser({
+    const result = await ensureSandboxBrowser({
       scopeKey: "session:test",
       workspaceDir: "/tmp/workspace",
       agentWorkspaceDir: "/tmp/workspace",
@@ -145,8 +146,14 @@ describe("ensureSandboxBrowser create args", () => {
 
     expect(createArgs).toBeDefined();
     expect(createArgs).toContain("127.0.0.1::6080");
-    const envEntries = envEntriesFromDockerArgs(createArgs ?? []);
+    const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
     expect(envEntries).toContain("BOT_BROWSER_NO_SANDBOX=1");
+    const passwordEntry = envEntries.find((entry) =>
+      entry.startsWith("BOT_BROWSER_NOVNC_PASSWORD="),
+    );
+    expect(passwordEntry).toMatch(/^BOT_BROWSER_NOVNC_PASSWORD=[A-Za-z0-9]{8}$/);
+    expect(result?.noVncUrl).toMatch(/^http:\/\/127\.0\.0\.1:19000\/sandbox\/novnc\?token=/);
+    expect(result?.noVncUrl).not.toContain("password=");
   });
 
   it("does not inject noVNC password env when noVNC is disabled", async () => {
@@ -157,10 +164,8 @@ describe("ensureSandboxBrowser create args", () => {
       cfg: buildConfig(false),
     });
 
-    const createArgs = dockerMocks.execDocker.mock.calls.find(
-      (call: unknown[]) => Array.isArray(call[0]) && call[0][0] === "create",
-    )?.[0] as string[] | undefined;
-    const envEntries = envEntriesFromDockerArgs(createArgs ?? []);
+    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+    const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
     expect(envEntries.some((entry) => entry.startsWith("BOT_BROWSER_NOVNC_PASSWORD="))).toBe(false);
     expect(result?.noVncUrl).toBeUndefined();
   });

@@ -7,7 +7,7 @@ function createHost() {
     client: { stop: vi.fn() },
     connected: true,
     tab: "chat",
-    assistantName: "Hanzo Bot",
+    assistantName: "Bot",
     assistantAvatar: null,
     assistantAgentId: null,
     chatHasAutoScrolled: false,

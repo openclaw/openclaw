@@ -13,8 +13,10 @@ export type SecretsPlanTargetType = string;
 export type SecretsPlanTarget = {
   type: SecretsPlanTargetType;
   /**
-   * Dot path in bot.json for operator readability.
-   * Example: "models.providers.openai.apiKey"
+   * Dot path in the target config surface for operator readability.
+   * Examples:
+   * - "models.providers.openai.apiKey"
+   * - "profiles.openai.key"
    */
   path: string;
   /**
@@ -134,10 +136,7 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       !resolved ||
       !ref ||
       typeof ref !== "object" ||
-      (ref.source !== "env" &&
-        ref.source !== "file" &&
-        ref.source !== "exec" &&
-        ref.source !== "kms") ||
+      (ref.source !== "env" && ref.source !== "file" && ref.source !== "exec") ||
       typeof ref.provider !== "string" ||
       ref.provider.trim().length === 0 ||
       typeof ref.id !== "string" ||

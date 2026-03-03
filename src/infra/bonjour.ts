@@ -40,12 +40,12 @@ function isDisabledByEnv() {
 
 function safeServiceName(name: string) {
   const trimmed = name.trim();
-  return trimmed.length > 0 ? trimmed : "Hanzo Bot";
+  return trimmed.length > 0 ? trimmed : "Bot";
 }
 
 function prettifyInstanceName(name: string) {
   const normalized = name.trim().replace(/\s+/g, " ");
-  return normalized.replace(/\s+\(Hanzo Bot\)\s*$/i, "").trim() || normalized;
+  return normalized.replace(/\s+\(Bot\)\s*$/i, "").trim() || normalized;
 }
 
 type BonjourService = {
@@ -95,16 +95,18 @@ export async function startGatewayBonjourAdvertiser(
   // `Mac.localdomain`) can confuse some resolvers/browsers and break discovery.
   // Keep only the first label and normalize away a trailing `.local`.
   const hostnameRaw =
-    process.env.BOT_MDNS_HOSTNAME?.trim() || process.env.BOT_MDNS_HOSTNAME?.trim() || "hanzo-bot";
+    process.env.BOT_MDNS_HOSTNAME?.trim() ||
+    process.env.CLAWDBOT_MDNS_HOSTNAME?.trim() ||
+    "@hanzo/bot";
   const hostname =
     hostnameRaw
       .replace(/\.local$/i, "")
       .split(".")[0]
-      .trim() || "hanzo-bot";
+      .trim() || "@hanzo/bot";
   const instanceName =
     typeof opts.instanceName === "string" && opts.instanceName.trim()
       ? opts.instanceName.trim()
-      : `${hostname} (Hanzo Bot)`;
+      : `${hostname} (Bot)`;
   const displayName = prettifyInstanceName(instanceName);
 
   const txtBase: Record<string, string> = {
@@ -145,7 +147,7 @@ export async function startGatewayBonjourAdvertiser(
 
   const gateway = responder.createService({
     name: safeServiceName(instanceName),
-    type: "hanzo-bot-gw",
+    type: "bot-gw",
     protocol: Protocol.TCP,
     port: opts.gatewayPort,
     domain: "local",

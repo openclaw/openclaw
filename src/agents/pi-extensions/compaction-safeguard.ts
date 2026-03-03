@@ -579,18 +579,21 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // incorporates context from pruned messages instead of losing it entirely.
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
 
-      const historySummary = await summarizeInStages({
-        messages: messagesToSummarize,
-        model,
-        apiKey,
-        signal,
-        reserveTokens,
-        maxChunkTokens,
-        contextWindow: contextWindowTokens,
-        customInstructions,
-        summarizationInstructions,
-        previousSummary: effectivePreviousSummary,
-      });
+      const historySummary =
+        messagesToSummarize.length > 0
+          ? await summarizeInStages({
+              messages: messagesToSummarize,
+              model,
+              apiKey,
+              signal,
+              reserveTokens,
+              maxChunkTokens,
+              contextWindow: contextWindowTokens,
+              customInstructions,
+              summarizationInstructions,
+              previousSummary: effectivePreviousSummary,
+            })
+          : (effectivePreviousSummary?.trim() ?? "");
 
       let summary = historySummary;
       if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {

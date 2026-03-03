@@ -19,7 +19,7 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("./auth.js", () => ({
-  authorizeGatewayConnect: async () => ({ ok: true }),
+  authorizeHttpGatewayConnect: alwaysAuthorized,
 }));
 
 vi.mock("../logger.js", () => ({

@@ -1,7 +1,6 @@
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { BotConfig } from "../../config/config.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
-import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import {
   loadSessionStore,
   resolveAgentMainSessionKey,
@@ -12,23 +11,30 @@ import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
+import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
+import { resolveWhatsAppAccount } from "../../web/accounts.js";
+import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
-/**
- * Result of resolving a cron delivery target.
- * When `ok` is `true` the `to` field is a non-empty string and `error` is
- * absent. When `ok` is `false` an `error` is present.
- */
-export type DeliveryTargetResolution = {
-  ok: boolean;
-  channel: Exclude<OutboundChannel, "none">;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-  mode: "explicit" | "implicit";
-  error?: Error;
-};
+export type DeliveryTargetResolution =
+  | {
+      ok: true;
+      channel: Exclude<OutboundChannel, "none">;
+      to: string;
+      accountId?: string;
+      threadId?: string | number;
+      mode: "explicit" | "implicit";
+    }
+  | {
+      ok: false;
+      channel?: Exclude<OutboundChannel, "none">;
+      to?: string;
+      accountId?: string;
+      threadId?: string | number;
+      mode: "explicit" | "implicit";
+      error: Error;
+    };
 
 export async function resolveDeliveryTarget(
   cfg: BotConfig,
@@ -36,6 +42,7 @@ export async function resolveDeliveryTarget(
   jobPayload: {
     channel?: "last" | ChannelId;
     to?: string;
+    /** Explicit accountId from job.delivery — overrides session-derived and binding-derived values. */
     accountId?: string;
     sessionKey?: string;
   },
@@ -48,50 +55,41 @@ export async function resolveDeliveryTarget(
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const store = loadSessionStore(storePath);
-  const main = store[mainSessionKey];
 
-  // Prefer the thread-specific session entry when a sessionKey is provided.
-  const threadEntry =
-    jobPayload.sessionKey && jobPayload.sessionKey !== mainSessionKey
-      ? store[jobPayload.sessionKey]
-      : undefined;
-  const entry = threadEntry ?? main;
+  // Look up thread-specific session first (e.g. agent:main:main:thread:1234),
+  // then fall back to the main session entry.
+  const threadSessionKey = jobPayload.sessionKey?.trim();
+  const threadEntry = threadSessionKey ? store[threadSessionKey] : undefined;
+  const main = threadEntry ?? store[mainSessionKey];
 
   const preliminary = resolveSessionDeliveryTarget({
-    entry,
+    entry: main,
     requestedChannel,
     explicitTo,
     allowMismatchedLastTo,
   });
 
   let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
-  let ambiguousChannelError: Error | undefined;
+  let channelResolutionError: Error | undefined;
   if (!preliminary.channel) {
-    try {
-      const selection = await resolveMessageChannelSelection({ cfg });
-      fallbackChannel = selection.channel;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("Channel is required")) {
-        ambiguousChannelError = err instanceof Error ? err : new Error(msg);
-      } else {
-        fallbackChannel = preliminary.lastChannel ?? DEFAULT_CHAT_CHANNEL;
+    if (preliminary.lastChannel) {
+      fallbackChannel = preliminary.lastChannel;
+    } else {
+      try {
+        const selection = await resolveMessageChannelSelection({ cfg });
+        fallbackChannel = selection.channel;
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        channelResolutionError = new Error(
+          `${detail} Set delivery.channel explicitly or use a main session with a previous channel.`,
+        );
       }
     }
   }
 
-  if (ambiguousChannelError) {
-    return {
-      ok: false,
-      channel: undefined as unknown as Exclude<OutboundChannel, "none">,
-      mode: "implicit",
-      error: ambiguousChannelError,
-    };
-  }
-
   const resolved = fallbackChannel
     ? resolveSessionDeliveryTarget({
-        entry,
+        entry: main,
         requestedChannel,
         explicitTo,
         fallbackChannel,
@@ -100,9 +98,9 @@ export async function resolveDeliveryTarget(
       })
     : preliminary;
 
-  const channel = resolved.channel ?? fallbackChannel ?? DEFAULT_CHAT_CHANNEL;
+  const channel = resolved.channel ?? fallbackChannel;
   const mode = resolved.mode as "explicit" | "implicit";
-  const toCandidate = resolved.to;
+  let toCandidate = resolved.to;
 
   // Prefer an explicit accountId from the job's delivery config (set via
   // --account on cron add/edit). Fall back to the session's lastAccountId,
@@ -121,6 +119,11 @@ export async function resolveDeliveryTarget(
     }
   }
 
+  // job.delivery.accountId takes highest precedence — explicitly set by the job author.
+  if (jobPayload.accountId) {
+    accountId = jobPayload.accountId;
+  }
+
   // Carry threadId when it was explicitly set (from :topic: parsing or config)
   // or when delivering to the same recipient as the session's last conversation.
   // Session-derived threadIds are dropped when the target differs to prevent
@@ -131,15 +134,41 @@ export async function resolveDeliveryTarget(
       ? resolved.threadId
       : undefined;
 
-  if (!toCandidate) {
+  if (!channel) {
     return {
       ok: false,
-      channel,
+      channel: undefined,
+      to: undefined,
       accountId,
       threadId,
       mode,
-      error: new Error(`No delivery target resolved for channel "${channel}"`),
+      error:
+        channelResolutionError ??
+        new Error("Channel is required when delivery.channel=last has no previous channel."),
     };
+  }
+
+  let allowFromOverride: string[] | undefined;
+  if (channel === "whatsapp") {
+    const resolvedAccountId = normalizeAccountId(accountId);
+    const configuredAllowFromRaw =
+      resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ?? [];
+    const configuredAllowFrom = configuredAllowFromRaw
+      .map((entry) => String(entry).trim())
+      .filter((entry) => entry && entry !== "*")
+      .map((entry) => normalizeWhatsAppTarget(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    const storeAllowFrom = readChannelAllowFromStoreSync("whatsapp", process.env, resolvedAccountId)
+      .map((entry) => normalizeWhatsAppTarget(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
+
+    if (toCandidate && mode === "implicit" && allowFromOverride.length > 0) {
+      const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
+      if (!normalizedCurrentTarget || !allowFromOverride.includes(normalizedCurrentTarget)) {
+        toCandidate = allowFromOverride[0];
+      }
+    }
   }
 
   const docked = resolveOutboundTarget({
@@ -148,11 +177,13 @@ export async function resolveDeliveryTarget(
     cfg,
     accountId,
     mode,
+    allowFrom: allowFromOverride,
   });
   if (!docked.ok) {
     return {
       ok: false,
       channel,
+      to: undefined,
       accountId,
       threadId,
       mode,

@@ -33,15 +33,17 @@ vi.mock("../../channels/plugins/index.js", () => ({
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
-  resolveAgentWorkspaceDir: () => "/tmp/bot-test-workspace",
-}));
-
-vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: ({ config }: { config: unknown }) => ({ config, changes: [] }),
+  resolveAgentWorkspaceDir: () => TEST_WORKSPACE_ROOT,
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
   loadBotPlugins: mocks.loadBotPlugins,
+}));
+
+vi.mock("../../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable(args: { config: unknown }) {
+    return applyPluginAutoEnableForTests(args.config);
+  },
 }));
 
 import { setActivePluginRegistry } from "../../plugins/runtime.js";

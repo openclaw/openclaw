@@ -13,8 +13,10 @@ import type { ReplyPayload } from "../types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 
 export type RouteReplyParams = {
   /** The reply payload to send. */
@@ -60,6 +62,9 @@ export type RouteReplyResult = {
  */
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
   const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
+  if (shouldSuppressReasoningPayload(payload)) {
+    return { ok: true };
+  }
   const normalizedChannel = normalizeMessageChannel(channel);
   const resolvedAgentId = params.sessionKey
     ? resolveSessionAgentId({
@@ -122,6 +127,11 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
     const { deliverOutboundPayloads } = await import("../../infra/outbound/deliver.js");
+    const outboundSession = buildOutboundSessionContext({
+      cfg,
+      agentId: resolvedAgentId,
+      sessionKey: params.sessionKey,
+    });
     const results = await deliverOutboundPayloads({
       cfg,
       channel: channelId,
@@ -130,7 +140,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       payloads: [normalized],
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
-      agentId: resolvedAgentId,
+      session: outboundSession,
       abortSignal,
       mirror:
         params.mirror !== false && params.sessionKey

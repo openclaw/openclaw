@@ -43,6 +43,6 @@ export async function stopKnownBrowserProfiles(params: {
       }
     }
   } catch (err) {
-    params.onWarn(`hanzo-bot browser stop failed: ${String(err)}`);
+    params.onWarn(`bot browser stop failed: ${String(err)}`);
   }
 }

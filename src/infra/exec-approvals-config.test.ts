@@ -21,7 +21,7 @@ describe("exec approvals wildcard agent", () => {
 
     try {
       process.env.BOT_HOME = dir;
-      const approvalsPath = path.join(dir, ".hanzo/bot", "exec-approvals.json");
+      const approvalsPath = path.join(dir, ".bot", "exec-approvals.json");
       fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
       fs.writeFileSync(
         approvalsPath,

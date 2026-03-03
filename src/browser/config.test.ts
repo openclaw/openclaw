@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
 
 describe("browser config", () => {
-  it("defaults to enabled with loopback defaults and bot-orange color", () => {
+  it("defaults to enabled with loopback defaults and lobster-orange color", () => {
     const resolved = resolveBrowserConfig(undefined);
     expect(resolved.enabled).toBe(true);
     expect(resolved.controlPort).toBe(18791);
@@ -16,18 +17,20 @@ describe("browser config", () => {
     expect(profile?.cdpPort).toBe(18800);
     expect(profile?.cdpUrl).toBe("http://127.0.0.1:18800");
 
-    const bot = resolveProfile(resolved, "bot");
-    expect(bot?.driver).toBe("bot");
+    const bot = resolveProfile(resolved, "@hanzo/bot");
+    expect(bot?.driver).toBe("@hanzo/bot");
     expect(bot?.cdpPort).toBe(18800);
     expect(bot?.cdpUrl).toBe("http://127.0.0.1:18800");
+    const chrome = resolveProfile(resolved, "chrome");
+    expect(chrome?.driver).toBe("extension");
+    expect(chrome?.cdpPort).toBe(18792);
+    expect(chrome?.cdpUrl).toBe("http://127.0.0.1:18792");
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
   });
 
   it("derives default ports from BOT_GATEWAY_PORT when unset", () => {
-    const prev = process.env.BOT_GATEWAY_PORT;
-    process.env.BOT_GATEWAY_PORT = "19001";
-    try {
+    withEnv({ BOT_GATEWAY_PORT: "19001" }, () => {
       const resolved = resolveBrowserConfig(undefined);
       expect(resolved.controlPort).toBe(19003);
       const chrome = resolveProfile(resolved, "chrome");
@@ -35,22 +38,14 @@ describe("browser config", () => {
       expect(chrome?.cdpPort).toBe(19004);
       expect(chrome?.cdpUrl).toBe("http://127.0.0.1:19004");
 
-      const bot = resolveProfile(resolved, "bot");
+      const bot = resolveProfile(resolved, "@hanzo/bot");
       expect(bot?.cdpPort).toBe(19012);
       expect(bot?.cdpUrl).toBe("http://127.0.0.1:19012");
-    } finally {
-      if (prev === undefined) {
-        delete process.env.BOT_GATEWAY_PORT;
-      } else {
-        process.env.BOT_GATEWAY_PORT = prev;
-      }
-    }
+    });
   });
 
   it("derives default ports from gateway.port when env is unset", () => {
-    const prev = process.env.BOT_GATEWAY_PORT;
-    delete process.env.BOT_GATEWAY_PORT;
-    try {
+    withEnv({ BOT_GATEWAY_PORT: undefined }, () => {
       const resolved = resolveBrowserConfig(undefined, { gateway: { port: 19011 } });
       expect(resolved.controlPort).toBe(19013);
       const chrome = resolveProfile(resolved, "chrome");
@@ -58,16 +53,10 @@ describe("browser config", () => {
       expect(chrome?.cdpPort).toBe(19014);
       expect(chrome?.cdpUrl).toBe("http://127.0.0.1:19014");
 
-      const bot = resolveProfile(resolved, "bot");
+      const bot = resolveProfile(resolved, "@hanzo/bot");
       expect(bot?.cdpPort).toBe(19022);
       expect(bot?.cdpUrl).toBe("http://127.0.0.1:19022");
-    } finally {
-      if (prev === undefined) {
-        delete process.env.BOT_GATEWAY_PORT;
-      } else {
-        process.env.BOT_GATEWAY_PORT = prev;
-      }
-    }
+    });
   });
 
   it("supports overriding the local CDP auto-allocation range start", () => {
@@ -113,7 +102,7 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       cdpUrl: "http://example.com:9222",
     });
-    const profile = resolveProfile(resolved, "bot");
+    const profile = resolveProfile(resolved, "@hanzo/bot");
     expect(profile?.cdpIsLoopback).toBe(false);
   });
 
@@ -121,7 +110,7 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       cdpUrl: "http://example.com:9222",
     });
-    const profile = resolveProfile(resolved, "bot");
+    const profile = resolveProfile(resolved, "@hanzo/bot");
     expect(profile?.cdpPort).toBe(9222);
     expect(profile?.cdpUrl).toBe("http://example.com:9222");
     expect(profile?.cdpIsLoopback).toBe(false);
@@ -187,7 +176,7 @@ describe("browser config", () => {
       },
     });
     expect(resolveProfile(resolved, "chrome")).toBe(null);
-    expect(resolved.defaultProfile).toBe("bot");
+    expect(resolved.defaultProfile).toBe("@hanzo/bot");
   });
 
   it("defaults extraArgs to empty array when not provided", () => {
@@ -221,5 +210,95 @@ describe("browser config", () => {
       extraArgs: "not-an-array" as unknown as string[],
     });
     expect(resolved.extraArgs).toEqual([]);
+  });
+
+  it("resolves browser SSRF policy when configured", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowPrivateNetwork: true,
+        allowedHostnames: [" localhost ", ""],
+        hostnameAllowlist: [" *.trusted.example ", " "],
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+      allowedHostnames: ["localhost"],
+      hostnameAllowlist: ["*.trusted.example"],
+    });
+  });
+
+  it("defaults browser SSRF policy to trusted-network mode", () => {
+    const resolved = resolveBrowserConfig({});
+    expect(resolved.ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+    });
+  });
+
+  it("supports explicit strict mode by disabling private network access", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: false,
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({});
+  });
+
+  describe("default profile preference", () => {
+    it("defaults to bot profile when defaultProfile is not configured", () => {
+      const resolved = resolveBrowserConfig({
+        headless: false,
+        noSandbox: false,
+      });
+      expect(resolved.defaultProfile).toBe("@hanzo/bot");
+    });
+
+    it("keeps bot default when headless=true", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+      });
+      expect(resolved.defaultProfile).toBe("@hanzo/bot");
+    });
+
+    it("keeps bot default when noSandbox=true", () => {
+      const resolved = resolveBrowserConfig({
+        noSandbox: true,
+      });
+      expect(resolved.defaultProfile).toBe("@hanzo/bot");
+    });
+
+    it("keeps bot default when both headless and noSandbox are true", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        noSandbox: true,
+      });
+      expect(resolved.defaultProfile).toBe("@hanzo/bot");
+    });
+
+    it("explicit defaultProfile config overrides defaults in headless mode", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        defaultProfile: "chrome",
+      });
+      expect(resolved.defaultProfile).toBe("chrome");
+    });
+
+    it("explicit defaultProfile config overrides defaults in noSandbox mode", () => {
+      const resolved = resolveBrowserConfig({
+        noSandbox: true,
+        defaultProfile: "chrome",
+      });
+      expect(resolved.defaultProfile).toBe("chrome");
+    });
+
+    it("allows custom profile as default even in headless mode", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        defaultProfile: "custom",
+        profiles: {
+          custom: { cdpPort: 19999, color: "#00FF00" },
+        },
+      });
+      expect(resolved.defaultProfile).toBe("custom");
+    });
   });
 });

@@ -126,6 +126,7 @@ export async function sweepCronRunSessions(params: {
           storePath,
           sessionFile,
           reason: "deleted",
+          restrictToStoreDir: true,
         });
         for (const archivedPath of archived) {
           archivedDirs.add(path.dirname(archivedPath));
@@ -136,6 +137,7 @@ export async function sweepCronRunSessions(params: {
           directories: [...archivedDirs],
           olderThanMs: retentionMs,
           reason: "deleted",
+          nowMs: now,
         });
       }
     } catch (err) {

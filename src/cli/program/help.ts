@@ -3,8 +3,10 @@ import type { ProgramContext } from "./context.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { isRich, theme } from "../../terminal/theme.js";
 import { escapeRegExp } from "../../utils.js";
+import { hasFlag, hasRootVersionAlias } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
+import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
 import { getCoreCliCommandsWithSubcommands } from "./command-registry.js";
 import { getSubCliCommandsWithSubcommands } from "./register.subclis.js";
 
@@ -19,24 +21,21 @@ const ROOT_COMMANDS_HINT =
 
 const EXAMPLES = [
   ["bot models --help", "Show detailed help for the models command."],
+  ["bot channels login --verbose", "Link personal WhatsApp Web and show QR + connection logs."],
   [
-    "hanzo-bot channels login --verbose",
-    "Link personal WhatsApp Web and show QR + connection logs.",
-  ],
-  [
-    'hanzo-bot message send --target +15555550123 --message "Hi" --json',
+    'bot message send --target +15555550123 --message "Hi" --json',
     "Send via your web session and print JSON result.",
   ],
-  ["hanzo-bot gateway --port 18789", "Run the WebSocket Gateway locally."],
-  ["hanzo-bot --dev gateway", "Run a dev Gateway (isolated state/config) on ws://127.0.0.1:19001."],
-  ["hanzo-bot gateway --force", "Kill anything bound to the default gateway port, then start it."],
-  ["hanzo-bot gateway ...", "Gateway control via WebSocket."],
+  ["bot gateway --port 18789", "Run the WebSocket Gateway locally."],
+  ["bot --dev gateway", "Run a dev Gateway (isolated state/config) on ws://127.0.0.1:19001."],
+  ["bot gateway --force", "Kill anything bound to the default gateway port, then start it."],
+  ["bot gateway ...", "Gateway control via WebSocket."],
   [
-    'hanzo-bot agent --to +15555550123 --message "Run summary" --deliver',
+    'bot agent --to +15555550123 --message "Run summary" --deliver',
     "Talk directly to the agent using the Gateway; optionally send the WhatsApp reply.",
   ],
   [
-    'hanzo-bot message send --channel telegram --target @mychat --message "Hi"',
+    'bot message send --channel telegram --target @mychat --message "Hi"',
     "Send via your Telegram bot.",
   ],
 ] as const;
@@ -48,11 +47,16 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     .version(ctx.programVersion)
     .option(
       "--dev",
-      "Dev profile: isolate state under ~/.hanzo/bot-dev, default gateway port 19001, and shift derived ports (browser/canvas)",
+      "Dev profile: isolate state under ~/.bot-dev, default gateway port 19001, and shift derived ports (browser/canvas)",
     )
     .option(
       "--profile <name>",
-      "Use a named profile (isolates BOT_STATE_DIR/BOT_CONFIG_PATH under ~/.hanzo/bot-<name>)",
+      "Use a named profile (isolates BOT_STATE_DIR/BOT_CONFIG_PATH under ~/.bot-<name>)",
+    )
+    .option(
+      "--log-level <level>",
+      `Global log level override for file + console (${CLI_LOG_LEVEL_VALUES})`,
+      parseCliLogLevelOption,
     );
 
   program.option("--no-color", "Disable ANSI colors", false);
@@ -98,9 +102,9 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
   });
 
   if (
-    process.argv.includes("-V") ||
-    process.argv.includes("--version") ||
-    process.argv.includes("-v")
+    hasFlag(process.argv, "-V") ||
+    hasFlag(process.argv, "--version") ||
+    hasRootVersionAlias(process.argv)
   ) {
     console.log(ctx.programVersion);
     process.exit(0);

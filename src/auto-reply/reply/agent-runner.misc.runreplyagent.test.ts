@@ -89,6 +89,9 @@ beforeEach(() => {
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  loadCronStoreMock.mockClear();
+  // Default: no cron jobs in store.
+  loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
   resetSystemEventsForTest();
 
   // Default: no provider switch; execute the chosen provider+model.

@@ -8,13 +8,13 @@ export function buildPairingReply(params: {
 }): string {
   const { channel, idLine, code } = params;
   return [
-    "Hanzo Bot: access not configured.",
+    "Bot: access not configured.",
     "",
     idLine,
     "",
     `Pairing code: ${code}`,
     "",
     "Ask the bot owner to approve with:",
-    formatCliCommand(`hanzo-bot pairing approve ${channel} ${code}`),
+    formatCliCommand(`bot pairing approve ${channel} ${code}`),
   ].join("\n");
 }

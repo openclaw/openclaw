@@ -62,18 +62,6 @@ export const ConnectParamsSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
-    tenant: Type.Optional(
-      Type.Object(
-        {
-          orgId: Type.Optional(NonEmptyString),
-          projectId: Type.Optional(NonEmptyString),
-          tenantId: Type.Optional(NonEmptyString),
-          actorId: Type.Optional(NonEmptyString),
-          env: Type.Optional(NonEmptyString),
-        },
-        { additionalProperties: false },
-      ),
-    ),
     locale: Type.Optional(Type.String()),
     userAgent: Type.Optional(Type.String()),
   },

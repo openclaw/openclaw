@@ -105,7 +105,7 @@ export function registerBrowserAgentSnapshotRoutes(
           cdpUrl,
           targetId: tab.targetId,
           url,
-          ...withBrowserNavigationPolicy({ dangerouslyAllowPrivateNetwork: true }),
+          ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
         });
         const currentTargetId = await resolveTargetIdAfterNavigate({
           oldTargetId: tab.targetId,

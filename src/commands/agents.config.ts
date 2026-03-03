@@ -1,6 +1,7 @@
 import type { AgentIdentityFile } from "../agents/identity-file.js";
 import type { BotConfig } from "../config/config.js";
 import {
+  listAgentEntries,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -31,14 +32,7 @@ export type AgentSummary = {
 type AgentEntry = NonNullable<NonNullable<BotConfig["agents"]>["list"]>[number];
 
 export type AgentIdentity = AgentIdentityFile;
-
-export function listAgentEntries(cfg: BotConfig): AgentEntry[] {
-  const list = cfg.agents?.list;
-  if (!Array.isArray(list)) {
-    return [];
-  }
-  return list.filter((entry): entry is AgentEntry => Boolean(entry && typeof entry === "object"));
-}
+export { listAgentEntries };
 
 export function findAgentEntryIndex(list: AgentEntry[], agentId: string): number {
   const id = normalizeAgentId(agentId);

@@ -1,5 +1,5 @@
 /**
- * Twitch channel plugin for Hanzo Bot.
+ * Twitch channel plugin for Bot.
  *
  * Main plugin export combining all adapters (outbound, actions, status, gateway).
  * This is the primary entry point for the Twitch channel integration.
@@ -33,7 +33,7 @@ import { isAccountConfigured } from "./utils/twitch.js";
  * Twitch channel plugin.
  *
  * Implements the ChannelPlugin interface to provide Twitch chat integration
- * for Hanzo Bot. Supports message sending, receiving, access control, and
+ * for Bot. Supports message sending, receiving, access control, and
  * status monitoring.
  */
 export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {

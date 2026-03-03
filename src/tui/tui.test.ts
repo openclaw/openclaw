@@ -80,7 +80,7 @@ describe("resolveGatewayDisconnectState", () => {
   it("returns pairing recovery guidance when disconnect reason requires pairing", () => {
     const state = resolveGatewayDisconnectState("gateway closed (1008): pairing required");
     expect(state.connectionStatus).toContain("pairing required");
-    expect(state.activityStatus).toBe("pairing required: run hanzo-bot devices list");
+    expect(state.activityStatus).toBe("pairing required: run bot devices list");
     expect(state.pairingHint).toContain("bot devices list");
   });
 

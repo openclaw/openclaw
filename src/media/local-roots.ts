@@ -1,13 +1,30 @@
-import os from "node:os";
 import path from "node:path";
 import type { BotConfig } from "../config/config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
+import { resolvePreferredBotTmpDir } from "../infra/tmp-bot-dir.js";
 
-function buildMediaLocalRoots(stateDir: string): string[] {
+type BuildMediaLocalRootsOptions = {
+  preferredTmpDir?: string;
+};
+
+let cachedPreferredTmpDir: string | undefined;
+
+function resolveCachedPreferredTmpDir(): string {
+  if (!cachedPreferredTmpDir) {
+    cachedPreferredTmpDir = resolvePreferredBotTmpDir();
+  }
+  return cachedPreferredTmpDir;
+}
+
+function buildMediaLocalRoots(
+  stateDir: string,
+  options: BuildMediaLocalRootsOptions = {},
+): string[] {
   const resolvedStateDir = path.resolve(stateDir);
+  const preferredTmpDir = options.preferredTmpDir ?? resolveCachedPreferredTmpDir();
   return [
-    os.tmpdir(),
+    preferredTmpDir,
     path.join(resolvedStateDir, "media"),
     path.join(resolvedStateDir, "agents"),
     path.join(resolvedStateDir, "workspace"),

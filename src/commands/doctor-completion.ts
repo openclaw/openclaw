@@ -42,12 +42,14 @@ export type ShellCompletionStatus = {
   profileInstalled: boolean;
   cacheExists: boolean;
   cachePath: string;
-  /** True if profile uses slow dynamic pattern like `source <(hanzo-bot completion ...)` */
+  /** True if profile uses slow dynamic pattern like `source <(bot completion ...)` */
   usesSlowPattern: boolean;
 };
 
 /** Check the status of shell completion for the current shell. */
-export async function checkShellCompletionStatus(binName = "bot"): Promise<ShellCompletionStatus> {
+export async function checkShellCompletionStatus(
+  binName = "@hanzo/bot",
+): Promise<ShellCompletionStatus> {
   const shell = resolveShellFromEnv() as CompletionShell;
   const profileInstalled = await isCompletionInstalled(shell, binName);
   const cacheExists = await completionCacheExists(shell, binName);
@@ -165,7 +167,7 @@ export async function doctorShellCompletion(
  * cases where profile has completion but no cache.
  * This is a silent fix - no prompts.
  */
-export async function ensureCompletionCacheExists(binName = "bot"): Promise<boolean> {
+export async function ensureCompletionCacheExists(binName = "@hanzo/bot"): Promise<boolean> {
   const shell = resolveShellFromEnv() as CompletionShell;
   const cacheExists = await completionCacheExists(shell, binName);
 

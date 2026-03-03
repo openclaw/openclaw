@@ -14,7 +14,7 @@ import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { colorize, theme } from "../../terminal/theme.js";
+import { colorize } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   runServiceRestart,
@@ -27,7 +27,12 @@ import {
   createDaemonActionContext,
   installDaemonServiceAndEmit,
 } from "../daemon-cli/response.js";
-import { createCliStatusTextStyles, formatRuntimeStatus, parsePort } from "../daemon-cli/shared.js";
+import {
+  createCliStatusTextStyles,
+  formatRuntimeStatus,
+  parsePort,
+  resolveRuntimeStatusColor,
+} from "../daemon-cli/shared.js";
 
 type NodeDaemonInstallOptions = {
   host?: string;
@@ -50,10 +55,7 @@ type NodeDaemonStatusOptions = {
 };
 
 function renderNodeServiceStartHints(): string[] {
-  const base = [
-    formatCliCommand("hanzo-bot node install"),
-    formatCliCommand("hanzo-bot node start"),
-  ];
+  const base = [formatCliCommand("bot node install"), formatCliCommand("bot node start")];
   switch (process.platform) {
     case "darwin":
       return [
@@ -141,7 +143,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     });
     if (!json) {
       defaultRuntime.log(`Node service already ${service.loadedText}.`);
-      defaultRuntime.log(`Reinstall with: ${formatCliCommand("hanzo-bot node install --force")}`);
+      defaultRuntime.log(`Reinstall with: ${formatCliCommand("bot node install --force")}`);
     }
     return;
   }
@@ -264,15 +266,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
 
   const runtimeLine = formatRuntimeStatus(runtime);
   if (runtimeLine) {
-    const runtimeStatus = runtime?.status ?? "unknown";
-    const runtimeColor =
-      runtimeStatus === "running"
-        ? theme.success
-        : runtimeStatus === "stopped"
-          ? theme.error
-          : runtimeStatus === "unknown"
-            ? theme.muted
-            : theme.warn;
+    const runtimeColor = resolveRuntimeStatusColor(runtime?.status);
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
   }
 

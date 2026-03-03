@@ -100,7 +100,7 @@ export async function handleAcpDoctorAction(
     lines.push("healthy: no");
     lines.push(formatAcpRuntimeErrorText(acpError));
     lines.push(`next: ${installHint}`);
-    lines.push(`next: hanzo-bot config set plugins.entries.${backendId}.enabled true`);
+    lines.push(`next: bot config set plugins.entries.${backendId}.enabled true`);
     if (backendId.toLowerCase() === "acpx") {
       lines.push("next: verify acpx is installed (`acpx --help`).");
     }
@@ -122,7 +122,7 @@ export function handleAcpInstallAction(
     "-----",
     `configuredBackend: ${backendId}`,
     `run: ${installHint}`,
-    `then: hanzo-bot config set plugins.entries.${backendId}.enabled true`,
+    `then: bot config set plugins.entries.${backendId}.enabled true`,
     "then: /acp doctor",
   ];
   return stopWithText(lines.join("\n"));

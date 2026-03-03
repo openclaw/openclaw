@@ -249,11 +249,10 @@ export const sendHandlers: GatewayRequestHandlers = {
           to: resolved.to,
           accountId,
           payloads: [{ text: message, mediaUrl, mediaUrls }],
-          agentId: outboundSession?.agentId,
+          session: outboundSession,
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,
           deps: outboundDeps,
-          session: outboundSession,
           mirror: providedSessionKey
             ? {
                 sessionKey: providedSessionKey,

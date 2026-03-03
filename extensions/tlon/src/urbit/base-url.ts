@@ -1,4 +1,4 @@
-import { isBlockedHostname, isPrivateIpAddress } from "bot/plugin-sdk";
+import { isBlockedHostnameOrIp } from "bot/plugin-sdk";
 
 export type UrbitBaseUrlValidation =
   | { ok: true; baseUrl: string; hostname: string }
@@ -53,5 +53,5 @@ export function isBlockedUrbitHostname(hostname: string): boolean {
   if (!normalized) {
     return false;
   }
-  return isBlockedHostname(normalized) || isPrivateIpAddress(normalized);
+  return isBlockedHostnameOrIp(normalized);
 }

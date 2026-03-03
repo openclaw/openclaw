@@ -35,7 +35,7 @@ describe("gateway control-plane write rate limit", () => {
       role: "operator",
       scopes: ["operator.admin"],
       client: {
-        id: "hanzo-bot-control-ui",
+        id: "bot-control-ui",
         version: "1.0.0",
         platform: "darwin",
         mode: "ui",

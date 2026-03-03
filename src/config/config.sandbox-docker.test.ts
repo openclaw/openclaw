@@ -264,16 +264,16 @@ describe("sandbox browser binds config", () => {
       globalBrowser: {},
       agentBrowser: {},
     });
-    expect(resolved.network).toBe("hanzo-bot-sandbox-browser");
+    expect(resolved.network).toBe("bot-sandbox-browser");
   });
 
   it("prefers agent browser network over global browser network", () => {
     const resolved = resolveSandboxBrowserConfig({
       scope: "agent",
-      globalBrowser: { network: "hanzo-bot-sandbox-browser-global" },
-      agentBrowser: { network: "hanzo-bot-sandbox-browser-agent" },
+      globalBrowser: { network: "bot-sandbox-browser-global" },
+      agentBrowser: { network: "bot-sandbox-browser-agent" },
     });
-    expect(resolved.network).toBe("hanzo-bot-sandbox-browser-agent");
+    expect(resolved.network).toBe("bot-sandbox-browser-agent");
   });
 
   it("merges cdpSourceRange with agent override", () => {

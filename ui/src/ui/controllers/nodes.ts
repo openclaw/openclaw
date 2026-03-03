@@ -8,24 +8,6 @@ export type NodesState = {
   lastError: string | null;
 };
 
-export type NodeBillingSetParams = {
-  nodeId: string;
-  billingMode: "global" | "dedicated" | "local";
-  budgetCents?: number;
-};
-
-export async function setNodeBilling(
-  state: NodesState,
-  params: NodeBillingSetParams,
-): Promise<void> {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  await state.client.request("node.billing.set", params);
-  // Reload nodes to reflect the change.
-  await loadNodes(state, { quiet: true });
-}
-
 export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
   if (!state.client || !state.connected) {
     return;
@@ -38,9 +20,7 @@ export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
     state.lastError = null;
   }
   try {
-    const res = await state.client.request<{ nodes?: Record<string, unknown> }>("node.list", {
-      connectedOnly: true,
-    });
+    const res = await state.client.request<{ nodes?: Record<string, unknown> }>("node.list", {});
     state.nodes = Array.isArray(res.nodes) ? res.nodes : [];
   } catch (err) {
     if (!opts?.quiet) {

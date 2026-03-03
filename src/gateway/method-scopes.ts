@@ -80,7 +80,6 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "talk.config",
     "agents.files.list",
     "agents.files.get",
-    "screen.vnc",
     "marketplace.status",
     "marketplace.earnings",
     "marketplace.config",

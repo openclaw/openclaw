@@ -148,7 +148,7 @@ describe("resolveSandboxedMediaSource", () => {
       expected: /sandbox/i,
     },
     {
-      name: "absolute paths under host tmp outside hanzo-bot tmp root",
+      name: "absolute paths under host tmp outside bot tmp root",
       media: path.join(os.tmpdir(), "outside-bot", "passwd"),
       expected: /sandbox/i,
     },

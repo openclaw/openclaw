@@ -91,7 +91,7 @@ export async function resolveControlUiDistIndexPath(
     return path.join(packageRoot, "dist", "control-ui", "index.html");
   }
 
-  // Fallback: traverse up and find package.json with name "bot" + dist/control-ui/index.html
+  // Fallback: traverse up and find package.json with name "@hanzo/bot" + dist/control-ui/index.html
   // This handles global installs where path-based resolution might fail.
   let dir = path.dirname(normalized);
   for (let i = 0; i < 8; i++) {
@@ -101,7 +101,7 @@ export async function resolveControlUiDistIndexPath(
       try {
         const raw = fs.readFileSync(pkgJsonPath, "utf-8");
         const parsed = JSON.parse(raw) as { name?: unknown };
-        if (parsed.name === "bot") {
+        if (parsed.name === "@hanzo/bot") {
           return fs.existsSync(indexPath) ? indexPath : null;
         }
         // Stop at the first package boundary to avoid resolving through unrelated ancestors.

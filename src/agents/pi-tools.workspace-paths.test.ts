@@ -78,7 +78,7 @@ describe("workspace path resolution", () => {
           await editTool.execute("ws-edit", {
             path: editFile,
             oldText: "world",
-            newText: "hanzo-bot",
+            newText: "@hanzo/bot",
           });
           expect(await fs.readFile(path.join(workspaceDir, editFile), "utf8")).toBe("hello bot");
         } finally {
@@ -115,53 +115,21 @@ describe("workspace path resolution", () => {
 
   it("defaults exec cwd to workspaceDir when workdir is omitted", async () => {
     await withTempDir("bot-ws-", async (workspaceDir) => {
-      const tools = createBotCodingTools({
-        workspaceDir,
-        exec: { host: "gateway", ask: "off", security: "full" },
-      });
-      const execTool = tools.find((tool) => tool.name === "exec");
-      expect(execTool).toBeDefined();
-
-      const result = await execTool?.execute("ws-exec", {
-        command: "echo ok",
-      });
-      const cwd =
-        result?.details && typeof result.details === "object" && "cwd" in result.details
-          ? (result.details as { cwd?: string }).cwd
-          : undefined;
-      expect(cwd).toBeTruthy();
-      const [resolvedOutput, resolvedWorkspace] = await Promise.all([
-        fs.realpath(String(cwd)),
-        fs.realpath(workspaceDir),
-      ]);
-      expect(resolvedOutput).toBe(resolvedWorkspace);
+      const execTool = createExecTool(workspaceDir);
+      await expectExecCwdResolvesTo(execTool, "ws-exec", { command: "echo ok" }, workspaceDir);
     });
   });
 
   it("lets exec workdir override the workspace default", async () => {
     await withTempDir("bot-ws-", async (workspaceDir) => {
       await withTempDir("bot-override-", async (overrideDir) => {
-        const tools = createBotCodingTools({
-          workspaceDir,
-          exec: { host: "gateway", ask: "off", security: "full" },
-        });
-        const execTool = tools.find((tool) => tool.name === "exec");
-        expect(execTool).toBeDefined();
-
-        const result = await execTool?.execute("ws-exec-override", {
-          command: "echo ok",
-          workdir: overrideDir,
-        });
-        const cwd =
-          result?.details && typeof result.details === "object" && "cwd" in result.details
-            ? (result.details as { cwd?: string }).cwd
-            : undefined;
-        expect(cwd).toBeTruthy();
-        const [resolvedOutput, resolvedOverride] = await Promise.all([
-          fs.realpath(String(cwd)),
-          fs.realpath(overrideDir),
-        ]);
-        expect(resolvedOutput).toBe(resolvedOverride);
+        const execTool = createExecTool(workspaceDir);
+        await expectExecCwdResolvesTo(
+          execTool,
+          "ws-exec-override",
+          { command: "echo ok", workdir: overrideDir },
+          overrideDir,
+        );
       });
     });
   });
@@ -222,7 +190,7 @@ describe("workspace path resolution", () => {
 
 describe("sandboxed workspace paths", () => {
   it("uses sandbox workspace for relative read/write/edit", async () => {
-    await withTempDir("hanzo-bot-sandbox-", async (sandboxDir) => {
+    await withTempDir("bot-sandbox-", async (sandboxDir) => {
       await withTempDir("bot-workspace-", async (workspaceDir) => {
         const sandbox = createPiToolsSandboxContext({
           workspaceDir: sandboxDir,

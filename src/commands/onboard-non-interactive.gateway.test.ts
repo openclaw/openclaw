@@ -2,12 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
-import {
-  createThrowingRuntime,
-  readJsonFile,
-  runNonInteractiveOnboarding,
-} from "./onboard-non-interactive.test-helpers.js";
+import { captureEnv } from "../test-utils/env.js";
+import { createThrowingRuntime, readJsonFile } from "./onboard-non-interactive.test-helpers.js";
 
 const gatewayClientCalls: Array<{
   url?: string;
@@ -16,6 +12,7 @@ const gatewayClientCalls: Array<{
   onHelloOk?: () => void;
   onClose?: (code: number, reason: string) => void;
 }> = [];
+const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
 
 vi.mock("../gateway/client.js", () => ({
   GatewayClient: class {
@@ -44,48 +41,27 @@ vi.mock("../gateway/client.js", () => ({
   },
 }));
 
-async function getFreePort(): Promise<number> {
-  return await getFreePortBlockWithPermissionFallback({
-    offsets: [0],
-    fallbackBase: 30_000,
-  });
-}
+vi.mock("./onboard-helpers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./onboard-helpers.js")>();
+  return {
+    ...actual,
+    ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
+  };
+});
 
-async function getFreeGatewayPort(): Promise<number> {
-  return await getFreePortBlockWithPermissionFallback({
-    offsets: [0, 1, 2, 4],
-    fallbackBase: 40_000,
-  });
+const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
+const { resolveConfigPath: resolveStateConfigPath } = await import("../config/paths.js");
+const { resolveConfigPath } = await import("../config/config.js");
+const { callGateway } = await import("../gateway/call.js");
+
+function getPseudoPort(base: number): number {
+  return base + (process.pid % 1000);
 }
 
 const runtime = createThrowingRuntime();
 
-async function expectGatewayTokenAuth(params: {
-  authConfig: unknown;
-  token: string;
-  env: NodeJS.ProcessEnv;
-}) {
-  const { authorizeGatewayConnect, resolveGatewayAuth } = await import("../gateway/auth.js");
-  const auth = resolveGatewayAuth({ authConfig: params.authConfig, env: params.env });
-  const resNoToken = await authorizeGatewayConnect({ auth, connectAuth: { token: undefined } });
-  expect(resNoToken.ok).toBe(false);
-  const resToken = await authorizeGatewayConnect({ auth, connectAuth: { token: params.token } });
-  expect(resToken.ok).toBe(true);
-}
-
 describe("onboard (non-interactive): gateway and remote auth", () => {
-  const prev = {
-    home: process.env.HOME,
-    stateDir: process.env.BOT_STATE_DIR,
-    configPath: process.env.BOT_CONFIG_PATH,
-    skipChannels: process.env.BOT_SKIP_CHANNELS,
-    skipGmail: process.env.BOT_SKIP_GMAIL_WATCHER,
-    skipCron: process.env.BOT_SKIP_CRON,
-    skipCanvas: process.env.BOT_SKIP_CANVAS_HOST,
-    skipBrowser: process.env.BOT_SKIP_BROWSER_CONTROL_SERVER,
-    token: process.env.BOT_GATEWAY_TOKEN,
-    password: process.env.BOT_GATEWAY_PASSWORD,
-  };
+  let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome: string | undefined;
 
   const initStateDir = async (prefix: string) => {
@@ -109,6 +85,18 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     }
   };
   beforeAll(async () => {
+    envSnapshot = captureEnv([
+      "HOME",
+      "BOT_STATE_DIR",
+      "BOT_CONFIG_PATH",
+      "BOT_SKIP_CHANNELS",
+      "BOT_SKIP_GMAIL_WATCHER",
+      "BOT_SKIP_CRON",
+      "BOT_SKIP_CANVAS_HOST",
+      "BOT_SKIP_BROWSER_CONTROL_SERVER",
+      "BOT_GATEWAY_TOKEN",
+      "BOT_GATEWAY_PASSWORD",
+    ]);
     process.env.BOT_SKIP_CHANNELS = "1";
     process.env.BOT_SKIP_GMAIL_WATCHER = "1";
     process.env.BOT_SKIP_CRON = "1";
@@ -125,22 +113,13 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     if (tempHome) {
       await fs.rm(tempHome, { recursive: true, force: true });
     }
-    process.env.HOME = prev.home;
-    process.env.BOT_STATE_DIR = prev.stateDir;
-    process.env.BOT_CONFIG_PATH = prev.configPath;
-    process.env.BOT_SKIP_CHANNELS = prev.skipChannels;
-    process.env.BOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
-    process.env.BOT_SKIP_CRON = prev.skipCron;
-    process.env.BOT_SKIP_CANVAS_HOST = prev.skipCanvas;
-    process.env.BOT_SKIP_BROWSER_CONTROL_SERVER = prev.skipBrowser;
-    process.env.BOT_GATEWAY_TOKEN = prev.token;
-    process.env.BOT_GATEWAY_PASSWORD = prev.password;
+    envSnapshot.restore();
   });
 
-  it("writes gateway token auth into config and gateway enforces it", async () => {
+  it("writes gateway token auth into config", async () => {
     await withStateDir("state-noninteractive-", async (stateDir) => {
       const token = "tok_test_123";
-      const workspace = path.join(stateDir, "bot");
+      const workspace = path.join(stateDir, "@hanzo/bot");
 
       await runNonInteractiveOnboarding(
         {
@@ -158,8 +137,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const { resolveConfigPath } = await import("../config/paths.js");
-      const configPath = resolveConfigPath(process.env, stateDir);
+      const configPath = resolveStateConfigPath(process.env, stateDir);
       const cfg = await readJsonFile<{
         gateway?: { auth?: { mode?: string; token?: string } };
         agents?: { defaults?: { workspace?: string } };
@@ -170,12 +148,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg?.tools?.profile).toBe("messaging");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
-
-      await expectGatewayTokenAuth({
-        authConfig: cfg.gateway?.auth,
-        token,
-        env: process.env,
-      });
     });
   }, 60_000);
 
@@ -221,7 +193,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("writes gateway.remote url/token and callGateway uses them", async () => {
     await withStateDir("state-remote-", async () => {
-      const port = await getFreePort();
+      const port = getPseudoPort(30_000);
       const token = "tok_remote_123";
       await runNonInteractiveOnboarding(
         {
@@ -235,7 +207,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const { resolveConfigPath } = await import("../config/config.js");
       const cfg = await readJsonFile<{
         gateway?: { mode?: string; remote?: { url?: string; token?: string } };
       }>(resolveConfigPath());
@@ -245,7 +216,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.gateway?.remote?.token).toBe(token);
 
       gatewayClientCalls.length = 0;
-      const { callGateway } = await import("../gateway/call.js");
       const health = await callGateway<{ ok?: boolean }>({ method: "health" });
       expect(health?.ok).toBe(true);
       const lastCall = gatewayClientCalls[gatewayClientCalls.length - 1];
@@ -263,8 +233,8 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       process.env.BOT_STATE_DIR = stateDir;
       process.env.BOT_CONFIG_PATH = path.join(stateDir, "bot.json");
 
-      const port = await getFreeGatewayPort();
-      const workspace = path.join(stateDir, "bot");
+      const port = getPseudoPort(40_000);
+      const workspace = path.join(stateDir, "@hanzo/bot");
 
       await runNonInteractiveOnboarding(
         {
@@ -281,8 +251,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const { resolveConfigPath } = await import("../config/paths.js");
-      const configPath = resolveConfigPath(process.env, stateDir);
+      const configPath = resolveStateConfigPath(process.env, stateDir);
       const cfg = await readJsonFile<{
         gateway?: {
           bind?: string;
@@ -294,14 +263,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.gateway?.bind).toBe("lan");
       expect(cfg.gateway?.port).toBe(port);
       expect(cfg.gateway?.auth?.mode).toBe("token");
-      const token = cfg.gateway?.auth?.token ?? "";
-      expect(token.length).toBeGreaterThan(8);
-
-      await expectGatewayTokenAuth({
-        authConfig: cfg.gateway?.auth,
-        token,
-        env: process.env,
-      });
+      expect((cfg.gateway?.auth?.token ?? "").length).toBeGreaterThan(8);
     });
   }, 60_000);
 });

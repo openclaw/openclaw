@@ -16,7 +16,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 const mocks = vi.hoisted(() => ({
   sendMessageDiscord: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   sendMessageIMessage: vi.fn(async () => ({ messageId: "ok" })),
-  sendMessageMSTeams: vi.fn(async () => ({
+  sendMessageMSTeams: vi.fn(async (_params: unknown) => ({
     messageId: "m1",
     conversationId: "c1",
   })),
@@ -64,6 +64,9 @@ const { routeReply } = await import("./route-reply.js");
 const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
   plugins: [],
   tools: [],
+  hooks: [],
+  typedHooks: [],
+  commands: [],
   channels,
   providers: [],
   gatewayHandlers: {},
@@ -140,6 +143,18 @@ describe("routeReply", () => {
     expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
   });
 
+  it("suppresses reasoning payloads", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const res = await routeReply({
+      payload: { text: "Reasoning:\n_step_", isReasoning: true },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expect(res.ok).toBe(true);
+    expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+  });
+
   it("drops silent token payloads", async () => {
     mocks.sendMessageSlack.mockClear();
     const res = await routeReply({
@@ -152,7 +167,7 @@ describe("routeReply", () => {
     expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
   });
 
-  it("drops payloads that start with the silent token", async () => {
+  it("does not drop payloads that merely start with the silent token", async () => {
     mocks.sendMessageSlack.mockClear();
     const res = await routeReply({
       payload: { text: `${SILENT_REPLY_TOKEN} -- (why am I here?)` },
@@ -161,7 +176,11 @@ describe("routeReply", () => {
       cfg: {} as never,
     });
     expect(res.ok).toBe(true);
-    expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      `${SILENT_REPLY_TOKEN} -- (why am I here?)`,
+      expect.any(Object),
+    );
   });
 
   it("applies responsePrefix when routing", async () => {

@@ -3,8 +3,8 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { resolveBotAgentDir } from "../../agents/agent-paths.js";
 import {
   resolveAgentDir,
+  resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
-  resolveAgentModelPrimary,
 } from "../../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
@@ -27,6 +27,10 @@ import {
 import { formatCliCommand } from "../../cli/command-format.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { CONFIG_PATH } from "../../config/config.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -76,7 +80,7 @@ export async function modelsStatusCommand(
   const cfg = await loadModelsConfig({ commandName: "models status", runtime });
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
   const agentDir = agentId ? resolveAgentDir(cfg, agentId) : resolveBotAgentDir();
-  const agentModelPrimary = agentId ? resolveAgentModelPrimary(cfg, agentId) : undefined;
+  const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
     : undefined;
@@ -88,24 +92,14 @@ export async function modelsStatusCommand(
         defaultModel: DEFAULT_MODEL,
       });
 
-  const modelConfig = cfg.agents?.defaults?.model as
-    | { primary?: string; fallbacks?: string[] }
-    | string
-    | undefined;
-  const imageConfig = cfg.agents?.defaults?.imageModel as
-    | { primary?: string; fallbacks?: string[] }
-    | string
-    | undefined;
-  const rawDefaultsModel =
-    typeof modelConfig === "string" ? modelConfig.trim() : (modelConfig?.primary?.trim() ?? "");
+  const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
   const rawModel = agentModelPrimary ?? rawDefaultsModel;
   const resolvedLabel = `${resolved.provider}/${resolved.model}`;
   const defaultLabel = rawModel || resolvedLabel;
-  const defaultsFallbacks = typeof modelConfig === "object" ? (modelConfig?.fallbacks ?? []) : [];
+  const defaultsFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
-  const imageModel =
-    typeof imageConfig === "string" ? imageConfig.trim() : (imageConfig?.primary?.trim() ?? "");
-  const imageFallbacks = typeof imageConfig === "object" ? (imageConfig?.fallbacks ?? []) : [];
+  const imageModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
+  const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
   const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<Record<string, string>>(
     (acc, [key, entry]) => {
       const alias = typeof entry?.alias === "string" ? entry.alias.trim() : undefined;
@@ -543,8 +537,8 @@ export async function modelsStatusCommand(
     for (const provider of missingProvidersInUse) {
       const hint =
         provider === "anthropic"
-          ? `Run \`claude setup-token\`, then \`${formatCliCommand("hanzo-bot models auth setup-token")}\` or \`${formatCliCommand("hanzo-bot configure")}\`.`
-          : `Run \`${formatCliCommand("hanzo-bot configure")}\` or set an API key env var.`;
+          ? `Run \`claude setup-token\`, then \`${formatCliCommand("bot models auth setup-token")}\` or \`${formatCliCommand("bot configure")}\`.`
+          : `Run \`${formatCliCommand("bot configure")}\` or set an API key env var.`;
       runtime.log(`- ${theme.heading(provider)} ${hint}`);
     }
   }

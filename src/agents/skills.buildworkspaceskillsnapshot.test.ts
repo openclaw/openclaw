@@ -51,7 +51,7 @@ async function cloneTemplateDir(templateDir: string, prefix: string): Promise<st
 
 describe("buildWorkspaceSkillSnapshot", () => {
   it("returns an empty snapshot when skills dirs are missing", async () => {
-    const workspaceDir = await tempDirs.make("bot-");
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
 
     const snapshot = withWorkspaceHome(workspaceDir, () =>
       buildWorkspaceSkillSnapshot(workspaceDir, {
@@ -65,7 +65,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("omits disable-model-invocation skills from the prompt", async () => {
-    const workspaceDir = await tempDirs.make("bot-");
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "visible-skill"),
       name: "visible-skill",
@@ -94,7 +94,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("keeps prompt output aligned with buildWorkspaceSkillsPrompt", async () => {
-    const workspaceDir = await tempDirs.make("bot-");
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "visible"),
       name: "visible",
@@ -139,17 +139,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("truncates the skills prompt when it exceeds the configured char budget", async () => {
-    const workspaceDir = await tempDirs.make("bot-");
-
-    // Keep fixture size modest while still forcing truncation logic.
-    for (let i = 0; i < 8; i += 1) {
-      const name = `skill-${String(i).padStart(2, "0")}`;
-      await writeSkill({
-        dir: path.join(workspaceDir, "skills", name),
-        name,
-        description: "x".repeat(800),
-      });
-    }
+    const workspaceDir = await cloneTemplateDir(truncationWorkspaceTemplateDir, "workspace");
 
     const snapshot = withWorkspaceHome(workspaceDir, () =>
       buildWorkspaceSkillSnapshot(workspaceDir, {
@@ -171,17 +161,8 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("limits discovery for nested repo-style skills roots (dir/skills/*)", async () => {
-    const workspaceDir = await tempDirs.make("bot-");
-    const repoDir = await tempDirs.make("bot-skills-repo-");
-
-    for (let i = 0; i < 8; i += 1) {
-      const name = `repo-skill-${String(i).padStart(2, "0")}`;
-      await writeSkill({
-        dir: path.join(repoDir, "skills", name),
-        name,
-        description: `Desc ${i}`,
-      });
-    }
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const repoDir = await cloneTemplateDir(nestedRepoTemplateDir, "skills-repo");
 
     const snapshot = withWorkspaceHome(workspaceDir, () =>
       buildWorkspaceSkillSnapshot(workspaceDir, {
@@ -208,7 +189,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("skips skills whose SKILL.md exceeds maxSkillFileBytes", async () => {
-    const workspaceDir = await tempDirs.make("bot-");
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
 
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "small-skill"),
@@ -244,8 +225,8 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("detects nested skills roots beyond the first 25 entries", async () => {
-    const workspaceDir = await tempDirs.make("bot-");
-    const repoDir = await tempDirs.make("bot-skills-repo-");
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const repoDir = await fixtureSuite.createCaseDir("skills-repo");
 
     // Create 30 nested dirs, but only the last one is an actual skill.
     for (let i = 0; i < 30; i += 1) {
@@ -283,8 +264,8 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("enforces maxSkillFileBytes for root-level SKILL.md", async () => {
-    const workspaceDir = await tempDirs.make("bot-");
-    const rootSkillDir = await tempDirs.make("bot-root-skill-");
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const rootSkillDir = await fixtureSuite.createCaseDir("root-skill");
 
     await writeSkill({
       dir: rootSkillDir,

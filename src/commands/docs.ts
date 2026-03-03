@@ -5,7 +5,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
 
-const SEARCH_TOOL = "https://docs.hanzo.bot/mcp.SearchHanzoBot";
+const SEARCH_TOOL = "https://docs.hanzo.bot/mcp.SearchBot";
 const SEARCH_TIMEOUT_MS = 30_000;
 const DEFAULT_SNIPPET_MAX = 220;
 
@@ -163,10 +163,10 @@ export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEn
     const docs = formatDocsLink("/", "docs.hanzo.bot");
     if (isRich()) {
       runtime.log(`${theme.muted("Docs:")} ${docs}`);
-      runtime.log(`${theme.muted("Search:")} ${formatCliCommand('hanzo-bot docs "your query"')}`);
+      runtime.log(`${theme.muted("Search:")} ${formatCliCommand('bot docs "your query"')}`);
     } else {
       runtime.log("Docs: https://docs.hanzo.bot/");
-      runtime.log(`Search: ${formatCliCommand('hanzo-bot docs "your query"')}`);
+      runtime.log(`Search: ${formatCliCommand('bot docs "your query"')}`);
     }
     return;
   }

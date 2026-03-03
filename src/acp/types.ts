@@ -20,15 +20,15 @@ export type AcpServerOptions = {
   requireExistingSession?: boolean;
   resetSession?: boolean;
   prefixCwd?: boolean;
-  verbose?: boolean;
   sessionCreateRateLimit?: {
     maxRequests?: number;
     windowMs?: number;
   };
+  verbose?: boolean;
 };
 
 export const ACP_AGENT_INFO = {
   name: "bot-acp",
-  title: "Hanzo Bot ACP Gateway",
+  title: "Bot ACP Gateway",
   version: VERSION,
 };

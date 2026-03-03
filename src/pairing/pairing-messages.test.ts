@@ -54,7 +54,7 @@ describe("buildPairingReply", () => {
       expect(text).toContain(`Pairing code: ${testCase.code}`);
       // CLI commands should respect BOT_PROFILE when set (most tests run with isolated profile)
       const commandRe = new RegExp(
-        `hanzo-bot --profile isolated pairing approve ${testCase.channel} ${testCase.code}`,
+        `(?:bot|bot) --profile isolated pairing approve ${testCase.channel} ${testCase.code}`,
       );
       expect(text).toMatch(commandRe);
     });

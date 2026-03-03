@@ -87,7 +87,7 @@ async function resolveCronAnnounceSessionKey(params: {
   return params.fallbackSessionKey;
 }
 
-export type SuccessfulDeliveryTarget = DeliveryTargetResolution & { ok: true; to: string };
+export type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
 type DispatchCronDeliveryParams = {
   cfg: BotConfig;
@@ -175,7 +175,7 @@ export async function dispatchCronDelivery(
         });
       }
       deliveryAttempted = true;
-      const _deliverySession = buildOutboundSessionContext({
+      const deliverySession = buildOutboundSessionContext({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
         sessionKey: params.agentSessionKey,
@@ -187,6 +187,7 @@ export async function dispatchCronDelivery(
         accountId: delivery.accountId,
         threadId: delivery.threadId,
         payloads: payloadsForDelivery,
+        session: deliverySession,
         identity,
         bestEffort: params.deliveryBestEffort,
         deps: createOutboundSendDeps(params.deps),
@@ -374,7 +375,7 @@ export async function dispatchCronDelivery(
     if (!params.resolvedDelivery.ok) {
       if (!params.deliveryBestEffort) {
         return {
-          result: failDeliveryTarget(params.resolvedDelivery.error!.message),
+          result: failDeliveryTarget(params.resolvedDelivery.error.message),
           delivered,
           deliveryAttempted,
           summary,
@@ -383,7 +384,7 @@ export async function dispatchCronDelivery(
           deliveryPayloads,
         };
       }
-      logWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error!.message}`);
+      logWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
       return {
         result: params.withRunSession({
           status: "ok",
@@ -412,9 +413,7 @@ export async function dispatchCronDelivery(
     const useDirectDelivery =
       params.deliveryPayloadHasStructuredContent || params.resolvedDelivery.threadId != null;
     if (useDirectDelivery) {
-      const directResult = await deliverViaDirect(
-        params.resolvedDelivery as SuccessfulDeliveryTarget,
-      );
+      const directResult = await deliverViaDirect(params.resolvedDelivery);
       if (directResult) {
         return {
           result: directResult,
@@ -427,9 +426,7 @@ export async function dispatchCronDelivery(
         };
       }
     } else {
-      const announceResult = await deliverViaAnnounce(
-        params.resolvedDelivery as SuccessfulDeliveryTarget,
-      );
+      const announceResult = await deliverViaAnnounce(params.resolvedDelivery);
       if (announceResult) {
         return {
           result: announceResult,

@@ -34,25 +34,7 @@ const hoisted = vi.hoisted(() => {
   const closeSessionMock = vi.fn();
   const initializeSessionMock = vi.fn();
   const state = {
-    cfg: {
-      acp: {
-        enabled: true,
-        backend: "acpx",
-        allowedAgents: ["codex"],
-      },
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-      channels: {
-        discord: {
-          threadBindings: {
-            enabled: true,
-            spawnAcpSessions: true,
-          },
-        },
-      },
-    } as BotConfig,
+    cfg: createDefaultSpawnConfig(),
   };
   return {
     callGatewayMock,
@@ -164,25 +146,7 @@ function expectResolvedIntroTextInBindMetadata(): void {
 
 describe("spawnAcpDirect", () => {
   beforeEach(() => {
-    hoisted.state.cfg = {
-      acp: {
-        enabled: true,
-        backend: "acpx",
-        allowedAgents: ["codex"],
-      },
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-      channels: {
-        discord: {
-          threadBindings: {
-            enabled: true,
-            spawnAcpSessions: true,
-          },
-        },
-      },
-    } satisfies BotConfig;
+    hoisted.state.cfg = createDefaultSpawnConfig();
 
     hoisted.callGatewayMock.mockReset().mockImplementation(async (argsUnknown: unknown) => {
       const args = argsUnknown as { method?: string };

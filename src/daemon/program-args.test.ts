@@ -46,7 +46,7 @@ describe("resolveGatewayProgramArguments", () => {
   });
 
   it("prefers symlinked path over realpath for stable service config", async () => {
-    // Simulates pnpm global install where node_modules/hanzo-bot is a symlink
+    // Simulates pnpm global install where node_modules/bot is a symlink
     // to .pnpm/bot@X.Y.Z/node_modules/bot
     const symlinkPath = path.resolve(
       "/Users/test/Library/pnpm/global/5/node_modules/bot/dist/entry.js",

@@ -11,7 +11,7 @@ import {
 } from "./policy.js";
 
 describe("acp policy", () => {
-  it("treats ACP as enabled by default", () => {
+  it("treats ACP + ACP dispatch as enabled by default", () => {
     const cfg = {} satisfies BotConfig;
     expect(isAcpEnabledByPolicy(cfg)).toBe(true);
     expect(isAcpDispatchEnabledByPolicy(cfg)).toBe(true);

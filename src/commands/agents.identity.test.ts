@@ -50,7 +50,7 @@ async function runIdentityCommandFromWorkspace(workspace: string, fromIdentity =
 
 describe("agents set-identity command", () => {
   beforeEach(() => {
-    configMocks.readConfigFileSnapshot.mockReset();
+    configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
@@ -117,7 +117,7 @@ describe("agents set-identity command", () => {
     const { workspace } = await createIdentityWorkspace();
     await writeIdentityFile(workspace, [
       "- Name: Bot",
-      "- Theme: autonomous workforce assistant",
+      "- Theme: space lobster",
       "- Emoji: :)",
       "- Avatar: avatars/bot.png",
       "",
@@ -133,7 +133,7 @@ describe("agents set-identity command", () => {
         workspace,
         fromIdentity: true,
         name: "Nova",
-        emoji: "B",
+        emoji: "🦞",
         avatar: "https://example.com/override.png",
       },
       runtime,
@@ -141,8 +141,8 @@ describe("agents set-identity command", () => {
 
     expect(getWrittenMainIdentity()).toEqual({
       name: "Nova",
-      theme: "autonomous workforce assistant",
-      emoji: "B",
+      theme: "space lobster",
+      emoji: "🦞",
       avatar: "https://example.com/override.png",
     });
   });

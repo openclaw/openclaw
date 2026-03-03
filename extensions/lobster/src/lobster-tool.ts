@@ -1,240 +1,266 @@
-/**
- * Lobster Workflow Tool
- *
- * Provides typed pipeline execution with resumable human-approval gates.
- * Pipelines are defined as DAGs of steps; each step can optionally require
- * human approval before continuing.  State is persisted to disk so that
- * long-running pipelines survive process restarts.
- */
+import { Type } from "@sinclair/typebox";
+import { spawn } from "node:child_process";
+import path from "node:path";
+import type { BotPluginApi } from "../../../src/plugins/types.js";
+import { resolveWindowsLobsterSpawn } from "./windows-spawn.js";
 
-import type { BotPluginApi } from "bot/plugin-sdk";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+type LobsterEnvelope =
+  | {
+      ok: true;
+      status: "ok" | "needs_approval" | "cancelled";
+      output: unknown[];
+      requiresApproval: null | {
+        type: "approval_request";
+        prompt: string;
+        items: unknown[];
+        resumeToken?: string;
+      };
+    }
+  | {
+      ok: false;
+      error: { type?: string; message: string };
+    };
 
-// ── Pipeline types ───────────────────────────────────────────────────────────
-
-export type PipelineStepStatus =
-  | "pending"
-  | "running"
-  | "awaiting_approval"
-  | "approved"
-  | "rejected"
-  | "completed"
-  | "failed";
-
-interface PipelineStep {
-  id: string;
-  label: string;
-  status: PipelineStepStatus;
-  requiresApproval: boolean;
-  output?: string;
-  error?: string;
-  startedAt?: string;
-  completedAt?: string;
+function normalizeForCwdSandbox(p: string): string {
+  const normalized = path.normalize(p);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-interface Pipeline {
-  id: string;
-  name: string;
-  steps: PipelineStep[];
-  createdAt: string;
-  updatedAt: string;
-  status: "active" | "completed" | "failed" | "paused";
-}
-
-// ── State persistence ────────────────────────────────────────────────────────
-
-function resolvePipelinesDir(api: BotPluginApi): string {
-  const dir = api.resolvePath("~/.hanzo/bot/lobster/pipelines");
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+function resolveCwd(cwdRaw: unknown): string {
+  if (typeof cwdRaw !== "string" || !cwdRaw.trim()) {
+    return process.cwd();
   }
-  return dir;
-}
-
-function loadPipeline(dir: string, id: string): Pipeline | null {
-  const filePath = join(dir, `${id}.json`);
-  if (!existsSync(filePath)) return null;
-  try {
-    return JSON.parse(readFileSync(filePath, "utf-8")) as Pipeline;
-  } catch {
-    return null;
+  const cwd = cwdRaw.trim();
+  if (path.isAbsolute(cwd)) {
+    throw new Error("cwd must be a relative path");
   }
+  const base = process.cwd();
+  const resolved = path.resolve(base, cwd);
+
+  const rel = path.relative(normalizeForCwdSandbox(base), normalizeForCwdSandbox(resolved));
+  if (rel === "" || rel === ".") {
+    return resolved;
+  }
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error("cwd must stay within the gateway working directory");
+  }
+  return resolved;
 }
 
-function savePipeline(dir: string, pipeline: Pipeline): void {
-  pipeline.updatedAt = new Date().toISOString();
-  writeFileSync(join(dir, `${pipeline.id}.json`), JSON.stringify(pipeline, null, 2));
+async function runLobsterSubprocessOnce(params: {
+  execPath: string;
+  argv: string[];
+  cwd: string;
+  timeoutMs: number;
+  maxStdoutBytes: number;
+}) {
+  const { execPath, argv, cwd } = params;
+  const timeoutMs = Math.max(200, params.timeoutMs);
+  const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
+
+  const env = { ...process.env, LOBSTER_MODE: "tool" } as Record<string, string | undefined>;
+  const nodeOptions = env.NODE_OPTIONS ?? "";
+  if (nodeOptions.includes("--inspect")) {
+    delete env.NODE_OPTIONS;
+  }
+  const spawnTarget =
+    process.platform === "win32"
+      ? resolveWindowsLobsterSpawn(execPath, argv, env)
+      : { command: execPath, argv };
+
+  return await new Promise<{ stdout: string }>((resolve, reject) => {
+    const child = spawn(spawnTarget.command, spawnTarget.argv, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env,
+      windowsHide: spawnTarget.windowsHide,
+    });
+
+    let stdout = "";
+    let stdoutBytes = 0;
+    let stderr = "";
+    let settled = false;
+
+    const settle = (
+      result: { ok: true; value: { stdout: string } } | { ok: false; error: Error },
+    ) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (result.ok) {
+        resolve(result.value);
+      } else {
+        reject(result.error);
+      }
+    };
+
+    const failAndTerminate = (message: string) => {
+      try {
+        child.kill("SIGKILL");
+      } finally {
+        settle({ ok: false, error: new Error(message) });
+      }
+    };
+
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+
+    child.stdout?.on("data", (chunk) => {
+      const str = String(chunk);
+      stdoutBytes += Buffer.byteLength(str, "utf8");
+      if (stdoutBytes > maxStdoutBytes) {
+        failAndTerminate("lobster output exceeded maxStdoutBytes");
+        return;
+      }
+      stdout += str;
+    });
+
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+
+    const timer = setTimeout(() => {
+      failAndTerminate("lobster subprocess timed out");
+    }, timeoutMs);
+
+    child.once("error", (err) => {
+      settle({ ok: false, error: err });
+    });
+
+    child.once("exit", (code) => {
+      if (code !== 0) {
+        settle({
+          ok: false,
+          error: new Error(`lobster failed (${code ?? "?"}): ${stderr.trim() || stdout.trim()}`),
+        });
+        return;
+      }
+      settle({ ok: true, value: { stdout } });
+    });
+  });
 }
 
-// ── Tool implementation ──────────────────────────────────────────────────────
+function parseEnvelope(stdout: string): LobsterEnvelope {
+  const trimmed = stdout.trim();
 
-function textResult(text: string) {
-  return { content: [{ type: "text" as const, text }], details: {} };
+  const tryParse = (input: string) => {
+    try {
+      return JSON.parse(input) as unknown;
+    } catch {
+      return undefined;
+    }
+  };
+
+  let parsed: unknown = tryParse(trimmed);
+
+  // Some environments can leak extra stdout (e.g. warnings/logs) before the
+  // final JSON envelope. Be tolerant and parse the last JSON-looking suffix.
+  if (parsed === undefined) {
+    const suffixMatch = trimmed.match(/({[\s\S]*}|\[[\s\S]*])\s*$/);
+    if (suffixMatch?.[1]) {
+      parsed = tryParse(suffixMatch[1]);
+    }
+  }
+
+  if (parsed === undefined) {
+    throw new Error("lobster returned invalid JSON");
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("lobster returned invalid JSON envelope");
+  }
+
+  const ok = (parsed as { ok?: unknown }).ok;
+  if (ok === true || ok === false) {
+    return parsed as LobsterEnvelope;
+  }
+
+  throw new Error("lobster returned invalid JSON envelope");
+}
+
+function buildLobsterArgv(action: string, params: Record<string, unknown>): string[] {
+  if (action === "run") {
+    const pipeline = typeof params.pipeline === "string" ? params.pipeline : "";
+    if (!pipeline.trim()) {
+      throw new Error("pipeline required");
+    }
+    const argv = ["run", "--mode", "tool", pipeline];
+    const argsJson = typeof params.argsJson === "string" ? params.argsJson : "";
+    if (argsJson.trim()) {
+      argv.push("--args-json", argsJson);
+    }
+    return argv;
+  }
+  if (action === "resume") {
+    const token = typeof params.token === "string" ? params.token : "";
+    if (!token.trim()) {
+      throw new Error("token required");
+    }
+    const approve = params.approve;
+    if (typeof approve !== "boolean") {
+      throw new Error("approve required");
+    }
+    return ["resume", "--token", token, "--approve", approve ? "yes" : "no"];
+  }
+  throw new Error(`Unknown action: ${action}`);
 }
 
 export function createLobsterTool(api: BotPluginApi) {
-  const pipelinesDir = resolvePipelinesDir(api);
-
   return {
-    name: "lobster_workflow",
+    name: "lobster",
     label: "Lobster Workflow",
     description:
-      "Manage typed workflow pipelines with resumable human-approval gates. " +
-      "Actions: create (new pipeline), status (inspect pipeline), approve/reject (gate step), " +
-      "advance (run next pending step), list (show all pipelines).",
-    parameters: {
-      type: "object" as const,
-      properties: {
-        action: {
-          type: "string",
-          enum: ["create", "status", "approve", "reject", "advance", "list"],
+      "Run Lobster pipelines as a local-first workflow runtime (typed JSON envelope + resumable approvals).",
+    parameters: Type.Object({
+      // NOTE: Prefer string enums in tool schemas; some providers reject unions/anyOf.
+      action: Type.Unsafe<"run" | "resume">({ type: "string", enum: ["run", "resume"] }),
+      pipeline: Type.Optional(Type.String()),
+      argsJson: Type.Optional(Type.String()),
+      token: Type.Optional(Type.String()),
+      approve: Type.Optional(Type.Boolean()),
+      cwd: Type.Optional(
+        Type.String({
           description:
-            "create: create a new pipeline with steps. status: view pipeline state. " +
-            "approve/reject: act on an awaiting_approval step. advance: run next pending step. " +
-            "list: show all pipelines.",
-        },
-        pipeline_id: {
-          type: "string",
-          description: "Pipeline ID (required for status, approve, reject, advance)",
-        },
-        step_id: {
-          type: "string",
-          description: "Step ID (required for approve/reject)",
-        },
-        name: {
-          type: "string",
-          description: "Pipeline name (for create)",
-        },
-        steps: {
-          type: "string",
-          description:
-            'JSON array of step definitions for create, e.g. [{"id":"build","label":"Build","requiresApproval":false}]',
-        },
-      },
-      required: ["action"],
-    },
-    async execute(_toolCallId: string, params: Record<string, unknown>) {
-      const action = params.action as string;
-
-      switch (action) {
-        case "list": {
-          const { readdirSync } = await import("node:fs");
-          const files = readdirSync(pipelinesDir).filter((f) => f.endsWith(".json"));
-          if (files.length === 0) return textResult("No pipelines found.");
-          const summaries = files.map((f) => {
-            const p = loadPipeline(pipelinesDir, f.replace(".json", ""));
-            if (!p) return `- (unreadable: ${f})`;
-            const pending = p.steps.filter((s) => s.status === "awaiting_approval").length;
-            return `- **${p.name}** (${p.id}) — ${p.status}${pending > 0 ? `, ${pending} awaiting approval` : ""}`;
-          });
-          return textResult(summaries.join("\n"));
-        }
-
-        case "create": {
-          const name = typeof params.name === "string" ? params.name.trim() : "Untitled Pipeline";
-          let stepDefs: Array<{ id: string; label: string; requiresApproval?: boolean }>;
-          try {
-            stepDefs = typeof params.steps === "string" ? JSON.parse(params.steps) : [];
-          } catch {
-            return textResult("Invalid steps JSON.");
-          }
-          if (!Array.isArray(stepDefs) || stepDefs.length === 0) {
-            return textResult("Provide at least one step definition.");
-          }
-          const id = `pipeline-${Date.now().toString(36)}`;
-          const pipeline: Pipeline = {
-            id,
-            name,
-            steps: stepDefs.map((s) => ({
-              id: s.id,
-              label: s.label ?? s.id,
-              status: "pending" as const,
-              requiresApproval: s.requiresApproval ?? false,
-            })),
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            status: "active",
-          };
-          savePipeline(pipelinesDir, pipeline);
-          return textResult(
-            `Pipeline **${name}** created with ${pipeline.steps.length} steps (id: ${id}).`,
-          );
-        }
-
-        case "status": {
-          const pipelineId = typeof params.pipeline_id === "string" ? params.pipeline_id : "";
-          const pipeline = loadPipeline(pipelinesDir, pipelineId);
-          if (!pipeline) return textResult(`Pipeline "${pipelineId}" not found.`);
-          const lines = [
-            `## ${pipeline.name} (${pipeline.status})`,
-            "",
-            ...pipeline.steps.map(
-              (s) =>
-                `- **${s.label}** [${s.status}]${s.output ? ` — ${s.output}` : ""}${s.error ? ` ERROR: ${s.error}` : ""}`,
-            ),
-          ];
-          return textResult(lines.join("\n"));
-        }
-
-        case "approve":
-        case "reject": {
-          const pipelineId = typeof params.pipeline_id === "string" ? params.pipeline_id : "";
-          const stepId = typeof params.step_id === "string" ? params.step_id : "";
-          const pipeline = loadPipeline(pipelinesDir, pipelineId);
-          if (!pipeline) return textResult(`Pipeline "${pipelineId}" not found.`);
-          const step = pipeline.steps.find((s) => s.id === stepId);
-          if (!step) return textResult(`Step "${stepId}" not found in pipeline.`);
-          if (step.status !== "awaiting_approval") {
-            return textResult(
-              `Step "${stepId}" is not awaiting approval (current: ${step.status}).`,
-            );
-          }
-          step.status = action === "approve" ? "approved" : "rejected";
-          step.completedAt = new Date().toISOString();
-          if (action === "reject") {
-            pipeline.status = "failed";
-            step.error = "Rejected by user";
-          }
-          savePipeline(pipelinesDir, pipeline);
-          return textResult(`Step **${step.label}** ${action}d.`);
-        }
-
-        case "advance": {
-          const pipelineId = typeof params.pipeline_id === "string" ? params.pipeline_id : "";
-          const pipeline = loadPipeline(pipelinesDir, pipelineId);
-          if (!pipeline) return textResult(`Pipeline "${pipelineId}" not found.`);
-          if (pipeline.status !== "active") {
-            return textResult(`Pipeline is ${pipeline.status}, cannot advance.`);
-          }
-          const nextStep = pipeline.steps.find(
-            (s) => s.status === "pending" || s.status === "approved",
-          );
-          if (!nextStep) {
-            pipeline.status = "completed";
-            savePipeline(pipelinesDir, pipeline);
-            return textResult("All steps completed. Pipeline finished.");
-          }
-          if (nextStep.requiresApproval && nextStep.status === "pending") {
-            nextStep.status = "awaiting_approval";
-            savePipeline(pipelinesDir, pipeline);
-            return textResult(
-              `Step **${nextStep.label}** requires approval. Use approve/reject with step_id="${nextStep.id}".`,
-            );
-          }
-          nextStep.status = "running";
-          nextStep.startedAt = new Date().toISOString();
-          // Simulate step execution (real pipelines would dispatch actual work)
-          nextStep.status = "completed";
-          nextStep.completedAt = new Date().toISOString();
-          nextStep.output = "Step completed successfully.";
-          savePipeline(pipelinesDir, pipeline);
-          return textResult(`Step **${nextStep.label}** completed.`);
-        }
-
-        default:
-          return textResult(`Unknown action: ${action}`);
+            "Relative working directory (optional). Must stay within the gateway working directory.",
+        }),
+      ),
+      timeoutMs: Type.Optional(Type.Number()),
+      maxStdoutBytes: Type.Optional(Type.Number()),
+    }),
+    async execute(_id: string, params: Record<string, unknown>) {
+      const action = typeof params.action === "string" ? params.action.trim() : "";
+      if (!action) {
+        throw new Error("action required");
       }
+
+      const execPath = "lobster";
+      const cwd = resolveCwd(params.cwd);
+      const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 20_000;
+      const maxStdoutBytes =
+        typeof params.maxStdoutBytes === "number" ? params.maxStdoutBytes : 512_000;
+
+      const argv = buildLobsterArgv(action, params);
+
+      if (api.runtime?.version && api.logger?.debug) {
+        api.logger.debug(`lobster plugin runtime=${api.runtime.version}`);
+      }
+
+      const { stdout } = await runLobsterSubprocessOnce({
+        execPath,
+        argv,
+        cwd,
+        timeoutMs,
+        maxStdoutBytes,
+      });
+
+      const envelope = parseEnvelope(stdout);
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
+        details: envelope,
+      };
     },
   };
 }

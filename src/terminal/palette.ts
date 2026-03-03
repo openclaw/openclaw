@@ -1,12 +1,12 @@
-// Bot palette tokens for CLI/UI theming.
+// Lobster palette tokens for CLI/UI theming. "lobster seam" == use this palette.
 // Keep in sync with docs/cli/index.md (CLI palette section).
-export const BOT_PALETTE = {
-  accent: "#E0E0E0",
-  accentBright: "#FFFFFF",
-  accentDim: "#A0A0A0",
-  info: "#C0C0C0",
-  success: "#B0B0B0",
-  warn: "#D0D0D0",
-  error: "#909090",
-  muted: "#707070",
+export const LOBSTER_PALETTE = {
+  accent: "#FF5A2D",
+  accentBright: "#FF7A3D",
+  accentDim: "#D14A22",
+  info: "#FF8A5B",
+  success: "#2FBF71",
+  warn: "#FFB020",
+  error: "#E23D2D",
+  muted: "#8B7F77",
 } as const;

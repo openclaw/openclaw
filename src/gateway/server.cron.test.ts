@@ -1,8 +1,10 @@
+import type WebSocket from "ws";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test, vi } from "vitest";
-import { __testing as controlPlaneTestHooks } from "./control-plane-rate-limit.js";
+import { setImmediate as setImmediatePromise } from "node:timers/promises";
+import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
+import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import {
   connectOk,
   cronIsolatedRun,
@@ -13,22 +15,41 @@ import {
   waitForSystemEvent,
 } from "./test-helpers.js";
 
-// Replace fetchWithSsrFGuard with a shim that delegates to globalThis.fetch so
-// the webhook tests can assert on vi.stubGlobal("fetch", ...) without hitting
-// real DNS resolution for .invalid domains.
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(async (params: GuardedFetchOptions) => ({
+    response: new Response("ok", { status: 200 }),
+    finalUrl: params.url,
+    release: async () => {},
+  })),
+);
+
 vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => {
-    const fetcher = globalThis.fetch;
-    const response = await fetcher(params.url, params.init);
-    return { response, finalUrl: params.url, release: async () => {} };
-  },
+  fetchWithSsrFGuard: (...args: unknown[]) =>
+    (
+      fetchWithSsrFGuardMock as unknown as (...innerArgs: unknown[]) => Promise<{
+        response: Response;
+        finalUrl: string;
+        release: () => Promise<void>;
+      }>
+    )(...args),
 }));
 
 installGatewayTestHooks({ scope: "suite" });
+const CRON_WAIT_INTERVAL_MS = 5;
+const CRON_WAIT_TIMEOUT_MS = 3_000;
+const EMPTY_CRON_STORE_CONTENT = JSON.stringify({ version: 1, jobs: [] });
+let cronSuiteTempRootPromise: Promise<string> | null = null;
+let cronSuiteCaseId = 0;
+
+async function getCronSuiteTempRoot(): Promise<string> {
+  if (!cronSuiteTempRootPromise) {
+    cronSuiteTempRootPromise = fs.mkdtemp(path.join(os.tmpdir(), "bot-gw-cron-suite-"));
+  }
+  return await cronSuiteTempRootPromise;
+}
 
 async function yieldToEventLoop() {
-  // Avoid relying on timers (fake timers can leak between tests).
-  await fs.stat(process.cwd()).catch(() => {});
+  await setImmediatePromise();
 }
 
 async function rmTempDir(dir: string) {
@@ -48,33 +69,66 @@ async function rmTempDir(dir: string) {
   await fs.rm(dir, { recursive: true, force: true });
 }
 
-async function waitForNonEmptyFile(pathname: string, timeoutMs = 2000) {
-  const startedAt = process.hrtime.bigint();
-  for (;;) {
-    const raw = await fs.readFile(pathname, "utf-8").catch(() => "");
-    if (raw.trim().length > 0) {
-      return raw;
-    }
-    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-    if (elapsedMs >= timeoutMs) {
-      throw new Error(`timeout waiting for file ${pathname}`);
-    }
-    await yieldToEventLoop();
-  }
+async function waitForCondition(check: () => boolean | Promise<boolean>, timeoutMs = 2000) {
+  await vi.waitFor(
+    async () => {
+      const ok = await check();
+      if (!ok) {
+        throw new Error("condition not met");
+      }
+    },
+    { timeout: timeoutMs, interval: CRON_WAIT_INTERVAL_MS },
+  );
 }
 
-async function waitForCondition(check: () => boolean, timeoutMs = 2000) {
-  const startedAt = process.hrtime.bigint();
-  for (;;) {
-    if (check()) {
-      return;
-    }
-    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-    if (elapsedMs >= timeoutMs) {
-      throw new Error("timeout waiting for condition");
-    }
-    await yieldToEventLoop();
+async function createCronCasePaths(tempPrefix: string): Promise<{
+  dir: string;
+  storePath: string;
+}> {
+  const suiteRoot = await getCronSuiteTempRoot();
+  const dir = path.join(suiteRoot, `${tempPrefix}${cronSuiteCaseId++}`);
+  const storePath = path.join(dir, "cron", "jobs.json");
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  return { dir, storePath };
+}
+
+async function cleanupCronTestRun(params: {
+  ws: { close: () => void };
+  server: { close: () => Promise<void> };
+  prevSkipCron: string | undefined;
+  clearSessionConfig?: boolean;
+}) {
+  params.ws.close();
+  await params.server.close();
+  testState.cronStorePath = undefined;
+  if (params.clearSessionConfig) {
+    testState.sessionConfig = undefined;
   }
+  testState.cronEnabled = undefined;
+  if (params.prevSkipCron === undefined) {
+    delete process.env.BOT_SKIP_CRON;
+    return;
+  }
+  process.env.BOT_SKIP_CRON = params.prevSkipCron;
+}
+
+async function setupCronTestRun(params: {
+  tempPrefix: string;
+  cronEnabled?: boolean;
+  sessionConfig?: { mainKey: string };
+  jobs?: unknown[];
+}): Promise<{ prevSkipCron: string | undefined; dir: string }> {
+  const prevSkipCron = process.env.BOT_SKIP_CRON;
+  process.env.BOT_SKIP_CRON = "0";
+  const { dir, storePath } = await createCronCasePaths(params.tempPrefix);
+  testState.cronStorePath = storePath;
+  testState.sessionConfig = params.sessionConfig;
+  testState.cronEnabled = params.cronEnabled;
+  await fs.writeFile(
+    testState.cronStorePath,
+    params.jobs ? JSON.stringify({ version: 1, jobs: params.jobs }) : EMPTY_CRON_STORE_CONTENT,
+  );
+  return { prevSkipCron, dir };
 }
 
 function expectCronJobIdFromResponse(response: { ok?: unknown; payload?: unknown }) {
@@ -115,15 +169,26 @@ function getWebhookCall(index: number) {
 }
 
 describe("gateway server cron", () => {
-  test("handles cron CRUD, normalization, and patch semantics", { timeout: 120_000 }, async () => {
-    const prevSkipCron = process.env.BOT_SKIP_CRON;
-    process.env.BOT_SKIP_CRON = "0";
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-gw-cron-"));
-    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
-    testState.sessionConfig = { mainKey: "primary" };
-    testState.cronEnabled = false;
-    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
-    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
+  afterAll(async () => {
+    if (!cronSuiteTempRootPromise) {
+      return;
+    }
+    await rmTempDir(await cronSuiteTempRootPromise);
+    cronSuiteTempRootPromise = null;
+    cronSuiteCaseId = 0;
+  });
+
+  beforeEach(() => {
+    // Keep polling helpers deterministic even if other tests left fake timers enabled.
+    vi.useRealTimers();
+  });
+
+  test("handles cron CRUD, normalization, and patch semantics", { timeout: 20_000 }, async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "bot-gw-cron-",
+      sessionConfig: { mainKey: "primary" },
+      cronEnabled: false,
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -172,8 +237,6 @@ describe("gateway server cron", () => {
       const events = await waitForSystemEvent();
       expect(events.some((event) => event.includes("cron route check"))).toBe(true);
 
-      // Reset rate limit before the wrapped cron.add (2 adds + 1 run consumed the budget).
-      controlPlaneTestHooks.resetControlPlaneRateLimitState();
       const wrappedAtMs = Date.now() + 1000;
       const wrappedRes = await rpcReq(ws, "cron.add", {
         data: {
@@ -207,8 +270,6 @@ describe("gateway server cron", () => {
       expect(updated?.schedule?.kind).toBe("at");
       expect(updated?.payload?.kind).toBe("systemEvent");
 
-      // Reset rate limit before patch merge (wrapped add + patch add + update consumed the budget).
-      controlPlaneTestHooks.resetControlPlaneRateLimitState();
       const mergeRes = await rpcReq(ws, "cron.add", {
         name: "patch merge",
         enabled: true,
@@ -221,6 +282,26 @@ describe("gateway server cron", () => {
       const mergeJobIdValue = (mergeRes.payload as { id?: unknown } | null)?.id;
       const mergeJobId = typeof mergeJobIdValue === "string" ? mergeJobIdValue : "";
       expect(mergeJobId.length > 0).toBe(true);
+
+      const noTimeoutRes = await rpcReq(ws, "cron.add", {
+        name: "no-timeout payload",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello", timeoutSeconds: 0 },
+      });
+      expect(noTimeoutRes.ok).toBe(true);
+      const noTimeoutPayload = noTimeoutRes.payload as
+        | {
+            payload?: {
+              kind?: unknown;
+              timeoutSeconds?: unknown;
+            };
+          }
+        | undefined;
+      expect(noTimeoutPayload?.payload?.kind).toBe("agentTurn");
+      expect(noTimeoutPayload?.payload?.timeoutSeconds).toBe(0);
 
       const mergeUpdateRes = await rpcReq(ws, "cron.update", {
         id: mergeJobId,
@@ -264,8 +345,6 @@ describe("gateway server cron", () => {
       expect(modelOnlyPatched?.payload?.message).toBe("hello");
       expect(modelOnlyPatched?.payload?.model).toBe("anthropic/claude-sonnet-4-5");
 
-      // Reset rate limit before legacy delivery patch (3 writes consumed the budget).
-      controlPlaneTestHooks.resetControlPlaneRateLimitState();
       const legacyDeliveryPatchRes = await rpcReq(ws, "cron.update", {
         id: mergeJobId,
         patch: {
@@ -302,20 +381,7 @@ describe("gateway server cron", () => {
       });
       expect(rejectUpdateRes.ok).toBe(false);
 
-      // Reset rate limit before jobId test (reject add + reject update consumed the budget).
-      controlPlaneTestHooks.resetControlPlaneRateLimitState();
-      const jobIdRes = await rpcReq(ws, "cron.add", {
-        name: "jobId test",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
-      });
-      expect(jobIdRes.ok).toBe(true);
-      const jobIdValue = (jobIdRes.payload as { id?: unknown } | null)?.id;
-      const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
-      expect(jobId.length > 0).toBe(true);
+      const jobId = await addMainSystemEventCronJob({ ws, name: "jobId test" });
 
       const jobIdUpdateRes = await rpcReq(ws, "cron.update", {
         jobId,
@@ -328,8 +394,6 @@ describe("gateway server cron", () => {
 
       const disableJobId = await addMainSystemEventCronJob({ ws, name: "disable test" });
 
-      // Reset rate limit before disable update (jobId add + jobId update + disable add consumed the budget).
-      controlPlaneTestHooks.resetControlPlaneRateLimitState();
       const disableUpdateRes = await rpcReq(ws, "cron.update", {
         id: disableJobId,
         patch: { enabled: false },
@@ -338,28 +402,19 @@ describe("gateway server cron", () => {
       const disabled = disableUpdateRes.payload as { enabled?: unknown } | undefined;
       expect(disabled?.enabled).toBe(false);
     } finally {
-      ws.close();
-      await server.close();
-      await rmTempDir(dir);
-      testState.cronStorePath = undefined;
-      testState.sessionConfig = undefined;
-      testState.cronEnabled = undefined;
-      if (prevSkipCron === undefined) {
-        delete process.env.BOT_SKIP_CRON;
-      } else {
-        process.env.BOT_SKIP_CRON = prevSkipCron;
-      }
+      await cleanupCronTestRun({
+        ws,
+        server,
+        prevSkipCron,
+        clearSessionConfig: true,
+      });
     }
   });
 
   test("writes cron run history and auto-runs due jobs", async () => {
-    const prevSkipCron = process.env.BOT_SKIP_CRON;
-    process.env.BOT_SKIP_CRON = "0";
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-gw-cron-log-"));
-    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
-    testState.cronEnabled = undefined;
-    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
-    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
+    const { prevSkipCron, dir } = await setupCronTestRun({
+      tempPrefix: "bot-gw-cron-log-",
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -382,7 +437,11 @@ describe("gateway server cron", () => {
       const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 20_000);
       expect(runRes.ok).toBe(true);
       const logPath = path.join(dir, "cron", "runs", `${jobId}.jsonl`);
-      const raw = await waitForNonEmptyFile(logPath, 5000);
+      let raw = "";
+      await waitForCondition(async () => {
+        raw = await fs.readFile(logPath, "utf-8").catch(() => "");
+        return raw.trim().length > 0;
+      }, CRON_WAIT_TIMEOUT_MS);
       const line = raw
         .split("\n")
         .map((l) => l.trim())
@@ -393,11 +452,13 @@ describe("gateway server cron", () => {
         action?: unknown;
         status?: unknown;
         summary?: unknown;
+        deliveryStatus?: unknown;
       };
       expect(last.action).toBe("finished");
       expect(last.jobId).toBe(jobId);
       expect(last.status).toBe("ok");
       expect(last.summary).toBe("hello");
+      expect(last.deliveryStatus).toBe("not-requested");
 
       const runsRes = await rpcReq(ws, "cron.runs", { id: jobId, limit: 50 });
       expect(runsRes.ok).toBe(true);
@@ -405,6 +466,20 @@ describe("gateway server cron", () => {
       expect(Array.isArray(entries)).toBe(true);
       expect((entries as Array<{ jobId?: unknown }>).at(-1)?.jobId).toBe(jobId);
       expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe("hello");
+      expect((entries as Array<{ deliveryStatus?: unknown }>).at(-1)?.deliveryStatus).toBe(
+        "not-requested",
+      );
+      const allRunsRes = await rpcReq(ws, "cron.runs", {
+        scope: "all",
+        limit: 50,
+        statuses: ["ok"],
+      });
+      expect(allRunsRes.ok).toBe(true);
+      const allEntries = (allRunsRes.payload as { entries?: unknown } | null)?.entries;
+      expect(Array.isArray(allEntries)).toBe(true);
+      expect(
+        (allEntries as Array<{ jobId?: unknown }>).some((entry) => entry.jobId === jobId),
+      ).toBe(true);
 
       const statusRes = await rpcReq(ws, "cron.status", {});
       expect(statusRes.ok).toBe(true);
@@ -428,7 +503,11 @@ describe("gateway server cron", () => {
       const autoJobId = typeof autoJobIdValue === "string" ? autoJobIdValue : "";
       expect(autoJobId.length > 0).toBe(true);
 
-      await waitForNonEmptyFile(path.join(dir, "cron", "runs", `${autoJobId}.jsonl`), 5000);
+      await waitForCondition(async () => {
+        const runsRes = await rpcReq(ws, "cron.runs", { id: autoJobId, limit: 10 });
+        const runsPayload = runsRes.payload as { entries?: unknown } | undefined;
+        return Array.isArray(runsPayload?.entries) && runsPayload.entries.length > 0;
+      }, CRON_WAIT_TIMEOUT_MS);
       const autoEntries = (await rpcReq(ws, "cron.runs", { id: autoJobId, limit: 10 })).payload as
         | { entries?: Array<{ jobId?: unknown }> }
         | undefined;
@@ -436,27 +515,11 @@ describe("gateway server cron", () => {
       const runs = autoEntries?.entries ?? [];
       expect(runs.at(-1)?.jobId).toBe(autoJobId);
     } finally {
-      ws.close();
-      await server.close();
-      await rmTempDir(dir);
-      testState.cronStorePath = undefined;
-      testState.cronEnabled = undefined;
-      if (prevSkipCron === undefined) {
-        delete process.env.BOT_SKIP_CRON;
-      } else {
-        process.env.BOT_SKIP_CRON = prevSkipCron;
-      }
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
   }, 45_000);
 
   test("posts webhooks for delivery mode and legacy notify fallback only when summary exists", async () => {
-    const prevSkipCron = process.env.BOT_SKIP_CRON;
-    process.env.BOT_SKIP_CRON = "0";
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-gw-cron-webhook-"));
-    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
-    testState.cronEnabled = false;
-    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
-
     const legacyNotifyJob = {
       id: "legacy-notify-job",
       name: "legacy notify job",
@@ -470,10 +533,11 @@ describe("gateway server cron", () => {
       payload: { kind: "systemEvent", text: "legacy webhook" },
       state: {},
     };
-    await fs.writeFile(
-      testState.cronStorePath,
-      JSON.stringify({ version: 1, jobs: [legacyNotifyJob] }),
-    );
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "bot-gw-cron-webhook-",
+      cronEnabled: false,
+      jobs: [legacyNotifyJob],
+    });
 
     const configPath = process.env.BOT_CONFIG_PATH;
     expect(typeof configPath).toBe("string");
@@ -493,8 +557,7 @@ describe("gateway server cron", () => {
       "utf-8",
     );
 
-    const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
+    fetchWithSsrFGuardMock.mockClear();
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -528,25 +591,19 @@ describe("gateway server cron", () => {
       const notifyRunRes = await rpcReq(ws, "cron.run", { id: notifyJobId, mode: "force" }, 20_000);
       expect(notifyRunRes.ok).toBe(true);
 
-      await waitForCondition(() => fetchMock.mock.calls.length === 1, 5000);
-      const [notifyUrl, notifyInit] = fetchMock.mock.calls[0] as [
-        string,
-        {
-          method?: string;
-          headers?: Record<string, string>;
-          body?: string;
-        },
-      ];
-      expect(notifyUrl).toBe("https://example.invalid/cron-finished");
-      expect(notifyInit.method).toBe("POST");
-      expect(notifyInit.headers?.Authorization).toBe("Bearer cron-webhook-token");
-      expect(notifyInit.headers?.["Content-Type"]).toBe("application/json");
-      const notifyBody = JSON.parse(notifyInit.body ?? "{}");
+      await waitForCondition(
+        () => fetchWithSsrFGuardMock.mock.calls.length === 1,
+        CRON_WAIT_TIMEOUT_MS,
+      );
+      const notifyCall = getWebhookCall(0);
+      expect(notifyCall.url).toBe("https://example.invalid/cron-finished");
+      expect(notifyCall.init.method).toBe("POST");
+      expect(notifyCall.init.headers?.Authorization).toBe("Bearer cron-webhook-token");
+      expect(notifyCall.init.headers?.["Content-Type"]).toBe("application/json");
+      const notifyBody = notifyCall.body;
       expect(notifyBody.action).toBe("finished");
       expect(notifyBody.jobId).toBe(notifyJobId);
 
-      // Reset rate limit before legacy run (invalid add + notify add + notify run consumed the budget).
-      controlPlaneTestHooks.resetControlPlaneRateLimitState();
       const legacyRunRes = await rpcReq(
         ws,
         "cron.run",
@@ -554,19 +611,15 @@ describe("gateway server cron", () => {
         20_000,
       );
       expect(legacyRunRes.ok).toBe(true);
-      await waitForCondition(() => fetchMock.mock.calls.length === 2, 5000);
-      const [legacyUrl, legacyInit] = fetchMock.mock.calls[1] as [
-        string,
-        {
-          method?: string;
-          headers?: Record<string, string>;
-          body?: string;
-        },
-      ];
-      expect(legacyUrl).toBe("https://legacy.example.invalid/cron-finished");
-      expect(legacyInit.method).toBe("POST");
-      expect(legacyInit.headers?.Authorization).toBe("Bearer cron-webhook-token");
-      const legacyBody = JSON.parse(legacyInit.body ?? "{}");
+      await waitForCondition(
+        () => fetchWithSsrFGuardMock.mock.calls.length === 2,
+        CRON_WAIT_TIMEOUT_MS,
+      );
+      const legacyCall = getWebhookCall(1);
+      expect(legacyCall.url).toBe("https://legacy.example.invalid/cron-finished");
+      expect(legacyCall.init.method).toBe("POST");
+      expect(legacyCall.init.headers?.Authorization).toBe("Bearer cron-webhook-token");
+      const legacyBody = legacyCall.body;
       expect(legacyBody.action).toBe("finished");
       expect(legacyBody.jobId).toBe("legacy-notify-job");
 
@@ -587,11 +640,52 @@ describe("gateway server cron", () => {
       expect(silentRunRes.ok).toBe(true);
       await yieldToEventLoop();
       await yieldToEventLoop();
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
 
-      // Reset rate limit before no-summary add (silent add + silent run consumed the budget).
-      controlPlaneTestHooks.resetControlPlaneRateLimitState();
-      cronIsolatedRun.mockResolvedValueOnce({ status: "ok" });
+      fetchWithSsrFGuardMock.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "delivery failed" });
+      const failureDestRes = await rpcReq(ws, "cron.add", {
+        name: "failure destination webhook",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "test" },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "19098680",
+          failureDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/failure-destination",
+          },
+        },
+      });
+      expect(failureDestRes.ok).toBe(true);
+      const failureDestJobIdValue = (failureDestRes.payload as { id?: unknown } | null)?.id;
+      const failureDestJobId =
+        typeof failureDestJobIdValue === "string" ? failureDestJobIdValue : "";
+      expect(failureDestJobId.length > 0).toBe(true);
+
+      const failureDestRunRes = await rpcReq(
+        ws,
+        "cron.run",
+        { id: failureDestJobId, mode: "force" },
+        20_000,
+      );
+      expect(failureDestRunRes.ok).toBe(true);
+      await waitForCondition(
+        () => fetchWithSsrFGuardMock.mock.calls.length === 1,
+        CRON_WAIT_TIMEOUT_MS,
+      );
+      const failureDestCall = getWebhookCall(0);
+      expect(failureDestCall.url).toBe("https://example.invalid/failure-destination");
+      const failureDestBody = failureDestCall.body;
+      expect(failureDestBody.message).toBe(
+        'Cron job "failure destination webhook" failed: unknown error',
+      );
+
+      cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "" });
       const noSummaryRes = await rpcReq(ws, "cron.add", {
         name: "webhook no summary",
         enabled: true,
@@ -615,19 +709,9 @@ describe("gateway server cron", () => {
       expect(noSummaryRunRes.ok).toBe(true);
       await yieldToEventLoop();
       await yieldToEventLoop();
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     } finally {
-      ws.close();
-      await server.close();
-      await rmTempDir(dir);
-      vi.unstubAllGlobals();
-      testState.cronStorePath = undefined;
-      testState.cronEnabled = undefined;
-      if (prevSkipCron === undefined) {
-        delete process.env.BOT_SKIP_CRON;
-      } else {
-        process.env.BOT_SKIP_CRON = prevSkipCron;
-      }
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
   }, 60_000);
 

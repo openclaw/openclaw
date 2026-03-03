@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -151,18 +152,18 @@ async function expectInvalidRequest(
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
-  it("rejects when disabled (default + config)", { timeout: 120_000 }, async () => {
+  it("rejects when disabled (default + config)", { timeout: 15_000 }, async () => {
     const port = await getFreePort();
-    const _server = await startServer(port);
+    const server = await startServer(port);
     try {
       const res = await postResponses(port, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hi",
       });
       expect(res.status).toBe(404);
       await ensureResponseConsumed(res);
     } finally {
-      // shared server
+      await server.close({ reason: "test done" });
     }
 
     const disabledPort = await getFreePort();
@@ -171,7 +172,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     });
     try {
       const res = await postResponses(disabledPort, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hi",
       });
       expect(res.status).toBe(404);
@@ -184,7 +185,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
   it("handles OpenResponses request parsing and validation", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>, meta?: unknown) => {
-      agentCommand.mockReset();
+      agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({ payloads, meta } as never);
     };
 
@@ -199,7 +200,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const resMissingAuth = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "bot", input: "hi" }),
+        body: JSON.stringify({ model: "@hanzo/bot", input: "hi" }),
       });
       expect(resMissingAuth.status).toBe(401);
       await ensureResponseConsumed(resMissingAuth);
@@ -215,11 +216,11 @@ describe("OpenResponses HTTP API (e2e)", () => {
       mockAgentOnce([{ text: "hello" }]);
       const resHeader = await postResponses(
         port,
-        { model: "bot", input: "hi" },
+        { model: "@hanzo/bot", input: "hi" },
         { "x-bot-agent-id": "beta" },
       );
       expect(resHeader.status).toBe(200);
-      const [optsHeader] = agentCommand.mock.calls[0] ?? [];
+      const optsHeader = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       expect((optsHeader as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
@@ -231,7 +232,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       mockAgentOnce([{ text: "hello" }]);
       const resModel = await postResponses(port, { model: "bot:beta", input: "hi" });
       expect(resModel.status).toBe(200);
-      const [optsModel] = agentCommand.mock.calls[0] ?? [];
+      const optsModel = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       expect((optsModel as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
@@ -253,11 +254,11 @@ describe("OpenResponses HTTP API (e2e)", () => {
       mockAgentOnce([{ text: "hello" }]);
       const resUser = await postResponses(port, {
         user: "alice",
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hi",
       });
       expect(resUser.status).toBe(200);
-      const [optsUser] = agentCommand.mock.calls[0] ?? [];
+      const optsUser = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       expect((optsUser as { sessionKey?: string } | undefined)?.sessionKey ?? "").toContain(
         "openresponses-user:alice",
       );
@@ -265,27 +266,27 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       mockAgentOnce([{ text: "hello" }]);
       const resString = await postResponses(port, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hello world",
       });
       expect(resString.status).toBe(200);
-      const [optsString] = agentCommand.mock.calls[0] ?? [];
+      const optsString = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       expect((optsString as { message?: string } | undefined)?.message).toBe("hello world");
       await ensureResponseConsumed(resString);
 
       mockAgentOnce([{ text: "hello" }]);
       const resArray = await postResponses(port, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: [{ type: "message", role: "user", content: "hello there" }],
       });
       expect(resArray.status).toBe(200);
-      const [optsArray] = agentCommand.mock.calls[0] ?? [];
+      const optsArray = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       expect((optsArray as { message?: string } | undefined)?.message).toBe("hello there");
       await ensureResponseConsumed(resArray);
 
       mockAgentOnce([{ text: "hello" }]);
       const resSystemDeveloper = await postResponses(port, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: [
           { type: "message", role: "system", content: "You are a helpful assistant." },
           { type: "message", role: "developer", content: "Be concise." },
@@ -293,7 +294,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resSystemDeveloper.status).toBe(200);
-      const [optsSystemDeveloper] = agentCommand.mock.calls[0] ?? [];
+      const optsSystemDeveloper = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       const extraSystemPrompt =
         (optsSystemDeveloper as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ??
         "";
@@ -303,12 +304,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       mockAgentOnce([{ text: "hello" }]);
       const resInstructions = await postResponses(port, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hi",
         instructions: "Always respond in French.",
       });
       expect(resInstructions.status).toBe(200);
-      const [optsInstructions] = agentCommand.mock.calls[0] ?? [];
+      const optsInstructions = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       const instructionPrompt =
         (optsInstructions as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
       expect(instructionPrompt).toContain("Always respond in French.");
@@ -316,7 +317,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       mockAgentOnce([{ text: "I am Claude" }]);
       const resHistory = await postResponses(port, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: [
           { type: "message", role: "system", content: "You are a helpful assistant." },
           { type: "message", role: "user", content: "Hello, who are you?" },
@@ -325,7 +326,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resHistory.status).toBe(200);
-      const [optsHistory] = agentCommand.mock.calls[0] ?? [];
+      const optsHistory = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       const historyMessage = (optsHistory as { message?: string } | undefined)?.message ?? "";
       expect(historyMessage).toContain(HISTORY_CONTEXT_MARKER);
       expect(historyMessage).toContain("User: Hello, who are you?");
@@ -336,14 +337,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       mockAgentOnce([{ text: "ok" }]);
       const resFunctionOutput = await postResponses(port, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: [
           { type: "message", role: "user", content: "What's the weather?" },
           { type: "function_call_output", call_id: "call_1", output: "Sunny, 70F." },
         ],
       });
       expect(resFunctionOutput.status).toBe(200);
-      const [optsFunctionOutput] = agentCommand.mock.calls[0] ?? [];
+      const optsFunctionOutput = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       const functionOutputMessage =
         (optsFunctionOutput as { message?: string } | undefined)?.message ?? "";
       expect(functionOutputMessage).toContain("Sunny, 70F.");
@@ -351,7 +352,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       mockAgentOnce([{ text: "ok" }]);
       const resInputFile = await postResponses(port, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: [
           {
             type: "message",
@@ -372,7 +373,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resInputFile.status).toBe(200);
-      const [optsInputFile] = agentCommand.mock.calls[0] ?? [];
+      const optsInputFile = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       const inputFileMessage = (optsInputFile as { message?: string } | undefined)?.message ?? "";
       const inputFilePrompt =
         (optsInputFile as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
@@ -382,13 +383,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       mockAgentOnce([{ text: "ok" }]);
       const resToolNone = await postResponses(port, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hi",
         tools: WEATHER_TOOL,
         tool_choice: "none",
       });
       expect(resToolNone.status).toBe(200);
-      const [optsToolNone] = agentCommand.mock.calls[0] ?? [];
+      const optsToolNone = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       expect(
         (optsToolNone as { clientTools?: unknown[] } | undefined)?.clientTools,
       ).toBeUndefined();
@@ -396,7 +397,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       mockAgentOnce([{ text: "ok" }]);
       const resToolChoice = await postResponses(port, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hi",
         tools: [
           {
@@ -411,16 +412,16 @@ describe("OpenResponses HTTP API (e2e)", () => {
         tool_choice: { type: "function", function: { name: "get_time" } },
       });
       expect(resToolChoice.status).toBe(200);
-      const [optsToolChoice] = agentCommand.mock.calls[0] ?? [];
+      const optsToolChoice = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       const clientTools =
-        (optsToolChoice as { clientTools?: Array<{ function?: { name?: string } }> })
+        (optsToolChoice as { clientTools?: Array<{ function?: { name?: string } }> } | undefined)
           ?.clientTools ?? [];
       expect(clientTools).toHaveLength(1);
       expect(clientTools[0]?.function?.name).toBe("get_time");
       await ensureResponseConsumed(resToolChoice);
 
       const resUnknownTool = await postResponses(port, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hi",
         tools: WEATHER_TOOL,
         tool_choice: { type: "function", function: { name: "unknown_tool" } },
@@ -430,12 +431,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       mockAgentOnce([{ text: "ok" }]);
       const resMaxTokens = await postResponses(port, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hi",
         max_output_tokens: 123,
       });
       expect(resMaxTokens.status).toBe(200);
-      const [optsMaxTokens] = agentCommand.mock.calls[0] ?? [];
+      const optsMaxTokens = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       expect(
         (optsMaxTokens as { streamParams?: { maxTokens?: number } } | undefined)?.streamParams
           ?.maxTokens,
@@ -449,7 +450,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       });
       const resUsage = await postResponses(port, {
         stream: false,
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hi",
       });
       expect(resUsage.status).toBe(200);
@@ -460,7 +461,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       mockAgentOnce([{ text: "hello" }]);
       const resShape = await postResponses(port, {
         stream: false,
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hi",
       });
       expect(resShape.status).toBe(200);
@@ -482,7 +483,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await ensureResponseConsumed(resShape);
 
       const resNoUser = await postResponses(port, {
-        model: "bot",
+        model: "@hanzo/bot",
         input: [{ type: "message", role: "system", content: "yo" }],
       });
       expect(resNoUser.status).toBe(400);
@@ -499,17 +500,18 @@ describe("OpenResponses HTTP API (e2e)", () => {
   it("streams OpenResponses SSE events", async () => {
     const port = enabledPort;
     try {
-      agentCommand.mockReset();
-      agentCommand.mockImplementationOnce(async (opts: unknown) => {
-        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-        emitAgentEvent({ runId, stream: "assistant", data: { delta: "he" } });
-        emitAgentEvent({ runId, stream: "assistant", data: { delta: "llo" } });
-        return { payloads: [{ text: "hello" }] } as never;
-      });
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) =>
+        buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["he", "llo"],
+          text: "hello",
+        })) as never);
 
       const resDelta = await postResponses(port, {
         stream: true,
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hi",
       });
       expect(resDelta.status).toBe(200);
@@ -538,14 +540,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
         .join("");
       expect(deltas).toBe("hello");
 
-      agentCommand.mockReset();
+      agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({
         payloads: [{ text: "hello" }],
       } as never);
 
       const resFallback = await postResponses(port, {
         stream: true,
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hi",
       });
       expect(resFallback.status).toBe(200);
@@ -553,14 +555,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(fallbackText).toContain("[DONE]");
       expect(fallbackText).toContain("hello");
 
-      agentCommand.mockReset();
+      agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({
         payloads: [{ text: "hello" }],
       } as never);
 
       const resTypeMatch = await postResponses(port, {
         stream: true,
-        model: "bot",
+        model: "@hanzo/bot",
         input: "hi",
       });
       expect(resTypeMatch.status).toBe(200);
@@ -581,59 +583,32 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
   it("blocks unsafe URL-based file/image inputs", async () => {
     const port = enabledPort;
-    agentCommand.mockReset();
+    agentCommand.mockClear();
 
     const blockedPrivate = await postResponses(port, {
-      model: "bot",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [
-            { type: "input_text", text: "read this" },
-            {
-              type: "input_file",
-              source: { type: "url", url: "http://127.0.0.1:6379/info" },
-            },
-          ],
-        },
-      ],
+      model: "@hanzo/bot",
+      input: buildUrlInputMessage({
+        kind: "input_file",
+        url: "http://127.0.0.1:6379/info",
+      }),
     });
     await expectInvalidRequest(blockedPrivate, /invalid request|private|internal|blocked/i);
 
     const blockedMetadata = await postResponses(port, {
-      model: "bot",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [
-            { type: "input_text", text: "read this" },
-            {
-              type: "input_image",
-              source: { type: "url", url: "http://metadata.google.internal/computeMetadata/v1" },
-            },
-          ],
-        },
-      ],
+      model: "@hanzo/bot",
+      input: buildUrlInputMessage({
+        kind: "input_image",
+        url: "http://metadata.google.internal/computeMetadata/v1",
+      }),
     });
     await expectInvalidRequest(blockedMetadata, /invalid request|blocked|metadata|internal/i);
 
     const blockedScheme = await postResponses(port, {
-      model: "bot",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [
-            { type: "input_text", text: "read this" },
-            {
-              type: "input_file",
-              source: { type: "url", url: "file:///etc/passwd" },
-            },
-          ],
-        },
-      ],
+      model: "@hanzo/bot",
+      input: buildUrlInputMessage({
+        kind: "input_file",
+        url: "file:///etc/passwd",
+      }),
     });
     await expectInvalidRequest(blockedScheme, /invalid request|http or https/i);
     expect(agentCommand).not.toHaveBeenCalled();
@@ -646,23 +621,15 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const allowlistPort = await getFreePort();
     const allowlistServer = await startServer(allowlistPort, { openResponsesEnabled: true });
     try {
-      agentCommand.mockReset();
+      agentCommand.mockClear();
 
       const allowlistBlocked = await postResponses(allowlistPort, {
-        model: "bot",
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [
-              { type: "input_text", text: "fetch this" },
-              {
-                type: "input_file",
-                source: { type: "url", url: "https://evil.example.org/secret.txt" },
-              },
-            ],
-          },
-        ],
+        model: "@hanzo/bot",
+        input: buildUrlInputMessage({
+          kind: "input_file",
+          text: "fetch this",
+          url: "https://evil.example.org/secret.txt",
+        }),
       });
       await expectInvalidRequest(allowlistBlocked, /invalid request|allowlist|blocked/i);
     } finally {
@@ -675,22 +642,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const capPort = await getFreePort();
     const capServer = await startServer(capPort, { openResponsesEnabled: true });
     try {
-      agentCommand.mockReset();
+      agentCommand.mockClear();
       const maxUrlBlocked = await postResponses(capPort, {
-        model: "bot",
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [
-              { type: "input_text", text: "fetch this" },
-              {
-                type: "input_file",
-                source: { type: "url", url: "https://cdn.example.com/file-1.txt" },
-              },
-            ],
-          },
-        ],
+        model: "@hanzo/bot",
+        input: buildUrlInputMessage({
+          kind: "input_file",
+          text: "fetch this",
+          url: "https://cdn.example.com/file-1.txt",
+        }),
       });
       await expectInvalidRequest(
         maxUrlBlocked,

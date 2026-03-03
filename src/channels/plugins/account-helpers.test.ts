@@ -5,14 +5,25 @@ import { createAccountListHelpers } from "./account-helpers.js";
 const { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId } =
   createAccountListHelpers("testchannel");
 
-function cfg(accounts?: Record<string, unknown> | null): BotConfig {
+function cfg(accounts?: Record<string, unknown> | null, defaultAccount?: string): BotConfig {
   if (accounts === null) {
-    return { channels: { testchannel: {} } } as unknown as BotConfig;
+    return {
+      channels: {
+        testchannel: defaultAccount ? { defaultAccount } : {},
+      },
+    } as unknown as BotConfig;
   }
-  if (accounts === undefined) {
+  if (accounts === undefined && !defaultAccount) {
     return {} as unknown as BotConfig;
   }
-  return { channels: { testchannel: { accounts } } } as unknown as BotConfig;
+  return {
+    channels: {
+      testchannel: {
+        ...(accounts === undefined ? {} : { accounts }),
+        ...(defaultAccount ? { defaultAccount } : {}),
+      },
+    },
+  } as unknown as BotConfig;
 }
 
 describe("createAccountListHelpers", () => {

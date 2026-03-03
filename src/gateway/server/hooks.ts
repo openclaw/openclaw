@@ -7,7 +7,11 @@ import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { type HookAgentPayload, type HooksConfigResolved } from "../hooks.js";
+import {
+  normalizeHookDispatchSessionKey,
+  type HookAgentDispatchPayload,
+  type HooksConfigResolved,
+} from "../hooks.js";
 import { createHooksRequestHandler } from "../server-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -29,18 +33,11 @@ export function createGatewayHooksRequestHandler(params: {
     }
   };
 
-  const dispatchAgentHook = (
-    value: HookAgentPayload & { sessionKey: string; allowUnsafeExternalContent?: boolean },
-  ) => {
-    // Strip duplicate agent prefix: when the sessionKey starts with `agent:{agentId}:`,
-    // the isolated runner will re-add it, so we normalize to avoid double-prefixing.
-    let sessionKey = value.sessionKey;
-    if (value.agentId) {
-      const prefix = `agent:${value.agentId}:`;
-      if (sessionKey.startsWith(prefix)) {
-        sessionKey = sessionKey.slice(prefix.length);
-      }
-    }
+  const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
+    const sessionKey = normalizeHookDispatchSessionKey({
+      sessionKey: value.sessionKey,
+      targetAgentId: value.agentId,
+    });
     const mainSessionKey = resolveMainSessionKeyFromConfig();
     const jobId = randomUUID();
     const now = Date.now();

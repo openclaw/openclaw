@@ -536,8 +536,7 @@ describe("/acp command", () => {
         dispatch: { enabled: false },
       },
     } satisfies BotConfig;
-    const params = createDiscordParams("/acp steer tighten logging", cfg);
-    const result = await handleAcpCommand(params, true);
+    const result = await runDiscordAcpCommand("/acp steer tighten logging", cfg);
     expect(result?.reply?.text).toContain("ACP dispatch is disabled by policy");
     expect(hoisted.runTurnMock).not.toHaveBeenCalled();
   });

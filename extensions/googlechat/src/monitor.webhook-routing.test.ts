@@ -1,8 +1,10 @@
 import type { BotConfig, PluginRuntime } from "bot/plugin-sdk";
 import type { IncomingMessage } from "node:http";
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
+import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import { createMockServerResponse } from "../../../src/test-utils/mock-http-response.js";
 import { verifyGoogleChatRequest } from "./auth.js";
 import { handleGoogleChatWebhookRequest, registerGoogleChatWebhookTarget } from "./monitor.js";
@@ -16,7 +18,11 @@ function createWebhookRequest(params: {
   payload: unknown;
   path?: string;
 }): IncomingMessage {
-  const req = new EventEmitter() as IncomingMessage & { destroyed?: boolean; destroy: () => void };
+  const req = new EventEmitter() as IncomingMessage & {
+    destroyed?: boolean;
+    destroy: (error?: Error) => IncomingMessage;
+    on: (event: string, listener: (...args: unknown[]) => void) => IncomingMessage;
+  };
   req.method = "POST";
   req.url = params.path ?? "/googlechat";
   req.headers = {
@@ -29,6 +35,7 @@ function createWebhookRequest(params: {
   };
   req.destroy = () => {
     req.destroyed = true;
+    return req;
   };
 
   const originalOn = req.on.bind(req);

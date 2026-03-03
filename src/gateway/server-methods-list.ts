@@ -1,7 +1,9 @@
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
 
 const BASE_METHODS = [
   "health",
+  "doctor.memory.status",
   "logs.tail",
   "channels.status",
   "channels.logout",
@@ -33,6 +35,7 @@ const BASE_METHODS = [
   "talk.config",
   "talk.mode",
   "models.list",
+  "tools.catalog",
   "agents.list",
   "agents.create",
   "agents.update",
@@ -47,6 +50,8 @@ const BASE_METHODS = [
   "update.run",
   "voicewake.get",
   "voicewake.set",
+  "secrets.reload",
+  "secrets.resolve",
   "sessions.list",
   "sessions.preview",
   "sessions.patch",
@@ -64,6 +69,7 @@ const BASE_METHODS = [
   "device.pair.list",
   "device.pair.approve",
   "device.pair.reject",
+  "device.pair.remove",
   "device.token.rotate",
   "device.token.revoke",
   "node.rename",
@@ -87,17 +93,6 @@ const BASE_METHODS = [
   "agent.identity.get",
   "agent.wait",
   "browser.request",
-  // Team presets
-  "team.presets.list",
-  "team.presets.get",
-  "team.provision",
-  "team.provision.all",
-  // Agent identity (DID + wallet)
-  "agent.did.get",
-  "agent.did.create",
-  "agent.wallet.get",
-  "agent.wallet.create",
-  "agent.identity.full",
   // WebChat WebSocket-native chat methods
   "chat.history",
   "chat.abort",
@@ -142,4 +137,5 @@ export const GATEWAY_EVENTS = [
   "marketplace.proxy.error",
   "marketplace.seller.available",
   "marketplace.seller.unavailable",
+  GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];

@@ -46,10 +46,11 @@ export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
 
 export type EmbeddingProviderResult = {
-  provider: EmbeddingProvider;
+  provider: EmbeddingProvider | null;
   requestedProvider: EmbeddingProviderRequest;
   fallbackFrom?: EmbeddingProviderId;
   fallbackReason?: string;
+  providerUnavailableReason?: string;
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
@@ -203,15 +204,21 @@ export async function createEmbeddingProvider(
           missingKeyErrors.push(message);
           continue;
         }
-        throw new Error(message, { cause: err });
+        // Non-auth errors (e.g., network) are still fatal
+        const wrapped = new Error(message) as Error & { cause?: unknown };
+        wrapped.cause = err;
+        throw wrapped;
       }
     }
 
+    // All providers failed due to missing API keys - return null provider for FTS-only mode
     const details = [...missingKeyErrors, localError].filter(Boolean) as string[];
-    if (details.length > 0) {
-      throw new Error(details.join("\n\n"));
-    }
-    throw new Error("No embeddings provider available.");
+    const reason = details.length > 0 ? details.join("\n\n") : "No embeddings provider available.";
+    return {
+      provider: null,
+      requestedProvider,
+      providerUnavailableReason: reason,
+    };
   }
 
   try {
@@ -229,14 +236,36 @@ export async function createEmbeddingProvider(
           fallbackReason: reason,
         };
       } catch (fallbackErr) {
-        // oxlint-disable-next-line preserve-caught-error
-        throw new Error(
-          `${reason}\n\nFallback to ${fallback} failed: ${formatErrorMessage(fallbackErr)}`,
-          { cause: fallbackErr },
-        );
+        // Both primary and fallback failed - check if it's auth-related
+        const fallbackReason = formatErrorMessage(fallbackErr);
+        const combinedReason = `${reason}\n\nFallback to ${fallback} failed: ${fallbackReason}`;
+        if (isMissingApiKeyError(primaryErr) && isMissingApiKeyError(fallbackErr)) {
+          // Both failed due to missing API keys - return null for FTS-only mode
+          return {
+            provider: null,
+            requestedProvider,
+            fallbackFrom: requestedProvider,
+            fallbackReason: reason,
+            providerUnavailableReason: combinedReason,
+          };
+        }
+        // Non-auth errors are still fatal
+        const wrapped = new Error(combinedReason) as Error & { cause?: unknown };
+        wrapped.cause = fallbackErr;
+        throw wrapped;
       }
     }
-    throw new Error(reason, { cause: primaryErr });
+    // No fallback configured - check if we should degrade to FTS-only
+    if (isMissingApiKeyError(primaryErr)) {
+      return {
+        provider: null,
+        requestedProvider,
+        providerUnavailableReason: reason,
+      };
+    }
+    const wrapped = new Error(reason) as Error & { cause?: unknown };
+    wrapped.cause = primaryErr;
+    throw wrapped;
   }
 }
 
@@ -264,9 +293,7 @@ function formatLocalSetupError(err: unknown): string {
     missing && detail ? `Detail: ${detail}` : null,
     "To enable local embeddings:",
     "1) Use Node 22 LTS (recommended for installs/updates)",
-    missing
-      ? "2) Reinstall Hanzo Bot (this should install node-llama-cpp): npm i -g bot@latest"
-      : null,
+    missing ? "2) Reinstall Bot (this should install node-llama-cpp): npm i -g bot@latest" : null,
     "3) If you use pnpm: pnpm approve-builds (select node-llama-cpp), then pnpm rebuild node-llama-cpp",
     ...REMOTE_EMBEDDING_PROVIDER_IDS.map(
       (provider) => `Or set agents.defaults.memorySearch.provider = "${provider}" (remote).`,

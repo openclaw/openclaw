@@ -36,7 +36,7 @@ describe("ensureExtensionRelayForProfiles", () => {
       if (name === "chrome") {
         return { driver: "extension", cdpUrl: "http://127.0.0.1:18888" };
       }
-      return { driver: "hanzo-bot", cdpUrl: "http://127.0.0.1:18889" };
+      return { driver: "@hanzo/bot", cdpUrl: "http://127.0.0.1:18889" };
     });
     ensureChromeExtensionRelayServerMock.mockResolvedValue(undefined);
 
@@ -79,7 +79,7 @@ describe("stopKnownBrowserProfiles", () => {
   });
 
   it("stops all known profiles and ignores per-profile failures", async () => {
-    listKnownProfileNamesMock.mockReturnValue(["hanzo-bot", "chrome"]);
+    listKnownProfileNamesMock.mockReturnValue(["@hanzo/bot", "chrome"]);
     const stopMap: Record<string, ReturnType<typeof vi.fn>> = {
       bot: vi.fn(async () => {}),
       chrome: vi.fn(async () => {

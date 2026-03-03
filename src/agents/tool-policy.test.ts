@@ -21,6 +21,18 @@ function createOwnerPolicyTools() {
       execute: async () => ({ content: [], details: {} }) as any,
     },
     {
+      name: "cron",
+      ownerOnly: true,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      execute: async () => ({ content: [], details: {} }) as any,
+    },
+    {
+      name: "gateway",
+      ownerOnly: true,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      execute: async () => ({ content: [], details: {} }) as any,
+    },
+    {
       name: "whatsapp_login",
       // oxlint-disable-next-line typescript/no-explicit-any
       execute: async () => ({ content: [], details: {} }) as any,
@@ -43,7 +55,9 @@ describe("tool-policy", () => {
 
   it("resolves known profiles and ignores unknown ones", () => {
     const coding = resolveToolProfilePolicy("coding");
-    expect(coding?.allow).toContain("group:fs");
+    expect(coding?.allow).toContain("read");
+    expect(coding?.allow).toContain("cron");
+    expect(coding?.allow).not.toContain("gateway");
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 
@@ -53,6 +67,7 @@ describe("tool-policy", () => {
     expect(group).toContain("message");
     expect(group).toContain("subagents");
     expect(group).toContain("session_status");
+    expect(group).toContain("tts");
   });
 
   it("normalizes tool names and aliases", () => {
@@ -63,6 +78,8 @@ describe("tool-policy", () => {
 
   it("identifies owner-only tools", () => {
     expect(isOwnerOnlyToolName("whatsapp_login")).toBe(true);
+    expect(isOwnerOnlyToolName("cron")).toBe(true);
+    expect(isOwnerOnlyToolName("gateway")).toBe(true);
     expect(isOwnerOnlyToolName("read")).toBe(false);
   });
 
@@ -75,7 +92,20 @@ describe("tool-policy", () => {
   it("keeps owner-only tools for the owner sender", async () => {
     const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, true);
-    expect(filtered.map((t) => t.name)).toEqual(["read", "whatsapp_login"]);
+    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "whatsapp_login"]);
+  });
+
+  it("honors ownerOnly metadata for custom tool names", async () => {
+    const tools = [
+      {
+        name: "custom_admin_tool",
+        ownerOnly: true,
+        // oxlint-disable-next-line typescript/no-explicit-any
+        execute: async () => ({ content: [], details: {} }) as any,
+      },
+    ] as unknown as AnyAgentTool[];
+    expect(applyOwnerOnlyToolPolicy(tools, false)).toEqual([]);
+    expect(applyOwnerOnlyToolPolicy(tools, true)).toHaveLength(1);
   });
 });
 

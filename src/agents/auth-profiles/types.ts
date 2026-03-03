@@ -6,8 +6,7 @@ export type ApiKeyCredential = {
   type: "api_key";
   provider: string;
   key?: string;
-  /** Optional secret reference for the API key (resolved at runtime). */
-  keyRef?: SecretRef | string;
+  keyRef?: SecretRef;
   email?: string;
   /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */
   metadata?: Record<string, string>;
@@ -16,12 +15,11 @@ export type ApiKeyCredential = {
 export type TokenCredential = {
   /**
    * Static bearer-style token (often OAuth access token / PAT).
-   * Not refreshable by Hanzo Bot (unlike `type: "oauth"`).
+   * Not refreshable by Bot (unlike `type: "oauth"`).
    */
   type: "token";
   provider: string;
   token: string;
-  /** Optional secret reference for the token (resolved at runtime). */
   tokenRef?: SecretRef;
   /** Optional expiry timestamp (ms since epoch). */
   expires?: number;
@@ -43,8 +41,9 @@ export type AuthProfileFailureReason =
   | "format"
   | "rate_limit"
   | "billing"
-  | "model_not_found"
   | "timeout"
+  | "model_not_found"
+  | "session_expired"
   | "unknown";
 
 /** Per-profile usage statistics for round-robin and cooldown tracking */

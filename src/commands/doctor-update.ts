@@ -45,7 +45,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
   const git = await detectBotGitCheckout(params.root);
   if (git === "git") {
     const shouldUpdate = await params.confirm({
-      message: "Update Hanzo Bot from git before running doctor?",
+      message: "Update Bot from git before running doctor?",
       initialValue: true,
     });
     if (!shouldUpdate) {
@@ -78,7 +78,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     note(
       [
         "This install is not a git checkout.",
-        `Run \`${formatCliCommand("hanzo-bot update")}\` to update via your package manager (npm/pnpm), then rerun doctor.`,
+        `Run \`${formatCliCommand("bot update")}\` to update via your package manager (npm/pnpm), then rerun doctor.`,
       ].join("\n"),
       "Update",
     );

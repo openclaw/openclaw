@@ -43,11 +43,10 @@ const log = createSubsystemLogger("memory");
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
-// eslint-disable-next-line no-control-regex -- intentional: matching null bytes in output
-const NUL_MARKER_RE = /(?:\^@|\0|\x00|\u0000|null\s*byte|nul\s*byte)/i;
+const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
-const HAN_SCRIPT_RE = /[㐀-鿿]/u;
+const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
 const QMD_BM25_HAN_KEYWORD_LIMIT = 12;
 
 let qmdEmbedQueueTail: Promise<void> = Promise.resolve();
@@ -531,7 +530,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
         continue;
       }
-      if (/^\s*collections/i.test(line)) {
+      if (/^\s*collections\b/i.test(line)) {
         continue;
       }
       const bareNameLine = /^\s*([a-z0-9._-]+)\s*$/i.exec(line);
@@ -1452,10 +1451,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private renderSessionMarkdown(entry: SessionFileEntry): string {
     const header = `# Session ${path.basename(entry.absPath, path.extname(entry.absPath))}`;
     const body = entry.content?.trim().length ? entry.content.trim() : "(empty)";
-    return `${header}
-
-${body}
-`;
+    return `${header}\n\n${body}\n`;
   }
 
   private pickSessionCollectionName(): string {

@@ -7,6 +7,7 @@ import type { BotConfig } from "../config/config.js";
 import type { SandboxDockerConfig } from "./sandbox.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { createBotCodingTools } from "./pi-tools.js";
+import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
 type ToolWithExecute = {
   execute: (toolCallId: string, args: unknown, signal?: AbortSignal) => Promise<unknown>;
@@ -95,28 +96,69 @@ describe("Agent-specific tool filtering", () => {
     }
   }
 
-  it("should apply global tool policy when no agent-specific policy exists", () => {
-    const cfg: BotConfig = {
-      tools: {
-        allow: ["read", "write"],
-        deny: ["bash"],
-      },
-      agents: {
-        list: [
-          {
-            id: "main",
-            workspace: "~/bot",
-          },
-        ],
-      },
-    };
-
-    const tools = createBotCodingTools({
+  function createMainSessionTools(cfg: BotConfig) {
+    return createBotCodingTools({
       config: cfg,
       sessionKey: "agent:main:main",
       workspaceDir: "/tmp/test",
       agentDir: "/tmp/agent",
     });
+  }
+
+  function createMainAgentConfig(params: {
+    tools: NonNullable<BotConfig["tools"]>;
+    agentTools?: NonNullable<NonNullable<BotConfig["agents"]>["list"]>[number]["tools"];
+  }): BotConfig {
+    return {
+      tools: params.tools,
+      agents: {
+        list: [
+          {
+            id: "main",
+            workspace: "~/bot",
+            ...(params.agentTools ? { tools: params.agentTools } : {}),
+          },
+        ],
+      },
+    };
+  }
+
+  function createExecHostDefaultsConfig(
+    agents: Array<{ id: string; execHost?: "gateway" | "sandbox" }>,
+  ): BotConfig {
+    return {
+      tools: {
+        exec: {
+          host: "sandbox",
+          security: "full",
+          ask: "off",
+        },
+      },
+      agents: {
+        list: agents.map((agent) => ({
+          id: agent.id,
+          ...(agent.execHost
+            ? {
+                tools: {
+                  exec: {
+                    host: agent.execHost,
+                  },
+                },
+              }
+            : {}),
+        })),
+      },
+    };
+  }
+
+  it("should apply global tool policy when no agent-specific policy exists", () => {
+    const cfg = createMainAgentConfig({
+      tools: {
+        allow: ["read", "write"],
+        deny: ["bash"],
+      },
+    });
+    const tools = createMainSessionTools(cfg);
 
     const toolNames = tools.map((t) => t.name);
     expect(toolNames).toContain("read");
@@ -126,32 +168,18 @@ describe("Agent-specific tool filtering", () => {
   });
 
   it("should keep global tool policy when agent only sets tools.elevated", () => {
-    const cfg: BotConfig = {
+    const cfg = createMainAgentConfig({
       tools: {
         deny: ["write"],
       },
-      agents: {
-        list: [
-          {
-            id: "main",
-            workspace: "~/bot",
-            tools: {
-              elevated: {
-                enabled: true,
-                allowFrom: { whatsapp: ["+15555550123"] },
-              },
-            },
-          },
-        ],
+      agentTools: {
+        elevated: {
+          enabled: true,
+          allowFrom: { whatsapp: ["+15555550123"] },
+        },
       },
-    };
-
-    const tools = createBotCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test",
-      agentDir: "/tmp/agent",
     });
+    const tools = createMainSessionTools(cfg);
 
     const toolNames = tools.map((t) => t.name);
     expect(toolNames).toContain("exec");
@@ -383,7 +411,7 @@ describe("Agent-specific tool filtering", () => {
             "*": {
               tools: { allow: ["read"] },
               toolsBySender: {
-                alice: { allow: ["read", "exec"] },
+                "id:alice": { allow: ["read", "exec"] },
               },
             },
           },
@@ -421,7 +449,7 @@ describe("Agent-specific tool filtering", () => {
           groups: {
             "*": {
               toolsBySender: {
-                admin: { allow: ["read", "exec"] },
+                "id:admin": { allow: ["read", "exec"] },
               },
             },
             locked: {
@@ -528,38 +556,16 @@ describe("Agent-specific tool filtering", () => {
   });
 
   it("should work with sandbox tools filtering", () => {
-    const cfg: BotConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            scope: "agent",
-          },
-        },
-        list: [
-          {
-            id: "restricted",
-            workspace: "~/bot-restricted",
-            sandbox: {
-              mode: "all",
-              scope: "agent",
-            },
-            tools: {
-              allow: ["read"], // Agent further restricts to only read
-              deny: ["exec", "write"],
-            },
-          },
-        ],
+    const cfg = createRestrictedAgentSandboxConfig({
+      agentTools: {
+        allow: ["read"], // Agent further restricts to only read
+        deny: ["exec", "write"],
       },
-      tools: {
-        sandbox: {
-          tools: {
-            allow: ["read", "write", "exec"], // Sandbox allows these
-            deny: [],
-          },
-        },
+      globalSandboxTools: {
+        allow: ["read", "write", "exec"], // Sandbox allows these
+        deny: [],
       },
-    };
+    });
 
     const tools = createBotCodingTools({
       config: cfg,
@@ -605,6 +611,10 @@ describe("Agent-specific tool filtering", () => {
     const cfg: BotConfig = {
       tools: {
         deny: ["process"],
+        exec: {
+          security: "full",
+          ask: "off",
+        },
       },
     };
 
@@ -622,32 +632,56 @@ describe("Agent-specific tool filtering", () => {
       yieldMs: 10,
     });
 
-    expect(result?.details.status).toBe("completed");
+    const resultDetails = result?.details as { status?: string } | undefined;
+    expect(resultDetails?.status).toBe("completed");
+  });
+
+  it("keeps sandbox as the implicit exec host default without forcing gateway approvals", async () => {
+    const tools = createBotCodingTools({
+      config: {},
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main-implicit-sandbox",
+      agentDir: "/tmp/agent-main-implicit-sandbox",
+    });
+    const execTool = tools.find((tool) => tool.name === "exec");
+    expect(execTool).toBeDefined();
+
+    const result = await execTool!.execute("call-implicit-sandbox-default", {
+      command: "echo done",
+    });
+    const details = result?.details as { status?: string } | undefined;
+    expect(details?.status).toBe("completed");
+
+    await expect(
+      execTool!.execute("call-implicit-sandbox-gateway", {
+        command: "echo done",
+        host: "gateway",
+      }),
+    ).rejects.toThrow("exec host not allowed");
+  });
+
+  it("fails closed when exec host=sandbox is requested without sandbox runtime", async () => {
+    const tools = createBotCodingTools({
+      config: {},
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main-fail-closed",
+      agentDir: "/tmp/agent-main-fail-closed",
+    });
+    const execTool = tools.find((tool) => tool.name === "exec");
+    expect(execTool).toBeDefined();
+    await expect(
+      execTool!.execute("call-fail-closed", {
+        command: "echo done",
+        host: "sandbox",
+      }),
+    ).rejects.toThrow("exec host=sandbox is configured");
   });
 
   it("should apply agent-specific exec host defaults over global defaults", async () => {
-    const cfg: BotConfig = {
-      tools: {
-        exec: {
-          host: "sandbox",
-        },
-      },
-      agents: {
-        list: [
-          {
-            id: "main",
-            tools: {
-              exec: {
-                host: "gateway",
-              },
-            },
-          },
-          {
-            id: "helper",
-          },
-        ],
-      },
-    };
+    const cfg = createExecHostDefaultsConfig([
+      { id: "main", execHost: "gateway" },
+      { id: "helper" },
+    ]);
 
     const mainTools = createBotCodingTools({
       config: cfg,
@@ -657,6 +691,12 @@ describe("Agent-specific tool filtering", () => {
     });
     const mainExecTool = mainTools.find((tool) => tool.name === "exec");
     expect(mainExecTool).toBeDefined();
+    const mainResult = await mainExecTool!.execute("call-main-default", {
+      command: "echo done",
+      yieldMs: 1000,
+    });
+    const mainDetails = mainResult?.details as { status?: string } | undefined;
+    expect(mainDetails?.status).toBe("completed");
     await expect(
       mainExecTool!.execute("call-main", {
         command: "echo done",
@@ -672,11 +712,38 @@ describe("Agent-specific tool filtering", () => {
     });
     const helperExecTool = helperTools.find((tool) => tool.name === "exec");
     expect(helperExecTool).toBeDefined();
-    const helperResult = await helperExecTool!.execute("call-helper", {
+    await expect(
+      helperExecTool!.execute("call-helper-default", {
+        command: "echo done",
+        yieldMs: 1000,
+      }),
+    ).rejects.toThrow("exec host=sandbox is configured");
+    await expect(
+      helperExecTool!.execute("call-helper", {
+        command: "echo done",
+        host: "sandbox",
+        yieldMs: 1000,
+      }),
+    ).rejects.toThrow("exec host=sandbox is configured");
+  });
+
+  it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {
+    const cfg = createExecHostDefaultsConfig([{ id: "main", execHost: "gateway" }]);
+
+    const tools = createBotCodingTools({
+      config: cfg,
+      agentId: "main",
+      sessionKey: "run-opaque-123",
+      workspaceDir: "/tmp/test-main-opaque-session",
+      agentDir: "/tmp/agent-main-opaque-session",
+    });
+    const execTool = tools.find((tool) => tool.name === "exec");
+    expect(execTool).toBeDefined();
+    const result = await execTool!.execute("call-main-opaque-session", {
       command: "echo done",
-      host: "sandbox",
       yieldMs: 1000,
     });
-    expect(helperResult?.details.status).toBe("completed");
+    const details = result?.details as { status?: string } | undefined;
+    expect(details?.status).toBe("completed");
   });
 });

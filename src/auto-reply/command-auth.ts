@@ -176,6 +176,35 @@ function resolveCommandsAllowFromList(params: {
   });
 }
 
+function isConversationLikeIdentity(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.includes("@g.us")) {
+    return true;
+  }
+  if (normalized.startsWith("chat_id:")) {
+    return true;
+  }
+  return /(^|:)(channel|group|thread|topic|room|space|spaces):/.test(normalized);
+}
+
+function shouldUseFromAsSenderFallback(params: {
+  from?: string | null;
+  chatType?: string | null;
+}): boolean {
+  const from = (params.from ?? "").trim();
+  if (!from) {
+    return false;
+  }
+  const chatType = (params.chatType ?? "").trim().toLowerCase();
+  if (chatType && chatType !== "direct") {
+    return false;
+  }
+  return !isConversationLikeIdentity(from);
+}
+
 function resolveSenderCandidates(params: {
   dock?: ChannelDock;
   providerId?: ChannelId;
@@ -184,6 +213,7 @@ function resolveSenderCandidates(params: {
   senderId?: string | null;
   senderE164?: string | null;
   from?: string | null;
+  chatType?: string | null;
 }): string[] {
   const { dock, cfg, accountId } = params;
   const candidates: string[] = [];
@@ -201,7 +231,12 @@ function resolveSenderCandidates(params: {
     pushCandidate(params.senderId);
     pushCandidate(params.senderE164);
   }
-  pushCandidate(params.from);
+  if (
+    candidates.length === 0 &&
+    shouldUseFromAsSenderFallback({ from: params.from, chatType: params.chatType })
+  ) {
+    pushCandidate(params.from);
+  }
 
   const normalized: string[] = [];
   for (const sender of candidates) {
@@ -295,6 +330,7 @@ export function resolveCommandAuthorization(params: {
     senderId: ctx.SenderId,
     senderE164: ctx.SenderE164,
     from,
+    chatType: ctx.ChatType,
   });
   const matchedSender = ownerList.length
     ? senderCandidates.find((candidate) => ownerList.includes(candidate))

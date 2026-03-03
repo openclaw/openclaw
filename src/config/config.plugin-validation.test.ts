@@ -32,17 +32,14 @@ async function writePluginFixture(params: {
 }
 
 describe("config plugin validation", () => {
-  const fixtureRoot = path.join(os.tmpdir(), "bot-config-plugin-validation");
-  let caseIndex = 0;
-
-  function createCaseHome() {
-    const home = path.join(fixtureRoot, `case-${caseIndex++}`);
-    return fs.mkdir(home, { recursive: true }).then(() => home);
-  }
-
-  const validateInHome = (home: string, raw: unknown) => {
-    process.env.BOT_STATE_DIR = path.join(home, ".bot");
-    return validateConfigObjectWithPlugins(raw);
+  let fixtureRoot = "";
+  let suiteHome = "";
+  let badPluginDir = "";
+  let enumPluginDir = "";
+  let bluebubblesPluginDir = "";
+  const envSnapshot = {
+    BOT_STATE_DIR: process.env.BOT_STATE_DIR,
+    BOT_PLUGIN_MANIFEST_CACHE_MS: process.env.BOT_PLUGIN_MANIFEST_CACHE_MS,
   };
 
   const validateInSuite = (raw: unknown) => validateConfigObjectWithPlugins(raw);
@@ -114,9 +111,9 @@ describe("config plugin validation", () => {
     }
   });
 
-  it("rejects missing plugin ids in entries", async () => {
-    const home = await createCaseHome();
-    const res = validateInHome(home, {
+  it("reports missing plugin refs across load paths, entries, and allowlist surfaces", async () => {
+    const missingPath = path.join(suiteHome, "missing-plugin-dir");
+    const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       plugins: {
         enabled: false,
@@ -129,31 +126,63 @@ describe("config plugin validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues).toContainEqual({
-        path: "plugins.entries.missing-plugin",
-        message: "plugin not found: missing-plugin",
-      });
-    }
-  });
-
-  it("rejects missing plugin ids in allow/deny/slots", async () => {
-    const home = await createCaseHome();
-    const res = validateInHome(home, {
-      agents: { list: [{ id: "pi" }] },
-      plugins: {
-        enabled: false,
-        allow: ["missing-allow"],
-        deny: ["missing-deny"],
-        slots: { memory: "missing-slot" },
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path === "plugins.load.paths" && issue.message.includes("plugin path not found"),
+        ),
+      ).toBe(true);
       expect(res.issues).toEqual(
         expect.arrayContaining([
           { path: "plugins.allow", message: "plugin not found: missing-allow" },
           { path: "plugins.deny", message: "plugin not found: missing-deny" },
           { path: "plugins.slots.memory", message: "plugin not found: missing-slot" },
+        ]),
+      );
+      expect(res.warnings).toContainEqual({
+        path: "plugins.entries.missing-plugin",
+        message:
+          "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
+      });
+    }
+  });
+
+  it("warns for removed legacy plugin ids instead of failing validation", async () => {
+    const removedId = "google-antigravity-auth";
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: false,
+        entries: { [removedId]: { enabled: true } },
+        allow: [removedId],
+        deny: [removedId],
+        slots: { memory: removedId },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toEqual(
+        expect.arrayContaining([
+          {
+            path: `plugins.entries.${removedId}`,
+            message:
+              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.allow",
+            message:
+              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.deny",
+            message:
+              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.slots.memory",
+            message:
+              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+          },
         ]),
       );
     }
@@ -200,6 +229,24 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("accepts known plugin ids and valid channel/heartbeat enums", async () => {
+    const res = validateInSuite({
+      agents: {
+        defaults: { heartbeat: { target: "last", directPolicy: "block" } },
+        list: [{ id: "pi", heartbeat: { directPolicy: "allow" } }],
+      },
+      channels: {
+        modelByChannel: {
+          openai: {
+            whatsapp: "openai/gpt-5.2",
+          },
+        },
+      },
+      plugins: { enabled: false, entries: { discord: { enabled: true } } },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts plugin heartbeat targets", async () => {
     const res = validateInSuite({
       agents: { defaults: { heartbeat: { target: "bluebubbles" } }, list: [{ id: "pi" }] },
@@ -221,6 +268,21 @@ describe("config plugin validation", () => {
         path: "agents.defaults.heartbeat.target",
         message: "unknown heartbeat target: not-a-channel",
       });
+    }
+  });
+
+  it("rejects invalid heartbeat directPolicy values", async () => {
+    const res = validateInSuite({
+      agents: {
+        defaults: { heartbeat: { directPolicy: "maybe" } },
+        list: [{ id: "pi" }],
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some((issue) => issue.path === "agents.defaults.heartbeat.directPolicy"),
+      ).toBe(true);
     }
   });
 });

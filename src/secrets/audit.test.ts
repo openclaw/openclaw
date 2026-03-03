@@ -92,62 +92,8 @@ describe("secrets audit", () => {
   let fixture: AuditFixture;
 
   beforeEach(async () => {
-    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-secrets-audit-"));
-    stateDir = path.join(rootDir, ".hanzo/bot");
-    configPath = path.join(stateDir, "bot.json");
-    authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
-    authJsonPath = path.join(stateDir, "agents", "main", "agent", "auth.json");
-    envPath = path.join(stateDir, ".env");
-    env = {
-      BOT_STATE_DIR: stateDir,
-      BOT_CONFIG_PATH: configPath,
-      OPENAI_API_KEY: "env-openai-key",
-      ...(typeof process.env.PATH === "string" && process.env.PATH.trim().length > 0
-        ? { PATH: process.env.PATH }
-        : { PATH: "/usr/bin:/bin" }),
-    };
-
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                api: "openai-completions",
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-                models: [{ id: "gpt-5", name: "gpt-5" }],
-              },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-    await fs.writeFile(
-      authStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "openai:default": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-openai-plaintext",
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-    await fs.writeFile(envPath, "OPENAI_API_KEY=sk-openai-plaintext\n", "utf8");
+    fixture = await createAuditFixture();
+    await seedAuditFixture(fixture);
   });
 
   afterEach(async () => {

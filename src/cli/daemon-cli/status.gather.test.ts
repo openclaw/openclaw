@@ -121,11 +121,13 @@ describe("gatherDaemonStatus", () => {
       "BOT_CONFIG_PATH",
       "BOT_GATEWAY_TOKEN",
       "BOT_GATEWAY_PASSWORD",
+      "DAEMON_GATEWAY_PASSWORD",
     ]);
     process.env.BOT_STATE_DIR = "/tmp/bot-cli";
     process.env.BOT_CONFIG_PATH = "/tmp/bot-cli/bot.json";
     delete process.env.BOT_GATEWAY_TOKEN;
     delete process.env.BOT_GATEWAY_PASSWORD;
+    delete process.env.DAEMON_GATEWAY_PASSWORD;
     callGatewayStatusProbe.mockClear();
     loadGatewayTlsRuntime.mockClear();
     daemonLoadedConfig = {

@@ -38,7 +38,7 @@ describe("push APNs registration store", () => {
     const saved = await registerApnsToken({
       nodeId: "ios-node-1",
       token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-      topic: "ai.hanzo.ios",
+      topic: "ai.bot.ios",
       environment: "sandbox",
       baseDir,
     });
@@ -47,7 +47,7 @@ describe("push APNs registration store", () => {
     expect(loaded).not.toBeNull();
     expect(loaded?.nodeId).toBe("ios-node-1");
     expect(loaded?.token).toBe("abcd1234abcd1234abcd1234abcd1234");
-    expect(loaded?.topic).toBe("ai.hanzo.ios");
+    expect(loaded?.topic).toBe("ai.bot.ios");
     expect(loaded?.environment).toBe("sandbox");
     expect(loaded?.updatedAtMs).toBe(saved.updatedAtMs);
   });
@@ -58,7 +58,7 @@ describe("push APNs registration store", () => {
       registerApnsToken({
         nodeId: "ios-node-1",
         token: "not-a-token",
-        topic: "ai.hanzo.ios",
+        topic: "ai.bot.ios",
         baseDir,
       }),
     ).rejects.toThrow("invalid APNs token");
@@ -116,7 +116,7 @@ describe("push APNs send semantics", () => {
       registration: {
         nodeId: "ios-node-alert",
         token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-        topic: "ai.hanzo.ios",
+        topic: "ai.bot.ios",
         environment: "sandbox",
         updatedAtMs: 1,
       },
@@ -160,7 +160,7 @@ describe("push APNs send semantics", () => {
       registration: {
         nodeId: "ios-node-wake",
         token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-        topic: "ai.hanzo.ios",
+        topic: "ai.bot.ios",
         environment: "production",
         updatedAtMs: 1,
       },
@@ -207,7 +207,7 @@ describe("push APNs send semantics", () => {
       registration: {
         nodeId: "ios-node-wake-default-reason",
         token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-        topic: "ai.hanzo.ios",
+        topic: "ai.bot.ios",
         environment: "sandbox",
         updatedAtMs: 1,
       },

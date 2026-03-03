@@ -21,4 +21,3 @@ export {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
-export { BotSchema } from "./zod-schema.js";

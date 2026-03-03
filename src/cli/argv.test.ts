@@ -10,6 +10,7 @@ import {
   getVerboseFlag,
   hasHelpOrVersion,
   hasFlag,
+  isRootHelpInvocation,
   isRootVersionInvocation,
   shouldMigrateState,
   shouldMigrateStateFromPath,
@@ -19,47 +20,47 @@ describe("argv helpers", () => {
   it.each([
     {
       name: "help flag",
-      argv: ["node", "bot", "--help"],
+      argv: ["node", "@hanzo/bot", "--help"],
       expected: true,
     },
     {
       name: "version flag",
-      argv: ["node", "bot", "-V"],
+      argv: ["node", "@hanzo/bot", "-V"],
       expected: true,
     },
     {
       name: "normal command",
-      argv: ["node", "bot", "status"],
+      argv: ["node", "@hanzo/bot", "status"],
       expected: false,
     },
     {
       name: "root -v alias",
-      argv: ["node", "bot", "-v"],
+      argv: ["node", "@hanzo/bot", "-v"],
       expected: true,
     },
     {
       name: "root -v alias with profile",
-      argv: ["node", "bot", "--profile", "work", "-v"],
+      argv: ["node", "@hanzo/bot", "--profile", "work", "-v"],
       expected: true,
     },
     {
       name: "root -v alias with log-level",
-      argv: ["node", "bot", "--log-level", "debug", "-v"],
+      argv: ["node", "@hanzo/bot", "--log-level", "debug", "-v"],
       expected: true,
     },
     {
       name: "subcommand -v should not be treated as version",
-      argv: ["node", "bot", "acp", "-v"],
+      argv: ["node", "@hanzo/bot", "acp", "-v"],
       expected: false,
     },
     {
       name: "root -v alias with equals profile",
-      argv: ["node", "bot", "--profile=work", "-v"],
+      argv: ["node", "@hanzo/bot", "--profile=work", "-v"],
       expected: true,
     },
     {
       name: "subcommand path after global root flags should not be treated as version",
-      argv: ["node", "bot", "--dev", "skills", "list", "-v"],
+      argv: ["node", "@hanzo/bot", "--dev", "skills", "list", "-v"],
       expected: false,
     },
   ])("detects help/version flags: $name", ({ argv, expected }) => {
@@ -69,27 +70,27 @@ describe("argv helpers", () => {
   it.each([
     {
       name: "root --version",
-      argv: ["node", "bot", "--version"],
+      argv: ["node", "@hanzo/bot", "--version"],
       expected: true,
     },
     {
       name: "root -V",
-      argv: ["node", "bot", "-V"],
+      argv: ["node", "@hanzo/bot", "-V"],
       expected: true,
     },
     {
       name: "root -v alias with profile",
-      argv: ["node", "bot", "--profile", "work", "-v"],
+      argv: ["node", "@hanzo/bot", "--profile", "work", "-v"],
       expected: true,
     },
     {
       name: "subcommand version flag",
-      argv: ["node", "bot", "status", "--version"],
+      argv: ["node", "@hanzo/bot", "status", "--version"],
       expected: false,
     },
     {
       name: "unknown root flag with version",
-      argv: ["node", "bot", "--unknown", "--version"],
+      argv: ["node", "@hanzo/bot", "--unknown", "--version"],
       expected: false,
     },
   ])("detects root-only version invocations: $name", ({ argv, expected }) => {
@@ -98,18 +99,63 @@ describe("argv helpers", () => {
 
   it.each([
     {
+      name: "root --help",
+      argv: ["node", "@hanzo/bot", "--help"],
+      expected: true,
+    },
+    {
+      name: "root -h",
+      argv: ["node", "@hanzo/bot", "-h"],
+      expected: true,
+    },
+    {
+      name: "root --help with profile",
+      argv: ["node", "@hanzo/bot", "--profile", "work", "--help"],
+      expected: true,
+    },
+    {
+      name: "subcommand --help",
+      argv: ["node", "@hanzo/bot", "status", "--help"],
+      expected: false,
+    },
+    {
+      name: "help before subcommand token",
+      argv: ["node", "@hanzo/bot", "--help", "status"],
+      expected: false,
+    },
+    {
+      name: "help after -- terminator",
+      argv: ["node", "@hanzo/bot", "nodes", "run", "--", "git", "--help"],
+      expected: false,
+    },
+    {
+      name: "unknown root flag before help",
+      argv: ["node", "@hanzo/bot", "--unknown", "--help"],
+      expected: false,
+    },
+    {
+      name: "unknown root flag after help",
+      argv: ["node", "@hanzo/bot", "--help", "--unknown"],
+      expected: false,
+    },
+  ])("detects root-only help invocations: $name", ({ argv, expected }) => {
+    expect(isRootHelpInvocation(argv)).toBe(expected);
+  });
+
+  it.each([
+    {
       name: "single command with trailing flag",
-      argv: ["node", "bot", "status", "--json"],
+      argv: ["node", "@hanzo/bot", "status", "--json"],
       expected: ["status"],
     },
     {
       name: "two-part command",
-      argv: ["node", "bot", "agents", "list"],
+      argv: ["node", "@hanzo/bot", "agents", "list"],
       expected: ["agents", "list"],
     },
     {
       name: "terminator cuts parsing",
-      argv: ["node", "bot", "status", "--", "ignored"],
+      argv: ["node", "@hanzo/bot", "status", "--", "ignored"],
       expected: ["status"],
     },
   ])("extracts command path: $name", ({ argv, expected }) => {
@@ -163,12 +209,12 @@ describe("argv helpers", () => {
   it.each([
     {
       name: "returns first command token",
-      argv: ["node", "bot", "agents", "list"],
+      argv: ["node", "@hanzo/bot", "agents", "list"],
       expected: "agents",
     },
     {
       name: "returns null when no command exists",
-      argv: ["node", "bot"],
+      argv: ["node", "@hanzo/bot"],
       expected: null,
     },
     {
@@ -183,13 +229,13 @@ describe("argv helpers", () => {
   it.each([
     {
       name: "detects flag before terminator",
-      argv: ["node", "bot", "status", "--json"],
+      argv: ["node", "@hanzo/bot", "status", "--json"],
       flag: "--json",
       expected: true,
     },
     {
       name: "ignores flag after terminator",
-      argv: ["node", "bot", "--", "--json"],
+      argv: ["node", "@hanzo/bot", "--", "--json"],
       flag: "--json",
       expected: false,
     },
@@ -200,27 +246,27 @@ describe("argv helpers", () => {
   it.each([
     {
       name: "value in next token",
-      argv: ["node", "bot", "status", "--timeout", "5000"],
+      argv: ["node", "@hanzo/bot", "status", "--timeout", "5000"],
       expected: "5000",
     },
     {
       name: "value in equals form",
-      argv: ["node", "bot", "status", "--timeout=2500"],
+      argv: ["node", "@hanzo/bot", "status", "--timeout=2500"],
       expected: "2500",
     },
     {
       name: "missing value",
-      argv: ["node", "bot", "status", "--timeout"],
+      argv: ["node", "@hanzo/bot", "status", "--timeout"],
       expected: null,
     },
     {
       name: "next token is another flag",
-      argv: ["node", "bot", "status", "--timeout", "--json"],
+      argv: ["node", "@hanzo/bot", "status", "--timeout", "--json"],
       expected: null,
     },
     {
       name: "flag appears after terminator",
-      argv: ["node", "bot", "--", "--timeout=99"],
+      argv: ["node", "@hanzo/bot", "--", "--timeout=99"],
       expected: undefined,
     },
   ])("extracts flag values: $name", ({ argv, expected }) => {
@@ -228,30 +274,32 @@ describe("argv helpers", () => {
   });
 
   it("parses verbose flags", () => {
-    expect(getVerboseFlag(["node", "bot", "status", "--verbose"])).toBe(true);
-    expect(getVerboseFlag(["node", "bot", "status", "--debug"])).toBe(false);
-    expect(getVerboseFlag(["node", "bot", "status", "--debug"], { includeDebug: true })).toBe(true);
+    expect(getVerboseFlag(["node", "@hanzo/bot", "status", "--verbose"])).toBe(true);
+    expect(getVerboseFlag(["node", "@hanzo/bot", "status", "--debug"])).toBe(false);
+    expect(
+      getVerboseFlag(["node", "@hanzo/bot", "status", "--debug"], { includeDebug: true }),
+    ).toBe(true);
   });
 
   it.each([
     {
       name: "missing flag",
-      argv: ["node", "bot", "status"],
+      argv: ["node", "@hanzo/bot", "status"],
       expected: undefined,
     },
     {
       name: "missing value",
-      argv: ["node", "bot", "status", "--timeout"],
+      argv: ["node", "@hanzo/bot", "status", "--timeout"],
       expected: null,
     },
     {
       name: "valid positive integer",
-      argv: ["node", "bot", "status", "--timeout", "5000"],
+      argv: ["node", "@hanzo/bot", "status", "--timeout", "5000"],
       expected: 5000,
     },
     {
       name: "invalid integer",
-      argv: ["node", "bot", "status", "--timeout", "nope"],
+      argv: ["node", "@hanzo/bot", "status", "--timeout", "nope"],
       expected: undefined,
     },
   ])("parses positive integer flag values: $name", ({ argv, expected }) => {
@@ -261,52 +309,52 @@ describe("argv helpers", () => {
   it("builds parse argv from raw args", () => {
     const cases = [
       {
-        rawArgs: ["node", "bot", "status"],
-        expected: ["node", "bot", "status"],
+        rawArgs: ["node", "@hanzo/bot", "status"],
+        expected: ["node", "@hanzo/bot", "status"],
       },
       {
-        rawArgs: ["node-22", "bot", "status"],
-        expected: ["node-22", "bot", "status"],
+        rawArgs: ["node-22", "@hanzo/bot", "status"],
+        expected: ["node-22", "@hanzo/bot", "status"],
       },
       {
-        rawArgs: ["node-22.2.0.exe", "bot", "status"],
-        expected: ["node-22.2.0.exe", "bot", "status"],
+        rawArgs: ["node-22.2.0.exe", "@hanzo/bot", "status"],
+        expected: ["node-22.2.0.exe", "@hanzo/bot", "status"],
       },
       {
-        rawArgs: ["node-22.2", "bot", "status"],
-        expected: ["node-22.2", "bot", "status"],
+        rawArgs: ["node-22.2", "@hanzo/bot", "status"],
+        expected: ["node-22.2", "@hanzo/bot", "status"],
       },
       {
-        rawArgs: ["node-22.2.exe", "bot", "status"],
-        expected: ["node-22.2.exe", "bot", "status"],
+        rawArgs: ["node-22.2.exe", "@hanzo/bot", "status"],
+        expected: ["node-22.2.exe", "@hanzo/bot", "status"],
       },
       {
-        rawArgs: ["/usr/bin/node-22.2.0", "bot", "status"],
-        expected: ["/usr/bin/node-22.2.0", "bot", "status"],
+        rawArgs: ["/usr/bin/node-22.2.0", "@hanzo/bot", "status"],
+        expected: ["/usr/bin/node-22.2.0", "@hanzo/bot", "status"],
       },
       {
-        rawArgs: ["node24", "bot", "status"],
-        expected: ["node24", "bot", "status"],
+        rawArgs: ["node24", "@hanzo/bot", "status"],
+        expected: ["node24", "@hanzo/bot", "status"],
       },
       {
-        rawArgs: ["/usr/bin/node24", "bot", "status"],
-        expected: ["/usr/bin/node24", "bot", "status"],
+        rawArgs: ["/usr/bin/node24", "@hanzo/bot", "status"],
+        expected: ["/usr/bin/node24", "@hanzo/bot", "status"],
       },
       {
-        rawArgs: ["node24.exe", "bot", "status"],
-        expected: ["node24.exe", "bot", "status"],
+        rawArgs: ["node24.exe", "@hanzo/bot", "status"],
+        expected: ["node24.exe", "@hanzo/bot", "status"],
       },
       {
-        rawArgs: ["nodejs", "bot", "status"],
-        expected: ["nodejs", "bot", "status"],
+        rawArgs: ["nodejs", "@hanzo/bot", "status"],
+        expected: ["nodejs", "@hanzo/bot", "status"],
       },
       {
-        rawArgs: ["node-dev", "bot", "status"],
-        expected: ["node", "bot", "node-dev", "bot", "status"],
+        rawArgs: ["node-dev", "@hanzo/bot", "status"],
+        expected: ["node", "@hanzo/bot", "node-dev", "@hanzo/bot", "status"],
       },
       {
-        rawArgs: ["bot", "status"],
-        expected: ["node", "bot", "status"],
+        rawArgs: ["@hanzo/bot", "status"],
+        expected: ["node", "@hanzo/bot", "status"],
       },
       {
         rawArgs: ["bun", "src/entry.ts", "status"],
@@ -316,7 +364,7 @@ describe("argv helpers", () => {
 
     for (const testCase of cases) {
       const parsed = buildParseArgv({
-        programName: "bot",
+        programName: "@hanzo/bot",
         rawArgs: [...testCase.rawArgs],
       });
       expect(parsed).toEqual([...testCase.expected]);
@@ -325,27 +373,27 @@ describe("argv helpers", () => {
 
   it("builds parse argv from fallback args", () => {
     const fallbackArgv = buildParseArgv({
-      programName: "bot",
+      programName: "@hanzo/bot",
       fallbackArgv: ["status"],
     });
-    expect(fallbackArgv).toEqual(["node", "bot", "status"]);
+    expect(fallbackArgv).toEqual(["node", "@hanzo/bot", "status"]);
   });
 
   it("decides when to migrate state", () => {
     const nonMutatingArgv = [
-      ["node", "bot", "status"],
-      ["node", "bot", "health"],
-      ["node", "bot", "sessions"],
-      ["node", "bot", "config", "get", "update"],
-      ["node", "bot", "config", "unset", "update"],
-      ["node", "bot", "models", "list"],
-      ["node", "bot", "models", "status"],
-      ["node", "bot", "memory", "status"],
-      ["node", "bot", "agent", "--message", "hi"],
+      ["node", "@hanzo/bot", "status"],
+      ["node", "@hanzo/bot", "health"],
+      ["node", "@hanzo/bot", "sessions"],
+      ["node", "@hanzo/bot", "config", "get", "update"],
+      ["node", "@hanzo/bot", "config", "unset", "update"],
+      ["node", "@hanzo/bot", "models", "list"],
+      ["node", "@hanzo/bot", "models", "status"],
+      ["node", "@hanzo/bot", "memory", "status"],
+      ["node", "@hanzo/bot", "agent", "--message", "hi"],
     ] as const;
     const mutatingArgv = [
-      ["node", "bot", "agents", "list"],
-      ["node", "bot", "message", "send"],
+      ["node", "@hanzo/bot", "agents", "list"],
+      ["node", "@hanzo/bot", "message", "send"],
     ] as const;
 
     for (const argv of nonMutatingArgv) {

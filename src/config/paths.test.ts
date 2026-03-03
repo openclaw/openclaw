@@ -37,6 +37,27 @@ describe("oauth paths", () => {
 });
 
 describe("state + config path candidates", () => {
+  async function withTempRoot(prefix: string, run: (root: string) => Promise<void>): Promise<void> {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    try {
+      await run(root);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  function expectBotHomeDefaults(env: NodeJS.ProcessEnv): void {
+    const configuredHome = env.BOT_HOME;
+    if (!configuredHome) {
+      throw new Error("BOT_HOME must be set for this assertion helper");
+    }
+    const resolvedHome = path.resolve(configuredHome);
+    expect(resolveStateDir(env)).toBe(path.join(resolvedHome, ".bot"));
+
+    const candidates = resolveDefaultConfigCandidates(env);
+    expect(candidates[0]).toBe(path.join(resolvedHome, ".bot", "bot.json"));
+  }
+
   it("uses BOT_STATE_DIR when set", () => {
     const env = {
       BOT_STATE_DIR: "/new/state",
@@ -49,12 +70,7 @@ describe("state + config path candidates", () => {
     const env = {
       BOT_HOME: "/srv/bot-home",
     } as NodeJS.ProcessEnv;
-
-    const resolvedHome = path.resolve("/srv/bot-home");
-    expect(resolveStateDir(env)).toBe(path.join(resolvedHome, ".hanzo", "bot"));
-
-    const candidates = resolveDefaultConfigCandidates(env);
-    expect(candidates[0]).toBe(path.join(resolvedHome, ".hanzo", "bot", "bot.json"));
+    expectBotHomeDefaults(env);
   });
 
   it("prefers BOT_HOME over HOME for default state/config locations", () => {
@@ -62,63 +78,75 @@ describe("state + config path candidates", () => {
       BOT_HOME: "/srv/bot-home",
       HOME: "/home/other",
     } as NodeJS.ProcessEnv;
-
-    const resolvedHome = path.resolve("/srv/bot-home");
-    expect(resolveStateDir(env)).toBe(path.join(resolvedHome, ".hanzo", "bot"));
-
-    const candidates = resolveDefaultConfigCandidates(env);
-    expect(candidates[0]).toBe(path.join(resolvedHome, ".hanzo", "bot", "bot.json"));
+    expectBotHomeDefaults(env);
   });
 
-  it("returns single canonical config candidate", () => {
+  it("orders default config candidates in a stable order", () => {
     const home = "/home/test";
     const resolvedHome = path.resolve(home);
     const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => home);
-    const expected = [path.join(resolvedHome, ".hanzo", "bot", "bot.json")];
+    const expected = [
+      path.join(resolvedHome, ".bot", "bot.json"),
+      path.join(resolvedHome, ".bot", "clawdbot.json"),
+      path.join(resolvedHome, ".bot", "moldbot.json"),
+      path.join(resolvedHome, ".bot", "moltbot.json"),
+      path.join(resolvedHome, ".clawdbot", "bot.json"),
+      path.join(resolvedHome, ".clawdbot", "clawdbot.json"),
+      path.join(resolvedHome, ".clawdbot", "moldbot.json"),
+      path.join(resolvedHome, ".clawdbot", "moltbot.json"),
+      path.join(resolvedHome, ".moldbot", "bot.json"),
+      path.join(resolvedHome, ".moldbot", "clawdbot.json"),
+      path.join(resolvedHome, ".moldbot", "moldbot.json"),
+      path.join(resolvedHome, ".moldbot", "moltbot.json"),
+      path.join(resolvedHome, ".moltbot", "bot.json"),
+      path.join(resolvedHome, ".moltbot", "clawdbot.json"),
+      path.join(resolvedHome, ".moltbot", "moldbot.json"),
+      path.join(resolvedHome, ".moltbot", "moltbot.json"),
+    ];
     expect(candidates).toEqual(expected);
   });
 
-  it("prefers ~/.bot when it exists", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bot-state-"));
-    try {
-      const botDir = path.join(root, ".bot");
-      await fs.mkdir(botDir, { recursive: true });
+  it("prefers ~/.bot when it exists and legacy dir is missing", async () => {
+    await withTempRoot("bot-state-", async (root) => {
+      const newDir = path.join(root, ".bot");
+      await fs.mkdir(newDir, { recursive: true });
       const resolved = resolveStateDir({} as NodeJS.ProcessEnv, () => root);
-      expect(resolved).toBe(botDir);
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+      expect(resolved).toBe(newDir);
+    });
+  });
+
+  it("falls back to existing legacy state dir when ~/.bot is missing", async () => {
+    await withTempRoot("bot-state-legacy-", async (root) => {
+      const legacyDir = path.join(root, ".clawdbot");
+      await fs.mkdir(legacyDir, { recursive: true });
+      const resolved = resolveStateDir({} as NodeJS.ProcessEnv, () => root);
+      expect(resolved).toBe(legacyDir);
+    });
   });
 
   it("CONFIG_PATH prefers existing config when present", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bot-config-"));
-    try {
-      const botDir = path.join(root, ".bot");
-      await fs.mkdir(botDir, { recursive: true });
-      const configPath = path.join(botDir, "bot.json");
-      await fs.writeFile(configPath, "{}", "utf-8");
+    await withTempRoot("bot-config-", async (root) => {
+      const legacyDir = path.join(root, ".bot");
+      await fs.mkdir(legacyDir, { recursive: true });
+      const legacyPath = path.join(legacyDir, "bot.json");
+      await fs.writeFile(legacyPath, "{}", "utf-8");
 
       const resolved = resolveConfigPathCandidate({} as NodeJS.ProcessEnv, () => root);
-      expect(resolved).toBe(configPath);
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+      expect(resolved).toBe(legacyPath);
+    });
   });
 
   it("respects state dir overrides when config is missing", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bot-config-override-"));
-    try {
-      const botDir = path.join(root, ".bot");
-      await fs.mkdir(botDir, { recursive: true });
-      const botConfig = path.join(botDir, "bot.json");
-      await fs.writeFile(botConfig, "{}", "utf-8");
+    await withTempRoot("bot-config-override-", async (root) => {
+      const legacyDir = path.join(root, ".bot");
+      await fs.mkdir(legacyDir, { recursive: true });
+      const legacyConfig = path.join(legacyDir, "bot.json");
+      await fs.writeFile(legacyConfig, "{}", "utf-8");
 
       const overrideDir = path.join(root, "override");
       const env = { BOT_STATE_DIR: overrideDir } as NodeJS.ProcessEnv;
       const resolved = resolveConfigPath(env, overrideDir, () => root);
       expect(resolved).toBe(path.join(overrideDir, "bot.json"));
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    });
   });
 });

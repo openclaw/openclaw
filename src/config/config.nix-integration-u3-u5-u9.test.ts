@@ -53,7 +53,7 @@ describe("Nix integration (U3, U5, U9)", () => {
   });
 
   describe("U5: CONFIG_PATH and STATE_DIR env var overrides", () => {
-    it("STATE_DIR defaults to ~/.hanzo/bot when env not set", () => {
+    it("STATE_DIR defaults to ~/.bot when env not set", () => {
       expect(resolveStateDir(envWith({ BOT_STATE_DIR: undefined }))).toMatch(/\.bot$/);
     });
 
@@ -66,7 +66,7 @@ describe("Nix integration (U3, U5, U9)", () => {
     it("STATE_DIR respects BOT_HOME when state override is unset", () => {
       const customHome = path.join(path.sep, "custom", "home");
       expect(resolveStateDir(envWith({ BOT_HOME: customHome, BOT_STATE_DIR: undefined }))).toBe(
-        path.join(path.resolve(customHome), ".hanzo/bot"),
+        path.join(path.resolve(customHome), ".bot"),
       );
     });
 
@@ -80,7 +80,7 @@ describe("Nix integration (U3, U5, U9)", () => {
             BOT_STATE_DIR: undefined,
           }),
         ),
-      ).toBe(path.join(path.resolve(customHome), ".hanzo/bot", "bot.json"));
+      ).toBe(path.join(path.resolve(customHome), ".bot", "bot.json"));
     });
 
     it("CONFIG_PATH defaults to ~/.hanzoai/bot.json when env not set", () => {
@@ -104,7 +104,7 @@ describe("Nix integration (U3, U5, U9)", () => {
             envWith({ BOT_HOME: home, BOT_CONFIG_PATH: "~/.hanzo/bot/custom.json" }),
             () => home,
           ),
-        ).toBe(path.join(home, ".hanzo/bot", "custom.json"));
+        ).toBe(path.join(home, ".bot", "custom.json"));
       });
     });
 
@@ -118,7 +118,7 @@ describe("Nix integration (U3, U5, U9)", () => {
   describe("U5b: tilde expansion for config paths", () => {
     it("expands ~ in common path-ish config fields", async () => {
       await withTempHome(async (home) => {
-        const configDir = path.join(home, ".hanzo/bot");
+        const configDir = path.join(home, ".bot");
         await fs.mkdir(configDir, { recursive: true });
         const pluginDir = path.join(home, "plugins", "demo-plugin");
         await fs.mkdir(pluginDir, { recursive: true });
@@ -180,12 +180,10 @@ describe("Nix integration (U3, U5, U9)", () => {
         expect(cfg.plugins?.load?.paths?.[0]).toBe(path.join(home, "plugins", "demo-plugin"));
         expect(cfg.agents?.defaults?.workspace).toBe(path.join(home, "ws-default"));
         expect(cfg.agents?.list?.[0]?.workspace).toBe(path.join(home, "ws-agent"));
-        expect(cfg.agents?.list?.[0]?.agentDir).toBe(
-          path.join(home, ".hanzo/bot", "agents", "main"),
-        );
+        expect(cfg.agents?.list?.[0]?.agentDir).toBe(path.join(home, ".bot", "agents", "main"));
         expect(cfg.agents?.list?.[0]?.sandbox?.workspaceRoot).toBe(path.join(home, "sandbox-root"));
         expect(cfg.channels?.whatsapp?.accounts?.personal?.authDir).toBe(
-          path.join(home, ".hanzo/bot", "credentials", "wa-personal"),
+          path.join(home, ".bot", "credentials", "wa-personal"),
         );
       });
     });

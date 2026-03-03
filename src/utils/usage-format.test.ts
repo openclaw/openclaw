@@ -35,7 +35,7 @@ describe("usage-format", () => {
           },
         },
       },
-    } as BotConfig;
+    } as unknown as BotConfig;
 
     const cost = resolveModelCostConfig({
       provider: "test",

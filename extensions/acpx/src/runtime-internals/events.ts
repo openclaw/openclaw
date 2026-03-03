@@ -1,4 +1,4 @@
-import type { AcpRuntimeEvent } from "bot/plugin-sdk";
+import type { AcpRuntimeEvent, AcpSessionUpdateTag } from "bot/plugin-sdk";
 import {
   asOptionalBoolean,
   asOptionalString,
@@ -9,72 +9,17 @@ import {
   isRecord,
 } from "./shared.js";
 
-type JsonRpcId = string | number | null;
-
-export type PromptParseContext = {
-  promptRequestIds: Set<string>;
-};
-
-function isJsonRpcId(value: unknown): value is JsonRpcId {
-  return (
-    value === null ||
-    typeof value === "string" ||
-    (typeof value === "number" && Number.isFinite(value))
-  );
-}
-
-function normalizeJsonRpcId(value: unknown): string | null {
-  if (!isJsonRpcId(value) || value == null) {
-    return null;
-  }
-  return String(value);
-}
-
-function isAcpJsonRpcMessage(value: unknown): value is Record<string, unknown> {
-  if (!isRecord(value) || value.jsonrpc !== "2.0") {
-    return false;
-  }
-
-  const hasMethod = typeof value.method === "string" && value.method.length > 0;
-  const hasId = Object.hasOwn(value, "id");
-
-  if (hasMethod && !hasId) {
-    return true;
-  }
-
-  if (hasMethod && hasId) {
-    return isJsonRpcId(value.id);
-  }
-
-  if (!hasMethod && hasId) {
-    if (!isJsonRpcId(value.id)) {
-      return false;
-    }
-    const hasResult = Object.hasOwn(value, "result");
-    const hasError = Object.hasOwn(value, "error");
-    return hasResult !== hasError;
-  }
-
-  return false;
-}
-
 export function toAcpxErrorEvent(value: unknown): AcpxErrorEvent | null {
   if (!isRecord(value)) {
     return null;
   }
-  const error = isRecord(value.error) ? value.error : null;
-  if (!error) {
+  if (asTrimmedString(value.type) !== "error") {
     return null;
   }
-  const message = asTrimmedString(error.message) || "acpx reported an error";
-  const codeValue = error.code;
   return {
-    message,
-    code:
-      typeof codeValue === "number" && Number.isFinite(codeValue)
-        ? String(codeValue)
-        : asOptionalString(codeValue),
-    retryable: asOptionalBoolean(error.retryable),
+    message: asTrimmedString(value.message) || "acpx reported an error",
+    code: asOptionalString(value.code),
+    retryable: asOptionalBoolean(value.retryable),
   };
 }
 
@@ -97,155 +42,127 @@ export function parseJsonLines(value: string): AcpxJsonObject[] {
   return events;
 }
 
-function parsePromptStopReason(message: Record<string, unknown>): string | undefined {
-  if (!Object.hasOwn(message, "result")) {
-    return undefined;
-  }
-  const result = isRecord(message.result) ? message.result : null;
-  if (!result) {
-    return undefined;
-  }
-  const stopReason = asString(result.stopReason);
-  return stopReason && stopReason.trim().length > 0 ? stopReason : undefined;
+function asOptionalFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function parseSessionUpdateEvent(message: Record<string, unknown>): AcpRuntimeEvent | null {
-  if (asTrimmedString(message.method) !== "session/update") {
-    return null;
-  }
-  const params = isRecord(message.params) ? message.params : null;
-  if (!params) {
-    return null;
-  }
-  const update = isRecord(params.update) ? params.update : null;
-  if (!update) {
-    return null;
+function resolveStructuredPromptPayload(parsed: Record<string, unknown>): {
+  type: string;
+  payload: Record<string, unknown>;
+  tag?: AcpSessionUpdateTag;
+} {
+  const method = asTrimmedString(parsed.method);
+  if (method === "session/update") {
+    const params = parsed.params;
+    if (isRecord(params) && isRecord(params.update)) {
+      const update = params.update;
+      const tag = asOptionalString(update.sessionUpdate) as AcpSessionUpdateTag | undefined;
+      return {
+        type: tag ?? "",
+        payload: update,
+        ...(tag ? { tag } : {}),
+      };
+    }
   }
 
-  const sessionUpdate = asTrimmedString(update.sessionUpdate);
-  switch (sessionUpdate) {
-    case "agent_message_chunk": {
-      const content = isRecord(update.content) ? update.content : null;
-      if (!content || asTrimmedString(content.type) !== "text") {
-        return null;
-      }
-      const text = asString(content.text);
-      if (!text) {
-        return null;
-      }
-      return {
-        type: "text_delta",
-        text,
-        stream: "output",
-      };
+  const sessionUpdate = asOptionalString(parsed.sessionUpdate) as AcpSessionUpdateTag | undefined;
+  if (sessionUpdate) {
+    return {
+      type: sessionUpdate,
+      payload: parsed,
+      tag: sessionUpdate,
+    };
+  }
+
+  const type = asTrimmedString(parsed.type);
+  const tag = asOptionalString(parsed.tag) as AcpSessionUpdateTag | undefined;
+  return {
+    type,
+    payload: parsed,
+    ...(tag ? { tag } : {}),
+  };
+}
+
+function resolveStatusTextForTag(params: {
+  tag: AcpSessionUpdateTag;
+  payload: Record<string, unknown>;
+}): string | null {
+  const { tag, payload } = params;
+  if (tag === "available_commands_update") {
+    const commands = Array.isArray(payload.availableCommands) ? payload.availableCommands : [];
+    return commands.length > 0
+      ? `available commands updated (${commands.length})`
+      : "available commands updated";
+  }
+  if (tag === "current_mode_update") {
+    const mode =
+      asTrimmedString(payload.currentModeId) ||
+      asTrimmedString(payload.modeId) ||
+      asTrimmedString(payload.mode);
+    return mode ? `mode updated: ${mode}` : "mode updated";
+  }
+  if (tag === "config_option_update") {
+    const id = asTrimmedString(payload.id) || asTrimmedString(payload.configOptionId);
+    const value =
+      asTrimmedString(payload.currentValue) ||
+      asTrimmedString(payload.value) ||
+      asTrimmedString(payload.optionValue);
+    if (id && value) {
+      return `config updated: ${id}=${value}`;
     }
-    case "agent_thought_chunk": {
-      const content = isRecord(update.content) ? update.content : null;
-      if (!content || asTrimmedString(content.type) !== "text") {
-        return null;
-      }
-      const text = asString(content.text);
-      if (!text) {
-        return null;
-      }
-      return {
-        type: "text_delta",
-        text,
-        stream: "thought",
-      };
+    if (id) {
+      return `config updated: ${id}`;
     }
-    case "tool_call":
-    case "tool_call_update": {
-      const title =
-        asTrimmedString(update.title) ||
-        asTrimmedString(update.toolCallId) ||
-        asTrimmedString(update.kind) ||
-        "tool";
-      const status = asTrimmedString(update.status);
-      return {
-        type: "tool_call",
-        text: status ? `${title} (${status})` : title,
-      };
-    }
-    case "plan": {
-      const entries = Array.isArray(update.entries) ? update.entries : [];
-      const first = entries.find((entry) => isRecord(entry)) as Record<string, unknown> | undefined;
-      const content = asTrimmedString(first?.content);
-      if (!content) {
-        return { type: "status", text: "plan updated" };
-      }
-      const status = asTrimmedString(first?.status);
-      return {
-        type: "status",
-        text: status ? `plan: [${status}] ${content}` : `plan: ${content}`,
-      };
-    }
-    case "available_commands_update": {
-      const commands = Array.isArray(update.availableCommands)
-        ? update.availableCommands.length
-        : 0;
-      return {
-        type: "status",
-        text: `available commands updated (${commands})`,
-      };
-    }
-    case "current_mode_update": {
-      const modeId = asTrimmedString(update.currentModeId);
-      return {
-        type: "status",
-        text: modeId ? `mode updated: ${modeId}` : "mode updated",
-      };
-    }
-    case "config_option_update": {
-      const options = Array.isArray(update.configOptions) ? update.configOptions.length : 0;
-      return {
-        type: "status",
-        text: `config options updated (${options})`,
-      };
-    }
-    case "session_info_update": {
-      const title = asTrimmedString(update.title);
-      return {
-        type: "status",
-        text: title ? `session info updated: ${title}` : "session info updated",
-      };
-    }
-    case "usage_update": {
-      const used =
-        typeof update.used === "number" && Number.isFinite(update.used) ? update.used : null;
-      const size =
-        typeof update.size === "number" && Number.isFinite(update.size) ? update.size : null;
-      if (used == null || size == null) {
-        return { type: "status", text: "usage updated" };
-      }
-      return {
-        type: "status",
-        text: `usage updated: ${used}/${size}`,
-      };
-    }
-    default:
+    return "config updated";
+  }
+  if (tag === "session_info_update") {
+    return (
+      asTrimmedString(payload.summary) || asTrimmedString(payload.message) || "session updated"
+    );
+  }
+  if (tag === "plan") {
+    const entries = Array.isArray(payload.entries) ? payload.entries : [];
+    const first = entries.find((entry) => isRecord(entry)) as Record<string, unknown> | undefined;
+    const content = asTrimmedString(first?.content);
+    return content ? `plan: ${content}` : null;
+  }
+  return null;
+}
+
+function resolveTextChunk(params: {
+  payload: Record<string, unknown>;
+  stream: "output" | "thought";
+  tag: AcpSessionUpdateTag;
+}): AcpRuntimeEvent | null {
+  const contentRaw = params.payload.content;
+  if (isRecord(contentRaw)) {
+    const contentType = asTrimmedString(contentRaw.type);
+    if (contentType && contentType !== "text") {
       return null;
+    }
+    const text = asString(contentRaw.text);
+    if (text && text.length > 0) {
+      return {
+        type: "text_delta",
+        text,
+        stream: params.stream,
+        tag: params.tag,
+      };
+    }
   }
+  const text = asString(params.payload.text);
+  if (!text || text.length === 0) {
+    return null;
+  }
+  return {
+    type: "text_delta",
+    text,
+    stream: params.stream,
+    tag: params.tag,
+  };
 }
 
-function shouldHandlePromptResponse(params: {
-  message: Record<string, unknown>;
-  context?: PromptParseContext;
-}): boolean {
-  const id = normalizeJsonRpcId(params.message.id);
-  if (!id) {
-    return false;
-  }
-  if (!params.context) {
-    return true;
-  }
-  return params.context.promptRequestIds.has(id);
-}
-
-export function parsePromptEventLine(
-  line: string,
-  context?: PromptParseContext,
-): AcpRuntimeEvent | null {
+export function parsePromptEventLine(line: string): AcpRuntimeEvent | null {
   const trimmed = line.trim();
   if (!trimmed) {
     return null;
@@ -264,81 +181,139 @@ export function parsePromptEventLine(
     return null;
   }
 
-  if (!isAcpJsonRpcMessage(parsed)) {
-    // `parsed` is narrowed to `never` because both isRecord and isAcpJsonRpcMessage
-    // guard to Record<string, unknown>. Re-bind to avoid TS errors on bare events.
-    const bare = parsed as Record<string, unknown>;
-    const bareType = asTrimmedString(bare.type);
-    if (bareType === "done") {
-      const stopReason = asTrimmedString(bare.stopReason);
-      return { type: "done", ...(stopReason ? { stopReason } : {}) };
+  const structured = resolveStructuredPromptPayload(parsed);
+  const type = structured.type;
+  const payload = structured.payload;
+  const tag = structured.tag;
+
+  switch (type) {
+    case "text": {
+      const content = asString(payload.content);
+      if (content == null || content.length === 0) {
+        return null;
+      }
+      return {
+        type: "text_delta",
+        text: content,
+        stream: "output",
+        ...(tag ? { tag } : {}),
+      };
     }
-    if (bareType === "error") {
-      const message = asTrimmedString(bare.message) || "acpx runtime error";
-      const codeValue = bare.code;
+    case "thought": {
+      const content = asString(payload.content);
+      if (content == null || content.length === 0) {
+        return null;
+      }
+      return {
+        type: "text_delta",
+        text: content,
+        stream: "thought",
+        ...(tag ? { tag } : {}),
+      };
+    }
+    case "tool_call": {
+      const title = asTrimmedString(payload.title) || "tool call";
+      const status = asTrimmedString(payload.status);
+      const toolCallId = asOptionalString(payload.toolCallId);
+      return {
+        type: "tool_call",
+        text: status ? `${title} (${status})` : title,
+        tag: (tag ?? "tool_call") as AcpSessionUpdateTag,
+        ...(toolCallId ? { toolCallId } : {}),
+        ...(status ? { status } : {}),
+        title,
+      };
+    }
+    case "tool_call_update": {
+      const title = asTrimmedString(payload.title) || "tool call";
+      const status = asTrimmedString(payload.status);
+      const toolCallId = asOptionalString(payload.toolCallId);
+      const text = status ? `${title} (${status})` : title;
+      return {
+        type: "tool_call",
+        text,
+        tag: (tag ?? "tool_call_update") as AcpSessionUpdateTag,
+        ...(toolCallId ? { toolCallId } : {}),
+        ...(status ? { status } : {}),
+        title,
+      };
+    }
+    case "agent_message_chunk":
+      return resolveTextChunk({
+        payload,
+        stream: "output",
+        tag: "agent_message_chunk",
+      });
+    case "agent_thought_chunk":
+      return resolveTextChunk({
+        payload,
+        stream: "thought",
+        tag: "agent_thought_chunk",
+      });
+    case "usage_update": {
+      const used = asOptionalFiniteNumber(payload.used);
+      const size = asOptionalFiniteNumber(payload.size);
+      const text =
+        used != null && size != null ? `usage updated: ${used}/${size}` : "usage updated";
+      return {
+        type: "status",
+        text,
+        tag: "usage_update",
+        ...(used != null ? { used } : {}),
+        ...(size != null ? { size } : {}),
+      };
+    }
+    case "available_commands_update":
+    case "current_mode_update":
+    case "config_option_update":
+    case "session_info_update":
+    case "plan": {
+      const text = resolveStatusTextForTag({
+        tag: type as AcpSessionUpdateTag,
+        payload,
+      });
+      if (!text) {
+        return null;
+      }
+      return {
+        type: "status",
+        text,
+        tag: type as AcpSessionUpdateTag,
+      };
+    }
+    case "client_operation": {
+      const method = asTrimmedString(payload.method) || "operation";
+      const status = asTrimmedString(payload.status);
+      const summary = asTrimmedString(payload.summary);
+      const text = [method, status, summary].filter(Boolean).join(" ");
+      if (!text) {
+        return null;
+      }
+      return { type: "status", text, ...(tag ? { tag } : {}) };
+    }
+    case "update": {
+      const update = asTrimmedString(payload.update);
+      if (!update) {
+        return null;
+      }
+      return { type: "status", text: update, ...(tag ? { tag } : {}) };
+    }
+    case "done": {
+      return {
+        type: "done",
+        stopReason: asOptionalString(payload.stopReason),
+      };
+    }
+    case "error": {
+      const message = asTrimmedString(payload.message) || "acpx runtime error";
       return {
         type: "error",
         message,
-        code:
-          typeof codeValue === "number" && Number.isFinite(codeValue)
-            ? String(codeValue)
-            : asOptionalString(codeValue),
-        retryable: asOptionalBoolean(bare.retryable),
+        code: asOptionalString(payload.code),
+        retryable: asOptionalBoolean(payload.retryable),
       };
     }
-    const fallbackError = toAcpxErrorEvent(bare);
-    if (fallbackError) {
-      return {
-        type: "error",
-        message: fallbackError.message,
-        code: fallbackError.code,
-        retryable: fallbackError.retryable,
-      };
-    }
-    return null;
-  }
-
-  const updateEvent = parseSessionUpdateEvent(parsed);
-  if (updateEvent) {
-    return updateEvent;
-  }
-
-  if (asTrimmedString(parsed.method) === "session/prompt") {
-    const id = normalizeJsonRpcId(parsed.id);
-    if (id && context) {
-      context.promptRequestIds.add(id);
-    }
-    return null;
-  }
-
-  if (Object.hasOwn(parsed, "error")) {
-    if (!shouldHandlePromptResponse({ message: parsed, context })) {
+    default:
       return null;
-    }
-    const error = isRecord(parsed.error) ? parsed.error : null;
-    const message = asTrimmedString(error?.message);
-    const codeValue = error?.code;
-    return {
-      type: "error",
-      message: message || "acpx runtime error",
-      code:
-        typeof codeValue === "number" && Number.isFinite(codeValue)
-          ? String(codeValue)
-          : asOptionalString(codeValue),
-      retryable: asOptionalBoolean(error?.retryable),
-    };
   }
-
-  const stopReason = parsePromptStopReason(parsed);
-  if (stopReason) {
-    if (!shouldHandlePromptResponse({ message: parsed, context })) {
-      return null;
-    }
-    return {
-      type: "done",
-      stopReason,
-    };
-  }
-
-  return null;
 }

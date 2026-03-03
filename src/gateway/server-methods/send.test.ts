@@ -55,7 +55,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
     agentId?: string;
   }) => resolveAgentIdFromSessionKeyForTests({ sessionKey }),
   resolveDefaultAgentId: () => "main",
-  resolveAgentWorkspaceDir: () => "/tmp/bot-test-workspace",
+  resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({

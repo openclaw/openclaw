@@ -1,27 +1,85 @@
+import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { CronJob } from "./types.js";
-import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
-
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-}));
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(),
-}));
-
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-const withTempHome = withTempCronHome;
+import {
+  makeCfg,
+  makeJob,
+  writeSessionStore,
+  writeSessionStoreEntries,
+} from "./isolated-agent.test-harness.js";
+
+type HomeEnvSnapshot = {
+  HOME: string | undefined;
+  USERPROFILE: string | undefined;
+  HOMEDRIVE: string | undefined;
+  HOMEPATH: string | undefined;
+  BOT_HOME: string | undefined;
+  BOT_STATE_DIR: string | undefined;
+};
+
+let suiteTempHomeRoot = "";
+let suiteTempHomeCaseId = 0;
+
+function snapshotHomeEnv(): HomeEnvSnapshot {
+  return {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    HOMEDRIVE: process.env.HOMEDRIVE,
+    HOMEPATH: process.env.HOMEPATH,
+    BOT_HOME: process.env.BOT_HOME,
+    BOT_STATE_DIR: process.env.BOT_STATE_DIR,
+  };
+}
+
+function restoreHomeEnv(snapshot: HomeEnvSnapshot) {
+  const restoreValue = (key: keyof HomeEnvSnapshot) => {
+    const value = snapshot[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  };
+  restoreValue("HOME");
+  restoreValue("USERPROFILE");
+  restoreValue("HOMEDRIVE");
+  restoreValue("HOMEPATH");
+  restoreValue("BOT_HOME");
+  restoreValue("BOT_STATE_DIR");
+}
+
+async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+  const home = path.join(suiteTempHomeRoot, `case-${suiteTempHomeCaseId++}`);
+  await fs.mkdir(path.join(home, ".bot", "agents", "main", "sessions"), { recursive: true });
+  const snapshot = snapshotHomeEnv();
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  delete process.env.BOT_HOME;
+  process.env.BOT_STATE_DIR = path.join(home, ".bot");
+  if (process.platform === "win32") {
+    const parsed = path.parse(home);
+    if (parsed.root) {
+      process.env.HOMEDRIVE = parsed.root.replace(/[\\/]+$/, "");
+      process.env.HOMEPATH = home.slice(process.env.HOMEDRIVE.length) || "\\";
+    }
+  }
+  try {
+    return await fn(home);
+  } finally {
+    restoreHomeEnv(snapshot);
+  }
+}
 
 function makeDeps(): CliDeps {
   return {
+    sendMessageSlack: vi.fn(),
     sendMessageWhatsApp: vi.fn(),
     sendMessageTelegram: vi.fn(),
     sendMessageDiscord: vi.fn(),
@@ -57,33 +115,6 @@ function expectEmbeddedProviderModel(expected: { provider: string; model: string
   expect(call?.model).toBe(expected.model);
 }
 
-async function writeSessionStore(
-  home: string,
-  entries: Record<string, Record<string, unknown>> = {},
-) {
-  const dir = path.join(home, ".bot", "sessions");
-  await fs.mkdir(dir, { recursive: true });
-  const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(
-    storePath,
-    JSON.stringify(
-      {
-        "agent:main:main": {
-          sessionId: "main-session",
-          updatedAt: Date.now(),
-          lastProvider: "webchat",
-          lastTo: "",
-        },
-        ...entries,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  return storePath;
-}
-
 async function readSessionEntry(storePath: string, key: string) {
   const raw = await fs.readFile(storePath, "utf-8");
   const store = JSON.parse(raw) as Record<string, { sessionId?: string; label?: string }>;
@@ -111,7 +142,17 @@ type RunCronTurnOptions = {
 };
 
 async function runCronTurn(home: string, options: RunCronTurnOptions = {}) {
-  const storePath = options.storePath ?? (await writeSessionStore(home, options.storeEntries));
+  const storePath =
+    options.storePath ??
+    (await writeSessionStoreEntries(home, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now(),
+        lastProvider: "webchat",
+        lastTo: "",
+      },
+      ...options.storeEntries,
+    }));
   const deps = options.deps ?? makeDeps();
   if (options.mockTexts === null) {
     vi.mocked(runEmbeddedPiAgent).mockClear();
@@ -197,7 +238,7 @@ describe("runCronIsolatedAgentTurn", () => {
   });
 
   beforeEach(() => {
-    vi.mocked(runEmbeddedPiAgent).mockReset();
+    vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
 
@@ -224,41 +265,14 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("treats transient error payloads as non-fatal when a later success payload exists", async () => {
+  it("returns error when embedded run payload is marked as error", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
-      const deps = makeDeps();
       mockEmbeddedPayloads([
-        { text: "⚠️ ✍️ Write: failed", isError: true },
-        { text: "Write completed successfully.", isError: false },
-      ]);
-      const res = await runCronIsolatedAgentTurn({
-        cfg: makeCfg(home, storePath),
-        deps,
-        job: makeJob(DEFAULT_AGENT_TURN_PAYLOAD),
-        message: DEFAULT_MESSAGE,
-        sessionKey: DEFAULT_SESSION_KEY,
-        lane: "cron",
-      });
-
-      expect(res.status).toBe("ok");
-      expect(res.summary).toBe("Write completed successfully.");
-    });
-  });
-
-  it("keeps error status when run-level error accompanies post-error text", async () => {
-    await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-        payloads: [
-          { text: "Model context overflow", isError: true },
-          { text: "Partial assistant text before error" },
-        ],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          error: { kind: "context_overflow", message: "exceeded context window" },
+        {
+          text: "⚠️ 🛠️ Exec failed: /bin/bash: line 1: python: command not found",
+          isError: true,
         },
-      });
+      ]);
       const { res } = await runCronTurn(home, {
         jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
         mockTexts: null,
@@ -324,7 +338,7 @@ describe("runCronIsolatedAgentTurn", () => {
       const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
         agentDir?: string;
       };
-      expect(call?.agentDir).toBe(path.join(home, ".hanzo", "bot", "agents", "main", "agent"));
+      expect(call?.agentDir).toBe(path.join(home, ".bot", "agents", "main", "agent"));
     });
   });
 
@@ -526,7 +540,7 @@ describe("runCronIsolatedAgentTurn", () => {
         cfgOverrides: {
           agents: {
             defaults: {
-              model: "anthropic/claude-opus-4-5",
+              model: { primary: "anthropic/claude-opus-4-5" },
               models: {
                 "anthropic/claude-opus-4-5": { alias: "Opus" },
               },
@@ -600,7 +614,7 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("starts a fresh session id for each cron run", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = makeDeps();
       const runPingTurn = () =>
         runCronTurn(home, {
@@ -626,7 +640,7 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("preserves an existing cron session label", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const raw = await fs.readFile(storePath, "utf-8");
       const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
       store["agent:main:cron:job-1"] = {

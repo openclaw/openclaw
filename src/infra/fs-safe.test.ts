@@ -157,6 +157,53 @@ describe("fs-safe", () => {
     ).rejects.toMatchObject({ code: "outside-workspace" });
   });
 
+  it("rejects directory path within root without leaking EISDIR (issue #31186)", async () => {
+    const root = await tempDirs.make("bot-fs-safe-root-");
+    await fs.mkdir(path.join(root, "memory"), { recursive: true });
+
+    await expect(
+      openFileWithinRoot({ rootDir: root, relativePath: "memory" }),
+    ).rejects.toMatchObject({ code: expect.stringMatching(/invalid-path|not-file/) });
+
+    const err = await openFileWithinRoot({
+      rootDir: root,
+      relativePath: "memory",
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SafeOpenError);
+    expect((err as SafeOpenError).message).not.toMatch(/EISDIR/i);
+  });
+
+  it("reads a file within root", async () => {
+    const root = await tempDirs.make("bot-fs-safe-root-");
+    await fs.writeFile(path.join(root, "inside.txt"), "inside");
+    const result = await readFileWithinRoot({
+      rootDir: root,
+      relativePath: "inside.txt",
+    });
+    expect(result.buffer.toString("utf8")).toBe("inside");
+    expect(result.realPath).toContain("inside.txt");
+    expect(result.stat.size).toBe(6);
+  });
+
+  it("reads an absolute path within root via readPathWithinRoot", async () => {
+    const root = await tempDirs.make("bot-fs-safe-root-");
+    const insidePath = path.join(root, "absolute.txt");
+    await fs.writeFile(insidePath, "absolute");
+    const result = await readPathWithinRoot({
+      rootDir: root,
+      filePath: insidePath,
+    });
+    expect(result.buffer.toString("utf8")).toBe("absolute");
+  });
+
+  it("creates a root-scoped read callback", async () => {
+    const root = await tempDirs.make("bot-fs-safe-root-");
+    const insidePath = path.join(root, "scoped.txt");
+    await fs.writeFile(insidePath, "scoped");
+    const readScoped = createRootScopedReadFile({ rootDir: root });
+    await expect(readScoped(insidePath)).resolves.toEqual(Buffer.from("scoped"));
+  });
+
   it.runIf(process.platform !== "win32")("blocks symlink escapes under root", async () => {
     const root = await tempDirs.make("bot-fs-safe-root-");
     const outside = await tempDirs.make("bot-fs-safe-outside-");
@@ -175,8 +222,6 @@ describe("fs-safe", () => {
 
   it.runIf(process.platform !== "win32")("blocks hardlink aliases under root", async () => {
     const root = await tempDirs.make("bot-fs-safe-root-");
-    const outside = await tempDirs.make("bot-fs-safe-outside-");
-    const outsideFile = path.join(outside, "outside.txt");
     const hardlinkPath = path.join(root, "link.txt");
     await withOutsideHardlinkAlias({
       aliasPath: hardlinkPath,
@@ -318,8 +363,6 @@ describe("fs-safe", () => {
 
   it.runIf(process.platform !== "win32")("rejects writing through hardlink aliases", async () => {
     const root = await tempDirs.make("bot-fs-safe-root-");
-    const outside = await tempDirs.make("bot-fs-safe-outside-");
-    const outsideFile = path.join(outside, "outside.txt");
     const hardlinkPath = path.join(root, "alias.txt");
     await withOutsideHardlinkAlias({
       aliasPath: hardlinkPath,
@@ -433,11 +476,11 @@ describe("tilde expansion in file tools", () => {
   it("expandHomePrefix respects process.env.HOME changes", async () => {
     const { expandHomePrefix } = await import("./home-dir.js");
     const originalHome = process.env.HOME;
-    const fakeHome = "/tmp/fake-home-test";
+    const fakeHome = path.resolve(path.sep, "tmp", "fake-home-test");
     process.env.HOME = fakeHome;
     try {
       const result = expandHomePrefix("~/file.txt");
-      expect(path.normalize(result)).toBe(path.join(path.resolve(fakeHome), "file.txt"));
+      expect(path.normalize(result)).toBe(path.join(fakeHome, "file.txt"));
     } finally {
       process.env.HOME = originalHome;
     }

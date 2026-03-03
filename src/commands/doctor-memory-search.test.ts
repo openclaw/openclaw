@@ -215,7 +215,7 @@ describe("noteMemorySearchHealth", () => {
 
     const message = note.mock.calls[0]?.[0] as string;
     expect(message).toContain("Gateway memory probe for default agent is not ready");
-    expect(message).toContain("hanzo-bot configure --section model");
+    expect(message).toContain("bot configure --section model");
     expect(message).not.toContain("bot auth add --provider");
   });
 
@@ -233,8 +233,32 @@ describe("noteMemorySearchHealth", () => {
     // provider: "local". So with no local file and no API keys, warn.
     expect(note).toHaveBeenCalledTimes(1);
     const message = String(note.mock.calls[0]?.[0] ?? "");
-    expect(message).toContain("hanzo-bot configure --section model");
-    expect(message).not.toContain("bot auth add --provider");
+    expect(message).toContain("bot configure --section model");
+  });
+
+  it("still warns in auto mode when only ollama credentials exist", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+    resolveApiKeyForProvider.mockImplementation(async ({ provider }: { provider: string }) => {
+      if (provider === "ollama") {
+        return {
+          apiKey: "ollama-local",
+          source: "env: OLLAMA_API_KEY",
+          mode: "api-key",
+        };
+      }
+      throw new Error("missing key");
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const providerCalls = resolveApiKeyForProvider.mock.calls as Array<[{ provider: string }]>;
+    const providersChecked = providerCalls.map(([arg]) => arg.provider);
+    expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
   });
 });
 

@@ -36,6 +36,20 @@ export function replyTexts(res: ReplyPayloadText | ReplyPayloadText[]): string[]
     .filter((value): value is string => Boolean(value));
 }
 
+export function makeEmbeddedTextResult(text = "done") {
+  return {
+    payloads: [{ text }],
+    meta: {
+      durationMs: 5,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  };
+}
+
+export function mockEmbeddedTextResult(text = "done") {
+  vi.mocked(runEmbeddedPiAgent).mockResolvedValue(makeEmbeddedTextResult(text));
+}
+
 export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(
     async (home) => {
@@ -63,7 +77,7 @@ export function makeWhatsAppDirectiveConfig(
   return {
     agents: {
       defaults: {
-        workspace: path.join(home, "bot"),
+        workspace: path.join(home, "@hanzo/bot"),
         ...defaults,
       },
     },
@@ -111,6 +125,13 @@ export function assertModelSelection(
   expect(entry?.providerOverride).toBe(selection.provider);
 }
 
+export function assertElevatedOffStatusReply(text: string | undefined) {
+  expect(text).toContain("Elevated mode disabled.");
+  const optionsLine = text?.split("\n").find((line) => line.trim().startsWith("⚙️"));
+  expect(optionsLine).toBeTruthy();
+  expect(optionsLine).not.toContain("elevated");
+}
+
 export function installDirectiveBehaviorE2EHooks() {
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockReset();
@@ -127,7 +148,7 @@ export function makeRestrictedElevatedDisabledConfig(home: string) {
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-5",
-        workspace: path.join(home, "bot"),
+        workspace: path.join(home, "@hanzo/bot"),
       },
       list: [
         {

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { BotConfig } from "../config/config.js";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -324,7 +325,7 @@ describe("promptCustomApiConfig", () => {
     expect(firstCall?.headers?.Authorization).toBe("Bearer test-env-key");
   });
 
-  it("re-prompts source after encrypted file ref preflight fails and succeeds with env ref", async () => {
+  it("re-prompts source after provider ref preflight fails and succeeds with env ref", async () => {
     vi.stubEnv("CUSTOM_PROVIDER_API_KEY", "test-env-key");
     const prompter = createTestPrompter({
       text: [
@@ -335,14 +336,24 @@ describe("promptCustomApiConfig", () => {
         "custom",
         "",
       ],
-      select: ["ref", "file", "env", "openai"],
+      select: ["ref", "provider", "filemain", "env", "openai"],
     });
     stubFetchSequence([{ ok: true }]);
 
-    const result = await runPromptCustomApi(prompter);
+    const result = await runPromptCustomApi(prompter, {
+      secrets: {
+        providers: {
+          filemain: {
+            source: "file",
+            path: "/tmp/bot-missing-provider.json",
+            mode: "json",
+          },
+        },
+      },
+    });
 
     expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Could not validate this encrypted file reference."),
+      expect.stringContaining("Could not validate provider reference"),
       "Reference check failed",
     );
     expect(result.config.models?.providers?.custom?.apiKey).toEqual({
@@ -354,91 +365,6 @@ describe("promptCustomApiConfig", () => {
 });
 
 describe("applyCustomApiConfig", () => {
-  it("uses hard-min context window for newly added custom models", () => {
-    const result = applyCustomApiConfig({
-      config: {},
-      baseUrl: "https://llm.example.com/v1",
-      modelId: "foo-large",
-      compatibility: "openai",
-      providerId: "custom",
-    });
-
-    const model = result.config.models?.providers?.custom?.models?.find(
-      (entry) => entry.id === "foo-large",
-    );
-    expect(model?.contextWindow).toBe(CONTEXT_WINDOW_HARD_MIN_TOKENS);
-  });
-
-  it("upgrades existing custom model context window when below hard minimum", () => {
-    const result = applyCustomApiConfig({
-      config: {
-        models: {
-          providers: {
-            custom: {
-              api: "openai-completions",
-              baseUrl: "https://llm.example.com/v1",
-              models: [
-                {
-                  id: "foo-large",
-                  name: "foo-large",
-                  contextWindow: 4096,
-                  maxTokens: 1024,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  reasoning: false,
-                },
-              ],
-            },
-          },
-        },
-      },
-      baseUrl: "https://llm.example.com/v1",
-      modelId: "foo-large",
-      compatibility: "openai",
-      providerId: "custom",
-    });
-
-    const model = result.config.models?.providers?.custom?.models?.find(
-      (entry) => entry.id === "foo-large",
-    );
-    expect(model?.contextWindow).toBe(CONTEXT_WINDOW_HARD_MIN_TOKENS);
-  });
-
-  it("preserves existing custom model context window when already above minimum", () => {
-    const result = applyCustomApiConfig({
-      config: {
-        models: {
-          providers: {
-            custom: {
-              api: "openai-completions",
-              baseUrl: "https://llm.example.com/v1",
-              models: [
-                {
-                  id: "foo-large",
-                  name: "foo-large",
-                  contextWindow: 131072,
-                  maxTokens: 4096,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  reasoning: false,
-                },
-              ],
-            },
-          },
-        },
-      },
-      baseUrl: "https://llm.example.com/v1",
-      modelId: "foo-large",
-      compatibility: "openai",
-      providerId: "custom",
-    });
-
-    const model = result.config.models?.providers?.custom?.models?.find(
-      (entry) => entry.id === "foo-large",
-    );
-    expect(model?.contextWindow).toBe(131072);
-  });
-
   it.each([
     {
       name: "uses hard-min context window for newly added custom models",

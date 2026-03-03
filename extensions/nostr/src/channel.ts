@@ -214,8 +214,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             `[${account.accountId}] DM from ${senderPubkey}: ${text.slice(0, 50)}...`,
           );
 
-          // Forward to Hanzo Bot's message pipeline
-          // TODO: Replace with proper dispatchReplyWithBufferedBlockDispatcher call
+          // Forward to Bot's message pipeline
           await (
             runtime.channel.reply as { handleInboundMessage?: (params: unknown) => Promise<void> }
           ).handleInboundMessage?.({

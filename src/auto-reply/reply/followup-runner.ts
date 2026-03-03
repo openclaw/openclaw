@@ -5,7 +5,7 @@ import type { OriginatingChannelType } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue.js";
 import type { TypingController } from "./typing.js";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -146,10 +146,11 @@ export function createFollowupRunner(params: {
           provider: queued.run.provider,
           model: queued.run.model,
           agentDir: queued.run.agentDir,
-          fallbacksOverride: resolveAgentModelFallbacksOverride(
-            queued.run.config,
-            queued.run.agentId ?? "",
-          ),
+          fallbacksOverride: resolveRunModelFallbacksOverride({
+            cfg: queued.run.config,
+            agentId: queued.run.agentId,
+            sessionKey: queued.run.sessionKey,
+          }),
           run: (provider, model) => {
             const authProfile = resolveRunAuthProfile(queued.run, provider);
             return runEmbeddedPiAgent({

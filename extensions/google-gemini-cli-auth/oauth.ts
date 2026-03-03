@@ -1,4 +1,4 @@
-import { isWSL2Sync } from "bot/plugin-sdk";
+import { fetchWithSsrFGuard, isWSL2Sync } from "bot/plugin-sdk";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { createServer } from "node:http";
@@ -10,11 +10,15 @@ const REDIRECT_URI = "http://localhost:8085/oauth2callback";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const USERINFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo?alt=json";
-const CODE_ASSIST_ENDPOINTS = [
-  "https://cloudcode-pa.googleapis.com",
-  "https://daily-cloudcode-pa.sandbox.googleapis.com",
-  "https://autopush-cloudcode-pa.sandbox.googleapis.com",
-] as const;
+const CODE_ASSIST_ENDPOINT_PROD = "https://cloudcode-pa.googleapis.com";
+const CODE_ASSIST_ENDPOINT_DAILY = "https://daily-cloudcode-pa.sandbox.googleapis.com";
+const CODE_ASSIST_ENDPOINT_AUTOPUSH = "https://autopush-cloudcode-pa.sandbox.googleapis.com";
+const LOAD_CODE_ASSIST_ENDPOINTS = [
+  CODE_ASSIST_ENDPOINT_PROD,
+  CODE_ASSIST_ENDPOINT_DAILY,
+  CODE_ASSIST_ENDPOINT_AUTOPUSH,
+];
+const DEFAULT_FETCH_TIMEOUT_MS = 10_000;
 const SCOPES = [
   "https://www.googleapis.com/auth/cloud-platform",
   "https://www.googleapis.com/auth/userinfo.email",
@@ -72,57 +76,45 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
     }
 
     const resolvedPath = realpathSync(geminiPath);
-    const geminiCliDir = dirname(dirname(resolvedPath));
-    // For npm global shims, the resolved path IS the shim itself, so the
-    // node_modules directory sits alongside the bin in the parent directory.
-    const shimDir = dirname(geminiPath);
-
-    const searchPaths = [
-      join(
-        geminiCliDir,
-        "node_modules",
-        "@google",
-        "gemini-cli-core",
-        "dist",
-        "src",
-        "code_assist",
-        "oauth2.js",
-      ),
-      join(
-        geminiCliDir,
-        "node_modules",
-        "@google",
-        "gemini-cli-core",
-        "dist",
-        "code_assist",
-        "oauth2.js",
-      ),
-      join(
-        shimDir,
-        "node_modules",
-        "@google",
-        "gemini-cli",
-        "node_modules",
-        "@google",
-        "gemini-cli-core",
-        "dist",
-        "src",
-        "code_assist",
-        "oauth2.js",
-      ),
-    ];
+    const geminiCliDirs = resolveGeminiCliDirs(geminiPath, resolvedPath);
 
     let content: string | null = null;
-    for (const p of searchPaths) {
-      if (existsSync(p)) {
-        content = readFileSync(p, "utf8");
+    for (const geminiCliDir of geminiCliDirs) {
+      const searchPaths = [
+        join(
+          geminiCliDir,
+          "node_modules",
+          "@google",
+          "gemini-cli-core",
+          "dist",
+          "src",
+          "code_assist",
+          "oauth2.js",
+        ),
+        join(
+          geminiCliDir,
+          "node_modules",
+          "@google",
+          "gemini-cli-core",
+          "dist",
+          "code_assist",
+          "oauth2.js",
+        ),
+      ];
+
+      for (const p of searchPaths) {
+        if (existsSync(p)) {
+          content = readFileSync(p, "utf8");
+          break;
+        }
+      }
+      if (content) {
         break;
       }
-    }
-    if (!content) {
       const found = findFile(geminiCliDir, "oauth2.js", 10);
       if (found) {
         content = readFileSync(found, "utf8");
+        break;
       }
     }
     if (!content) {
@@ -139,6 +131,30 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
     // Gemini CLI not installed or extraction failed
   }
   return null;
+}
+
+function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[] {
+  const binDir = dirname(geminiPath);
+  const candidates = [
+    dirname(dirname(resolvedPath)),
+    join(dirname(resolvedPath), "node_modules", "@google", "gemini-cli"),
+    join(binDir, "node_modules", "@google", "gemini-cli"),
+    join(dirname(binDir), "node_modules", "@google", "gemini-cli"),
+    join(dirname(binDir), "lib", "node_modules", "@google", "gemini-cli"),
+  ];
+
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const key =
+      process.platform === "win32" ? candidate.replace(/\\/g, "/").toLowerCase() : candidate;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(candidate);
+  }
+  return deduped;
 }
 
 function findInPath(name: string): string | null {
@@ -203,6 +219,40 @@ function generatePkce(): { verifier: string; challenge: string } {
   const verifier = randomBytes(32).toString("hex");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge };
+}
+
+function resolvePlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
+  if (process.platform === "win32") {
+    return "WINDOWS";
+  }
+  if (process.platform === "darwin") {
+    return "MACOS";
+  }
+  // Google's loadCodeAssist API rejects "LINUX" as an invalid Platform enum value.
+  // Use "PLATFORM_UNSPECIFIED" for Linux and other platforms to match the pi-ai runtime.
+  return "PLATFORM_UNSPECIFIED";
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init,
+    timeoutMs,
+  });
+  try {
+    const body = await response.arrayBuffer();
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } finally {
+    await release();
+  }
 }
 
 function buildAuthUrl(challenge: string, verifier: string): string {
@@ -303,7 +353,7 @@ async function waitForLocalCallback(params: {
         res.end(
           "<!doctype html><html><head><meta charset='utf-8'/></head>" +
             "<body><h2>Gemini CLI OAuth complete</h2>" +
-            "<p>You can close this window and return to Hanzo Bot.</p></body></html>",
+            "<p>You can close this window and return to Bot.</p></body></html>",
         );
 
         finish(undefined, { code, state });
@@ -358,9 +408,13 @@ async function exchangeCodeForTokens(
     body.set("client_secret", clientSecret);
   }
 
-  const response = await fetch(TOKEN_URL, {
+  const response = await fetchWithTimeout(TOKEN_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      Accept: "*/*",
+      "User-Agent": "google-api-nodejs-client/9.15.1",
+    },
     body,
   });
 
@@ -394,7 +448,7 @@ async function exchangeCodeForTokens(
 
 async function getUserEmail(accessToken: string): Promise<string | undefined> {
   try {
-    const response = await fetch(USERINFO_URL, {
+    const response = await fetchWithTimeout(USERINFO_URL, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (response.ok) {
@@ -407,34 +461,28 @@ async function getUserEmail(accessToken: string): Promise<string | undefined> {
   return undefined;
 }
 
-function resolvePlatform(): "WINDOWS" | "MACOS" | "LINUX" {
-  if (process.platform === "win32") {
-    return "WINDOWS";
-  }
-  if (process.platform === "linux") {
-    return "LINUX";
-  }
-  return "MACOS";
-}
-
 async function discoverProject(accessToken: string): Promise<string> {
   const envProject = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
   const platform = resolvePlatform();
-  const clientMetadata = {
+  const metadata = {
     ideType: "ANTIGRAVITY",
     platform,
     pluginType: "GEMINI",
   };
-  const headers: Record<string, string> = {
+  const headers = {
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
     "User-Agent": "google-api-nodejs-client/9.15.1",
     "X-Goog-Api-Client": `gl-node/${process.versions.node}`,
-    "Client-Metadata": JSON.stringify(clientMetadata),
+    "Client-Metadata": JSON.stringify(metadata),
   };
 
   const loadBody = {
-    metadata: clientMetadata,
+    ...(envProject ? { cloudaicompanionProject: envProject } : {}),
+    metadata: {
+      ...metadata,
+      ...(envProject ? { duetProject: envProject } : {}),
+    },
   };
 
   let data: {
@@ -442,12 +490,11 @@ async function discoverProject(accessToken: string): Promise<string> {
     cloudaicompanionProject?: string | { id?: string };
     allowedTiers?: Array<{ id?: string; isDefault?: boolean }>;
   } = {};
-
-  // Try each loadCodeAssist endpoint in sequence, falling back on non-VPC-SC errors
-  let lastError: Error | null = null;
-  for (const endpoint of CODE_ASSIST_ENDPOINTS) {
+  let activeEndpoint = CODE_ASSIST_ENDPOINT_PROD;
+  let loadError: Error | undefined;
+  for (const endpoint of LOAD_CODE_ASSIST_ENDPOINTS) {
     try {
-      const response = await fetch(`${endpoint}/v1internal:loadCodeAssist`, {
+      const response = await fetchWithTimeout(`${endpoint}/v1internal:loadCodeAssist`, {
         method: "POST",
         headers,
         body: JSON.stringify(loadBody),
@@ -457,27 +504,32 @@ async function discoverProject(accessToken: string): Promise<string> {
         const errorPayload = await response.json().catch(() => null);
         if (isVpcScAffected(errorPayload)) {
           data = { currentTier: { id: TIER_STANDARD } };
-          lastError = null;
+          activeEndpoint = endpoint;
+          loadError = undefined;
           break;
         }
-        lastError = new Error(`loadCodeAssist failed: ${response.status} ${response.statusText}`);
+        loadError = new Error(`loadCodeAssist failed: ${response.status} ${response.statusText}`);
         continue;
       }
 
       data = (await response.json()) as typeof data;
-      lastError = null;
+      activeEndpoint = endpoint;
+      loadError = undefined;
       break;
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error("loadCodeAssist failed", { cause: err });
+      loadError = err instanceof Error ? err : new Error("loadCodeAssist failed", { cause: err });
     }
   }
 
-  // All endpoints failed: fall back to env var
-  if (lastError) {
+  const hasLoadCodeAssistData =
+    Boolean(data.currentTier) ||
+    Boolean(data.cloudaicompanionProject) ||
+    Boolean(data.allowedTiers?.length);
+  if (!hasLoadCodeAssistData && loadError) {
     if (envProject) {
       return envProject;
     }
-    throw lastError;
+    throw loadError;
   }
 
   if (data.currentTier) {
@@ -506,14 +558,16 @@ async function discoverProject(accessToken: string): Promise<string> {
 
   const onboardBody: Record<string, unknown> = {
     tierId,
-    metadata: clientMetadata,
+    metadata: {
+      ...metadata,
+    },
   };
   if (tierId !== TIER_FREE && envProject) {
     onboardBody.cloudaicompanionProject = envProject;
     (onboardBody.metadata as Record<string, unknown>).duetProject = envProject;
   }
 
-  const onboardResponse = await fetch(`${CODE_ASSIST_ENDPOINTS[0]}/v1internal:onboardUser`, {
+  const onboardResponse = await fetchWithTimeout(`${activeEndpoint}/v1internal:onboardUser`, {
     method: "POST",
     headers,
     body: JSON.stringify(onboardBody),
@@ -530,7 +584,7 @@ async function discoverProject(accessToken: string): Promise<string> {
   };
 
   if (!lro.done && lro.name) {
-    lro = await pollOperation(lro.name, headers);
+    lro = await pollOperation(activeEndpoint, lro.name, headers);
   }
 
   const projectId = lro.response?.cloudaicompanionProject?.id;
@@ -576,12 +630,13 @@ function getDefaultTier(
 }
 
 async function pollOperation(
+  endpoint: string,
   operationName: string,
   headers: Record<string, string>,
 ): Promise<{ done?: boolean; response?: { cloudaicompanionProject?: { id?: string } } }> {
   for (let attempt = 0; attempt < 24; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 5000));
-    const response = await fetch(`${CODE_ASSIST_ENDPOINTS[0]}/v1internal/${operationName}`, {
+    const response = await fetchWithTimeout(`${endpoint}/v1internal/${operationName}`, {
       headers,
     });
     if (!response.ok) {

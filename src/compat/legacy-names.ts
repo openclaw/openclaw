@@ -1,4 +1,4 @@
-export const PROJECT_NAME = "bot" as const;
+export const PROJECT_NAME = "@hanzo/bot" as const;
 
 export const LEGACY_PROJECT_NAMES = [] as const;
 

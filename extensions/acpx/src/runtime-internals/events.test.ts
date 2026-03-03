@@ -1,208 +1,81 @@
 import { describe, expect, it } from "vitest";
-import { parsePromptEventLine, toAcpxErrorEvent } from "./events.js";
+import { parsePromptEventLine } from "./events.js";
 
-function jsonLine(payload: unknown): string {
-  return JSON.stringify(payload);
-}
-
-describe("acpx runtime event parsing", () => {
-  it("maps agent message chunks to output deltas", () => {
-    const event = parsePromptEventLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "session-1",
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: {
-              type: "text",
-              text: "hello world",
-            },
-          },
+describe("parsePromptEventLine", () => {
+  it("parses raw ACP session/update agent_message_chunk lines", () => {
+    const line = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "s1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "hello" },
         },
-      }),
-    );
-
-    expect(event).toEqual({
+      },
+    });
+    expect(parsePromptEventLine(line)).toEqual({
       type: "text_delta",
-      text: "hello world",
+      text: "hello",
       stream: "output",
+      tag: "agent_message_chunk",
     });
   });
 
-  it("preserves leading spaces in streamed output chunks", () => {
-    const event = parsePromptEventLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "session-1",
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: {
-              type: "text",
-              text: "  indented",
-            },
-          },
+  it("parses usage_update with stable metadata", () => {
+    const line = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "s1",
+        update: {
+          sessionUpdate: "usage_update",
+          used: 12,
+          size: 500,
         },
-      }),
-    );
-
-    expect(event).toEqual({
-      type: "text_delta",
-      text: "  indented",
-      stream: "output",
+      },
+    });
+    expect(parsePromptEventLine(line)).toEqual({
+      type: "status",
+      text: "usage updated: 12/500",
+      tag: "usage_update",
+      used: 12,
+      size: 500,
     });
   });
 
-  it("maps agent thought chunks to thought deltas", () => {
-    const event = parsePromptEventLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "session-1",
-          update: {
-            sessionUpdate: "agent_thought_chunk",
-            content: {
-              type: "text",
-              text: "thinking",
-            },
-          },
+  it("parses tool_call_update without using call ids as primary fallback label", () => {
+    const line = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "s1",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "call_ABC123",
+          status: "in_progress",
         },
-      }),
-    );
-
-    expect(event).toEqual({
-      type: "text_delta",
-      text: "thinking",
-      stream: "thought",
+      },
     });
-  });
-
-  it("maps tool call updates to tool_call events", () => {
-    const event = parsePromptEventLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "session-1",
-          update: {
-            sessionUpdate: "tool_call",
-            toolCallId: "call-1",
-            title: "exec",
-            status: "in_progress",
-          },
-        },
-      }),
-    );
-
-    expect(event).toEqual({
+    expect(parsePromptEventLine(line)).toEqual({
       type: "tool_call",
-      text: "exec (in_progress)",
+      text: "tool call (in_progress)",
+      tag: "tool_call_update",
+      toolCallId: "call_ABC123",
+      status: "in_progress",
+      title: "tool call",
     });
   });
 
-  it("maps prompt response stop reasons to done events", () => {
-    const event = parsePromptEventLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        id: "req-1",
-        result: {
-          stopReason: "end_turn",
-        },
-      }),
-    );
-
-    expect(event).toEqual({
+  it("keeps compatibility with simplified text/done lines", () => {
+    expect(parsePromptEventLine(JSON.stringify({ type: "text", content: "alpha" }))).toEqual({
+      type: "text_delta",
+      text: "alpha",
+      stream: "output",
+    });
+    expect(parsePromptEventLine(JSON.stringify({ type: "done", stopReason: "end_turn" }))).toEqual({
       type: "done",
       stopReason: "end_turn",
-    });
-  });
-
-  it("maps json-rpc errors to runtime errors", () => {
-    const event = parsePromptEventLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        id: "req-1",
-        error: {
-          code: -32000,
-          message: "adapter failed",
-        },
-      }),
-    );
-
-    expect(event).toEqual({
-      type: "error",
-      message: "adapter failed",
-      code: "-32000",
-      retryable: undefined,
-    });
-  });
-
-  it("ignores non-prompt response errors when parse context is provided", () => {
-    const context = {
-      promptRequestIds: new Set<string>(),
-    };
-
-    const promptRequest = parsePromptEventLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        id: 3,
-        method: "session/prompt",
-        params: {
-          sessionId: "session-1",
-          prompt: [{ type: "text", text: "hello" }],
-        },
-      }),
-      context,
-    );
-    const loadError = parsePromptEventLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        id: 1,
-        error: {
-          code: -32002,
-          message: "Resource not found",
-        },
-      }),
-      context,
-    );
-    const promptDone = parsePromptEventLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        id: 3,
-        result: {
-          stopReason: "end_turn",
-        },
-      }),
-      context,
-    );
-
-    expect(promptRequest).toBeNull();
-    expect(loadError).toBeNull();
-    expect(promptDone).toEqual({
-      type: "done",
-      stopReason: "end_turn",
-    });
-  });
-});
-
-describe("toAcpxErrorEvent", () => {
-  it("reads control command errors from json output", () => {
-    expect(
-      toAcpxErrorEvent({
-        error: {
-          code: "NO_SESSION",
-          message: "No matching session",
-          retryable: false,
-        },
-      }),
-    ).toEqual({
-      code: "NO_SESSION",
-      message: "No matching session",
-      retryable: false,
     });
   });
 });

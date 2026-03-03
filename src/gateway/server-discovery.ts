@@ -14,12 +14,12 @@ export type ResolveBonjourCliPathOptions = {
 export function formatBonjourInstanceName(displayName: string) {
   const trimmed = displayName.trim();
   if (!trimmed) {
-    return "Hanzo Bot";
+    return "Bot";
   }
   if (/bot/i.test(trimmed)) {
     return trimmed;
   }
-  return `${trimmed} (Hanzo Bot)`;
+  return `${trimmed} (Bot)`;
 }
 
 export function resolveBonjourCliPath(opts: ResolveBonjourCliPathOptions = {}): string | undefined {
@@ -40,7 +40,7 @@ export function resolveBonjourCliPath(opts: ResolveBonjourCliPathOptions = {}): 
 
   const execPath = opts.execPath ?? process.execPath;
   const execDir = path.dirname(execPath);
-  const siblingCli = path.join(execDir, "bot");
+  const siblingCli = path.join(execDir, "@hanzo/bot");
   if (isFile(siblingCli)) {
     return siblingCli;
   }
@@ -56,7 +56,7 @@ export function resolveBonjourCliPath(opts: ResolveBonjourCliPathOptions = {}): 
   if (isFile(distCli)) {
     return distCli;
   }
-  const binCli = path.join(cwd, "bin", "bot");
+  const binCli = path.join(cwd, "bin", "@hanzo/bot");
   if (isFile(binCli)) {
     return binCli;
   }

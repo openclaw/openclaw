@@ -14,9 +14,6 @@ export type MistralEmbeddingClient = {
 
 export const DEFAULT_MISTRAL_EMBEDDING_MODEL = "mistral-embed";
 const DEFAULT_MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
-const MISTRAL_MAX_INPUT_TOKENS: Record<string, number> = {
-  "mistral-embed": 8192,
-};
 
 export function normalizeMistralModel(model: string): string {
   const trimmed = model.trim();
@@ -39,13 +36,12 @@ export async function createMistralEmbeddingProvider(
       id: "mistral",
       client,
       errorPrefix: "mistral embeddings failed",
-      maxInputTokens: MISTRAL_MAX_INPUT_TOKENS[client.model],
     }),
     client,
   };
 }
 
-async function resolveMistralEmbeddingClient(
+export async function resolveMistralEmbeddingClient(
   options: EmbeddingProviderOptions,
 ): Promise<MistralEmbeddingClient> {
   return await resolveRemoteEmbeddingClient({

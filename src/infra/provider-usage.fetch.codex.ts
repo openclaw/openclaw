@@ -90,7 +90,11 @@ export async function fetchCodexUsage(
   if (data.rate_limit?.secondary_window) {
     const sw = data.rate_limit.secondary_window;
     const windowHours = Math.round((sw.limit_window_seconds || 86400) / 3600);
-    const label = windowHours >= 168 ? "Week" : windowHours >= 24 ? "Day" : `${windowHours}h`;
+    const label = resolveSecondaryWindowLabel({
+      windowHours,
+      primaryResetAt: data.rate_limit?.primary_window?.reset_at,
+      secondaryResetAt: sw.reset_at,
+    });
     windows.push({
       label,
       usedPercent: clampPercent(sw.used_percent || 0),

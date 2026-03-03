@@ -134,14 +134,12 @@ describe("gateway server hooks", () => {
       expect(resBadChannel.status).toBe(400);
       expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
 
-      const resHeader = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-bot-token": "hook-secret",
-        },
-        body: JSON.stringify({ text: "Header auth" }),
-      });
+      const resHeader = await postHook(
+        port,
+        "/hooks/wake",
+        { text: "Header auth" },
+        { token: null, headers: { "x-bot-token": HOOK_TOKEN } },
+      );
       expect(resHeader.status).toBe(200);
       const headerEvents = await waitForSystemEvent();
       expect(headerEvents.some((e) => e.includes("Header auth"))).toBe(true);

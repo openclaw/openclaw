@@ -43,12 +43,10 @@ export const FeishuDocSchema = Type.Union([
     action: Type.Literal("create"),
     title: Type.String({ description: "Document title" }),
     folder_token: Type.Optional(Type.String({ description: "Target folder token (optional)" })),
-    owner_open_id: Type.Optional(
-      Type.String({ description: "Open ID of the user to grant ownership permission" }),
-    ),
-    owner_perm_type: Type.Optional(
-      Type.Union([Type.Literal("view"), Type.Literal("edit"), Type.Literal("full_access")], {
-        description: "Permission type (default: full_access)",
+    grant_to_requester: Type.Optional(
+      Type.Boolean({
+        description:
+          "Grant edit permission to the trusted requesting Feishu user from runtime context (default: true).",
       }),
     ),
   }),
@@ -75,17 +73,7 @@ export const FeishuDocSchema = Type.Union([
   // Table creation (explicit structure)
   Type.Object({
     action: Type.Literal("create_table"),
-    doc_token: Type.String({ description: "Document token" }),
-    parent_block_id: Type.Optional(
-      Type.String({ description: "Parent block ID (default: document root)" }),
-    ),
-    row_size: Type.Integer({ description: "Table row count", minimum: 1 }),
-    column_size: Type.Integer({ description: "Table column count", minimum: 1 }),
-    column_width: Type.Optional(
-      Type.Array(Type.Number({ minimum: 1 }), {
-        description: "Column widths in px (length should match column_size)",
-      }),
-    ),
+    ...tableCreationProperties,
   }),
   Type.Object({
     action: Type.Literal("write_table_cells"),
@@ -98,17 +86,7 @@ export const FeishuDocSchema = Type.Union([
   }),
   Type.Object({
     action: Type.Literal("create_table_with_values"),
-    doc_token: Type.String({ description: "Document token" }),
-    parent_block_id: Type.Optional(
-      Type.String({ description: "Parent block ID (default: document root)" }),
-    ),
-    row_size: Type.Integer({ description: "Table row count", minimum: 1 }),
-    column_size: Type.Integer({ description: "Table column count", minimum: 1 }),
-    column_width: Type.Optional(
-      Type.Array(Type.Number({ minimum: 1 }), {
-        description: "Column widths in px (length should match column_size)",
-      }),
-    ),
+    ...tableCreationProperties,
     values: Type.Array(Type.Array(Type.String()), {
       description: "2D matrix values[row][col] to write into table cells",
       minItems: 1,

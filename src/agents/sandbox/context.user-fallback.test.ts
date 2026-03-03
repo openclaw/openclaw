@@ -4,7 +4,7 @@ import { resolveSandboxDockerUser } from "./context.js";
 
 const baseDocker: SandboxDockerConfig = {
   image: "ghcr.io/example/sandbox:latest",
-  containerPrefix: "hanzo-bot-sandbox-",
+  containerPrefix: "bot-sandbox-",
   workdir: "/workspace",
   readOnlyRoot: true,
   tmpfs: ["/tmp"],

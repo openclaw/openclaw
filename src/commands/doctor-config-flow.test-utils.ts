@@ -11,7 +11,7 @@ export async function runDoctorConfigWithInput<T>(params: {
   }) => Promise<T>;
 }) {
   return withTempHome(async (home) => {
-    const configDir = path.join(home, ".hanzo/bot");
+    const configDir = path.join(home, ".bot");
     await fs.mkdir(configDir, { recursive: true });
     await fs.writeFile(
       path.join(configDir, "bot.json"),

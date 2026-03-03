@@ -1,10 +1,10 @@
 import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
+import { resolvePreferredBotTmpDir } from "bot/plugin-sdk";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-// NOTE: This extension is intended to be bundled with Hanzo Bot.
-// When running from source (tests/dev), Hanzo Bot internals live under src/.
+// NOTE: This extension is intended to be bundled with Bot.
+// When running from source (tests/dev), Bot internals live under src/.
 // When running from a built install, internals live under dist/ (no src/ tree).
 // So we resolve internal imports dynamically with src-first, dist-fallback.
 import type { BotPluginApi } from "../../../src/plugins/types.js";
@@ -71,7 +71,7 @@ export function createLlmTaskTool(api: BotPluginApi) {
     name: "llm-task",
     label: "LLM Task",
     description:
-      "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from Flow workflows via bot.invoke.",
+      "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from Lobster workflows via bot.invoke.",
     parameters: Type.Object({
       prompt: Type.String({ description: "Task instruction for the LLM." }),
       input: Type.Optional(Type.Unknown({ description: "Optional input payload for the task." })),
@@ -96,8 +96,11 @@ export function createLlmTaskTool(api: BotPluginApi) {
 
       const pluginCfg = (api.pluginConfig ?? {}) as PluginCfg;
 
-      const modelCfg = api.config?.agents?.defaults?.model;
-      const primary = typeof modelCfg === "string" ? modelCfg : modelCfg?.primary;
+      const defaultsModel = api.config?.agents?.defaults?.model;
+      const primary =
+        typeof defaultsModel === "string"
+          ? defaultsModel.trim()
+          : (defaultsModel?.primary?.trim() ?? undefined);
       const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
       const primaryModel =
         typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
@@ -177,7 +180,7 @@ export function createLlmTaskTool(api: BotPluginApi) {
 
       let tmpDir: string | null = null;
       try {
-        tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-llm-task-"));
+        tmpDir = await fs.mkdtemp(path.join(resolvePreferredBotTmpDir(), "bot-llm-task-"));
         const sessionId = `llm-task-${Date.now()}`;
         const sessionFile = path.join(tmpDir, "session.json");
 

@@ -657,22 +657,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("continues on errors when bestEffort is enabled", async () => {
-    const sendWhatsApp = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("fail"))
-      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
-    const onError = vi.fn();
-    const cfg: BotConfig = {};
-
-    const results = await deliverOutboundPayloads({
-      cfg,
-      channel: "whatsapp",
-      to: "+1555",
-      payloads: [{ text: "a" }, { text: "b" }],
-      deps: { sendWhatsApp },
-      bestEffort: true,
-      onError,
-    });
+    const { sendWhatsApp, onError, results } = await runBestEffortPartialFailureDelivery();
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
     expect(onError).toHaveBeenCalledTimes(1);
@@ -744,22 +729,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("calls failDelivery instead of ackDelivery on bestEffort partial failure", async () => {
-    const sendWhatsApp = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("fail"))
-      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
-    const onError = vi.fn();
-    const cfg: BotConfig = {};
-
-    await deliverOutboundPayloads({
-      cfg,
-      channel: "whatsapp",
-      to: "+1555",
-      payloads: [{ text: "a" }, { text: "b" }],
-      deps: { sendWhatsApp },
-      bestEffort: true,
-      onError,
-    });
+    const { onError } = await runBestEffortPartialFailureDelivery();
 
     // onError was called for the first payload's failure.
     expect(onError).toHaveBeenCalledTimes(1);

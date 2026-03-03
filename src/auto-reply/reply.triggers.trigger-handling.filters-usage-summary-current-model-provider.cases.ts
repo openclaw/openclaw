@@ -156,7 +156,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
           runEmbeddedPiAgentMock.mockClear();
           const cfg = makeCfg(home);
           cfg.session = { ...cfg.session, store: join(home, "auth-profile-status.sessions.json") };
-          const agentDir = join(home, ".hanzo/bot", "agents", "main", "agent");
+          const agentDir = join(home, ".bot", "agents", "main", "agent");
           await mkdir(agentDir, { recursive: true });
           await writeFile(
             join(agentDir, "auth-profiles.json"),

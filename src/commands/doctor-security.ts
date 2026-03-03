@@ -1,16 +1,24 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { BotConfig, GatewayBindMode } from "../config/config.js";
-import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
-import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { resolveDmAllowState } from "../security/dm-policy-shared.js";
 import { note } from "../terminal/note.js";
+import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
 export async function noteSecurityWarnings(cfg: BotConfig) {
   const warnings: string[] = [];
-  const auditHint = `- Run: ${formatCliCommand("hanzo-bot security audit --deep")}`;
+  const auditHint = `- Run: ${formatCliCommand("bot security audit --deep")}`;
+
+  if (cfg.approvals?.exec?.enabled === false) {
+    warnings.push(
+      "- Note: approvals.exec.enabled=false disables approval forwarding only.",
+      "  Host exec gating still comes from ~/.hanzo/bot/exec-approvals.json.",
+      `  Check local policy with: ${formatCliCommand("bot approvals get --gateway")}`,
+    );
+  }
 
   // ===========================================
   // GATEWAY NETWORK EXPOSURE CHECK
@@ -42,25 +50,31 @@ export async function noteSecurityWarnings(cfg: BotConfig) {
     (resolvedAuth.mode === "token" && hasToken) ||
     (resolvedAuth.mode === "password" && hasPassword);
   const bindDescriptor = `"${gatewayBind}" (${resolvedBindHost})`;
+  const saferRemoteAccessLines = [
+    "  Safer remote access: keep bind loopback and use Tailscale Serve/Funnel or an SSH tunnel.",
+    "  Example tunnel: ssh -N -L 18789:127.0.0.1:18789 user@gateway-host",
+    "  Docs: https://docs.hanzo.bot/gateway/remote",
+  ];
 
   if (isExposed) {
     if (!hasSharedSecret) {
       const authFixLines =
         resolvedAuth.mode === "password"
           ? [
-              `  Fix: ${formatCliCommand("hanzo-bot configure")} to set a password`,
-              `  Or switch to token: ${formatCliCommand("hanzo-bot config set gateway.auth.mode token")}`,
+              `  Fix: ${formatCliCommand("bot configure")} to set a password`,
+              `  Or switch to token: ${formatCliCommand("bot config set gateway.auth.mode token")}`,
             ]
           : [
-              `  Fix: ${formatCliCommand("hanzo-bot doctor --fix")} to generate a token`,
+              `  Fix: ${formatCliCommand("bot doctor --fix")} to generate a token`,
               `  Or set token directly: ${formatCliCommand(
-                "hanzo-bot config set gateway.auth.mode token",
+                "bot config set gateway.auth.mode token",
               )}`,
             ];
       warnings.push(
         `- CRITICAL: Gateway bound to ${bindDescriptor} without authentication.`,
         `  Anyone on your network (or internet if port-forwarded) can fully control your agent.`,
-        `  Fix: ${formatCliCommand("hanzo-bot config set gateway.bind loopback")}`,
+        `  Fix: ${formatCliCommand("bot config set gateway.bind loopback")}`,
+        ...saferRemoteAccessLines,
         ...authFixLines,
       );
     } else {
@@ -68,6 +82,7 @@ export async function noteSecurityWarnings(cfg: BotConfig) {
       warnings.push(
         `- WARNING: Gateway bound to ${bindDescriptor} (network-accessible).`,
         `  Ensure your auth credentials are strong and not exposed.`,
+        ...saferRemoteAccessLines,
       );
     }
   }
@@ -75,35 +90,23 @@ export async function noteSecurityWarnings(cfg: BotConfig) {
   const warnDmPolicy = async (params: {
     label: string;
     provider: ChannelId;
+    accountId: string;
     dmPolicy: string;
     allowFrom?: Array<string | number> | null;
     policyPath?: string;
     allowFromPath: string;
     approveHint: string;
     normalizeEntry?: (raw: string) => string;
-    accountId?: string;
   }) => {
     const dmPolicy = params.dmPolicy;
     const policyPath = params.policyPath ?? `${params.allowFromPath}policy`;
-    const configAllowFrom = (params.allowFrom ?? []).map((v) => String(v).trim());
-    const hasWildcard = configAllowFrom.includes("*");
-    const storeAllowFrom = await readChannelAllowFromStore(
-      params.provider,
-      process.env,
-      params.accountId ?? "",
-    ).catch(() => []);
-    const normalizedCfg = configAllowFrom
-      .filter((v) => v !== "*")
-      .map((v) => (params.normalizeEntry ? params.normalizeEntry(v) : v))
-      .map((v) => v.trim())
-      .filter(Boolean);
-    const normalizedStore = storeAllowFrom
-      .map((v) => (params.normalizeEntry ? params.normalizeEntry(v) : v))
-      .map((v) => v.trim())
-      .filter(Boolean);
-    const allowCount = Array.from(new Set([...normalizedCfg, ...normalizedStore])).length;
+    const { hasWildcard, allowCount, isMultiUserDm } = await resolveDmAllowState({
+      provider: params.provider,
+      accountId: params.accountId,
+      allowFrom: params.allowFrom,
+      normalizeEntry: params.normalizeEntry,
+    });
     const dmScope = cfg.session?.dmScope ?? "main";
-    const isMultiUserDm = hasWildcard || allowCount > 1;
 
     if (dmPolicy === "open") {
       const allowFromPath = `${params.allowFromPath}allowFrom`;
@@ -140,20 +143,11 @@ export async function noteSecurityWarnings(cfg: BotConfig) {
     if (!plugin.security) {
       continue;
     }
-    const accountIds = plugin.config.listAccountIds(cfg);
-    const defaultAccountId = resolveChannelDefaultAccountId({
-      plugin,
-      cfg,
-      accountIds,
-    });
-    const account = plugin.config.resolveAccount(cfg, defaultAccountId);
-    const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, cfg) : true;
+    const { defaultAccountId, account, enabled, configured } =
+      await resolveDefaultChannelAccountContext(plugin, cfg);
     if (!enabled) {
       continue;
     }
-    const configured = plugin.config.isConfigured
-      ? await plugin.config.isConfigured(account, cfg)
-      : true;
     if (!configured) {
       continue;
     }
@@ -166,13 +160,13 @@ export async function noteSecurityWarnings(cfg: BotConfig) {
       await warnDmPolicy({
         label: plugin.meta.label ?? plugin.id,
         provider: plugin.id,
+        accountId: defaultAccountId,
         dmPolicy: dmPolicy.policy,
         allowFrom: dmPolicy.allowFrom,
         policyPath: dmPolicy.policyPath,
         allowFromPath: dmPolicy.allowFromPath,
         approveHint: dmPolicy.approveHint,
         normalizeEntry: dmPolicy.normalizeEntry,
-        accountId: defaultAccountId,
       });
     }
     if (plugin.security.collectWarnings) {

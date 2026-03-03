@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { PluginConfigUiHint, PluginKind } from "./types.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "bot.plugin.json";
@@ -46,18 +47,33 @@ export function loadPluginManifest(
   rejectHardlinks = true,
 ): PluginManifestLoadResult {
   const manifestPath = resolvePluginManifestPath(rootDir);
-  if (!fs.existsSync(manifestPath)) {
-    return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
+  const opened = openBoundaryFileSync({
+    absolutePath: manifestPath,
+    rootPath: rootDir,
+    boundaryLabel: "plugin root",
+    rejectHardlinks,
+  });
+  if (!opened.ok) {
+    if (opened.reason === "path") {
+      return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
+    }
+    return {
+      ok: false,
+      error: `unsafe plugin manifest path: ${manifestPath} (${opened.reason})`,
+      manifestPath,
+    };
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as unknown;
+    raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
   } catch (err) {
     return {
       ok: false,
       error: `failed to parse plugin manifest: ${String(err)}`,
       manifestPath,
     };
+  } finally {
+    fs.closeSync(opened.fd);
   }
   if (!isRecord(raw)) {
     return { ok: false, error: "plugin manifest must be an object", manifestPath };
@@ -102,7 +118,7 @@ export function loadPluginManifest(
   };
 }
 
-// package.json "bot" metadata (used for onboarding/catalog)
+// package.json "@hanzo/bot" metadata (used for onboarding/catalog)
 export type PluginPackageChannel = {
   id?: string;
   label?: string;

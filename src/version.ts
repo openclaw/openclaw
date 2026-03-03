@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 
 declare const __BOT_VERSION__: string | undefined;
-const CORE_PACKAGE_NAME = "bot";
+const CORE_PACKAGE_NAME = "@hanzo/bot";
 
 const PACKAGE_JSON_CANDIDATES = [
   "../package.json",
@@ -44,6 +44,16 @@ function readVersionFromJsonCandidates(
   }
 }
 
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
 export function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): string | null {
   return readVersionFromJsonCandidates(moduleUrl, PACKAGE_JSON_CANDIDATES, {
     requirePackageName: true,
@@ -61,11 +71,58 @@ export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
   );
 }
 
-// Single source of truth for the current Hanzo Bot version.
+export function resolveBinaryVersion(params: {
+  moduleUrl: string;
+  injectedVersion?: string;
+  bundledVersion?: string;
+  fallback?: string;
+}): string {
+  return (
+    firstNonEmpty(params.injectedVersion) ||
+    resolveVersionFromModuleUrl(params.moduleUrl) ||
+    firstNonEmpty(params.bundledVersion) ||
+    params.fallback ||
+    "0.0.0"
+  );
+}
+
+export type RuntimeVersionEnv = {
+  [key: string]: string | undefined;
+};
+
+export const RUNTIME_SERVICE_VERSION_FALLBACK = "unknown";
+
+export function resolveUsableRuntimeVersion(version: string | undefined): string | undefined {
+  const trimmed = version?.trim();
+  // "0.0.0" is the resolver's hard fallback when module metadata cannot be read.
+  // Prefer explicit service/package markers in that edge case.
+  if (!trimmed || trimmed === "0.0.0") {
+    return undefined;
+  }
+  return trimmed;
+}
+
+export function resolveRuntimeServiceVersion(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+  fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
+): string {
+  const runtimeVersion = resolveUsableRuntimeVersion(VERSION);
+
+  return (
+    firstNonEmpty(
+      env["BOT_VERSION"],
+      runtimeVersion,
+      env["BOT_SERVICE_VERSION"],
+      env["npm_package_version"],
+    ) ?? fallback
+  );
+}
+
+// Single source of truth for the current Bot version.
 // - Embedded/bundled builds: injected define or env var.
 // - Dev/npm builds: package.json.
-export const VERSION =
-  (typeof __BOT_VERSION__ === "string" && __BOT_VERSION__) ||
-  process.env.BOT_BUNDLED_VERSION ||
-  resolveVersionFromModuleUrl(import.meta.url) ||
-  "0.0.0";
+export const VERSION = resolveBinaryVersion({
+  moduleUrl: import.meta.url,
+  injectedVersion: typeof __BOT_VERSION__ === "string" ? __BOT_VERSION__ : undefined,
+  bundledVersion: process.env.BOT_BUNDLED_VERSION,
+});

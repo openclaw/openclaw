@@ -6,6 +6,8 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
 } from "../agents/huggingface-models.js";
 import {
+  buildKilocodeProvider,
+  buildKimiCodingProvider,
   buildQianfanProvider,
   buildXiaomiProvider,
   QIANFAN_DEFAULT_MODEL_ID,
@@ -39,7 +41,6 @@ import {
   ZAI_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
-export { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 export {
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
@@ -60,16 +61,15 @@ import {
   applyProviderConfigWithModelCatalog,
 } from "./onboard-auth.config-shared.js";
 import {
-  buildKilocodeModelDefinition,
   buildMistralModelDefinition,
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
-  KILOCODE_DEFAULT_MODEL_ID,
   MISTRAL_BASE_URL,
   MISTRAL_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
+  KIMI_CODING_MODEL_ID,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_BASE_URL,
   MOONSHOT_CN_BASE_URL,
@@ -212,19 +212,19 @@ export function applyKimiCodeProviderConfig(cfg: BotConfig): BotConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[KIMI_CODING_MODEL_REF] = {
     ...models[KIMI_CODING_MODEL_REF],
-    alias: models[KIMI_CODING_MODEL_REF]?.alias ?? "Kimi K2.5",
+    alias: models[KIMI_CODING_MODEL_REF]?.alias ?? "Kimi for Coding",
   };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-  };
+  const defaultModel = buildKimiCodingProvider().models[0];
+
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "kimi-coding",
+    api: "anthropic-messages",
+    baseUrl: "https://api.kimi.com/coding/",
+    defaultModel,
+    defaultModelId: KIMI_CODING_MODEL_ID,
+  });
 }
 
 export function applyKimiCodeConfig(cfg: BotConfig): BotConfig {
@@ -406,6 +406,63 @@ export function applyXaiConfig(cfg: BotConfig): BotConfig {
   return applyAgentDefaultModelPrimary(next, XAI_DEFAULT_MODEL_REF);
 }
 
+export function applyMistralProviderConfig(cfg: BotConfig): BotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[MISTRAL_DEFAULT_MODEL_REF] = {
+    ...models[MISTRAL_DEFAULT_MODEL_REF],
+    alias: models[MISTRAL_DEFAULT_MODEL_REF]?.alias ?? "Mistral",
+  };
+
+  const defaultModel = buildMistralModelDefinition();
+
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "mistral",
+    api: "openai-completions",
+    baseUrl: MISTRAL_BASE_URL,
+    defaultModel,
+    defaultModelId: MISTRAL_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyMistralConfig(cfg: BotConfig): BotConfig {
+  const next = applyMistralProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, MISTRAL_DEFAULT_MODEL_REF);
+}
+
+export { KILOCODE_BASE_URL };
+
+/**
+ * Apply Kilo Gateway provider configuration without changing the default model.
+ * Registers Kilo Gateway and sets up the provider, but preserves existing model selection.
+ */
+export function applyKilocodeProviderConfig(cfg: BotConfig): BotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[KILOCODE_DEFAULT_MODEL_REF] = {
+    ...models[KILOCODE_DEFAULT_MODEL_REF],
+    alias: models[KILOCODE_DEFAULT_MODEL_REF]?.alias ?? "Kilo Gateway",
+  };
+
+  const kilocodeModels = buildKilocodeProvider().models ?? [];
+
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "kilocode",
+    api: "openai-completions",
+    baseUrl: KILOCODE_BASE_URL,
+    catalogModels: kilocodeModels,
+  });
+}
+
+/**
+ * Apply Kilo Gateway provider configuration AND set Kilo Gateway as the default model.
+ * Use this when Kilo Gateway is the primary provider choice during onboarding.
+ */
+export function applyKilocodeConfig(cfg: BotConfig): BotConfig {
+  const next = applyKilocodeProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, KILOCODE_DEFAULT_MODEL_REF);
+}
+
 export function applyAuthProfileConfig(
   cfg: BotConfig,
   params: {
@@ -416,6 +473,7 @@ export function applyAuthProfileConfig(
     preferProfileFirst?: boolean;
   },
 ): BotConfig {
+  const normalizedProvider = params.provider.toLowerCase();
   const profiles = {
     ...cfg.auth?.profiles,
     [params.profileId]: {
@@ -425,51 +483,48 @@ export function applyAuthProfileConfig(
     },
   };
 
-  // Maintain `auth.order` when the user explicitly configured it, or when mixed
-  // provider modes (e.g. api_key + oauth) require deterministic ordering.
+  const configuredProviderProfiles = Object.entries(cfg.auth?.profiles ?? {})
+    .filter(([, profile]) => profile.provider.toLowerCase() === normalizedProvider)
+    .map(([profileId, profile]) => ({ profileId, mode: profile.mode }));
+
+  // Maintain `auth.order` when it already exists. Additionally, if we detect
+  // mixed auth modes for the same provider (e.g. legacy oauth + newly selected
+  // api_key), create an explicit order to keep the newly selected profile first.
   const existingProviderOrder = cfg.auth?.order?.[params.provider];
   const preferProfileFirst = params.preferProfileFirst ?? true;
-
-  // Detect mixed modes: if the new profile's mode differs from any existing
-  // profile for the same provider, create an explicit order to ensure predictable
-  // auth profile resolution (api_key should come before oauth by default).
-  const hasMixedModes =
-    !existingProviderOrder &&
-    Object.entries(profiles).some(
-      ([id, profile]) =>
-        id !== params.profileId &&
-        (profile as { provider?: string; mode?: string }).provider === params.provider &&
-        (profile as { provider?: string; mode?: string }).mode !== params.mode,
-    );
-
-  let order: Record<string, string[]> | undefined;
-  if (existingProviderOrder) {
-    const reorderedProviderOrder = preferProfileFirst
+  const reorderedProviderOrder =
+    existingProviderOrder && preferProfileFirst
       ? [
           params.profileId,
           ...existingProviderOrder.filter((profileId) => profileId !== params.profileId),
         ]
       : existingProviderOrder;
-    order = {
-      ...cfg.auth?.order,
-      [params.provider]: reorderedProviderOrder.includes(params.profileId)
-        ? reorderedProviderOrder
-        : [...reorderedProviderOrder, params.profileId],
-    };
-  } else if (hasMixedModes) {
-    // Create explicit order with new profile first, then existing profiles for this provider
-    const siblingIds = Object.keys(profiles).filter(
-      (id) =>
-        id !== params.profileId &&
-        (profiles[id] as { provider?: string }).provider === params.provider,
-    );
-    order = {
-      ...cfg.auth?.order,
-      [params.provider]: [params.profileId, ...siblingIds],
-    };
-  } else {
-    order = cfg.auth?.order;
-  }
+  const hasMixedConfiguredModes = configuredProviderProfiles.some(
+    ({ profileId, mode }) => profileId !== params.profileId && mode !== params.mode,
+  );
+  const derivedProviderOrder =
+    existingProviderOrder === undefined && preferProfileFirst && hasMixedConfiguredModes
+      ? [
+          params.profileId,
+          ...configuredProviderProfiles
+            .map(({ profileId }) => profileId)
+            .filter((profileId) => profileId !== params.profileId),
+        ]
+      : undefined;
+  const order =
+    existingProviderOrder !== undefined
+      ? {
+          ...cfg.auth?.order,
+          [params.provider]: reorderedProviderOrder?.includes(params.profileId)
+            ? reorderedProviderOrder
+            : [...(reorderedProviderOrder ?? []), params.profileId],
+        }
+      : derivedProviderOrder
+        ? {
+            ...cfg.auth?.order,
+            [params.provider]: derivedProviderOrder,
+          }
+        : cfg.auth?.order;
   return {
     ...cfg,
     auth: {
@@ -514,52 +569,4 @@ export function applyQianfanProviderConfig(cfg: BotConfig): BotConfig {
 export function applyQianfanConfig(cfg: BotConfig): BotConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
-}
-
-export function applyMistralProviderConfig(cfg: BotConfig): BotConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[MISTRAL_DEFAULT_MODEL_REF] = {
-    ...models[MISTRAL_DEFAULT_MODEL_REF],
-    alias: models[MISTRAL_DEFAULT_MODEL_REF]?.alias ?? "Mistral",
-  };
-
-  const defaultModel = buildMistralModelDefinition();
-
-  return applyProviderConfigWithDefaultModel(cfg, {
-    agentModels: models,
-    providerId: "mistral",
-    api: "openai-completions",
-    baseUrl: MISTRAL_BASE_URL,
-    defaultModel,
-    defaultModelId: MISTRAL_DEFAULT_MODEL_ID,
-  });
-}
-
-export function applyMistralConfig(cfg: BotConfig): BotConfig {
-  const next = applyMistralProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, MISTRAL_DEFAULT_MODEL_REF);
-}
-
-export function applyKilocodeProviderConfig(cfg: BotConfig): BotConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[KILOCODE_DEFAULT_MODEL_REF] = {
-    ...models[KILOCODE_DEFAULT_MODEL_REF],
-    alias: models[KILOCODE_DEFAULT_MODEL_REF]?.alias ?? "Kilocode",
-  };
-
-  const defaultModel = buildKilocodeModelDefinition();
-
-  return applyProviderConfigWithDefaultModel(cfg, {
-    agentModels: models,
-    providerId: "kilocode",
-    api: "openai-completions",
-    baseUrl: KILOCODE_BASE_URL,
-    defaultModel,
-    defaultModelId: KILOCODE_DEFAULT_MODEL_ID,
-  });
-}
-
-export function applyKilocodeConfig(cfg: BotConfig): BotConfig {
-  const next = applyKilocodeProviderConfig(cfg);
-  return applyAgentDefaultModelPrimary(next, KILOCODE_DEFAULT_MODEL_REF);
 }

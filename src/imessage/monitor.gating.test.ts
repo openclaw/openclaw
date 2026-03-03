@@ -44,16 +44,19 @@ function resolve(params: { cfg?: BotConfig; message: IMessagePayload; storeAllow
   });
 }
 
-function buildDispatchContextPayload(params: { cfg: BotConfig; message: IMessagePayload }) {
-  const { cfg, message } = params;
-  const groupHistories = new Map();
+function resolveDispatchDecision(params: {
+  cfg: BotConfig;
+  message: IMessagePayload;
+  groupHistories?: Parameters<typeof resolveIMessageInboundDecision>[0]["groupHistories"];
+}) {
+  const groupHistories = params.groupHistories ?? new Map();
   const decision = resolveIMessageInboundDecision({
-    cfg,
+    cfg: params.cfg,
     accountId: "default",
-    message,
+    message: params.message,
     opts: {},
-    messageText: message.text,
-    bodyText: message.text,
+    messageText: params.message.text ?? "",
+    bodyText: params.message.text ?? "",
     allowFrom: ["*"],
     groupAllowFrom: [],
     groupPolicy: "open",
@@ -63,6 +66,15 @@ function buildDispatchContextPayload(params: { cfg: BotConfig; message: IMessage
     groupHistories,
   });
   expect(decision.kind).toBe("dispatch");
+  if (decision.kind !== "dispatch") {
+    throw new Error("expected dispatch decision");
+  }
+  return { decision, groupHistories };
+}
+
+function buildDispatchContextPayload(params: { cfg: BotConfig; message: IMessagePayload }) {
+  const { cfg, message } = params;
+  const { decision, groupHistories } = resolveDispatchDecision({ cfg, message });
 
   const { ctxPayload } = buildIMessageInboundContext({
     cfg,
@@ -160,22 +172,7 @@ describe("imessage monitor gating + envelope builders", () => {
       text: "hello",
       is_group: false,
     };
-    const decision = resolveIMessageInboundDecision({
-      cfg,
-      accountId: "default",
-      message,
-      opts: {},
-      messageText: message.text,
-      bodyText: message.text,
-      allowFrom: ["*"],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories,
-    });
-    expect(decision.kind).toBe("dispatch");
+    const { decision } = resolveDispatchDecision({ cfg, message, groupHistories });
     expect(decision.isGroup).toBe(true);
     expect(decision.route.sessionKey).toBe("agent:main:imessage:group:2");
   });

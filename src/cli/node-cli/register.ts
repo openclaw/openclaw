@@ -18,79 +18,20 @@ function parsePortWithFallback(value: unknown, fallback: number): number {
   return parsed ?? fallback;
 }
 
-async function startNodeHost(opts: Record<string, unknown>) {
-  const existing = await loadNodeHostConfig();
-  const host = (opts.host as string | undefined)?.trim() || existing?.gateway?.host;
-  const port = parsePortWithFallback(opts.port, existing?.gateway?.port ?? 18789);
-
-  // Auto-auth: when no explicit gateway credentials and no saved gateway host
-  // are configured, this is likely a first-run cloud connection.  Trigger IAM
-  // login and point at the default cloud gateway.
-  const hasExplicitToken = Boolean(
-    process.env.BOT_GATEWAY_TOKEN?.trim() || process.env.BOT_GATEWAY_PASSWORD?.trim(),
-  );
-  const hasExplicitGateway = Boolean(
-    (opts.host as string | undefined)?.trim() || process.env.BOT_NODE_GATEWAY_URL?.trim(),
-  );
-
-  if (!hasExplicitToken && !hasExplicitGateway && !existing?.gateway?.host) {
-    const { ensureCloudAuth, CLOUD_GATEWAY_URL } = await import("../../node-host/auto-auth.js");
-    const iamToken = await ensureCloudAuth();
-    if (iamToken) {
-      if (!process.env.BOT_NODE_GATEWAY_URL) {
-        process.env.BOT_NODE_GATEWAY_URL = CLOUD_GATEWAY_URL;
-      }
-      if (!process.env.BOT_GATEWAY_TOKEN) {
-        process.env.BOT_GATEWAY_TOKEN = iamToken;
-      }
-    }
-  }
-
-  // Only override TLS if --tls or --tls-fingerprint was explicitly passed.
-  // Otherwise let the saved config or remote URL scheme decide.
-  const explicitTls = opts.tls === true || Boolean(opts.tlsFingerprint);
-  const savedTls = existing?.gateway?.tls ?? false;
-  const useTls = explicitTls || savedTls || port === 443;
-
-  await runNodeHost({
-    gatewayHost: host,
-    gatewayPort: port,
-    gatewayTls: useTls,
-    gatewayTlsFingerprint: opts.tlsFingerprint as string | undefined,
-    nodeId: opts.nodeId as string | undefined,
-    displayName: (opts.displayName || opts.name) as string | undefined,
-  });
-}
-
 export function registerNodeCli(program: Command) {
   const node = program
     .command("node")
     .description("Run and manage the headless node host service")
-    .option("--host <host>", "Gateway host")
-    .option("--port <port>", "Gateway port")
-    .option("--tls", "Use TLS for the gateway connection", false)
-    .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
-    .option("--node-id <id>", "Override node id (clears pairing token)")
-    .option("--display-name <name>", "Override node display name")
-    .option("--name <name>", "Node display name (alias for --display-name)")
-    .option("--space <id>", "Space ID to connect to")
     .addHelpText(
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["hanzo-bot node", "Run the node host (default: foreground connect mode)."],
-          ["hanzo-bot node run --host 127.0.0.1 --port 18789", "Run with explicit gateway."],
-          ["hanzo-bot node --name my-bot", "Run with a custom display name."],
-          ["hanzo-bot node status", "Check node host service status."],
-          ["hanzo-bot node install", "Install the node host service."],
-          ["hanzo-bot node restart", "Restart the installed node host service."],
+          ["bot node run --host 127.0.0.1 --port 18789", "Run the node host in the foreground."],
+          ["bot node status", "Check node host service status."],
+          ["bot node install", "Install the node host service."],
+          ["bot node restart", "Restart the installed node host service."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.hanzo.bot/cli/node")}\n`,
     );
-
-  // Default action: `hanzo-bot node` (no subcommand) → run in foreground
-  node.action(async (opts) => {
-    await startNodeHost(opts);
-  });
 
   node
     .command("run")
@@ -101,9 +42,19 @@ export function registerNodeCli(program: Command) {
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override node id (clears pairing token)")
     .option("--display-name <name>", "Override node display name")
-    .option("--name <name>", "Node display name (alias for --display-name)")
     .action(async (opts) => {
-      await startNodeHost(opts);
+      const existing = await loadNodeHostConfig();
+      const host =
+        (opts.host as string | undefined)?.trim() || existing?.gateway?.host || "127.0.0.1";
+      const port = parsePortWithFallback(opts.port, existing?.gateway?.port ?? 18789);
+      await runNodeHost({
+        gatewayHost: host,
+        gatewayPort: port,
+        gatewayTls: Boolean(opts.tls) || Boolean(opts.tlsFingerprint),
+        gatewayTlsFingerprint: opts.tlsFingerprint,
+        nodeId: opts.nodeId,
+        displayName: opts.displayName,
+      });
     });
 
   node

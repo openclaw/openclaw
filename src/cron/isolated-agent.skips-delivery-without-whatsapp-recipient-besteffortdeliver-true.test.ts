@@ -1,6 +1,8 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import {
@@ -197,33 +199,11 @@ async function assertExplicitTelegramTargetAnnounce(params: {
   payloads: Array<Record<string, unknown>>;
   expectedText: string;
 }): Promise<void> {
-  await withTempCronHome(async (home) => {
-    const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-    const deps = createCliDeps();
-    mockAgentPayloads(params.payloads);
-    const res = await runExplicitTelegramAnnounceTurn({
-      home,
-      storePath,
-      deps,
-    });
-
-    expectDeliveredOk(res);
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-    const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
-      | {
-          requesterOrigin?: { channel?: string; to?: string };
-          roundOneReply?: string;
-          bestEffortDeliver?: boolean;
-        }
-      | undefined;
-    expect(announceArgs?.requesterOrigin?.channel).toBe("telegram");
-    expect(announceArgs?.requesterOrigin?.to).toBe("123");
-    expect(announceArgs?.roundOneReply).toBe(params.expectedText);
-    expect(announceArgs?.bestEffortDeliver).toBe(false);
-    expect((announceArgs as { expectsCompletionMessage?: boolean })?.expectsCompletionMessage).toBe(
-      true,
-    );
-    expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+  mockAgentPayloads(params.payloads);
+  const res = await runExplicitTelegramAnnounceTurn({
+    home: params.home,
+    storePath: params.storePath,
+    deps: params.deps,
   });
 
   expectDeliveredOk(res);

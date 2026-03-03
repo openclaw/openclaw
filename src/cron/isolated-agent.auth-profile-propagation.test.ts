@@ -20,31 +20,12 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
 
   it("passes authProfileId to runEmbeddedPiAgent when auth profiles exist", async () => {
     await withTempCronHome(async (home) => {
-      // 1. Write session store
-      const sessionsDir = path.join(home, ".hanzo/bot", "sessions");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const storePath = path.join(sessionsDir, "sessions.json");
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            "agent:main:main": {
-              sessionId: "main-session",
-              updatedAt: Date.now(),
-              lastProvider: "webchat",
-              lastTo: "",
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
 
       // 2. Write auth-profiles.json in the agent directory
       //    resolveAgentDir returns <stateDir>/agents/main/agent
-      //    stateDir = <home>/.hanzo/bot
-      const agentDir = path.join(home, ".hanzo/bot", "agents", "main", "agent");
+      //    stateDir = <home>/.bot
+      const agentDir = path.join(home, ".bot", "agents", "main", "agent");
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(
         path.join(agentDir, "auth-profiles.json"),
@@ -78,7 +59,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
         agents: {
           defaults: {
             model: { primary: "openrouter/moonshotai/kimi-k2.5" },
-            workspace: path.join(home, "hanzo-bot"),
+            workspace: path.join(home, "@hanzo/bot"),
           },
         },
       });

@@ -1,11 +1,9 @@
 import type { BotConfig } from "../config/config.js";
-import type { DiscordActionConfig } from "../config/types.discord.js";
-import type { DiscordAccountConfig } from "../config/types.js";
-import {
-  createAccountActionGate,
-  type ActionGate,
-} from "../channels/plugins/account-action-gate.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import type { DiscordAccountConfig, DiscordActionConfig } from "../config/types.js";
+import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
+import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveDiscordToken } from "./token.js";
 
 export type ResolvedDiscordAccount = {
@@ -17,36 +15,12 @@ export type ResolvedDiscordAccount = {
   config: DiscordAccountConfig;
 };
 
-function listConfiguredAccountIds(cfg: BotConfig): string[] {
-  const accounts = cfg.channels?.discord?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return [];
-  }
-  return Object.keys(accounts).filter(Boolean);
-}
-
-export function listDiscordAccountIds(cfg: BotConfig): string[] {
-  const ids = listConfiguredAccountIds(cfg);
-  if (ids.length === 0) {
-    return [DEFAULT_ACCOUNT_ID];
-  }
-  return ids.toSorted((a, b) => a.localeCompare(b));
-}
-
-export function resolveDefaultDiscordAccountId(cfg: BotConfig): string {
-  const ids = listDiscordAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
-}
+const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord");
+export const listDiscordAccountIds = listAccountIds;
+export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 
 function resolveAccountConfig(cfg: BotConfig, accountId: string): DiscordAccountConfig | undefined {
-  const accounts = cfg.channels?.discord?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  return accounts[accountId] as DiscordAccountConfig | undefined;
+  return resolveAccountEntry(cfg.channels?.discord?.accounts, accountId);
 }
 
 function mergeDiscordAccountConfig(cfg: BotConfig, accountId: string): DiscordAccountConfig {
@@ -55,6 +29,17 @@ function mergeDiscordAccountConfig(cfg: BotConfig, accountId: string): DiscordAc
   };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
+}
+
+export function createDiscordActionGate(params: {
+  cfg: BotConfig;
+  accountId?: string | null;
+}): (key: keyof DiscordActionConfig, defaultValue?: boolean) => boolean {
+  const accountId = normalizeAccountId(params.accountId);
+  return createAccountActionGate({
+    baseActions: params.cfg.channels?.discord?.actions,
+    accountActions: resolveAccountConfig(params.cfg, accountId)?.actions,
+  });
 }
 
 export function resolveDiscordAccount(params: {
@@ -81,17 +66,4 @@ export function listEnabledDiscordAccounts(cfg: BotConfig): ResolvedDiscordAccou
   return listDiscordAccountIds(cfg)
     .map((accountId) => resolveDiscordAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
-}
-
-/** Build an action gate for Discord that merges base + account action configs. */
-export function createDiscordActionGate(params: {
-  cfg: BotConfig;
-  accountId?: string | null;
-}): ActionGate<DiscordActionConfig> {
-  const baseActions = (params.cfg.channels?.discord as DiscordAccountConfig | undefined)?.actions;
-  const account = resolveDiscordAccount(params);
-  return createAccountActionGate({
-    baseActions,
-    accountActions: account.config.actions,
-  });
 }

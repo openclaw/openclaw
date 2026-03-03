@@ -348,7 +348,7 @@ describe("web_search kimi provider", () => {
                       type: "function",
                       function: {
                         name: "$web_search",
-                        arguments: JSON.stringify({ q: "hanzo-bot" }),
+                        arguments: JSON.stringify({ q: "@hanzo/bot" }),
                       },
                     },
                   ],
@@ -376,7 +376,7 @@ describe("web_search kimi provider", () => {
       baseUrl: "https://api.moonshot.ai/v1",
       model: "moonshot-v1-128k",
     });
-    const result = await tool?.execute?.("call-1", { query: "latest hanzo-bot release" });
+    const result = await tool?.execute?.("call-1", { query: "latest bot release" });
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
     const secondRequest = mockFetch.mock.calls[1]?.[1];

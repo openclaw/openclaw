@@ -242,25 +242,6 @@ function resolveZaiGlm5ForwardCompatModel(
   } as Model<Api>);
 }
 
-/**
- * Candidate models for Google Antigravity Opus 4.6 forward-compat synthesis.
- * Each entry defines the synthetic model id and template prefixes used to
- * determine availability from the underlying model registry.
- */
-export const ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES: readonly {
-  id: string;
-  templatePrefixes: readonly string[];
-}[] = [
-  {
-    id: "claude-opus-4-6",
-    templatePrefixes: ["google-antigravity/claude-opus-4-5", "google-antigravity/claude-opus-4.5"],
-  },
-  {
-    id: "claude-opus-4.6",
-    templatePrefixes: ["google-antigravity/claude-opus-4-5", "google-antigravity/claude-opus-4.5"],
-  },
-];
-
 export function resolveForwardCompatModel(
   provider: string,
   modelId: string,

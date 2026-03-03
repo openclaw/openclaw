@@ -26,8 +26,12 @@ vi.mock("../../slack/scopes.js", () => ({
 }));
 
 const runtime = {
-  log: (value: string) => logs.push(value),
-  error: (value: string) => errors.push(value),
+  log: (...args: unknown[]) => {
+    logs.push(args.map(String).join(" "));
+  },
+  error: (...args: unknown[]) => {
+    errors.push(args.map(String).join(" "));
+  },
   exit: (code: number) => {
     throw new Error(`exit:${code}`);
   },
@@ -89,7 +93,7 @@ describe("channelsCapabilitiesCommand", () => {
         userToken: "xoxp-user",
         config: { userToken: "xoxp-user" },
       },
-      probe: { ok: true, bot: { name: "bot" }, team: { name: "team" } },
+      probe: { ok: true, bot: { name: "@hanzo/bot" }, team: { name: "team" } },
     });
     vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
     vi.mocked(getChannelPlugin).mockReturnValue(plugin);

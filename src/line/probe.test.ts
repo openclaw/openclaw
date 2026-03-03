@@ -15,7 +15,7 @@ let probeLineBot: typeof import("./probe.js").probeLineBot;
 
 afterEach(() => {
   vi.useRealTimers();
-  getBotInfoMock.mockReset();
+  getBotInfoMock.mockClear();
 });
 
 describe("probeLineBot", () => {
@@ -37,7 +37,7 @@ describe("probeLineBot", () => {
 
   it("returns bot info when available", async () => {
     getBotInfoMock.mockResolvedValue({
-      displayName: "Hanzo Bot",
+      displayName: "Bot",
       userId: "U123",
       basicId: "@bot",
       pictureUrl: "https://example.com/bot.png",

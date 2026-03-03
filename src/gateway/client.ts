@@ -42,7 +42,6 @@ type Pending = {
 
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
-  wsHeaders?: Record<string, string>;
   connectDelayMs?: number;
   tickWatchMinIntervalMs?: number;
   token?: string;
@@ -61,13 +60,6 @@ export type GatewayClientOptions = {
   commands?: string[];
   permissions?: Record<string, boolean>;
   pathEnv?: string;
-  tenant?: {
-    orgId?: string;
-    projectId?: string;
-    tenantId?: string;
-    actorId?: string;
-    env?: string;
-  };
   deviceIdentity?: DeviceIdentity;
   minProtocol?: number;
   maxProtocol?: number;
@@ -105,11 +97,6 @@ export class GatewayClient {
   private tickIntervalMs = 30_000;
   private tickTimer: NodeJS.Timeout | null = null;
 
-  /** The gateway WebSocket URL this client connects to. */
-  get gatewayUrl(): string {
-    return this.opts.url ?? "ws://127.0.0.1:18789";
-  }
-
   constructor(opts: GatewayClientOptions) {
     this.opts = {
       ...opts,
@@ -144,7 +131,10 @@ export class GatewayClient {
           "Both credentials and chat data would be exposed to network interception. " +
           "Use wss:// for remote URLs. Safe defaults: keep gateway.bind=loopback and connect via SSH tunnel " +
           "(ssh -N -L 18789:127.0.0.1:18789 user@gateway-host), or use Tailscale Serve/Funnel. " +
-          "Run `hanzo-bot doctor --fix` for guidance.",
+          (allowPrivateWs
+            ? ""
+            : "Break-glass (trusted private networks only): set BOT_ALLOW_INSECURE_PRIVATE_WS=1. ") +
+          "Run `bot doctor --fix` for guidance.",
       );
       this.opts.onConnectError?.(error);
       return;
@@ -152,7 +142,6 @@ export class GatewayClient {
     // Allow node screen snapshots and other large responses.
     const wsOptions: ClientOptions = {
       maxPayload: 25 * 1024 * 1024,
-      headers: this.opts.wsHeaders,
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
@@ -326,16 +315,6 @@ export class GatewayClient {
           ? this.opts.permissions
           : undefined,
       pathEnv: this.opts.pathEnv,
-      tenant:
-        this.opts.tenant && typeof this.opts.tenant === "object"
-          ? {
-              orgId: this.opts.tenant.orgId,
-              projectId: this.opts.tenant.projectId,
-              tenantId: this.opts.tenant.tenantId,
-              actorId: this.opts.tenant.actorId,
-              env: this.opts.tenant.env,
-            }
-          : undefined,
       auth,
       role,
       scopes,

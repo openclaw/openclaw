@@ -141,7 +141,7 @@ describe("formatUpdateAvailableHint", () => {
     });
 
     expect(formatUpdateAvailableHint(update)).toBe(
-      `Update available (git behind 2 · npm ${latestVersion}). Run: hanzo-bot update`,
+      `Update available (git behind 2 · npm ${latestVersion}). Run: bot update`,
     );
   });
 });

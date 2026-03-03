@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { expandHomePrefix } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
@@ -27,27 +27,30 @@ export type SystemRunApprovalPlan = {
   sessionKey: string | null;
 };
 
+export type ExecApprovalRequestPayload = {
+  command: string;
+  commandArgv?: string[];
+  // Optional UI-safe env key preview for approval prompts.
+  envKeys?: string[];
+  systemRunBinding?: SystemRunApprovalBinding | null;
+  systemRunPlan?: SystemRunApprovalPlan | null;
+  cwd?: string | null;
+  nodeId?: string | null;
+  host?: string | null;
+  security?: string | null;
+  ask?: string | null;
+  agentId?: string | null;
+  resolvedPath?: string | null;
+  sessionKey?: string | null;
+  turnSourceChannel?: string | null;
+  turnSourceTo?: string | null;
+  turnSourceAccountId?: string | null;
+  turnSourceThreadId?: string | number | null;
+};
+
 export type ExecApprovalRequest = {
   id: string;
-  request: {
-    command: string;
-    commandArgv?: string[];
-    envKeys?: string[];
-    systemRunBindingV1?: unknown;
-    systemRunPlanV2?: unknown;
-    cwd?: string | null;
-    nodeId?: string | null;
-    host?: string | null;
-    security?: string | null;
-    ask?: string | null;
-    agentId?: string | null;
-    resolvedPath?: string | null;
-    sessionKey?: string | null;
-    turnSourceChannel?: string | null;
-    turnSourceTo?: string | null;
-    turnSourceAccountId?: string | null;
-    turnSourceThreadId?: string | number | null;
-  };
+  request: ExecApprovalRequestPayload;
   createdAtMs: number;
   expiresAtMs: number;
 };
@@ -57,6 +60,7 @@ export type ExecApprovalResolved = {
   decision: ExecApprovalDecision;
   resolvedBy?: string | null;
   ts: number;
+  request?: ExecApprovalRequest["request"];
 };
 
 export type ExecApprovalsDefaults = {
@@ -123,25 +127,12 @@ function hashExecApprovalsRaw(raw: string | null): string {
     .digest("hex");
 }
 
-function expandHome(value: string): string {
-  if (!value) {
-    return value;
-  }
-  if (value === "~") {
-    return os.homedir();
-  }
-  if (value.startsWith("~/")) {
-    return path.join(os.homedir(), value.slice(2));
-  }
-  return value;
-}
-
 export function resolveExecApprovalsPath(): string {
-  return expandHome(DEFAULT_FILE);
+  return expandHomePrefix(DEFAULT_FILE);
 }
 
 export function resolveExecApprovalsSocketPath(): string {
-  return expandHome(DEFAULT_SOCKET);
+  return expandHomePrefix(DEFAULT_SOCKET);
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
@@ -395,7 +386,7 @@ export function resolveExecApprovals(
     agentId,
     overrides,
     path: resolveExecApprovalsPath(),
-    socketPath: expandHome(file.socket?.path ?? resolveExecApprovalsSocketPath()),
+    socketPath: expandHomePrefix(file.socket?.path ?? resolveExecApprovalsSocketPath()),
     token: file.socket?.token ?? "",
   });
 }
@@ -446,7 +437,7 @@ export function resolveExecApprovalsFromFile(params: {
   ];
   return {
     path: params.path ?? resolveExecApprovalsPath(),
-    socketPath: expandHome(
+    socketPath: expandHomePrefix(
       params.socketPath ?? file.socket?.path ?? resolveExecApprovalsSocketPath(),
     ),
     token: params.token ?? file.socket?.token ?? "",

@@ -41,12 +41,7 @@ export const NodeRenameParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const NodeListParamsSchema = Type.Object(
-  {
-    connectedOnly: Type.Optional(Type.Boolean()),
-  },
-  { additionalProperties: false },
-);
+export const NodeListParamsSchema = Type.Object({}, { additionalProperties: false });
 
 export const NodeDescribeParamsSchema = Type.Object(
   { nodeId: NonEmptyString },
@@ -89,19 +84,6 @@ export const NodeEventParamsSchema = Type.Object(
     event: NonEmptyString,
     payload: Type.Optional(Type.Unknown()),
     payloadJSON: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
-
-export const NodeBillingSetParamsSchema = Type.Object(
-  {
-    nodeId: NonEmptyString,
-    billingMode: Type.Union([
-      Type.Literal("global"),
-      Type.Literal("dedicated"),
-      Type.Literal("local"),
-    ]),
-    budgetCents: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );

@@ -120,7 +120,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   }
 
   const boundThreadId = ctx.threadBinding?.conversation?.conversationId?.trim();
-  if (boundThreadId && threadBindings && typeof threadBindings.touchThread === "function") {
+  if (boundThreadId && typeof threadBindings.touchThread === "function") {
     threadBindings.touchThread({ threadId: boundThreadId });
   }
   const ackReaction = resolveAckReaction(cfg, route.agentId, {

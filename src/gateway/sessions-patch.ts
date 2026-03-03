@@ -2,8 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { BotConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveAllowedModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAllowedModelRef,
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "../agents/model-selection.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -32,67 +36,6 @@ import {
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
-}
-
-/**
- * Extract the primary model string from an AgentModelConfig (string | { primary? }).
- */
-function extractModelPrimary(raw: unknown): string | undefined {
-  if (typeof raw === "string") {
-    return raw.trim() || undefined;
-  }
-  if (raw && typeof raw === "object" && "primary" in raw) {
-    const primary = (raw as { primary?: string }).primary;
-    return typeof primary === "string" ? primary.trim() || undefined : undefined;
-  }
-  return undefined;
-}
-
-/**
- * Build a cfg with extra models added to the allowlist for subagent sessions.
- * This allows subagent sessions to use models from the target agent's subagents.model
- * and the global defaults.subagents.model even when those are absent from the global allowlist.
- */
-function expandCfgForSubagentModels(params: { cfg: BotConfig; sessionAgentId: string }): BotConfig {
-  const { cfg, sessionAgentId } = params;
-  const extraModels: string[] = [];
-
-  // Agent-level subagents.model
-  const agentConfig = resolveAgentConfig(cfg, sessionAgentId);
-  const agentSubagentModel = extractModelPrimary(agentConfig?.subagents?.model);
-  if (agentSubagentModel) {
-    extraModels.push(agentSubagentModel);
-  }
-
-  // Global defaults.subagents.model
-  const globalSubagentModel = extractModelPrimary(cfg.agents?.defaults?.subagents?.model);
-  if (globalSubagentModel) {
-    extraModels.push(globalSubagentModel);
-  }
-
-  if (extraModels.length === 0) {
-    return cfg;
-  }
-
-  // Build an expanded models allowlist that includes the extra subagent models.
-  const existingModels = cfg.agents?.defaults?.models ?? {};
-  const expanded: Record<string, unknown> = { ...existingModels };
-  for (const model of extraModels) {
-    if (!(model in expanded)) {
-      expanded[model] = {};
-    }
-  }
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models: expanded,
-      },
-    },
-  } as BotConfig;
 }
 
 function normalizeExecHost(raw: string): "sandbox" | "gateway" | "node" | undefined {
@@ -131,6 +74,9 @@ export async function applySessionsPatchToStore(params: {
   const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
   const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
+  const subagentModelHint = isSubagentSessionKey(storeKey)
+    ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
+    : undefined;
 
   const existing = store[storeKey];
   const next: SessionEntry = existing
@@ -240,7 +186,8 @@ export async function applySessionsPatchToStore(params: {
       if (!normalized) {
         return invalid('invalid reasoningLevel (use "on"|"off"|"stream")');
       }
-      // Persist "off" explicitly so patches can override defaults.
+      // Persist "off" explicitly so that resolveDefaultReasoningLevel()
+      // does not re-enable reasoning for capable models (#24406).
       next.reasoningLevel = normalized;
     }
   }
@@ -351,17 +298,12 @@ export async function applySessionsPatchToStore(params: {
         };
       }
       const catalog = await params.loadGatewayModelCatalog();
-      // For subagent sessions, expand the model allowlist to include the
-      // target agent's subagents.model and the global defaults.subagents.model.
-      const effectiveCfg = isSubagentSessionKey(storeKey)
-        ? expandCfgForSubagentModels({ cfg, sessionAgentId })
-        : cfg;
       const resolved = resolveAllowedModelRef({
-        cfg: effectiveCfg,
+        cfg,
         catalog,
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,
-        defaultModel: resolvedDefault.model,
+        defaultModel: subagentModelHint ?? resolvedDefault.model,
       });
       if ("error" in resolved) {
         return invalid(resolved.error);

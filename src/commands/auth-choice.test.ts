@@ -46,7 +46,7 @@ vi.mock("./zai-endpoint-detect.js", () => ({
 
 type StoredAuthProfile = {
   key?: string;
-  keyRef?: { source: string; id: string };
+  keyRef?: { source: string; provider: string; id: string };
   access?: string;
   refresh?: string;
   provider?: string;
@@ -740,14 +740,16 @@ describe("applyAuthChoice", () => {
     }
   });
 
-  it("retries ref setup when sops preflight fails and can switch to env ref", async () => {
+  it("retries ref setup when provider preflight fails and can switch to env ref", async () => {
     await setupTempState();
     process.env.OPENAI_API_KEY = "sk-openai-env";
 
-    const selectValues: Array<"file" | "env"> = ["file", "env"];
+    const selectValues: Array<"provider" | "env" | "filemain"> = ["provider", "filemain", "env"];
     const select = vi.fn(async (params: Parameters<WizardPrompter["select"]>[0]) => {
-      if (params.options.some((option) => option.value === "file")) {
-        return (selectValues.shift() ?? "env") as never;
+      const next = selectValues[0];
+      if (next && params.options.some((option) => option.value === next)) {
+        selectValues.shift();
+        return next as never;
       }
       return (params.options[0]?.value ?? "env") as never;
     });
@@ -767,7 +769,17 @@ describe("applyAuthChoice", () => {
 
     const result = await applyAuthChoice({
       authChoice: "openai-api-key",
-      config: {},
+      config: {
+        secrets: {
+          providers: {
+            filemain: {
+              source: "file",
+              path: "/tmp/bot-missing-secrets.json",
+              mode: "json",
+            },
+          },
+        },
+      },
       prompter,
       runtime,
       setDefaultModel: false,
@@ -779,7 +791,7 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Could not validate this encrypted file reference."),
+      expect.stringContaining("Could not validate provider reference"),
       "Reference check failed",
     );
     expect(note).toHaveBeenCalledWith(
@@ -1038,11 +1050,7 @@ describe("applyAuthChoice", () => {
         },
         expectEnvPrompt: false,
         expectedTextCalls: 3,
-        expectedKeyRef: {
-          source: "env",
-          provider: "default",
-          id: "CLOUDFLARE_AI_GATEWAY_API_KEY",
-        },
+        expectedKeyRef: { source: "env", provider: "default", id: "CLOUDFLARE_AI_GATEWAY_API_KEY" },
         expectedMetadata: {
           accountId: "cf-account-id-ref",
           gatewayId: "cf-gateway-id-ref",

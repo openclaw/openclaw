@@ -1,8 +1,6 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { createDefaultDeps } from "../../cli/deps.js";
 import type { HealthSummary } from "../../commands/health.js";
-import type { PlanTier } from "../../commerce/tier-model.js";
-import type { GatewayIamConfig } from "../../config/config.js";
 import type { CronService } from "../../cron/service.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
@@ -10,23 +8,16 @@ import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.js";
-import type { RequestRateLimiter } from "../request-rate-limit.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast.js";
 import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 import type { DedupeEntry } from "../server-shared.js";
-import type { TenantContext } from "../tenant-context.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
-  /** Resolved client IP address (set during WS connection setup). */
   clientIp?: string;
-  /** Resolved tenant context (multi-tenant IAM mode). */
-  tenant?: TenantContext;
-  /** Billing tier resolved from the tenant's subscription plan. */
-  billingTier?: PlanTier;
   canvasHostUrl?: string;
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;
@@ -40,16 +31,10 @@ export type RespondFn = (
 ) => void;
 
 export type GatewayRequestContext = {
-  /** IAM config for billing enforcement (null/undefined when not in IAM mode). */
-  iamConfig?: GatewayIamConfig | null;
-  /** Token-bucket rate limiter for billable request throughput. */
-  requestRateLimiter?: RequestRateLimiter;
   deps: ReturnType<typeof createDefaultDeps>;
   cron: CronService;
   cronStorePath: string;
   execApprovalManager?: ExecApprovalManager;
-  /** Check if any operator-scope clients are available for exec approval UX. */
-  hasExecApprovalClients?: () => boolean;
   loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
@@ -65,6 +50,7 @@ export type GatewayRequestContext = {
   nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedMobileNode: () => boolean;
+  hasExecApprovalClients?: () => boolean;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;

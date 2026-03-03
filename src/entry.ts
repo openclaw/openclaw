@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { enableCompileCache } from "node:module";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { isRootVersionInvocation } from "./cli/argv.js";
+import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
@@ -15,8 +15,6 @@ import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "bot.mjs", entryBasename: "entry.js" },
   { wrapperBasename: "bot.js", entryBasename: "entry.js" },
-  { wrapperBasename: "hanzo-bot.mjs", entryBasename: "entry.js" },
-  { wrapperBasename: "hanzo-bot.js", entryBasename: "entry.js" },
 ] as const;
 
 function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
@@ -42,7 +40,7 @@ if (
 ) {
   // Imported as a dependency — skip all entry-point side effects.
 } else {
-  process.title = "bot";
+  process.title = "@hanzo/bot";
   installProcessWarningFilter();
   normalizeEnv();
   if (!isTruthyEnvValue(process.env.NODE_DISABLE_COMPILE_CACHE)) {
@@ -143,6 +141,24 @@ if (
     return true;
   }
 
+  function tryHandleRootHelpFastPath(argv: string[]): boolean {
+    if (!isRootHelpInvocation(argv)) {
+      return false;
+    }
+    import("./cli/program.js")
+      .then(({ buildProgram }) => {
+        buildProgram().outputHelp();
+      })
+      .catch((error) => {
+        console.error(
+          "[bot] Failed to display help:",
+          error instanceof Error ? (error.stack ?? error.message) : error,
+        );
+        process.exitCode = 1;
+      });
+    return true;
+  }
+
   process.argv = normalizeWindowsArgv(process.argv);
 
   if (!ensureExperimentalWarningSuppressed()) {
@@ -159,7 +175,7 @@ if (
       process.argv = parsed.argv;
     }
 
-    if (!tryHandleRootVersionFastPath(process.argv)) {
+    if (!tryHandleRootVersionFastPath(process.argv) && !tryHandleRootHelpFastPath(process.argv)) {
       import("./cli/run-main.js")
         .then(({ runCli }) => runCli(process.argv))
         .catch((error) => {

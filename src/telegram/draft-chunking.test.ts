@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BotConfig } from "../../config/config.js";
+import type { BotConfig } from "../config/config.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 
 describe("resolveTelegramDraftStreamingChunking", () => {

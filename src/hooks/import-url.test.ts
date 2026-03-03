@@ -19,7 +19,7 @@ describe("buildImportUrl", () => {
   });
 
   it("returns bare URL for bundled hooks (no query string)", () => {
-    const url = buildImportUrl(tmpFile, "hanzo-bot-bundled");
+    const url = buildImportUrl(tmpFile, "bot-bundled");
     expect(url).not.toContain("?t=");
     expect(url).toMatch(/^file:\/\//);
   });
@@ -44,8 +44,8 @@ describe("buildImportUrl", () => {
   });
 
   it("returns same URL for bundled hooks across calls (cacheable)", () => {
-    const url1 = buildImportUrl(tmpFile, "hanzo-bot-bundled");
-    const url2 = buildImportUrl(tmpFile, "hanzo-bot-bundled");
+    const url1 = buildImportUrl(tmpFile, "bot-bundled");
+    const url2 = buildImportUrl(tmpFile, "bot-bundled");
     expect(url1).toBe(url2);
   });
 

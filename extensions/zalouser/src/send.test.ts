@@ -93,21 +93,65 @@ describe("zalouser send helpers", () => {
   it("delegates typing helper to JS transport", async () => {
     await sendTypingZalouser("thread-4", { profile: "p4", isGroup: true });
 
-    const result = await sendLinkZalouser("thread-5", " https://hanzo.bot ", { isGroup: true });
-
-    expect(mockRunZca).toHaveBeenCalledWith(
-      ["msg", "link", "thread-5", "https://hanzo.bot", "-g"],
-      { profile: "env-profile" },
-    );
-    expect(result).toEqual({ ok: true, messageId: "abc123" });
+    expect(mockSendTyping).toHaveBeenCalledWith("thread-4", {
+      profile: "p4",
+      isGroup: true,
+    });
   });
 
   it("delegates reaction helper to JS transport", async () => {
     mockSendReaction.mockResolvedValueOnce({ ok: true });
 
-    await expect(sendLinkZalouser("thread-6", "https://hanzo.bot")).resolves.toEqual({
-      ok: false,
-      error: "zca unavailable",
+    const result = await sendReactionZalouser({
+      threadId: "thread-5",
+      profile: "p5",
+      isGroup: true,
+      msgId: "100",
+      cliMsgId: "200",
+      emoji: "👍",
+    });
+
+    expect(mockSendReaction).toHaveBeenCalledWith({
+      profile: "p5",
+      threadId: "thread-5",
+      isGroup: true,
+      msgId: "100",
+      cliMsgId: "200",
+      emoji: "👍",
+      remove: undefined,
+    });
+    expect(result).toEqual({ ok: true, error: undefined });
+  });
+
+  it("delegates delivered+seen helpers to JS transport", async () => {
+    mockSendDelivered.mockResolvedValueOnce();
+    mockSendSeen.mockResolvedValueOnce();
+
+    const message = {
+      msgId: "100",
+      cliMsgId: "200",
+      uidFrom: "1",
+      idTo: "2",
+      msgType: "webchat",
+      st: 1,
+      at: 0,
+      cmd: 0,
+      ts: "123",
+    };
+
+    await sendDeliveredZalouser({ profile: "p6", isGroup: true, message, isSeen: false });
+    await sendSeenZalouser({ profile: "p6", isGroup: true, message });
+
+    expect(mockSendDelivered).toHaveBeenCalledWith({
+      profile: "p6",
+      isGroup: true,
+      message,
+      isSeen: false,
+    });
+    expect(mockSendSeen).toHaveBeenCalledWith({
+      profile: "p6",
+      isGroup: true,
+      message,
     });
   });
 });

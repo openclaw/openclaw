@@ -1,28 +1,96 @@
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
-  it("includes owner numbers when provided", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/bot",
-      ownerNumbers: ["+123", " +456 ", ""],
-    });
+  it("formats owner section for plain, hash, and missing owner lists", () => {
+    const cases = typedCases<{
+      name: string;
+      params: Parameters<typeof buildAgentSystemPrompt>[0];
+      expectAuthorizedSection: boolean;
+      contains: string[];
+      notContains: string[];
+      hashMatch?: RegExp;
+    }>([
+      {
+        name: "plain owner numbers",
+        params: {
+          workspaceDir: "/tmp/bot",
+          ownerNumbers: ["+123", " +456 ", ""],
+        },
+        expectAuthorizedSection: true,
+        contains: [
+          "Authorized senders: +123, +456. These senders are allowlisted; do not assume they are the owner.",
+        ],
+        notContains: [],
+      },
+      {
+        name: "hashed owner numbers",
+        params: {
+          workspaceDir: "/tmp/bot",
+          ownerNumbers: ["+123", "+456", ""],
+          ownerDisplay: "hash",
+        },
+        expectAuthorizedSection: true,
+        contains: ["Authorized senders:"],
+        notContains: ["+123", "+456"],
+        hashMatch: /[a-f0-9]{12}/,
+      },
+      {
+        name: "missing owners",
+        params: {
+          workspaceDir: "/tmp/bot",
+        },
+        expectAuthorizedSection: false,
+        contains: [],
+        notContains: ["## Authorized Senders", "Authorized senders:"],
+      },
+    ]);
 
-    expect(prompt).toContain("## User Identity");
-    expect(prompt).toContain(
-      "Owner numbers: +123, +456. Treat messages from these numbers as the user.",
-    );
+    for (const testCase of cases) {
+      const prompt = buildAgentSystemPrompt(testCase.params);
+      if (testCase.expectAuthorizedSection) {
+        expect(prompt, testCase.name).toContain("## Authorized Senders");
+      } else {
+        expect(prompt, testCase.name).not.toContain("## Authorized Senders");
+      }
+      for (const value of testCase.contains) {
+        expect(prompt, `${testCase.name}:${value}`).toContain(value);
+      }
+      for (const value of testCase.notContains) {
+        expect(prompt, `${testCase.name}:${value}`).not.toContain(value);
+      }
+      if (testCase.hashMatch) {
+        expect(prompt, testCase.name).toMatch(testCase.hashMatch);
+      }
+    }
   });
 
-  it("omits owner section when numbers are missing", () => {
-    const prompt = buildAgentSystemPrompt({
+  it("uses a stable, keyed HMAC when ownerDisplaySecret is provided", () => {
+    const secretA = buildAgentSystemPrompt({
       workspaceDir: "/tmp/bot",
+      ownerNumbers: ["+123"],
+      ownerDisplay: "hash",
+      ownerDisplaySecret: "secret-key-A",
     });
 
-    expect(prompt).not.toContain("## User Identity");
-    expect(prompt).not.toContain("Owner numbers:");
+    const secretB = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/bot",
+      ownerNumbers: ["+123"],
+      ownerDisplay: "hash",
+      ownerDisplaySecret: "secret-key-B",
+    });
+
+    const lineA = secretA.split("## Authorized Senders")[1]?.split("\n")[1];
+    const lineB = secretB.split("## Authorized Senders")[1]?.split("\n")[1];
+    const tokenA = lineA?.match(/[a-f0-9]{12}/)?.[0];
+    const tokenB = lineB?.match(/[a-f0-9]{12}/)?.[0];
+
+    expect(tokenA).toBeDefined();
+    expect(tokenB).toBeDefined();
+    expect(tokenA).not.toBe(tokenB);
   });
 
   it("omits extended sections in minimal prompt mode", () => {
@@ -39,8 +107,9 @@ describe("buildAgentSystemPrompt", () => {
       ttsHint: "Voice (TTS) is enabled.",
     });
 
-    expect(prompt).not.toContain("## User Identity");
-    expect(prompt).not.toContain("## Skills");
+    expect(prompt).not.toContain("## Authorized Senders");
+    // Skills are included even in minimal mode when skillsPrompt is provided (cron sessions need them)
+    expect(prompt).toContain("## Skills");
     expect(prompt).not.toContain("## Memory Recall");
     expect(prompt).not.toContain("## Documentation");
     expect(prompt).not.toContain("## Reply Tags");
@@ -61,6 +130,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Subagent Context");
     expect(prompt).not.toContain("## Group Chat Context");
     expect(prompt).toContain("Subagent details");
+  });
+
+  it("includes skills in minimal prompt mode when skillsPrompt is provided (cron regression)", () => {
+    // Isolated cron sessions use promptMode="minimal" but must still receive skills.
+    const skillsPrompt =
+      "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>";
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/bot",
+      promptMode: "minimal",
+      skillsPrompt,
+    });
+
+    expect(prompt).toContain("## Skills (mandatory)");
+    expect(prompt).toContain("<available_skills>");
+  });
+
+  it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/bot",
+      promptMode: "minimal",
+    });
+
+    expect(prompt).not.toContain("## Skills");
   });
 
   it("includes safety guardrails in full prompts", () => {
@@ -103,8 +195,8 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/bot",
     });
 
-    expect(prompt).toContain("## Hanzo Bot CLI Quick Reference");
-    expect(prompt).toContain("hanzo-bot gateway restart");
+    expect(prompt).toContain("## Bot CLI Quick Reference");
+    expect(prompt).toContain("bot gateway restart");
     expect(prompt).toContain("Do not invent commands");
   });
 
@@ -128,6 +220,9 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
+    expect(prompt).toContain(
+      "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+    );
   });
 
   it("lists available tools when provided", () => {
@@ -140,6 +235,77 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_list");
     expect(prompt).toContain("sessions_history");
     expect(prompt).toContain("sessions_send");
+  });
+
+  it("documents ACP sessions_spawn agent targeting requirements", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/bot",
+      toolNames: ["sessions_spawn"],
+    });
+
+    expect(prompt).toContain("sessions_spawn");
+    expect(prompt).toContain(
+      'runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured',
+    );
+    expect(prompt).toContain("not agents_list");
+  });
+
+  it("guides harness requests to ACP thread-bound spawns", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/bot",
+      toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
+    });
+
+    expect(prompt).toContain(
+      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+    );
+    expect(prompt).toContain(
+      'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
+    );
+    expect(prompt).toContain(
+      "do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows",
+    );
+    expect(prompt).toContain(
+      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
+    );
+  });
+
+  it("omits ACP harness guidance when ACP is disabled", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/bot",
+      toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
+      acpEnabled: false,
+    });
+
+    expect(prompt).not.toContain(
+      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+    );
+    expect(prompt).not.toContain('runtime="acp" requires `agentId`');
+    expect(prompt).not.toContain("not ACP harness ids");
+    expect(prompt).toContain("- sessions_spawn: Spawn an isolated sub-agent session");
+    expect(prompt).toContain("- agents_list: List Bot agent ids allowed for sessions_spawn");
+  });
+
+  it("omits ACP harness spawn guidance for sandboxed sessions and shows ACP block note", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/bot",
+      toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
+      sandboxInfo: {
+        enabled: true,
+      },
+    });
+
+    expect(prompt).not.toContain('runtime="acp" requires `agentId`');
+    expect(prompt).not.toContain("ACP harness ids follow acp.allowedAgents");
+    expect(prompt).not.toContain(
+      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+    );
+    expect(prompt).not.toContain(
+      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
+    );
+    expect(prompt).toContain("ACP harness spawns are blocked from sandboxed sessions");
+    expect(prompt).toContain('`runtime: "acp"`');
+    expect(prompt).toContain('Use `runtime: "subagent"` instead.');
   });
 
   it("preserves tool casing in the prompt", () => {
@@ -156,9 +322,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it.",
     );
-    expect(prompt).toContain("Hanzo Bot docs: /tmp/bot/docs");
+    expect(prompt).toContain("Bot docs: /tmp/bot/docs");
     expect(prompt).toContain(
-      "For Hanzo Bot behavior, commands, config, or architecture: consult local docs first.",
+      "For Bot behavior, commands, config, or architecture: consult local docs first.",
     );
   });
 
@@ -169,9 +335,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Documentation");
-    expect(prompt).toContain("Hanzo Bot docs: /tmp/bot/docs");
+    expect(prompt).toContain("Bot docs: /tmp/bot/docs");
     expect(prompt).toContain(
-      "For Hanzo Bot behavior, commands, config, or architecture: consult local docs first.",
+      "For Bot behavior, commands, config, or architecture: consult local docs first.",
     );
   });
 
@@ -184,44 +350,46 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reminder: commit your changes in this workspace after edits.");
   });
 
-  it("includes user timezone when provided (12-hour)", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/bot",
-      userTimezone: "America/Chicago",
-      userTime: "Monday, January 5th, 2026 — 3:26 PM",
-      userTimeFormat: "12",
-    });
+  it("shows timezone section for 12h, 24h, and timezone-only modes", () => {
+    const cases = [
+      {
+        name: "12-hour",
+        params: {
+          workspaceDir: "/tmp/bot",
+          userTimezone: "America/Chicago",
+          userTime: "Monday, January 5th, 2026 — 3:26 PM",
+          userTimeFormat: "12" as const,
+        },
+      },
+      {
+        name: "24-hour",
+        params: {
+          workspaceDir: "/tmp/bot",
+          userTimezone: "America/Chicago",
+          userTime: "Monday, January 5th, 2026 — 15:26",
+          userTimeFormat: "24" as const,
+        },
+      },
+      {
+        name: "timezone-only",
+        params: {
+          workspaceDir: "/tmp/bot",
+          userTimezone: "America/Chicago",
+          userTimeFormat: "24" as const,
+        },
+      },
+    ] as const;
 
-    expect(prompt).toContain("## Current Date & Time");
-    expect(prompt).toContain("Time zone: America/Chicago");
-  });
-
-  it("includes user timezone when provided (24-hour)", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/bot",
-      userTimezone: "America/Chicago",
-      userTime: "Monday, January 5th, 2026 — 15:26",
-      userTimeFormat: "24",
-    });
-
-    expect(prompt).toContain("## Current Date & Time");
-    expect(prompt).toContain("Time zone: America/Chicago");
-  });
-
-  it("shows timezone when only timezone is provided", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/bot",
-      userTimezone: "America/Chicago",
-      userTimeFormat: "24",
-    });
-
-    expect(prompt).toContain("## Current Date & Time");
-    expect(prompt).toContain("Time zone: America/Chicago");
+    for (const testCase of cases) {
+      const prompt = buildAgentSystemPrompt(testCase.params);
+      expect(prompt, testCase.name).toContain("## Current Date & Time");
+      expect(prompt, testCase.name).toContain("Time zone: America/Chicago");
+    }
   });
 
   it("hints to use session_status for current date/time", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/bot",
+      workspaceDir: "/tmp/clawd",
       userTimezone: "America/Chicago",
     });
 
@@ -231,13 +399,13 @@ describe("buildAgentSystemPrompt", () => {
 
   // The system prompt intentionally does NOT include the current date/time.
   // Only the timezone is included, to keep the prompt stable for caching.
-  // See: https://github.com/hanzoai/bot/commit/66eec295b894bce8333886cfbca3b960c57c4946
+  // See: https://github.com/moltbot/moltbot/commit/66eec295b894bce8333886cfbca3b960c57c4946
   // Agents should use session_status or message timestamps to determine the date/time.
-  // Related: https://github.com/hanzoai/bot/issues/1897
-  //          https://github.com/hanzoai/bot/issues/3658
+  // Related: https://github.com/moltbot/moltbot/issues/1897
+  //          https://github.com/moltbot/moltbot/issues/3658
   it("does NOT include a date or time in the system prompt (cache stability)", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/bot",
+      workspaceDir: "/tmp/clawd",
       userTimezone: "America/Chicago",
       userTime: "Monday, January 5th, 2026 — 3:26 PM",
       userTimeFormat: "12",
@@ -246,7 +414,7 @@ describe("buildAgentSystemPrompt", () => {
     // The prompt should contain the timezone but NOT the formatted date/time string.
     // This is intentional for prompt cache stability — the date/time was removed in
     // commit 66eec295b. If you're here because you want to add it back, please see
-    // https://github.com/hanzoai/bot/issues/3658 for the preferred approach:
+    // https://github.com/moltbot/moltbot/issues/3658 for the preferred approach:
     // gateway-level timestamp injection into messages, not the system prompt.
     expect(prompt).toContain("Time zone: America/Chicago");
     expect(prompt).not.toContain("Monday, January 5th, 2026");
@@ -274,7 +442,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["gateway", "exec"],
     });
 
-    expect(prompt).toContain("## Hanzo Bot Self-Update");
+    expect(prompt).toContain("## Bot Self-Update");
     expect(prompt).toContain("config.apply");
     expect(prompt).toContain("update.run");
   });
@@ -495,7 +663,7 @@ describe("buildAgentSystemPrompt", () => {
 });
 
 describe("buildSubagentSystemPrompt", () => {
-  it("includes sub-agent spawning guidance for depth-1 orchestrator when maxSpawnDepth >= 2", () => {
+  it("renders depth-1 orchestrator guidance, labels, and recovery notes", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
       task: "research task",
@@ -504,26 +672,42 @@ describe("buildSubagentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Sub-Agent Spawning");
-    expect(prompt).toContain("You CAN spawn your own sub-agents");
+    expect(prompt).toContain(
+      "You CAN spawn your own sub-agents for parallel or complex work using `sessions_spawn`.",
+    );
     expect(prompt).toContain("sessions_spawn");
-    expect(prompt).toContain("`subagents` tool");
-    expect(prompt).toContain("announce their results back to you automatically");
-    expect(prompt).toContain("Do NOT repeatedly poll `subagents list`");
+    expect(prompt).toContain('runtime: "acp"');
+    expect(prompt).toContain("For ACP harness sessions (codex/claudecode/gemini)");
+    expect(prompt).toContain("set `agentId` unless `acp.defaultAgent` is configured");
+    expect(prompt).toContain("Do not ask users to run slash commands or CLI");
+    expect(prompt).toContain("Do not use `exec` (`bot ...`, `acpx ...`)");
+    expect(prompt).toContain("Use `subagents` only for Bot subagents");
+    expect(prompt).toContain("Subagent results auto-announce back to you");
+    expect(prompt).toContain("Avoid polling loops");
+    expect(prompt).toContain("spawned by the main agent");
+    expect(prompt).toContain("reported to the main agent");
+    expect(prompt).toContain("[compacted: tool output removed to free context]");
+    expect(prompt).toContain("[truncated: output exceeded context limit]");
+    expect(prompt).toContain("offset/limit");
+    expect(prompt).toContain("instead of full-file `cat`");
   });
 
-  it("does not include spawning guidance for depth-1 leaf when maxSpawnDepth == 1", () => {
+  it("omits ACP spawning guidance when ACP is disabled", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
       task: "research task",
       childDepth: 1,
-      maxSpawnDepth: 1,
+      maxSpawnDepth: 2,
+      acpEnabled: false,
     });
 
-    expect(prompt).not.toContain("## Sub-Agent Spawning");
-    expect(prompt).not.toContain("You CAN spawn");
+    expect(prompt).not.toContain('runtime: "acp"');
+    expect(prompt).not.toContain("For ACP harness sessions (codex/claudecode/gemini)");
+    expect(prompt).not.toContain("set `agentId` unless `acp.defaultAgent` is configured");
+    expect(prompt).toContain("You CAN spawn your own sub-agents");
   });
 
-  it("includes leaf worker note for depth-2 sub-sub-agents", () => {
+  it("renders depth-2 leaf guidance with parent orchestrator labels", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc:subagent:def",
       task: "leaf task",
@@ -534,40 +718,39 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("## Sub-Agent Spawning");
     expect(prompt).toContain("leaf worker");
     expect(prompt).toContain("CANNOT spawn further sub-agents");
-  });
-
-  it("uses 'parent orchestrator' label for depth-2 agents", () => {
-    const prompt = buildSubagentSystemPrompt({
-      childSessionKey: "agent:main:subagent:abc:subagent:def",
-      task: "leaf task",
-      childDepth: 2,
-      maxSpawnDepth: 2,
-    });
-
     expect(prompt).toContain("spawned by the parent orchestrator");
     expect(prompt).toContain("reported to the parent orchestrator");
   });
 
-  it("uses 'main agent' label for depth-1 agents", () => {
-    const prompt = buildSubagentSystemPrompt({
-      childSessionKey: "agent:main:subagent:abc",
-      task: "orchestrator task",
-      childDepth: 1,
-      maxSpawnDepth: 2,
-    });
+  it("omits spawning guidance for depth-1 leaf agents", () => {
+    const leafCases = [
+      {
+        name: "explicit maxSpawnDepth 1",
+        input: {
+          childSessionKey: "agent:main:subagent:abc",
+          task: "research task",
+          childDepth: 1,
+          maxSpawnDepth: 1,
+        },
+        expectMainAgentLabel: false,
+      },
+      {
+        name: "implicit default depth/maxSpawnDepth",
+        input: {
+          childSessionKey: "agent:main:subagent:abc",
+          task: "basic task",
+        },
+        expectMainAgentLabel: true,
+      },
+    ] as const;
 
-    expect(prompt).toContain("spawned by the main agent");
-    expect(prompt).toContain("reported to the main agent");
-  });
-
-  it("defaults to depth 1 and maxSpawnDepth 1 when not provided", () => {
-    const prompt = buildSubagentSystemPrompt({
-      childSessionKey: "agent:main:subagent:abc",
-      task: "basic task",
-    });
-
-    // Should not include spawning guidance (default maxSpawnDepth is 1, depth 1 is leaf)
-    expect(prompt).not.toContain("## Sub-Agent Spawning");
-    expect(prompt).toContain("spawned by the main agent");
+    for (const testCase of leafCases) {
+      const prompt = buildSubagentSystemPrompt(testCase.input);
+      expect(prompt, testCase.name).not.toContain("## Sub-Agent Spawning");
+      expect(prompt, testCase.name).not.toContain("You CAN spawn");
+      if (testCase.expectMainAgentLabel) {
+        expect(prompt, testCase.name).toContain("spawned by the main agent");
+      }
+    }
   });
 });

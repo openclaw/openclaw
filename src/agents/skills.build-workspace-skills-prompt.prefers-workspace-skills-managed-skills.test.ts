@@ -63,31 +63,31 @@ describe("buildWorkspaceSkillsPrompt", () => {
       dir: path.join(skillsDir, "bin-skill"),
       name: "bin-skill",
       description: "Needs a bin",
-      metadata: '{"hanzo-bot":{"requires":{"bins":["fakebin"]}}}',
+      metadata: '{"@hanzo/bot":{"requires":{"bins":["fakebin"]}}}',
     });
     await writeSkill({
       dir: path.join(skillsDir, "anybin-skill"),
       name: "anybin-skill",
       description: "Needs any bin",
-      metadata: '{"hanzo-bot":{"requires":{"anyBins":["missingbin","fakebin"]}}}',
+      metadata: '{"@hanzo/bot":{"requires":{"anyBins":["missingbin","fakebin"]}}}',
     });
     await writeSkill({
       dir: path.join(skillsDir, "config-skill"),
       name: "config-skill",
       description: "Needs config",
-      metadata: '{"hanzo-bot":{"requires":{"config":["browser.enabled"]}}}',
+      metadata: '{"@hanzo/bot":{"requires":{"config":["browser.enabled"]}}}',
     });
     await writeSkill({
       dir: path.join(skillsDir, "always-skill"),
       name: "always-skill",
       description: "Always on",
-      metadata: '{"hanzo-bot":{"always":true,"requires":{"env":["MISSING"]}}}',
+      metadata: '{"@hanzo/bot":{"always":true,"requires":{"env":["MISSING"]}}}',
     });
     await writeSkill({
       dir: path.join(skillsDir, "env-skill"),
       name: "env-skill",
       description: "Needs env",
-      metadata: '{"hanzo-bot":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
+      metadata: '{"@hanzo/bot":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
     });
 
     const managedSkillsDir = path.join(workspaceDir, ".managed");
@@ -140,7 +140,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       dir: skillDir,
       name: "alias-skill",
       description: "Uses skillKey",
-      metadata: '{"hanzo-bot":{"skillKey":"alias"}}',
+      metadata: '{"@hanzo/bot":{"skillKey":"alias"}}',
     });
 
     const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>

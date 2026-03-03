@@ -159,76 +159,8 @@ describe("secrets apply", () => {
   let fixture: ApplyFixture;
 
   beforeEach(async () => {
-    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-secrets-apply-"));
-    stateDir = path.join(rootDir, ".hanzo/bot");
-    configPath = path.join(stateDir, "bot.json");
-    authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
-    authJsonPath = path.join(stateDir, "agents", "main", "agent", "auth.json");
-    envPath = path.join(stateDir, ".env");
-    env = {
-      BOT_STATE_DIR: stateDir,
-      BOT_CONFIG_PATH: configPath,
-      OPENAI_API_KEY: "sk-live-env",
-    };
-
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                api: "openai-completions",
-                apiKey: "sk-openai-plaintext",
-                models: [{ id: "gpt-5", name: "gpt-5" }],
-              },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-
-    await fs.writeFile(
-      authStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "openai:default": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-openai-plaintext",
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-
-    await fs.writeFile(
-      authJsonPath,
-      `${JSON.stringify(
-        {
-          openai: {
-            type: "api_key",
-            key: "sk-openai-plaintext",
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-    await fs.writeFile(envPath, "OPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n", "utf8");
+    fixture = await createApplyFixture();
+    await seedDefaultApplyFixture(fixture);
   });
 
   afterEach(async () => {

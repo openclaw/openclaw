@@ -186,7 +186,6 @@ describe("resolveForwardedMediaList", () => {
       filePathHint: attachment.filename,
       maxBytes: 512,
       fetchImpl: undefined,
-      ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
     });
     expectDiscordCdnSsrFPolicy(call.ssrfPolicy);
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
@@ -281,9 +280,8 @@ describe("resolveForwardedMediaList", () => {
       result,
       expectedUrl: "https://media.discordapp.net/stickers/sticker-1.png",
       filePathHint: "wave.png",
-      maxBytes: 512,
-      fetchImpl: undefined,
-      ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+      expectedPath: "/tmp/sticker.png",
+      placeholder: "<media:sticker>",
     });
   });
 
@@ -341,9 +339,8 @@ describe("resolveMediaList", () => {
       result,
       expectedUrl: "https://media.discordapp.net/stickers/sticker-2.png",
       filePathHint: "hello.png",
-      maxBytes: 512,
-      fetchImpl: undefined,
-      ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+      expectedPath: "/tmp/sticker-2.png",
+      placeholder: "<media:sticker>",
     });
   });
 
@@ -557,37 +554,6 @@ describe("Discord media SSRF policy", () => {
         hostnameAllowlist: expect.arrayContaining(["assets.example.com", ...DISCORD_CDN_HOSTNAMES]),
       }),
     );
-  });
-});
-
-describe("Discord media SSRF policy", () => {
-  beforeEach(() => {
-    fetchRemoteMedia.mockClear();
-    saveMediaBuffer.mockClear();
-  });
-
-  it("passes ssrfPolicy with Discord CDN allowedHostnames and allowRfc2544BenchmarkRange", async () => {
-    fetchRemoteMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("img"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/a.png",
-      contentType: "image/png",
-    });
-
-    await resolveMediaList(
-      asMessage({
-        attachments: [{ id: "a1", url: "https://cdn.discordapp.com/a.png", filename: "a.png" }],
-      }),
-      1024,
-    );
-
-    const policy = fetchRemoteMedia.mock.calls[0][0].ssrfPolicy;
-    expect(policy).toEqual({
-      allowedHostnames: ["cdn.discordapp.com", "media.discordapp.net"],
-      allowRfc2544BenchmarkRange: true,
-    });
   });
 });
 

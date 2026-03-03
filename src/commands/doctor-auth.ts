@@ -129,13 +129,13 @@ export async function maybeRemoveDeprecatedCliAuthProfiles(
   const lines = ["Deprecated external CLI auth profiles detected (no longer supported):"];
   if (deprecated.has(CLAUDE_CLI_PROFILE_ID)) {
     lines.push(
-      `- ${CLAUDE_CLI_PROFILE_ID} (Anthropic): use setup-token → ${formatCliCommand("hanzo-bot models auth setup-token")}`,
+      `- ${CLAUDE_CLI_PROFILE_ID} (Anthropic): use setup-token → ${formatCliCommand("bot models auth setup-token")}`,
     );
   }
   if (deprecated.has(CODEX_CLI_PROFILE_ID)) {
     lines.push(
       `- ${CODEX_CLI_PROFILE_ID} (OpenAI Codex): use OAuth → ${formatCliCommand(
-        "hanzo-bot models auth login --provider openai-codex",
+        "bot models auth login --provider openai-codex",
       )}`,
     );
   }
@@ -206,18 +206,33 @@ type AuthIssue = {
   remainingMs?: number;
 };
 
+export function resolveUnusableProfileHint(params: {
+  kind: "cooldown" | "disabled";
+  reason?: string;
+}): string {
+  if (params.kind === "disabled") {
+    if (params.reason === "billing") {
+      return "Top up credits (provider billing) or switch provider.";
+    }
+    if (params.reason === "auth_permanent" || params.reason === "auth") {
+      return "Refresh or replace credentials, then retry.";
+    }
+  }
+  return "Wait for cooldown or switch provider.";
+}
+
 function formatAuthIssueHint(issue: AuthIssue): string | null {
   if (issue.provider === "anthropic" && issue.profileId === CLAUDE_CLI_PROFILE_ID) {
-    return `Deprecated profile. Use ${formatCliCommand("hanzo-bot models auth setup-token")} or ${formatCliCommand(
-      "hanzo-bot configure",
+    return `Deprecated profile. Use ${formatCliCommand("bot models auth setup-token")} or ${formatCliCommand(
+      "bot configure",
     )}.`;
   }
   if (issue.provider === "openai-codex" && issue.profileId === CODEX_CLI_PROFILE_ID) {
     return `Deprecated profile. Use ${formatCliCommand(
-      "hanzo-bot models auth login --provider openai-codex",
-    )} or ${formatCliCommand("hanzo-bot configure")}.`;
+      "bot models auth login --provider openai-codex",
+    )} or ${formatCliCommand("bot configure")}.`;
   }
-  return `Re-auth via \`${formatCliCommand("hanzo-bot configure")}\` or \`${formatCliCommand("hanzo-bot onboard")}\`.`;
+  return `Re-auth via \`${formatCliCommand("bot configure")}\` or \`${formatCliCommand("bot onboard")}\`.`;
 }
 
 function formatAuthIssueLine(issue: AuthIssue): string {
@@ -245,13 +260,14 @@ export async function noteAuthProfileHealth(params: {
       }
       const stats = store.usageStats?.[profileId];
       const remaining = formatRemainingShort(until - now);
-      const kind =
-        typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
-          ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
-          : "cooldown";
-      const hint = kind.startsWith("disabled:billing")
-        ? "Top up credits (provider billing) or switch provider."
-        : "Wait for cooldown or switch provider.";
+      const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
+      const kind = disabledActive
+        ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
+        : "cooldown";
+      const hint = resolveUnusableProfileHint({
+        kind: disabledActive ? "disabled" : "cooldown",
+        reason: stats?.disabledReason,
+      });
       out.push(`- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`);
     }
     return out;

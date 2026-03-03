@@ -4,7 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotConfig } from "../config/config.js";
 import { captureFullEnv } from "../test-utils/env.js";
-import { resolveSandboxContext } from "./sandbox.js";
+import { resolveSandboxContext } from "./sandbox/context.js";
+import { writeSkill } from "./skills.e2e-test-helpers.js";
 
 vi.mock("./sandbox/docker.js", () => ({
   ensureSandboxContainer: vi.fn(async () => "bot-sbx-test"),
@@ -17,16 +18,6 @@ vi.mock("./sandbox/browser.js", () => ({
 vi.mock("./sandbox/prune.js", () => ({
   maybePruneSandboxes: vi.fn(async () => undefined),
 }));
-
-async function writeSkill(params: { dir: string; name: string; description: string }) {
-  const { dir, name, description } = params;
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "SKILL.md"),
-    `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`,
-    "utf-8",
-  );
-}
 
 describe("sandbox skill mirroring", () => {
   let envSnapshot: ReturnType<typeof captureFullEnv>;
@@ -74,19 +65,15 @@ describe("sandbox skill mirroring", () => {
     return { context, workspaceDir };
   };
 
-  it("copies skills into the sandbox when workspaceAccess is ro", async () => {
-    const { context } = await runContext("ro");
+  it.each(["ro", "none"] as const)(
+    "copies skills into the sandbox when workspaceAccess is %s",
+    async (workspaceAccess) => {
+      const { context } = await runContext(workspaceAccess);
 
-    expect(context?.enabled).toBe(true);
-    const skillPath = path.join(context?.workspaceDir ?? "", "skills", "demo-skill", "SKILL.md");
-    await expect(fs.readFile(skillPath, "utf-8")).resolves.toContain("demo-skill");
-  }, 20_000);
-
-  it("copies skills into the sandbox when workspaceAccess is none", async () => {
-    const { context } = await runContext("none");
-
-    expect(context?.enabled).toBe(true);
-    const skillPath = path.join(context?.workspaceDir ?? "", "skills", "demo-skill", "SKILL.md");
-    await expect(fs.readFile(skillPath, "utf-8")).resolves.toContain("demo-skill");
-  }, 20_000);
+      expect(context?.enabled).toBe(true);
+      const skillPath = path.join(context?.workspaceDir ?? "", "skills", "demo-skill", "SKILL.md");
+      await expect(fs.readFile(skillPath, "utf-8")).resolves.toContain("demo-skill");
+    },
+    20_000,
+  );
 });

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { resolveGatewayProfileSuffix } from "./constants.js";
 
@@ -39,22 +38,5 @@ export function resolveGatewayStateDir(env: Record<string, string | undefined>):
   }
   const home = resolveHomeDir(env);
   const suffix = resolveGatewayProfileSuffix(env.BOT_PROFILE);
-  // Prefer ~/.hanzo/bot, fall back to legacy ~/.bot
-  const hanzoDir = path.join(home, ".hanzo", `bot${suffix}`);
-  try {
-    if (fs.existsSync(hanzoDir)) {
-      return hanzoDir;
-    }
-  } catch {
-    // fall through
-  }
-  const legacyDir = path.join(home, `.bot${suffix}`);
-  try {
-    if (fs.existsSync(legacyDir)) {
-      return legacyDir;
-    }
-  } catch {
-    // fall through
-  }
-  return hanzoDir;
+  return path.join(home, `.bot${suffix}`);
 }

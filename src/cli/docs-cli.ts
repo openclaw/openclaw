@@ -8,7 +8,7 @@ import { runCommandWithRuntime } from "./cli-utils.js";
 export function registerDocsCli(program: Command) {
   program
     .command("docs")
-    .description("Search the live Hanzo Bot docs")
+    .description("Search the live Bot docs")
     .argument("[query...]", "Search query")
     .addHelpText(
       "after",

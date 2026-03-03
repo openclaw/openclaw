@@ -52,7 +52,7 @@ describe("findExtraGatewayServices (win32)", () => {
         "Task To Run: C:\\Program Files\\Bot\\bot.exe gateway run",
         "",
         "TaskName: Clawdbot Legacy",
-        "Task To Run: C:\\hanzo-bot\\hanzo-bot.exe run",
+        "Task To Run: C:\\clawdbot\\clawdbot.exe run",
         "",
         "TaskName: Other Task",
         "Task To Run: C:\\tools\\helper.exe",
@@ -69,9 +69,9 @@ describe("findExtraGatewayServices (win32)", () => {
       {
         platform: "win32",
         label: "Clawdbot Legacy",
-        detail: "task: Clawdbot Legacy, run: C:\\hanzo-bot\\hanzo-bot.exe run",
+        detail: "task: Clawdbot Legacy, run: C:\\clawdbot\\clawdbot.exe run",
         scope: "system",
-        marker: "hanzo-bot",
+        marker: "clawdbot",
         legacy: true,
       },
       {

@@ -234,50 +234,6 @@ export function findUnsupportedSchemaKeywords(schema: unknown, path: string): st
   return violations;
 }
 
-/**
- * Normalize thinking blocks produced by Antigravity-routed Claude models.
- *
- * Antigravity (Google-routed Claude) can produce `type: "thinking"` blocks
- * that are incompatible with subsequent requests to the same provider.
- * This strips or converts them to plain text so the session history stays
- * valid across follow-up turns.
- *
- * Returns the original array reference when nothing was changed.
- */
-export function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
-  let touched = false;
-  const out: AgentMessage[] = [];
-  for (const msg of messages) {
-    if (msg.role !== "assistant" || !Array.isArray((msg as { content?: unknown }).content)) {
-      out.push(msg);
-      continue;
-    }
-    const assistantMsg = msg;
-    type ContentBlock = (typeof assistantMsg.content)[number];
-    const nextContent: ContentBlock[] = [];
-    let changed = false;
-    for (const block of assistantMsg.content) {
-      if (block && typeof block === "object" && (block as { type?: unknown }).type === "thinking") {
-        touched = true;
-        changed = true;
-        continue;
-      }
-      nextContent.push(block);
-    }
-    if (!changed) {
-      out.push(msg);
-    } else {
-      const replacement: AgentMessage = {
-        ...assistantMsg,
-        content:
-          nextContent.length > 0 ? nextContent : [{ type: "text", text: "" } as ContentBlock],
-      };
-      out.push(replacement);
-    }
-  }
-  return touched ? out : messages;
-}
-
 export function sanitizeToolsForGoogle<
   TSchemaType extends TSchema = TSchema,
   TResult = unknown,

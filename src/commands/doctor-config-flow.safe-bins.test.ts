@@ -85,7 +85,7 @@ describe("doctor config flow safe bins", () => {
       "Doctor warnings",
     );
     expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining("hanzo-bot doctor --fix"),
+      expect.stringContaining("bot doctor --fix"),
       "Doctor warnings",
     );
   });

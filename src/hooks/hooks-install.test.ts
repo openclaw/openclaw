@@ -63,7 +63,7 @@ describe("hooks install (e2e)", () => {
         "---",
         'name: "hello-hook"',
         'description: "Test hook"',
-        'metadata: {"bot":{"events":["command:new"]}}',
+        'metadata: {"@hanzo/bot":{"events":["command:new"]}}',
         "---",
         "",
         "# Hello Hook",

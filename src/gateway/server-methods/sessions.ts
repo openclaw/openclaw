@@ -166,11 +166,8 @@ async function emitSessionUnboundLifecycleEvent(params: {
   if (!hookRunner?.hasHooks("subagent_ended")) {
     return;
   }
-  const parsed = parseAgentSessionKey(params.targetSessionKey);
-  const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(loadConfig()));
   await hookRunner.runSubagentEnded(
     {
-      agentId,
       targetSessionKey: params.targetSessionKey,
       targetKind,
       reason: params.reason,

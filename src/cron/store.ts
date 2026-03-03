@@ -1,4 +1,5 @@
 import JSON5 from "json5";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { CronStoreFile } from "./types.js";
@@ -53,17 +54,24 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
 
 export async function saveCronStore(storePath: string, store: CronStoreFile) {
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  const { randomBytes } = await import("node:crypto");
   const json = JSON.stringify(store, null, 2);
-  let previous: string | null = null;
-  try {
-    previous = await fs.promises.readFile(storePath, "utf-8");
-  } catch (err) {
-    if ((err as { code?: unknown }).code !== "ENOENT") {
-      throw err;
+  const cached = serializedStoreCache.get(storePath);
+  if (cached === json) {
+    return;
+  }
+
+  let previous: string | null = cached ?? null;
+  if (previous === null) {
+    try {
+      previous = await fs.promises.readFile(storePath, "utf-8");
+    } catch (err) {
+      if ((err as { code?: unknown }).code !== "ENOENT") {
+        throw err;
+      }
     }
   }
   if (previous === json) {
+    serializedStoreCache.set(storePath, json);
     return;
   }
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
@@ -75,5 +83,31 @@ export async function saveCronStore(storePath: string, store: CronStoreFile) {
       // best-effort
     }
   }
-  await fs.promises.rename(tmp, storePath);
+  await renameWithRetry(tmp, storePath);
+  serializedStoreCache.set(storePath, json);
+}
+
+const RENAME_MAX_RETRIES = 3;
+const RENAME_BASE_DELAY_MS = 50;
+
+async function renameWithRetry(src: string, dest: string): Promise<void> {
+  for (let attempt = 0; attempt <= RENAME_MAX_RETRIES; attempt++) {
+    try {
+      await fs.promises.rename(src, dest);
+      return;
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "EBUSY" && attempt < RENAME_MAX_RETRIES) {
+        await new Promise((resolve) => setTimeout(resolve, RENAME_BASE_DELAY_MS * 2 ** attempt));
+        continue;
+      }
+      // Windows doesn't reliably support atomic replace via rename when dest exists.
+      if (code === "EPERM" || code === "EEXIST") {
+        await fs.promises.copyFile(src, dest);
+        await fs.promises.unlink(src).catch(() => {});
+        return;
+      }
+      throw err;
+    }
+  }
 }

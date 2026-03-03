@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
+import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
   isSystemNodePath,
   isVersionManagedNodePath,
@@ -35,10 +36,10 @@ export const SERVICE_AUDIT_CODES = {
   gatewayPathMissingDirs: "gateway-path-missing-dirs",
   gatewayPathNonMinimal: "gateway-path-nonminimal",
   gatewayTokenMismatch: "gateway-token-mismatch",
-  gatewayTokenDrift: "gateway-token-drift",
   gatewayRuntimeBun: "gateway-runtime-bun",
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
   gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
+  gatewayTokenDrift: "gateway-token-drift",
   launchdKeepAlive: "launchd-keep-alive",
   launchdRunAtLoad: "launchd-run-at-load",
   systemdAfterNetworkOnline: "systemd-after-network-online",
@@ -52,36 +53,6 @@ export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean
       issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun ||
       issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
   );
-}
-
-/**
- * Compare the token currently active in the running service against the token
- * stored in the config file. Returns a {@link ServiceConfigIssue} when they
- * diverge, or `null` when no drift is detected.
- */
-export function checkTokenDrift(params: {
-  serviceToken: string | undefined;
-  configToken: string | undefined;
-}): ServiceConfigIssue | null {
-  const service = params.serviceToken?.trim() || "";
-  const config = params.configToken?.trim() || "";
-
-  // No config token means nothing to drift from.
-  if (!config) {
-    return null;
-  }
-  // Both empty or identical — no drift.
-  if (service === config) {
-    return null;
-  }
-  return {
-    code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
-    message: service
-      ? "Config gateway token differs from service token"
-      : "Config gateway token set but service token is missing",
-    detail: service ? "tokens differ" : "service token empty",
-    level: "recommended",
-  };
 }
 
 function hasGatewaySubcommand(programArguments?: string[]): boolean {
@@ -253,16 +224,6 @@ function auditGatewayToken(
   });
 }
 
-function isNodeRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "node" || base === "node.exe";
-}
-
-function isBunRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "bun" || base === "bun.exe";
-}
-
 function getPathModule(platform: NodeJS.Platform) {
   return platform === "win32" ? path.win32 : path.posix;
 }
@@ -388,6 +349,35 @@ async function auditGatewayRuntime(
       }
     }
   }
+}
+
+/**
+ * Check if the service's embedded token differs from the config file token.
+ * Returns an issue if drift is detected (service will use old token after restart).
+ */
+export function checkTokenDrift(params: {
+  serviceToken: string | undefined;
+  configToken: string | undefined;
+}): ServiceConfigIssue | null {
+  const { serviceToken, configToken } = params;
+
+  // No drift if both are undefined/empty
+  if (!serviceToken && !configToken) {
+    return null;
+  }
+
+  // Drift: config has token, service has different or no token
+  if (configToken && serviceToken !== configToken) {
+    return {
+      code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
+      message:
+        "Config token differs from service token. The daemon will use the old token after restart.",
+      detail: "Run `bot gateway install --force` to sync the token.",
+      level: "recommended",
+    };
+  }
+
+  return null;
 }
 
 export async function auditGatewayServiceConfig(params: {

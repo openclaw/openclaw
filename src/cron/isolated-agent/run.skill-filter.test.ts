@@ -25,47 +25,30 @@ const makeSkillParams = makeIsolatedAgentTurnParams;
 // ---------- tests ----------
 
 describe("runCronIsolatedAgentTurn — skill filter", () => {
-  let previousFastTestEnv: string | undefined;
-  beforeEach(() => {
-    vi.clearAllMocks();
-    previousFastTestEnv = process.env.BOT_TEST_FAST;
-    delete process.env.BOT_TEST_FAST;
-    buildWorkspaceSkillSnapshotMock.mockReturnValue({
-      prompt: "<available_skills></available_skills>",
-      resolvedSkills: [],
-      version: 42,
-    });
-    resolveAgentConfigMock.mockReturnValue(undefined);
-    resolveAgentSkillsFilterMock.mockReturnValue(undefined);
-    resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4" });
-    resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-4" } });
-    resolveHooksGmailModelMock.mockReturnValue(null);
-    resolveThinkingDefaultMock.mockReturnValue(undefined);
-    getModelRefStatusMock.mockReturnValue({ allowed: false });
-    isCliProviderMock.mockReturnValue(false);
-    logWarnMock.mockReset();
-    // Fresh session object per test — prevents mutation leaking between tests
-    resolveCronSessionMock.mockReturnValue({
-      storePath: "/tmp/store.json",
-      store: {},
-      sessionEntry: {
-        sessionId: "test-session-id",
-        updatedAt: 0,
-        systemSent: false,
-        skillsSnapshot: undefined,
-      },
-      systemSent: false,
-      isNewSession: true,
-    });
-  });
+  setupRunCronIsolatedAgentTurnSuite();
 
-  afterEach(() => {
-    if (previousFastTestEnv == null) {
-      delete process.env.BOT_TEST_FAST;
-      return;
-    }
-    process.env.BOT_TEST_FAST = previousFastTestEnv;
-  });
+  async function runSkillFilterCase(overrides?: Record<string, unknown>) {
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams(overrides));
+    expect(result.status).toBe("ok");
+    return result;
+  }
+
+  function expectDefaultModelCall(params: { primary: string; fallbacks: string[] }) {
+    expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+    const callCfg = runWithModelFallbackMock.mock.calls[0][0].cfg;
+    const model = callCfg?.agents?.defaults?.model as { primary?: string; fallbacks?: string[] };
+    expect(model?.primary).toBe(params.primary);
+    expect(model?.fallbacks).toEqual(params.fallbacks);
+  }
+
+  function mockCliFallbackInvocation() {
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        const result = await params.run("claude-cli", "claude-opus-4-6");
+        return { result, provider: "claude-cli", model: "claude-opus-4-6", attempts: [] };
+      },
+    );
+  }
 
   it("passes agent-level skillFilter to buildWorkspaceSkillSnapshot", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue(["meme-factory", "weather"]);

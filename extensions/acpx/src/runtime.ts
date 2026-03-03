@@ -17,7 +17,6 @@ import { checkAcpxVersion } from "./ensure.js";
 import {
   parseJsonLines,
   parsePromptEventLine,
-  type PromptParseContext,
   toAcpxErrorEvent,
 } from "./runtime-internals/events.js";
 import {
@@ -146,6 +145,7 @@ export class AcpxRuntime implements AcpRuntime {
       command: this.config.command,
       cwd: this.config.cwd,
       expectedVersion: this.config.expectedVersion,
+      spawnOptions: this.spawnCommandOptions,
     });
     if (!versionCheck.ok) {
       this.healthy = false;
@@ -266,11 +266,10 @@ export class AcpxRuntime implements AcpRuntime {
 
     let sawDone = false;
     let sawError = false;
-    const parseContext: PromptParseContext = { promptRequestIds: new Set() };
     const lines = createInterface({ input: child.stdout });
     try {
       for await (const line of lines) {
-        const parsed = parsePromptEventLine(line, parseContext);
+        const parsed = parsePromptEventLine(line);
         if (!parsed) {
           continue;
         }
@@ -411,6 +410,7 @@ export class AcpxRuntime implements AcpRuntime {
       command: this.config.command,
       cwd: this.config.cwd,
       expectedVersion: this.config.expectedVersion,
+      spawnOptions: this.spawnCommandOptions,
     });
     if (!versionCheck.ok) {
       this.healthy = false;

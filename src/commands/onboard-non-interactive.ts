@@ -14,7 +14,7 @@ export async function runNonInteractiveOnboarding(
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
     runtime.error(
-      `Config invalid. Run \`${formatCliCommand("hanzo-bot doctor")}\` to repair it, then re-run onboarding.`,
+      `Config invalid. Run \`${formatCliCommand("bot doctor")}\` to repair it, then re-run onboarding.`,
     );
     runtime.exit(1);
     return;

@@ -61,7 +61,7 @@ function isMcporterCommand(cmd: unknown): boolean {
   if (typeof cmd !== "string") {
     return false;
   }
-  return /(^|[/])mcporter(?:\.cmd)?$/i.test(cmd);
+  return /(^|[\\/])mcporter(?:\.cmd)?$/i.test(cmd);
 }
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -133,7 +133,10 @@ describe("QmdMemoryManager", () => {
     tmpRoot = path.join(fixtureRoot, `case-${fixtureCount++}`);
     workspaceDir = path.join(tmpRoot, "workspace");
     stateDir = path.join(tmpRoot, "state");
-    await fs.mkdir(stateDir);
+    await fs.mkdir(tmpRoot);
+    // Only workspace must exist for configured collection paths; state paths are
+    // created lazily by manager code when needed.
+    await fs.mkdir(workspaceDir);
     process.env.BOT_STATE_DIR = stateDir;
     cfg = {
       agents: {

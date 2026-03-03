@@ -7,11 +7,7 @@ import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { formatUsageReportLines, loadProviderUsageSummary } from "../infra/provider-usage.js";
-import {
-  formatUpdateChannelLabel,
-  normalizeUpdateChannel,
-  resolveEffectiveUpdateChannel,
-} from "../infra/update-channels.js";
+import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import { formatGitInstallLabel } from "../infra/update-check.js";
 import {
   resolveMemoryCacheSummary,
@@ -41,6 +37,33 @@ import {
   formatUpdateOneLiner,
   resolveUpdateAvailability,
 } from "./status.update.js";
+
+function resolvePairingRecoveryContext(params: {
+  error?: string | null;
+  closeReason?: string | null;
+}): { requestId: string | null } | null {
+  const sanitizeRequestId = (value: string): string | null => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    // Keep CLI guidance injection-safe: allow only compact id characters.
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(trimmed)) {
+      return null;
+    }
+    return trimmed;
+  };
+  const source = [params.error, params.closeReason]
+    .filter((part) => typeof part === "string" && part.trim().length > 0)
+    .join(" ");
+  if (!source || !/pairing required/i.test(source)) {
+    return null;
+  }
+  const requestIdMatch = source.match(/requestId:\s*([^\s)]+)/i);
+  const requestId =
+    requestIdMatch && requestIdMatch[1] ? sanitizeRequestId(requestIdMatch[1]) : null;
+  return { requestId: requestId || null };
+}
 
 export async function statusCommand(
   opts: {
@@ -141,10 +164,11 @@ export async function statusCommand(
       : null;
 
   const configChannel = normalizeUpdateChannel(cfg.update?.channel);
-  const channelInfo = resolveEffectiveUpdateChannel({
+  const channelInfo = resolveUpdateChannelDisplay({
     configChannel,
     installKind: update.installKind,
-    git: update.git ? { tag: update.git.tag, branch: update.git.branch } : undefined,
+    gitTag: update.git?.tag ?? null,
+    gitBranch: update.git?.branch ?? null,
   });
 
   if (opts.json) {
@@ -242,12 +266,16 @@ export async function statusCommand(
     const suffix = self ? ` · ${self}` : "";
     return `${gatewayMode} · ${target} · ${reach}${auth}${suffix}`;
   })();
+  const pairingRecovery = resolvePairingRecoveryContext({
+    error: gatewayProbe?.error ?? null,
+    closeReason: gatewayProbe?.close?.reason ?? null,
+  });
 
   const agentsValue = (() => {
     const pending =
       agentStatus.bootstrapPendingCount > 0
-        ? `${agentStatus.bootstrapPendingCount} bootstrapping`
-        : "no bootstraps";
+        ? `${agentStatus.bootstrapPendingCount} bootstrap file${agentStatus.bootstrapPendingCount === 1 ? "" : "s"} present`
+        : "no bootstrap files";
     const def = agentStatus.agents.find((a) => a.id === agentStatus.defaultId);
     const defActive = def?.lastActiveAgeMs != null ? formatTimeAgo(def.lastActiveAgeMs) : "unknown";
     const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
@@ -361,12 +389,7 @@ export async function statusCommand(
 
   const updateAvailability = resolveUpdateAvailability(update);
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
-  const channelLabel = formatUpdateChannelLabel({
-    channel: channelInfo.channel,
-    source: channelInfo.source,
-    gitTag: update.git?.tag ?? null,
-    gitBranch: update.git?.branch ?? null,
-  });
+  const channelLabel = channelInfo.label;
   const gitLabel = formatGitInstallLabel(update);
 
   const overviewRows = [
@@ -402,7 +425,7 @@ export async function statusCommand(
     },
   ];
 
-  runtime.log(theme.heading("Hanzo Bot status"));
+  runtime.log(theme.heading("Bot status"));
   runtime.log("");
   runtime.log(theme.heading("Overview"));
   runtime.log(
@@ -415,6 +438,20 @@ export async function statusCommand(
       rows: overviewRows,
     }).trimEnd(),
   );
+
+  if (pairingRecovery) {
+    runtime.log("");
+    runtime.log(theme.warn("Gateway pairing approval required."));
+    if (pairingRecovery.requestId) {
+      runtime.log(
+        theme.muted(
+          `Recovery: ${formatCliCommand(`bot devices approve ${pairingRecovery.requestId}`)}`,
+        ),
+      );
+    }
+    runtime.log(theme.muted(`Fallback: ${formatCliCommand("bot devices approve --latest")}`));
+    runtime.log(theme.muted(`Inspect: ${formatCliCommand("bot devices list")}`));
+  }
 
   runtime.log("");
   runtime.log(theme.heading("Security audit"));
@@ -459,8 +496,8 @@ export async function statusCommand(
       runtime.log(theme.muted(`… +${sorted.length - shown.length} more`));
     }
   }
-  runtime.log(theme.muted(`Full report: ${formatCliCommand("hanzo-bot security audit")}`));
-  runtime.log(theme.muted(`Deep probe: ${formatCliCommand("hanzo-bot security audit --deep")}`));
+  runtime.log(theme.muted(`Full report: ${formatCliCommand("bot security audit")}`));
+  runtime.log(theme.muted(`Deep probe: ${formatCliCommand("bot security audit --deep")}`));
 
   runtime.log("");
   runtime.log(theme.heading("Channels"));
@@ -612,8 +649,8 @@ export async function statusCommand(
   }
 
   runtime.log("");
-  runtime.log("FAQ: https://github.com/hanzoai/bot/wiki/faq");
-  runtime.log("Troubleshooting: https://github.com/hanzoai/bot/wiki/troubleshooting");
+  runtime.log("FAQ: https://docs.hanzo.bot/faq");
+  runtime.log("Troubleshooting: https://docs.hanzo.bot/troubleshooting");
   runtime.log("");
   const updateHint = formatUpdateAvailableHint(update);
   if (updateHint) {
@@ -621,11 +658,11 @@ export async function statusCommand(
     runtime.log("");
   }
   runtime.log("Next steps:");
-  runtime.log(`  Need to share?      ${formatCliCommand("hanzo-bot status --all")}`);
-  runtime.log(`  Need to debug live? ${formatCliCommand("hanzo-bot logs --follow")}`);
+  runtime.log(`  Need to share?      ${formatCliCommand("bot status --all")}`);
+  runtime.log(`  Need to debug live? ${formatCliCommand("bot logs --follow")}`);
   if (gatewayReachable) {
-    runtime.log(`  Need to test channels? ${formatCliCommand("hanzo-bot status --deep")}`);
+    runtime.log(`  Need to test channels? ${formatCliCommand("bot status --deep")}`);
   } else {
-    runtime.log(`  Fix reachability first: ${formatCliCommand("hanzo-bot gateway probe")}`);
+    runtime.log(`  Fix reachability first: ${formatCliCommand("bot gateway probe")}`);
   }
 }

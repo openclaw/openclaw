@@ -229,38 +229,10 @@ export type WebConfig = {
 // Provider docking: allowlists keyed by provider id (and internal "webchat").
 export type AgentElevatedAllowFromConfig = Partial<Record<string, Array<string | number>>>;
 
-/** W3C Decentralized Identifier configuration for an agent. */
-export type DIDConfig = {
-  /** Full DID URI, e.g. "did:hanzo:0xabc..." */
-  uri?: string;
-  /** DID method: hanzo, lux, pars, zoo, ai */
-  method?: "hanzo" | "lux" | "pars" | "zoo" | "ai";
-  /** Chain ID for on-chain DID resolution */
-  chainId?: number;
-};
-
-/** Safe smart-contract wallet configuration for an agent. */
-export type WalletConfig = {
-  /** EOA address derived for this agent (hex) */
-  address?: string;
-  /** Safe contract address (multisig) on target chain */
-  safeAddress?: string;
-  /** Chain the Safe is deployed on */
-  chain?: "lux" | "hanzo" | "zoo" | "pars";
-  /** Chain ID */
-  chainId?: number;
-  /** HD derivation path used for the EOA */
-  derivationPath?: string;
-};
-
 export type IdentityConfig = {
   name?: string;
   theme?: string;
   emoji?: string;
   /** Avatar image: workspace-relative path, http(s) URL, or data URI. */
   avatar?: string;
-  /** W3C DID for this agent */
-  did?: DIDConfig;
-  /** On-chain wallet (EOA + Safe) for this agent */
-  wallet?: WalletConfig;
 };

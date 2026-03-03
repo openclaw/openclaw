@@ -11,11 +11,11 @@ import {
 
 describe("resolveSessionToolsVisibility", () => {
   it("defaults to tree when unset or invalid", () => {
-    expect(resolveSessionToolsVisibility({} as BotConfig)).toBe("tree");
+    expect(resolveSessionToolsVisibility({} as unknown as BotConfig)).toBe("tree");
     expect(
       resolveSessionToolsVisibility({
         tools: { sessions: { visibility: "invalid" } },
-      } as BotConfig),
+      } as unknown as BotConfig),
     ).toBe("tree");
   });
 
@@ -23,7 +23,7 @@ describe("resolveSessionToolsVisibility", () => {
     expect(
       resolveSessionToolsVisibility({
         tools: { sessions: { visibility: "ALL" } },
-      } as BotConfig),
+      } as unknown as BotConfig),
     ).toBe("all");
   });
 });
@@ -33,7 +33,7 @@ describe("resolveEffectiveSessionToolsVisibility", () => {
     const cfg = {
       tools: { sessions: { visibility: "all" } },
       agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
-    } as BotConfig;
+    } as unknown as BotConfig;
     expect(resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: true })).toBe("tree");
   });
 
@@ -41,21 +41,21 @@ describe("resolveEffectiveSessionToolsVisibility", () => {
     const cfg = {
       tools: { sessions: { visibility: "all" } },
       agents: { defaults: { sandbox: { sessionToolsVisibility: "all" } } },
-    } as BotConfig;
+    } as unknown as BotConfig;
     expect(resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: true })).toBe("all");
   });
 });
 
 describe("sandbox session-tools context", () => {
   it("defaults sandbox visibility clamp to spawned", () => {
-    expect(resolveSandboxSessionToolsVisibility({} as BotConfig)).toBe("spawned");
+    expect(resolveSandboxSessionToolsVisibility({} as unknown as BotConfig)).toBe("spawned");
   });
 
   it("restricts non-subagent sandboxed sessions to spawned visibility", () => {
     const cfg = {
       tools: { sessions: { visibility: "all" } },
       agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
-    } as BotConfig;
+    } as unknown as BotConfig;
     const context = resolveSandboxedSessionToolContext({
       cfg,
       agentSessionKey: "agent:main:main",
@@ -71,7 +71,7 @@ describe("sandbox session-tools context", () => {
     const cfg = {
       tools: { sessions: { visibility: "all" } },
       agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
-    } as BotConfig;
+    } as unknown as BotConfig;
     const context = resolveSandboxedSessionToolContext({
       cfg,
       agentSessionKey: "agent:main:subagent:abc",
@@ -85,7 +85,7 @@ describe("sandbox session-tools context", () => {
 
 describe("createAgentToAgentPolicy", () => {
   it("denies cross-agent access when disabled", () => {
-    const policy = createAgentToAgentPolicy({} as BotConfig);
+    const policy = createAgentToAgentPolicy({} as unknown as BotConfig);
     expect(policy.enabled).toBe(false);
     expect(policy.isAllowed("main", "main")).toBe(true);
     expect(policy.isAllowed("main", "ops")).toBe(false);
@@ -99,7 +99,7 @@ describe("createAgentToAgentPolicy", () => {
           allow: ["ops-*", "main"],
         },
       },
-    } as BotConfig);
+    } as unknown as BotConfig);
 
     expect(policy.isAllowed("ops-a", "ops-b")).toBe(true);
     expect(policy.isAllowed("main", "ops-a")).toBe(true);
@@ -113,7 +113,7 @@ describe("createSessionVisibilityGuard", () => {
       action: "send",
       requesterSessionKey: "agent:main:main",
       visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy({} as BotConfig),
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as BotConfig),
     });
 
     expect(guard.check("agent:ops:main")).toEqual({
@@ -129,7 +129,7 @@ describe("createSessionVisibilityGuard", () => {
       action: "history",
       requesterSessionKey: "agent:main:main",
       visibility: "self",
-      a2aPolicy: createAgentToAgentPolicy({} as BotConfig),
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as BotConfig),
     });
 
     expect(guard.check("agent:main:main")).toEqual({ allowed: true });

@@ -1,10 +1,17 @@
 import type { BotConfig } from "../config/config.js";
+import type { DoctorMemoryStatusPayload } from "../gateway/server-methods/doctor.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { note } from "../terminal/note.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
+
+export type GatewayMemoryProbe = {
+  checked: boolean;
+  ready: boolean;
+  error?: string;
+};
 
 export async function checkGatewayHealth(params: {
   runtime: RuntimeEnv;
@@ -55,4 +62,31 @@ export async function checkGatewayHealth(params: {
   }
 
   return { healthOk };
+}
+
+export async function probeGatewayMemoryStatus(params: {
+  cfg: BotConfig;
+  timeoutMs?: number;
+}): Promise<GatewayMemoryProbe> {
+  const timeoutMs =
+    typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 8_000;
+  try {
+    const payload = await callGateway<DoctorMemoryStatusPayload>({
+      method: "doctor.memory.status",
+      timeoutMs,
+      config: params.cfg,
+    });
+    return {
+      checked: true,
+      ready: payload.embedding.ok,
+      error: payload.embedding.error,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      checked: true,
+      ready: false,
+      error: `gateway memory probe unavailable: ${message}`,
+    };
+  }
 }

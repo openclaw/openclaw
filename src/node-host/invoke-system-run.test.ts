@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, type Mock, vi } from "vitest";
 import type { ExecHostResponse } from "../infra/exec-host.js";
 import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
 import { saveExecApprovals } from "../infra/exec-approvals.js";
@@ -541,7 +541,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   it.runIf(process.platform !== "win32")(
     "denies approval-based execution when cwd is a symlink",
     async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "hanzo-bot-approval-cwd-link-"));
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bot-approval-cwd-link-"));
       const safeDir = path.join(tmp, "safe");
       const linkDir = path.join(tmp, "cwd-link");
       const script = path.join(safeDir, "run.sh");
@@ -569,7 +569,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   it.runIf(process.platform !== "win32")(
     "denies approval-based execution when cwd contains a symlink parent component",
     async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "hanzo-bot-approval-cwd-parent-link-"));
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bot-approval-cwd-parent-link-"));
       const safeRoot = path.join(tmp, "safe-root");
       const safeSub = path.join(safeRoot, "sub");
       const linkRoot = path.join(tmp, "approved-link");
@@ -593,7 +593,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   );
 
   it("uses canonical executable path for approval-based relative command execution", async () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "hanzo-bot-approval-cwd-real-"));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bot-approval-cwd-real-"));
     const script = path.join(tmp, "run.sh");
     fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
     fs.chmodSync(script, 0o755);

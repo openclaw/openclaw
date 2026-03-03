@@ -14,7 +14,7 @@ import {
 describe("runtime config snapshot writes", () => {
   it("preserves source secret refs when writeConfigFile receives runtime-resolved config", async () => {
     await withTempHome("bot-config-runtime-write-", async (home) => {
-      const configPath = path.join(home, ".hanzo/bot", "bot.json");
+      const configPath = path.join(home, ".bot", "bot.json");
       const sourceConfig: BotConfig = {
         models: {
           providers: {

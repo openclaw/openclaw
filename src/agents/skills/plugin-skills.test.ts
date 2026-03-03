@@ -93,36 +93,40 @@ afterEach(async () => {
 });
 
 describe("resolvePluginSkillDirs", () => {
-  it("keeps acpx plugin skills when ACP is enabled", async () => {
-    const workspaceDir = await tempDirs.make("bot-");
-    const acpxRoot = await tempDirs.make("bot-acpx-plugin-");
-    const helperRoot = await tempDirs.make("bot-helper-plugin-");
-    await fs.mkdir(path.join(acpxRoot, "skills"), { recursive: true });
-    await fs.mkdir(path.join(helperRoot, "skills"), { recursive: true });
-
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
-      buildRegistry({
-        acpxRoot,
-        helperRoot,
-      }),
-    );
+  it.each([
+    {
+      name: "keeps acpx plugin skills when ACP is enabled",
+      acpEnabled: true,
+      expectedDirs: ({ acpxRoot, helperRoot }: { acpxRoot: string; helperRoot: string }) => [
+        path.resolve(acpxRoot, "skills"),
+        path.resolve(helperRoot, "skills"),
+      ],
+    },
+    {
+      name: "skips acpx plugin skills when ACP is disabled",
+      acpEnabled: false,
+      expectedDirs: ({ helperRoot }: { acpxRoot: string; helperRoot: string }) => [
+        path.resolve(helperRoot, "skills"),
+      ],
+    },
+  ])("$name", async ({ acpEnabled, expectedDirs }) => {
+    const { workspaceDir, acpxRoot, helperRoot } = await setupAcpxAndHelperRegistry();
 
     const dirs = resolvePluginSkillDirs({
       workspaceDir,
       config: {
-        acp: { enabled: true },
+        acp: { enabled: acpEnabled },
       } as BotConfig,
     });
 
     expect(dirs).toEqual(expectedDirs({ acpxRoot, helperRoot }));
   });
 
-  it("skips acpx plugin skills when ACP is disabled", async () => {
-    const workspaceDir = await tempDirs.make("bot-");
-    const acpxRoot = await tempDirs.make("bot-acpx-plugin-");
-    const helperRoot = await tempDirs.make("bot-helper-plugin-");
-    await fs.mkdir(path.join(acpxRoot, "skills"), { recursive: true });
-    await fs.mkdir(path.join(helperRoot, "skills"), { recursive: true });
+  it("rejects plugin skill paths that escape the plugin root", async () => {
+    const { workspaceDir, pluginRoot, outsideSkills } = await setupPluginOutsideSkills();
+    await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+    await fs.mkdir(outsideSkills, { recursive: true });
+    const escapePath = path.relative(pluginRoot, outsideSkills);
 
     hoisted.loadPluginManifestRegistry.mockReturnValue(
       createSinglePluginRegistry({
@@ -133,9 +137,7 @@ describe("resolvePluginSkillDirs", () => {
 
     const dirs = resolvePluginSkillDirs({
       workspaceDir,
-      config: {
-        acp: { enabled: false },
-      } as BotConfig,
+      config: {} as BotConfig,
     });
 
     expect(dirs).toEqual([path.resolve(pluginRoot, "skills")]);

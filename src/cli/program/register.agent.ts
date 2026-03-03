@@ -1,11 +1,13 @@
 import type { Command } from "commander";
-import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { agentCliCommand } from "../../commands/agent-via-gateway.js";
 import {
   agentsAddCommand,
+  agentsBindingsCommand,
+  agentsBindCommand,
   agentsDeleteCommand,
   agentsListCommand,
   agentsSetIdentityCommand,
+  agentsUnbindCommand,
 } from "../../commands/agents.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -29,7 +31,7 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
     .option("--verbose <on|off>", "Persist agent verbose level for the session")
     .option(
       "--channel <channel>",
-      `Delivery channel: ${args.agentChannelOptions} (default: ${DEFAULT_CHAT_CHANNEL})`,
+      `Delivery channel: ${args.agentChannelOptions} (omit to use the main session channel)`,
     )
     .option("--reply-to <target>", "Delivery target override (separate from session routing)")
     .option("--reply-channel <channel>", "Delivery channel override (separate from routing)")
@@ -51,19 +53,19 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
         `
 ${theme.heading("Examples:")}
 ${formatHelpExamples([
-  ['hanzo-bot agent --to +15555550123 --message "status update"', "Start a new session."],
-  ['hanzo-bot agent --agent ops --message "Summarize logs"', "Use a specific agent."],
+  ['bot agent --to +15555550123 --message "status update"', "Start a new session."],
+  ['bot agent --agent ops --message "Summarize logs"', "Use a specific agent."],
   [
-    'hanzo-bot agent --session-id 1234 --message "Summarize inbox" --thinking medium',
+    'bot agent --session-id 1234 --message "Summarize inbox" --thinking medium',
     "Target a session with explicit thinking level.",
   ],
   [
-    'hanzo-bot agent --to +15555550123 --message "Trace logs" --verbose on --json',
+    'bot agent --to +15555550123 --message "Trace logs" --verbose on --json',
     "Enable verbose logging and JSON output.",
   ],
-  ['hanzo-bot agent --to +15555550123 --message "Summon reply" --deliver', "Deliver reply."],
+  ['bot agent --to +15555550123 --message "Summon reply" --deliver', "Deliver reply."],
   [
-    'hanzo-bot agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"',
+    'bot agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"',
     "Send reply to a different channel/target.",
   ],
 ])}
@@ -98,6 +100,68 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.hanzo.bot/cli/agent
       await runCommandWithRuntime(defaultRuntime, async () => {
         await agentsListCommand(
           { json: Boolean(opts.json), bindings: Boolean(opts.bindings) },
+          defaultRuntime,
+        );
+      });
+    });
+
+  agents
+    .command("bindings")
+    .description("List routing bindings")
+    .option("--agent <id>", "Filter by agent id")
+    .option("--json", "Output JSON instead of text", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsBindingsCommand(
+          {
+            agent: opts.agent as string | undefined,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  agents
+    .command("bind")
+    .description("Add routing bindings for an agent")
+    .option("--agent <id>", "Agent id (defaults to current default agent)")
+    .option(
+      "--bind <channel[:accountId]>",
+      "Binding to add (repeatable). If omitted, accountId is resolved by channel defaults/hooks.",
+      collectOption,
+      [],
+    )
+    .option("--json", "Output JSON summary", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsBindCommand(
+          {
+            agent: opts.agent as string | undefined,
+            bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  agents
+    .command("unbind")
+    .description("Remove routing bindings for an agent")
+    .option("--agent <id>", "Agent id (defaults to current default agent)")
+    .option("--bind <channel[:accountId]>", "Binding to remove (repeatable)", collectOption, [])
+    .option("--all", "Remove all bindings for this agent", false)
+    .option("--json", "Output JSON summary", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsUnbindCommand(
+          {
+            agent: opts.agent as string | undefined,
+            bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
+            all: Boolean(opts.all),
+            json: Boolean(opts.json),
+          },
           defaultRuntime,
         );
       });
@@ -155,17 +219,14 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.hanzo.bot/cli/agent
         `
 ${theme.heading("Examples:")}
 ${formatHelpExamples([
+  ['bot agents set-identity --agent main --name "Bot" --emoji "🦞"', "Set name + emoji."],
+  ["bot agents set-identity --agent main --avatar avatars/bot.png", "Set avatar path."],
   [
-    'hanzo-bot agents set-identity --agent main --name "Hanzo Bot" --emoji "🥷"',
-    "Set name + emoji.",
-  ],
-  ["hanzo-bot agents set-identity --agent main --avatar avatars/bot.png", "Set avatar path."],
-  [
-    "hanzo-bot agents set-identity --workspace ~/.hanzo/bot/workspace --from-identity",
+    "bot agents set-identity --workspace ~/.hanzo/bot/workspace --from-identity",
     "Load from IDENTITY.md.",
   ],
   [
-    "hanzo-bot agents set-identity --identity-file ~/.hanzo/bot/workspace/IDENTITY.md --agent main",
+    "bot agents set-identity --identity-file ~/.hanzo/bot/workspace/IDENTITY.md --agent main",
     "Use a specific IDENTITY.md.",
   ],
 ])}

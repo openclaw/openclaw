@@ -77,28 +77,15 @@ describe("buildTelegramMessageContext audio transcript body", () => {
   it("uses preflight transcript as BodyForAgent for mention-gated group voice messages", async () => {
     transcribeFirstAudioMock.mockResolvedValueOnce("hey bot please help");
 
-    const ctx = await buildTelegramMessageContextForTest({
-      message: {
-        message_id: 1,
-        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
-        date: 1700000000,
-        text: undefined,
-        from: { id: 42, first_name: "Alice" },
-        voice: { file_id: "voice-1" },
-      },
-      allMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
-      options: { forceWasMentioned: true },
-      cfg: {
-        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/bot" } },
-        channels: { telegram: {} },
-        messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
-      },
-      resolveGroupActivation: () => true,
-      resolveGroupRequireMention: () => true,
-      resolveTelegramGroupConfig: () => ({
-        groupConfig: { requireMention: true },
-        topicConfig: undefined,
-      }),
+    const ctx = await buildGroupVoiceContext({
+      messageId: 1,
+      chatId: -1001234567890,
+      title: "Test Group",
+      date: 1700000000,
+      fromId: 42,
+      firstName: "Alice",
+      fileId: "voice-1",
+      mediaPath: "/tmp/voice.ogg",
     });
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);

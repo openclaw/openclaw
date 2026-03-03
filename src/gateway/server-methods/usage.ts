@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { SessionEntry, SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type {
   CostUsageSummary,
   SessionDailyModelUsage,

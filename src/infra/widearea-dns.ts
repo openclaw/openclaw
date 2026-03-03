@@ -104,8 +104,8 @@ export type WideAreaGatewayZoneOpts = {
 };
 
 function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string {
-  const hostname = os.hostname().split(".")[0] ?? "bot";
-  const hostLabel = dnsLabel(opts.hostLabel ?? hostname, "bot");
+  const hostname = os.hostname().split(".")[0] ?? "@hanzo/bot";
+  const hostLabel = dnsLabel(opts.hostLabel ?? hostname, "@hanzo/bot");
   const instanceLabel = dnsLabel(opts.instanceLabel ?? `${hostname}-gateway`, "bot-gw");
   const domain = normalizeWideAreaDomain(opts.domain) ?? "local.";
 

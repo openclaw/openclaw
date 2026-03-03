@@ -88,10 +88,7 @@ describe("promptRemoteGatewayConfig", () => {
       return "";
     }) as WizardPrompter["text"];
 
-    const cfg = {} as BotConfig;
-    const prompter = createPrompter({
-      confirm: vi.fn(async () => true),
-      select,
+    const { next, prompter } = await runRemotePrompt({
       text,
       confirm: true,
       selectResponses: {

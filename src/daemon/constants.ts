@@ -1,17 +1,20 @@
 // Default service labels (canonical + legacy compatibility)
-export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.hanzo.bot.gateway";
+export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.bot.gateway";
 export const GATEWAY_SYSTEMD_SERVICE_NAME = "bot-gateway";
-export const GATEWAY_WINDOWS_TASK_NAME = "Hanzo Bot Gateway";
-export const GATEWAY_SERVICE_MARKER = "bot";
+export const GATEWAY_WINDOWS_TASK_NAME = "Bot Gateway";
+export const GATEWAY_SERVICE_MARKER = "@hanzo/bot";
 export const GATEWAY_SERVICE_KIND = "gateway";
-export const NODE_LAUNCH_AGENT_LABEL = "ai.hanzo.bot.node";
+export const NODE_LAUNCH_AGENT_LABEL = "ai.bot.node";
 export const NODE_SYSTEMD_SERVICE_NAME = "bot-node";
-export const NODE_WINDOWS_TASK_NAME = "Hanzo Bot Node";
-export const NODE_SERVICE_MARKER = "bot";
+export const NODE_WINDOWS_TASK_NAME = "Bot Node";
+export const NODE_SERVICE_MARKER = "@hanzo/bot";
 export const NODE_SERVICE_KIND = "node";
 export const NODE_WINDOWS_TASK_SCRIPT_NAME = "node.cmd";
 export const LEGACY_GATEWAY_LAUNCH_AGENT_LABELS: string[] = [];
-export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = [];
+export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = [
+  "clawdbot-gateway",
+  "moltbot-gateway",
+];
 export const LEGACY_GATEWAY_WINDOWS_TASK_NAMES: string[] = [];
 
 export function normalizeGatewayProfile(profile?: string): string | null {
@@ -32,7 +35,7 @@ export function resolveGatewayLaunchAgentLabel(profile?: string): string {
   if (!normalized) {
     return GATEWAY_LAUNCH_AGENT_LABEL;
   }
-  return `ai.hanzo.bot.${normalized}`;
+  return `ai.bot.${normalized}`;
 }
 
 export function resolveLegacyGatewayLaunchAgentLabels(profile?: string): string[] {
@@ -53,7 +56,7 @@ export function resolveGatewayWindowsTaskName(profile?: string): string {
   if (!normalized) {
     return GATEWAY_WINDOWS_TASK_NAME;
   }
-  return `Hanzo Bot Gateway (${normalized})`;
+  return `Bot Gateway (${normalized})`;
 }
 
 export function formatGatewayServiceDescription(params?: {
@@ -70,9 +73,9 @@ export function formatGatewayServiceDescription(params?: {
     parts.push(`v${version}`);
   }
   if (parts.length === 0) {
-    return "Hanzo Bot Gateway";
+    return "Bot Gateway";
   }
-  return `Hanzo Bot Gateway (${parts.join(", ")})`;
+  return `Bot Gateway (${parts.join(", ")})`;
 }
 
 export function resolveGatewayServiceDescription(params: {
@@ -104,7 +107,7 @@ export function resolveNodeWindowsTaskName(): string {
 export function formatNodeServiceDescription(params?: { version?: string }): string {
   const version = params?.version?.trim();
   if (!version) {
-    return "Hanzo Bot Node Host";
+    return "Bot Node Host";
   }
-  return `Hanzo Bot Node Host (v${version})`;
+  return `Bot Node Host (v${version})`;
 }

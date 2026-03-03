@@ -10,7 +10,7 @@ import { hasExplicitOptions } from "../command-options.js";
 export function registerSetupCommand(program: Command) {
   program
     .command("setup")
-    .description("Initialize ~/.hanzo/bot/bot.json and the agent workspace")
+    .description("Initialize ~/.hanzoai/bot.json and the agent workspace")
     .addHelpText(
       "after",
       () =>

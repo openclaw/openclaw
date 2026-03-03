@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
@@ -19,17 +20,22 @@ installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
 let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
+let sharedSessionStoreDir: string;
+let sharedSessionStorePath: string;
 
 beforeAll(async () => {
   const started = await startServerWithClient();
   server = started.server;
   ws = started.ws;
   await connectOk(ws);
+  sharedSessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-gw-session-"));
+  sharedSessionStorePath = path.join(sharedSessionStoreDir, "sessions.json");
 });
 
 afterAll(async () => {
   ws.close();
   await server.close();
+  await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
 });
 
 const BASE_IMAGE_PNG =
@@ -48,8 +54,7 @@ async function setTestSessionStore(params: {
   entries: Record<string, Record<string, unknown>>;
   agentId?: string;
 }) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-gw-"));
-  testState.sessionStorePath = path.join(dir, "sessions.json");
+  testState.sessionStorePath = sharedSessionStorePath;
   await writeSessionStore({
     entries: params.entries,
     agentId: params.agentId,
@@ -57,7 +62,8 @@ async function setTestSessionStore(params: {
 }
 
 function latestAgentCall(): AgentCommandCall {
-  return vi.mocked(agentCommand).mock.calls.at(-1)?.[0] as AgentCommandCall;
+  const calls = vi.mocked(agentCommand).mock.calls as unknown as Array<[unknown]>;
+  return calls.at(-1)?.[0] as AgentCommandCall;
 }
 
 async function runMainAgentDeliveryWithSession(params: {
@@ -94,22 +100,15 @@ const createStubChannelPlugin = (params: {
   label: string;
   resolveAllowFrom?: (cfg: Record<string, unknown>) => string[];
 }): ChannelPlugin => ({
-  id: params.id,
-  meta: {
+  ...createChannelTestPluginBase({
     id: params.id,
     label: params.label,
-    selectionLabel: params.label,
-    docsPath: `/channels/${params.id}`,
-    blurb: "test stub.",
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => ["default"],
-    resolveAccount: () => ({}),
-    resolveAllowFrom: params.resolveAllowFrom
-      ? ({ cfg }) => params.resolveAllowFrom?.(cfg as Record<string, unknown>) ?? []
-      : undefined,
-  },
+    config: {
+      resolveAllowFrom: params.resolveAllowFrom
+        ? ({ cfg }) => params.resolveAllowFrom?.(cfg as Record<string, unknown>) ?? []
+        : undefined,
+    },
+  }),
   outbound: {
     deliveryMode: "direct",
     resolveTarget: ({ to, allowFrom }) => {
@@ -131,6 +130,13 @@ const createStubChannelPlugin = (params: {
   },
 });
 
+const defaultDirectChannelEntries = [
+  { id: "telegram", label: "Telegram" },
+  { id: "discord", label: "Discord" },
+  { id: "slack", label: "Slack" },
+  { id: "signal", label: "Signal" },
+] as const;
+
 const defaultRegistry = createRegistry([
   {
     pluginId: "whatsapp",
@@ -146,26 +152,11 @@ const defaultRegistry = createRegistry([
       },
     }),
   },
-  {
-    pluginId: "telegram",
+  ...defaultDirectChannelEntries.map((entry) => ({
+    pluginId: entry.id,
     source: "test",
-    plugin: createStubChannelPlugin({ id: "telegram", label: "Telegram" }),
-  },
-  {
-    pluginId: "discord",
-    source: "test",
-    plugin: createStubChannelPlugin({ id: "discord", label: "Discord" }),
-  },
-  {
-    pluginId: "slack",
-    source: "test",
-    plugin: createStubChannelPlugin({ id: "slack", label: "Slack" }),
-  },
-  {
-    pluginId: "signal",
-    source: "test",
-    plugin: createStubChannelPlugin({ id: "signal", label: "Signal" }),
-  },
+    plugin: createStubChannelPlugin({ id: entry.id, label: entry.label }),
+  })),
 ]);
 
 describe("gateway server agent", () => {
@@ -226,10 +217,7 @@ describe("gateway server agent", () => {
 
   test("agent preserves spawnDepth on subagent sessions", async () => {
     setRegistry(defaultRegistry);
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-gw-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
-    await writeSessionStore({
+    await setTestSessionStore({
       entries: {
         "agent:main:subagent:depth": {
           sessionId: "sess-sub-depth",
@@ -247,7 +235,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    const raw = await fs.readFile(storePath, "utf-8");
+    const raw = await fs.readFile(sharedSessionStorePath, "utf-8");
     const persisted = JSON.parse(raw) as Record<
       string,
       { spawnDepth?: number; spawnedBy?: string }
@@ -440,19 +428,31 @@ describe("gateway server agent", () => {
     expect(images[0]?.data).toBe(BASE_IMAGE_PNG);
   });
 
-  test("agent falls back to whatsapp when delivery requested and no last channel exists", async () => {
-    const call = await runMainAgentDeliveryWithSession({
-      entry: {
-        sessionId: "sess-main-missing-provider",
-      },
-      request: {
+  test("agent errors when delivery requested and no last channel exists", async () => {
+    setRegistry(defaultRegistry);
+    testState.allowFrom = ["+1555"];
+    try {
+      await setTestSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main-missing-provider",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const res = await rpcReq(ws, "agent", {
+        message: "hi",
+        sessionKey: "main",
+        deliver: true,
         idempotencyKey: "idem-agent-missing-provider",
-      },
-    });
-    expectChannels(call, "whatsapp");
-    expect(call.to).toBe("+1555");
-    expect(call.deliver).toBe(true);
-    expect(call.sessionId).toBe("sess-main-missing-provider");
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.code).toBe("INVALID_REQUEST");
+      expect(res.error?.message).toContain("Channel is required");
+      expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
+    } finally {
+      testState.allowFrom = undefined;
+    }
   });
 
   test.each([

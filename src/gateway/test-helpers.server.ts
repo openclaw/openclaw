@@ -19,8 +19,7 @@ import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { __testing as controlPlaneTestHooks } from "./control-plane-rate-limit.js";
-import { buildDeviceAuthPayload } from "./device-auth.js";
+import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import {
   agentCommand,
@@ -44,18 +43,22 @@ async function getServerModule() {
   return await serverModulePromise;
 }
 
-let previousHome: string | undefined;
-let previousUserProfile: string | undefined;
-let previousStateDir: string | undefined;
-let previousConfigPath: string | undefined;
-let previousSkipBrowserControl: string | undefined;
-let previousSkipGmailWatcher: string | undefined;
-let previousSkipCanvasHost: string | undefined;
-let previousBundledPluginsDir: string | undefined;
-let previousSkipChannels: string | undefined;
-let previousSkipProviders: string | undefined;
-let previousSkipCron: string | undefined;
-let previousMinimalGateway: string | undefined;
+const GATEWAY_TEST_ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "BOT_STATE_DIR",
+  "BOT_CONFIG_PATH",
+  "BOT_SKIP_BROWSER_CONTROL_SERVER",
+  "BOT_SKIP_GMAIL_WATCHER",
+  "BOT_SKIP_CANVAS_HOST",
+  "BOT_BUNDLED_PLUGINS_DIR",
+  "BOT_SKIP_CHANNELS",
+  "BOT_SKIP_PROVIDERS",
+  "BOT_SKIP_CRON",
+  "BOT_TEST_MINIMAL_GATEWAY",
+] as const;
+
+let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
 let suiteConfigRootSeq = 0;
@@ -89,23 +92,11 @@ export async function writeSessionStore(params: {
 }
 
 async function setupGatewayTestHome() {
-  previousHome = process.env.HOME;
-  previousUserProfile = process.env.USERPROFILE;
-  previousStateDir = process.env.BOT_STATE_DIR;
-  previousConfigPath = process.env.BOT_CONFIG_PATH;
-  previousSkipBrowserControl = process.env.BOT_SKIP_BROWSER_CONTROL_SERVER;
-  previousSkipGmailWatcher = process.env.BOT_SKIP_GMAIL_WATCHER;
-  previousSkipCanvasHost = process.env.BOT_SKIP_CANVAS_HOST;
-  previousBundledPluginsDir = process.env.BOT_BUNDLED_PLUGINS_DIR;
-  previousSkipChannels = process.env.BOT_SKIP_CHANNELS;
-  previousSkipProviders = process.env.BOT_SKIP_PROVIDERS;
-  previousSkipCron = process.env.BOT_SKIP_CRON;
-  previousMinimalGateway = process.env.BOT_TEST_MINIMAL_GATEWAY;
+  gatewayEnvSnapshot = captureEnv([...GATEWAY_TEST_ENV_KEYS]);
   tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "bot-gateway-home-"));
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
-  await fs.mkdir(path.join(tempHome, ".hanzo/bot"), { recursive: true });
-  process.env.BOT_STATE_DIR = path.join(tempHome, ".hanzo/bot");
+  process.env.BOT_STATE_DIR = path.join(tempHome, ".bot");
   delete process.env.BOT_CONFIG_PATH;
 }
 
@@ -131,7 +122,11 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   }
   applyGatewaySkipEnv();
   if (options.uniqueConfigRoot) {
-    tempConfigRoot = await fs.mkdtemp(path.join(tempHome, "bot-test-"));
+    const suiteRoot = path.join(tempHome, ".bot-test-suite");
+    await fs.mkdir(suiteRoot, { recursive: true });
+    tempConfigRoot = path.join(suiteRoot, `case-${suiteConfigRootSeq++}`);
+    await fs.rm(tempConfigRoot, { recursive: true, force: true });
+    await fs.mkdir(tempConfigRoot, { recursive: true });
   } else {
     tempConfigRoot = path.join(tempHome, ".bot-test");
     await fs.rm(tempConfigRoot, { recursive: true, force: true });
@@ -168,8 +163,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   embeddedRunMock.waitResults.clear();
   drainSystemEvents(resolveMainSessionKeyFromConfig());
   resetAgentRunContextForTest();
-  // Reset module-level rate-limit buckets so write-rate-limit tests are isolated.
-  controlPlaneTestHooks.resetControlPlaneRateLimitState();
   const mod = await getServerModule();
   mod.__resetModelCatalogCacheForTest();
   piSdkMock.enabled = false;
@@ -181,66 +174,8 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
   resetLogger();
   if (options.restoreEnv) {
-    if (previousHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = previousHome;
-    }
-    if (previousUserProfile === undefined) {
-      delete process.env.USERPROFILE;
-    } else {
-      process.env.USERPROFILE = previousUserProfile;
-    }
-    if (previousStateDir === undefined) {
-      delete process.env.BOT_STATE_DIR;
-    } else {
-      process.env.BOT_STATE_DIR = previousStateDir;
-    }
-    if (previousConfigPath === undefined) {
-      delete process.env.BOT_CONFIG_PATH;
-    } else {
-      process.env.BOT_CONFIG_PATH = previousConfigPath;
-    }
-    if (previousSkipBrowserControl === undefined) {
-      delete process.env.BOT_SKIP_BROWSER_CONTROL_SERVER;
-    } else {
-      process.env.BOT_SKIP_BROWSER_CONTROL_SERVER = previousSkipBrowserControl;
-    }
-    if (previousSkipGmailWatcher === undefined) {
-      delete process.env.BOT_SKIP_GMAIL_WATCHER;
-    } else {
-      process.env.BOT_SKIP_GMAIL_WATCHER = previousSkipGmailWatcher;
-    }
-    if (previousSkipCanvasHost === undefined) {
-      delete process.env.BOT_SKIP_CANVAS_HOST;
-    } else {
-      process.env.BOT_SKIP_CANVAS_HOST = previousSkipCanvasHost;
-    }
-    if (previousBundledPluginsDir === undefined) {
-      delete process.env.BOT_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.BOT_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-    }
-    if (previousSkipChannels === undefined) {
-      delete process.env.BOT_SKIP_CHANNELS;
-    } else {
-      process.env.BOT_SKIP_CHANNELS = previousSkipChannels;
-    }
-    if (previousSkipProviders === undefined) {
-      delete process.env.BOT_SKIP_PROVIDERS;
-    } else {
-      process.env.BOT_SKIP_PROVIDERS = previousSkipProviders;
-    }
-    if (previousSkipCron === undefined) {
-      delete process.env.BOT_SKIP_CRON;
-    } else {
-      process.env.BOT_SKIP_CRON = previousSkipCron;
-    }
-    if (previousMinimalGateway === undefined) {
-      delete process.env.BOT_TEST_MINIMAL_GATEWAY;
-    } else {
-      process.env.BOT_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
-    }
+    gatewayEnvSnapshot?.restore();
+    gatewayEnvSnapshot = undefined;
   }
   if (options.restoreEnv && tempHome) {
     await fs.rm(tempHome, {
@@ -304,6 +239,17 @@ export async function occupyPort(): Promise<{
   });
 }
 
+type GatewayTestMessage = {
+  type?: string;
+  id?: string;
+  ok?: boolean;
+  event?: string;
+  payload?: Record<string, unknown> | null;
+  seq?: number;
+  stateVersion?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
 const CONNECT_CHALLENGE_NONCE_KEY = "__botTestConnectChallengeNonce";
 const CONNECT_CHALLENGE_TRACKED_KEY = "__botTestConnectChallengeTracked";
 type TrackedWs = WebSocket & Record<string, unknown>;
@@ -311,38 +257,6 @@ type TrackedWs = WebSocket & Record<string, unknown>;
 export function getTrackedConnectChallengeNonce(ws: WebSocket): string | undefined {
   const tracked = (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY];
   return typeof tracked === "string" && tracked.trim().length > 0 ? tracked.trim() : undefined;
-}
-
-/**
- * Wait for the connect challenge nonce to arrive on a tracked WebSocket.
- * Returns the nonce string once available, or undefined after timeout.
- */
-export async function readConnectChallengeNonce(
-  ws: WebSocket,
-  timeoutMs = 2000,
-): Promise<string | undefined> {
-  trackConnectChallengeNonce(ws);
-  const existing = getTrackedConnectChallengeNonce(ws);
-  if (existing) {
-    return existing;
-  }
-  return new Promise<string | undefined>((resolve) => {
-    const timer = setTimeout(() => {
-      ws.off("message", check);
-      resolve(getTrackedConnectChallengeNonce(ws));
-    }, timeoutMs);
-    const check = () => {
-      const nonce = getTrackedConnectChallengeNonce(ws);
-      if (nonce) {
-        clearTimeout(timer);
-        ws.off("message", check);
-        resolve(nonce);
-      }
-    };
-    ws.on("message", check);
-    // Check immediately in case it arrived between calls.
-    check();
-  });
 }
 
 export function trackConnectChallengeNonce(ws: WebSocket): void {
@@ -353,7 +267,7 @@ export function trackConnectChallengeNonce(ws: WebSocket): void {
   trackedWs[CONNECT_CHALLENGE_TRACKED_KEY] = true;
   ws.on("message", (data) => {
     try {
-      const obj = JSON.parse(rawDataToString(data)) as Record<string, unknown>;
+      const obj = JSON.parse(rawDataToString(data)) as GatewayTestMessage;
       if (obj.type !== "event" || obj.event !== "connect.challenge") {
         return;
       }
@@ -367,9 +281,9 @@ export function trackConnectChallengeNonce(ws: WebSocket): void {
   });
 }
 
-export function onceMessage<T = unknown>(
+export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   ws: WebSocket,
-  filter: (obj: unknown) => boolean,
+  filter: (obj: T) => boolean,
   // Full-suite runs can saturate the event loop (581+ files). Keep this high
   // enough to avoid flaky RPC timeouts, but still fail fast when a response
   // never arrives.
@@ -383,12 +297,12 @@ export function onceMessage<T = unknown>(
       reject(new Error(`closed ${code}: ${reason.toString()}`));
     };
     const handler = (data: WebSocket.RawData) => {
-      const obj = JSON.parse(rawDataToString(data));
+      const obj = JSON.parse(rawDataToString(data)) as T;
       if (filter(obj)) {
         clearTimeout(timer);
         ws.off("message", handler);
         ws.off("close", closeHandler);
-        resolve(obj as T);
+        resolve(obj);
       }
     };
     ws.on("message", handler);
@@ -549,20 +463,70 @@ export async function startServerWithClient(
   return { server, ws, port, prevToken: prev, envSnapshot };
 }
 
+export async function startConnectedServerWithClient(
+  token?: string,
+  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
+) {
+  const started = await startServerWithClient(token, opts);
+  await connectOk(started.ws);
+  return started;
+}
+
 type ConnectResponse = {
   type: "res";
   id: string;
   ok: boolean;
-  payload?: unknown;
-  error?: { message?: string };
+  payload?: Record<string, unknown>;
+  error?: { message?: string; code?: string; details?: unknown };
 };
+
+function resolveDefaultTestDeviceIdentityPath(params: {
+  clientId: string;
+  clientMode: string;
+  platform: string;
+  deviceFamily?: string;
+  role: string;
+}) {
+  const safe =
+    `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}`
+      .replace(/[^a-zA-Z0-9._-]+/g, "_")
+      .toLowerCase();
+  const suiteRoot = process.env.BOT_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
+  return path.join(suiteRoot, "test-device-identities", `${safe}.json`);
+}
+
+export async function readConnectChallengeNonce(
+  ws: WebSocket,
+  timeoutMs = 2_000,
+): Promise<string | undefined> {
+  const cached = getTrackedConnectChallengeNonce(ws);
+  if (cached) {
+    return cached;
+  }
+  trackConnectChallengeNonce(ws);
+  try {
+    const evt = await onceMessage<{
+      type?: string;
+      event?: string;
+      payload?: Record<string, unknown> | null;
+    }>(ws, (o) => o.type === "event" && o.event === "connect.challenge", timeoutMs);
+    const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
+    if (typeof nonce === "string" && nonce.trim().length > 0) {
+      (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY] = nonce.trim();
+      return nonce.trim();
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export async function connectReq(
   ws: WebSocket,
   opts?: {
     token?: string;
-    password?: string;
     deviceToken?: string;
+    password?: string;
     skipDefaultAuth?: boolean;
     minProtocol?: number;
     maxProtocol?: number;
@@ -581,7 +545,6 @@ export async function connectReq(
     caps?: string[];
     commands?: string[];
     permissions?: Record<string, boolean>;
-    deviceIdentityPath?: string;
     device?: {
       id: string;
       publicKey: string;
@@ -589,14 +552,11 @@ export async function connectReq(
       signedAt: number;
       nonce?: string;
     } | null;
+    deviceIdentityPath?: string;
+    skipConnectChallengeNonce?: boolean;
+    timeoutMs?: number;
   },
 ): Promise<ConnectResponse> {
-  // Ensure challenge nonce tracking is active before we need it.
-  trackConnectChallengeNonce(ws);
-
-  // Wait for the connect-challenge nonce using the robust helper (2 s timeout).
-  const nonce = (await readConnectChallengeNonce(ws)) ?? "";
-
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
   const client = opts?.client ?? {
@@ -619,13 +579,19 @@ export async function connectReq(
         ? ((testState.gatewayAuth as { password?: string }).password ?? undefined)
         : process.env.BOT_GATEWAY_PASSWORD;
   const token = opts?.token ?? defaultToken;
+  const deviceToken = opts?.deviceToken?.trim() || undefined;
   const password = opts?.password ?? defaultPassword;
-  const deviceToken = opts?.deviceToken;
+  const authTokenForSignature = token ?? deviceToken;
   const requestedScopes = Array.isArray(opts?.scopes)
     ? opts.scopes
     : role === "operator"
       ? ["operator.admin"]
       : [];
+  if (opts?.skipConnectChallengeNonce && opts?.device === undefined) {
+    throw new Error("skipConnectChallengeNonce requires an explicit device override");
+  }
+  const connectChallengeNonce =
+    opts?.device !== undefined ? undefined : await readConnectChallengeNonce(ws);
   const device = (() => {
     if (opts?.device === null) {
       return undefined;
@@ -633,25 +599,38 @@ export async function connectReq(
     if (opts?.device) {
       return opts.device;
     }
-    const identity = loadOrCreateDeviceIdentity(opts?.deviceIdentityPath);
+    if (!connectChallengeNonce) {
+      throw new Error("missing connect.challenge nonce");
+    }
+    const identityPath =
+      opts?.deviceIdentityPath ??
+      resolveDefaultTestDeviceIdentityPath({
+        clientId: client.id,
+        clientMode: client.mode,
+        platform: client.platform,
+        deviceFamily: client.deviceFamily,
+        role,
+      });
+    const identity = loadOrCreateDeviceIdentity(identityPath);
     const signedAtMs = Date.now();
-    const payload = buildDeviceAuthPayload({
+    const payload = buildDeviceAuthPayloadV3({
       deviceId: identity.deviceId,
       clientId: client.id,
       clientMode: client.mode,
       role,
       scopes: requestedScopes,
       signedAtMs,
-      token: token ?? null,
-      nonce,
+      token: authTokenForSignature ?? null,
+      nonce: connectChallengeNonce,
+      platform: client.platform,
+      deviceFamily: client.deviceFamily,
     });
     return {
       id: identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
       signature: signDevicePayload(identity.privateKeyPem, payload),
       signedAt: signedAtMs,
-      // Always include nonce as string (may be "" for loopback — server accepts that).
-      nonce,
+      nonce: connectChallengeNonce,
     };
   })();
   ws.send(
@@ -672,8 +651,8 @@ export async function connectReq(
           token || password || deviceToken
             ? {
                 token,
+                deviceToken,
                 password,
-                ...(deviceToken ? { deviceToken } : {}),
               }
             : undefined,
         device,
@@ -687,7 +666,7 @@ export async function connectReq(
     const rec = o as Record<string, unknown>;
     return rec.type === "res" && rec.id === id;
   };
-  return await onceMessage<ConnectResponse>(ws, isResponseForId);
+  return await onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
 }
 
 export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectReq>[1]) {
@@ -697,7 +676,45 @@ export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectR
   return res.payload as { type: "hello-ok" };
 }
 
-export async function rpcReq<T = unknown>(
+export async function connectWebchatClient(params: {
+  port: number;
+  origin?: string;
+  client?: NonNullable<Parameters<typeof connectReq>[1]>["client"];
+}): Promise<WebSocket> {
+  const origin = params.origin ?? `http://127.0.0.1:${params.port}`;
+  const ws = new WebSocket(`ws://127.0.0.1:${params.port}`, {
+    headers: { origin },
+  });
+  trackConnectChallengeNonce(ws);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
+    const onOpen = () => {
+      clearTimeout(timer);
+      ws.off("error", onError);
+      resolve();
+    };
+    const onError = (err: Error) => {
+      clearTimeout(timer);
+      ws.off("open", onOpen);
+      reject(err);
+    };
+    ws.once("open", onOpen);
+    ws.once("error", onError);
+  });
+  await connectOk(ws, {
+    client:
+      params.client ??
+      ({
+        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      } as NonNullable<Parameters<typeof connectReq>[1]>["client"]),
+  });
+  return ws;
+}
+
+export async function rpcReq<T extends Record<string, unknown>>(
   ws: WebSocket,
   method: string,
   params?: unknown,
@@ -710,7 +727,7 @@ export async function rpcReq<T = unknown>(
     type: "res";
     id: string;
     ok: boolean;
-    payload?: T;
+    payload?: T | null | undefined;
     error?: { message?: string; code?: string };
   }>(
     ws,
@@ -736,39 +753,4 @@ export async function waitForSystemEvent(timeoutMs = 2000) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("timeout waiting for system event");
-}
-
-/**
- * Convenience wrapper: starts a gateway server + connected client and
- * immediately performs `connectOk`. Returns the same shape as
- * `startServerWithClient` plus the resolved port.
- */
-export async function startConnectedServerWithClient(
-  token?: string,
-  opts?: Parameters<typeof startServerWithClient>[1],
-) {
-  const started = await startServerWithClient(token, opts);
-  await connectOk(started.ws);
-  return started;
-}
-
-/**
- * Opens a webchat WebSocket client, tracks the nonce, waits for open,
- * and performs `connectOk` with webchat client info.
- */
-export async function connectWebchatClient(params: { port: number }): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://127.0.0.1:${params.port}`, {
-    headers: { origin: `http://127.0.0.1:${params.port}` },
-  });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
-  await connectOk(ws, {
-    client: {
-      id: GATEWAY_CLIENT_NAMES.WEBCHAT,
-      version: "1.0.0",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-    },
-  });
-  return ws;
 }

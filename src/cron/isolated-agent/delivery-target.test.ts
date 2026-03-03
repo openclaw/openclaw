@@ -21,14 +21,10 @@ vi.mock("../../web/accounts.js", () => ({
   resolveWhatsAppAccount: vi.fn(() => ({ allowFrom: [] })),
 }));
 
-import { beforeEach } from "vitest";
 import { loadSessionStore } from "../../config/sessions.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
-import { resolveWhatsAppOutboundTarget } from "../../whatsapp/resolve-outbound-target.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 
 function makeCfg(overrides?: Partial<BotConfig>): BotConfig {
@@ -37,6 +33,17 @@ function makeCfg(overrides?: Partial<BotConfig>): BotConfig {
     channels: {},
     ...overrides,
   } as BotConfig;
+}
+
+function makeTelegramBoundCfg(accountId = "account-b"): BotConfig {
+  return makeCfg({
+    bindings: [
+      {
+        agentId: AGENT_ID,
+        match: { channel: "telegram", accountId },
+      },
+    ],
+  });
 }
 
 const AGENT_ID = "agent-b";
@@ -75,82 +82,6 @@ async function resolveForAgent(params: {
 }
 
 describe("resolveDeliveryTarget", () => {
-  beforeEach(() => {
-    // Override the WhatsApp plugin stub with real resolveTarget and resolveAllowFrom
-    // so that allowFrom-based rerouting tests work correctly.
-    const registry = createTestRegistry([
-      {
-        pluginId: "telegram",
-        plugin: {
-          id: "telegram",
-          meta: {
-            id: "telegram",
-            label: "Telegram",
-            selectionLabel: "Telegram",
-            docsPath: "/channels/telegram",
-            blurb: "test",
-          },
-          capabilities: { chatTypes: ["direct", "group"] },
-          config: {},
-          outbound: {
-            deliveryMode: "direct",
-            sendText: async () => ({ channel: "telegram", messageId: "t" }),
-          },
-        },
-        source: "test",
-      },
-      {
-        pluginId: "whatsapp",
-        plugin: {
-          id: "whatsapp",
-          meta: {
-            id: "whatsapp",
-            label: "WhatsApp",
-            selectionLabel: "WhatsApp",
-            docsPath: "/channels/whatsapp",
-            blurb: "test",
-          },
-          capabilities: { chatTypes: ["direct", "group"] },
-          config: {
-            resolveAllowFrom: ({ cfg, accountId }: { cfg: unknown; accountId?: string }) => {
-              const configEntries =
-                resolveWhatsAppAccount({ cfg, accountId } as Parameters<
-                  typeof resolveWhatsAppAccount
-                >[0])?.allowFrom ?? [];
-              const storeEntries = readChannelAllowFromStoreSync(
-                "whatsapp" as Parameters<typeof readChannelAllowFromStoreSync>[0],
-                process.env,
-                accountId ?? "",
-              );
-              if (storeEntries.length === 0) {
-                return configEntries;
-              }
-              if (configEntries.length === 0) {
-                return storeEntries;
-              }
-              return [...new Set([...configEntries, ...storeEntries])];
-            },
-          },
-          outbound: {
-            deliveryMode: "gateway",
-            resolveTarget: ({
-              to,
-              allowFrom,
-              mode,
-            }: {
-              to?: string;
-              allowFrom?: Array<string | number>;
-              mode?: string;
-            }) => resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-            sendText: async () => ({ channel: "whatsapp", messageId: "w" }),
-          },
-        },
-        source: "test",
-      },
-    ]);
-    setActivePluginRegistry(registry);
-  });
-
   it("reroutes implicit whatsapp delivery to authorized allowFrom recipient", async () => {
     setMainSessionEntry({
       sessionId: "sess-w1",

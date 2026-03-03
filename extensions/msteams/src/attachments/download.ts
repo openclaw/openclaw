@@ -1,4 +1,3 @@
-import { fetchWithBearerAuthScopeFallback } from "bot/plugin-sdk";
 import type {
   MSTeamsAccessTokenProvider,
   MSTeamsAttachmentLike,

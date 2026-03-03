@@ -84,7 +84,7 @@ export function makeReplyConfig(home: string) {
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-5",
-        workspace: path.join(home, "bot"),
+        workspace: path.join(home, "@hanzo/bot"),
       },
     },
     channels: {

@@ -56,8 +56,7 @@ describe("acpx ensure", () => {
 
   it("accepts the pinned acpx version", async () => {
     spawnAndCollectMock.mockResolvedValueOnce({
-      stdout: `acpx ${ACPX_PINNED_VERSION}
-`,
+      stdout: `acpx ${ACPX_PINNED_VERSION}\n`,
       stderr: "",
       code: 0,
       error: null,
@@ -167,8 +166,7 @@ describe("acpx ensure", () => {
         error: null,
       })
       .mockResolvedValueOnce({
-        stdout: `acpx ${ACPX_PINNED_VERSION}
-`,
+        stdout: `acpx ${ACPX_PINNED_VERSION}\n`,
         stderr: "",
         code: 0,
         error: null,

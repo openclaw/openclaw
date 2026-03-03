@@ -4,6 +4,7 @@ import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   GATEWAY_SYSTEMD_SERVICE_NAME,
   GATEWAY_WINDOWS_TASK_NAME,
+  LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   normalizeGatewayProfile,
   resolveGatewayLaunchAgentLabel,
   resolveGatewayProfileSuffix,
@@ -31,12 +32,12 @@ describe("resolveGatewayLaunchAgentLabel", () => {
   it("returns default label when no profile is set", () => {
     const result = resolveGatewayLaunchAgentLabel();
     expect(result).toBe(GATEWAY_LAUNCH_AGENT_LABEL);
-    expect(result).toBe("ai.hanzo.bot.gateway");
+    expect(result).toBe("ai.bot.gateway");
   });
 
   it("returns profile-specific label when profile is set", () => {
     const result = resolveGatewayLaunchAgentLabel("dev");
-    expect(result).toBe("ai.hanzo.bot.dev");
+    expect(result).toBe("ai.bot.dev");
   });
 });
 
@@ -57,12 +58,12 @@ describe("resolveGatewayWindowsTaskName", () => {
   it("returns default task name when no profile is set", () => {
     const result = resolveGatewayWindowsTaskName();
     expect(result).toBe(GATEWAY_WINDOWS_TASK_NAME);
-    expect(result).toBe("Hanzo Bot Gateway");
+    expect(result).toBe("Bot Gateway");
   });
 
   it("returns profile-specific task name when profile is set", () => {
     const result = resolveGatewayWindowsTaskName("dev");
-    expect(result).toBe("Hanzo Bot Gateway (dev)");
+    expect(result).toBe("Bot Gateway (dev)");
   });
 });
 
@@ -87,24 +88,24 @@ describe("resolveGatewayProfileSuffix", () => {
 
 describe("formatGatewayServiceDescription", () => {
   it("returns default description when no profile/version", () => {
-    expect(formatGatewayServiceDescription()).toBe("Hanzo Bot Gateway");
+    expect(formatGatewayServiceDescription()).toBe("Bot Gateway");
   });
 
   it("includes profile when set", () => {
     expect(formatGatewayServiceDescription({ profile: "work" })).toBe(
-      "Hanzo Bot Gateway (profile: work)",
+      "Bot Gateway (profile: work)",
     );
   });
 
   it("includes version when set", () => {
     expect(formatGatewayServiceDescription({ version: "2026.1.10" })).toBe(
-      "Hanzo Bot Gateway (v2026.1.10)",
+      "Bot Gateway (v2026.1.10)",
     );
   });
 
   it("includes profile and version when set", () => {
     expect(formatGatewayServiceDescription({ profile: "dev", version: "1.2.3" })).toBe(
-      "Hanzo Bot Gateway (profile: dev, v1.2.3)",
+      "Bot Gateway (profile: dev, v1.2.3)",
     );
   });
 });
@@ -125,6 +126,13 @@ describe("resolveGatewayServiceDescription", () => {
         env: { BOT_PROFILE: "work", BOT_SERVICE_VERSION: "local" },
         environment: { BOT_SERVICE_VERSION: "remote" },
       }),
-    ).toBe("Hanzo Bot Gateway (profile: work, vremote)");
+    ).toBe("Bot Gateway (profile: work, vremote)");
+  });
+});
+
+describe("LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES", () => {
+  it("includes known pre-rebrand gateway unit names", () => {
+    expect(LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES).toContain("clawdbot-gateway");
+    expect(LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES).toContain("moltbot-gateway");
   });
 });

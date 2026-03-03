@@ -87,8 +87,12 @@ describe("bundled plugin sources", () => {
     });
     loadPluginManifestMock.mockReturnValue({ ok: true, manifest: { id: "feishu" } });
 
-    const resolved = findBundledPluginByNpmSpec({ spec: "@bot/feishu" });
-    const missing = findBundledPluginByNpmSpec({ spec: "@bot/not-found" });
+    const resolved = findBundledPluginSource({
+      lookup: { kind: "npmSpec", value: "@bot/feishu" },
+    });
+    const missing = findBundledPluginSource({
+      lookup: { kind: "npmSpec", value: "@bot/not-found" },
+    });
 
     expect(resolved?.pluginId).toBe("feishu");
     expect(resolved?.localPath).toBe("/app/extensions/feishu");

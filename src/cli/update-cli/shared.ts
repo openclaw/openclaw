@@ -13,6 +13,7 @@ import { fetchNpmTagVersion } from "../../infra/update-check.js";
 import {
   detectGlobalInstallManagerByPresence,
   detectGlobalInstallManagerForRoot,
+  type CommandRunner,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -23,6 +24,7 @@ import { pathExists } from "../../utils.js";
 export type UpdateCommandOptions = {
   json?: boolean;
   restart?: boolean;
+  dryRun?: boolean;
   channel?: string;
   tag?: string;
   timeout?: string;
@@ -38,27 +40,26 @@ export type UpdateWizardOptions = {
   timeout?: string;
 };
 
+const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
+
+export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
+  const timeoutMs = timeout ? Number.parseInt(timeout, 10) * 1000 : undefined;
+  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
+    defaultRuntime.error(INVALID_TIMEOUT_ERROR);
+    defaultRuntime.exit(1);
+    return null;
+  }
+  return timeoutMs;
+}
+
 const BOT_REPO_URL = "https://github.com/hanzoai/bot.git";
 const MAX_LOG_CHARS = 8000;
 
-export const DEFAULT_PACKAGE_NAME = "bot";
+export const DEFAULT_PACKAGE_NAME = "@hanzo/bot";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
 export function normalizeTag(value?: string | null): string | null {
-  if (!value) {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.startsWith("bot@")) {
-    return trimmed.slice("bot@".length);
-  }
-  if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
-    return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
-  }
-  return trimmed;
+  return normalizePackageTagInput(value, ["@hanzo/bot", DEFAULT_PACKAGE_NAME]);
 }
 
 export function normalizeVersionTag(tag: string): string | null {
@@ -225,10 +226,7 @@ export async function resolveGlobalManager(params: {
   installKind: "git" | "package" | "unknown";
   timeoutMs: number;
 }): Promise<GlobalInstallManager> {
-  const runCommand = async (argv: string[], options: { timeoutMs: number }) => {
-    const res = await runCommandWithTimeout(argv, options);
-    return { stdout: res.stdout, stderr: res.stderr, code: res.code };
-  };
+  const runCommand = createGlobalCommandRunner();
 
   if (params.installKind === "package") {
     const detected = await detectGlobalInstallManagerForRoot(
@@ -271,21 +269,9 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
   }
 }
 
-/**
- * Parse an optional timeout string (seconds) into milliseconds.
- * Returns `null` and prints an error if the value is invalid.
- */
-export function parseTimeoutMsOrExit(raw: string | undefined): number | null {
-  if (raw === undefined || raw === "") {
-    return null;
-  }
-  const seconds = Number(raw);
-  if (!Number.isFinite(seconds) || seconds <= 0) {
-    defaultRuntime.error(
-      theme.error(`Invalid timeout: "${raw}" (expected a positive number of seconds)`),
-    );
-    defaultRuntime.exit(1);
-    return null;
-  }
-  return Math.round(seconds * 1000);
+export function createGlobalCommandRunner(): CommandRunner {
+  return async (argv, options) => {
+    const res = await runCommandWithTimeout(argv, options);
+    return { stdout: res.stdout, stderr: res.stderr, code: res.code };
+  };
 }

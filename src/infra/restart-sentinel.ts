@@ -55,7 +55,7 @@ const SENTINEL_FILENAME = "restart-sentinel.json";
 export function formatDoctorNonInteractiveHint(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string {
-  return `Run: ${formatCliCommand("hanzo-bot doctor --non-interactive", env)}`;
+  return `Run: ${formatCliCommand("bot doctor --non-interactive", env)}`;
 }
 
 export function resolveRestartSentinelPath(env: NodeJS.ProcessEnv = process.env): string {

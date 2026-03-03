@@ -5,7 +5,6 @@ import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 
 vi.mock("./http-auth-helpers.js", () => {
   return {
-    authorizeGatewayBearerRequest: vi.fn(),
     authorizeGatewayBearerRequestOrReply: vi.fn(),
   };
 });
@@ -17,7 +16,7 @@ vi.mock("./http-common.js", () => {
   };
 });
 
-const { authorizeGatewayBearerRequest } = await import("./http-auth-helpers.js");
+const { authorizeGatewayBearerRequestOrReply } = await import("./http-auth-helpers.js");
 const { readJsonBodyOrError, sendMethodNotAllowed } = await import("./http-common.js");
 
 describe("handleGatewayPostJsonEndpoint", () => {
@@ -51,7 +50,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
   });
 
   it("returns undefined when auth fails", async () => {
-    vi.mocked(authorizeGatewayBearerRequest).mockResolvedValue(null);
+    vi.mocked(authorizeGatewayBearerRequestOrReply).mockResolvedValue(false);
     const result = await handleGatewayPostJsonEndpoint(
       {
         url: "/v1/ok",
@@ -65,7 +64,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
   });
 
   it("returns body when auth succeeds and JSON parsing succeeds", async () => {
-    vi.mocked(authorizeGatewayBearerRequest).mockResolvedValue({ ok: true } as never);
+    vi.mocked(authorizeGatewayBearerRequestOrReply).mockResolvedValue(true);
     vi.mocked(readJsonBodyOrError).mockResolvedValue({ hello: "world" });
     const result = await handleGatewayPostJsonEndpoint(
       {
@@ -76,6 +75,6 @@ describe("handleGatewayPostJsonEndpoint", () => {
       {} as unknown as ServerResponse,
       { pathname: "/v1/ok", auth: {} as unknown as ResolvedGatewayAuth, maxBodyBytes: 123 },
     );
-    expect(result).toMatchObject({ body: { hello: "world" } });
+    expect(result).toEqual({ body: { hello: "world" } });
   });
 });

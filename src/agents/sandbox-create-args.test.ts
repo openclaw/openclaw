@@ -8,8 +8,8 @@ describe("buildSandboxCreateArgs", () => {
     binds?: string[],
   ): SandboxDockerConfig {
     return {
-      image: "hanzo-bot-sandbox:bookworm-slim",
-      containerPrefix: "hanzo-bot-sbx-",
+      image: "bot-sandbox:bookworm-slim",
+      containerPrefix: "bot-sbx-",
       workdir: "/workspace",
       readOnlyRoot: false,
       tmpfs: [],
@@ -39,8 +39,8 @@ describe("buildSandboxCreateArgs", () => {
 
   it("includes hardening and resource flags", () => {
     const cfg: SandboxDockerConfig = {
-      image: "hanzo-bot-sandbox:bookworm-slim",
-      containerPrefix: "hanzo-bot-sbx-",
+      image: "bot-sandbox:bookworm-slim",
+      containerPrefix: "bot-sbx-",
       workdir: "/workspace",
       readOnlyRoot: true,
       tmpfs: ["/tmp"],
@@ -58,13 +58,13 @@ describe("buildSandboxCreateArgs", () => {
         core: "0",
       },
       seccompProfile: "/tmp/seccomp.json",
-      apparmorProfile: "hanzo-bot-sandbox",
+      apparmorProfile: "bot-sandbox",
       dns: ["1.1.1.1"],
       extraHosts: ["internal.service:10.0.0.5"],
     };
 
     const args = buildSandboxCreateArgs({
-      name: "hanzo-bot-sbx-test",
+      name: "bot-sbx-test",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
@@ -75,7 +75,7 @@ describe("buildSandboxCreateArgs", () => {
       expect.arrayContaining([
         "create",
         "--name",
-        "hanzo-bot-sbx-test",
+        "bot-sbx-test",
         "--label",
         "bot.sandbox=1",
         "--label",
@@ -98,7 +98,7 @@ describe("buildSandboxCreateArgs", () => {
         "--security-opt",
         "seccomp=/tmp/seccomp.json",
         "--security-opt",
-        "apparmor=hanzo-bot-sandbox",
+        "apparmor=bot-sandbox",
         "--dns",
         "1.1.1.1",
         "--add-host",
@@ -131,8 +131,8 @@ describe("buildSandboxCreateArgs", () => {
 
   it("emits -v flags for safe custom binds", () => {
     const cfg: SandboxDockerConfig = {
-      image: "hanzo-bot-sandbox:bookworm-slim",
-      containerPrefix: "hanzo-bot-sbx-",
+      image: "bot-sandbox:bookworm-slim",
+      containerPrefix: "bot-sbx-",
       workdir: "/workspace",
       readOnlyRoot: false,
       tmpfs: [],
@@ -142,7 +142,7 @@ describe("buildSandboxCreateArgs", () => {
     };
 
     const args = buildSandboxCreateArgs({
-      name: "hanzo-bot-sbx-binds",
+      name: "bot-sbx-binds",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
@@ -165,37 +165,37 @@ describe("buildSandboxCreateArgs", () => {
   it.each([
     {
       name: "dangerous Docker socket bind mounts",
-      containerName: "hanzo-bot-sbx-dangerous",
+      containerName: "bot-sbx-dangerous",
       cfg: createSandboxConfig({}, ["/var/run/docker.sock:/var/run/docker.sock"]),
       expected: /blocked path/,
     },
     {
       name: "dangerous parent bind mounts",
-      containerName: "hanzo-bot-sbx-dangerous-parent",
+      containerName: "bot-sbx-dangerous-parent",
       cfg: createSandboxConfig({}, ["/run:/run"]),
       expected: /blocked path/,
     },
     {
       name: "network host mode",
-      containerName: "hanzo-bot-sbx-host",
+      containerName: "bot-sbx-host",
       cfg: createSandboxConfig({ network: "host" }),
       expected: /network mode "host" is blocked/,
     },
     {
       name: "network container namespace join",
-      containerName: "hanzo-bot-sbx-container-network",
+      containerName: "bot-sbx-container-network",
       cfg: createSandboxConfig({ network: "container:peer" }),
       expected: /network mode "container:peer" is blocked by default/,
     },
     {
       name: "seccomp unconfined",
-      containerName: "hanzo-bot-sbx-seccomp",
+      containerName: "bot-sbx-seccomp",
       cfg: createSandboxConfig({ seccompProfile: "unconfined" }),
       expected: /seccomp profile "unconfined" is blocked/,
     },
     {
       name: "apparmor unconfined",
-      containerName: "hanzo-bot-sbx-apparmor",
+      containerName: "bot-sbx-apparmor",
       cfg: createSandboxConfig({ apparmorProfile: "unconfined" }),
       expected: /apparmor profile "unconfined" is blocked/,
     },
@@ -205,8 +205,8 @@ describe("buildSandboxCreateArgs", () => {
 
   it("omits -v flags when binds is empty or undefined", () => {
     const cfg: SandboxDockerConfig = {
-      image: "hanzo-bot-sandbox:bookworm-slim",
-      containerPrefix: "hanzo-bot-sbx-",
+      image: "bot-sandbox:bookworm-slim",
+      containerPrefix: "bot-sbx-",
       workdir: "/workspace",
       readOnlyRoot: false,
       tmpfs: [],
@@ -216,7 +216,7 @@ describe("buildSandboxCreateArgs", () => {
     };
 
     const args = buildSandboxCreateArgs({
-      name: "hanzo-bot-sbx-no-binds",
+      name: "bot-sbx-no-binds",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
@@ -239,7 +239,7 @@ describe("buildSandboxCreateArgs", () => {
     const cfg = createSandboxConfig({}, ["/opt/external:/data:rw"]);
     expect(() =>
       buildSandboxCreateArgs({
-        name: "hanzo-bot-sbx-outside-roots",
+        name: "bot-sbx-outside-roots",
         cfg,
         scopeKey: "main",
         createdAtMs: 1700000000000,
@@ -251,7 +251,7 @@ describe("buildSandboxCreateArgs", () => {
   it("allows bind sources outside runtime allowlist with explicit override", () => {
     const cfg = createSandboxConfig({}, ["/opt/external:/data:rw"]);
     const args = buildSandboxCreateArgs({
-      name: "hanzo-bot-sbx-outside-roots-override",
+      name: "bot-sbx-outside-roots-override",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
@@ -263,13 +263,13 @@ describe("buildSandboxCreateArgs", () => {
 
   it("blocks reserved /workspace target bind mounts by default", () => {
     const cfg = createSandboxConfig({}, ["/tmp/override:/workspace:rw"]);
-    expectBuildToThrow("hanzo-bot-sbx-reserved-target", cfg, /reserved container path/);
+    expectBuildToThrow("bot-sbx-reserved-target", cfg, /reserved container path/);
   });
 
   it("allows reserved /workspace target bind mounts with explicit dangerous override", () => {
     const cfg = createSandboxConfig({}, ["/tmp/override:/workspace:rw"]);
     const args = buildSandboxCreateArgs({
-      name: "hanzo-bot-sbx-reserved-target-override",
+      name: "bot-sbx-reserved-target-override",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
@@ -284,7 +284,7 @@ describe("buildSandboxCreateArgs", () => {
       dangerouslyAllowContainerNamespaceJoin: true,
     });
     const args = buildSandboxCreateArgs({
-      name: "hanzo-bot-sbx-container-network-override",
+      name: "bot-sbx-container-network-override",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,

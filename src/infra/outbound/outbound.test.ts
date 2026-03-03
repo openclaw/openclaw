@@ -44,8 +44,8 @@ describe("delivery-queue", () => {
   let fixtureRoot = "";
   let fixtureCount = 0;
 
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bot-dq-test-"));
+  beforeAll(() => {
+    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bot-dq-suite-"));
   });
 
   beforeEach(() => {

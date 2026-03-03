@@ -2,14 +2,41 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { loadBotPlugins } from "./loader.js";
+import { withEnv } from "../test-utils/env.js";
+import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
+import { __testing, loadBotPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
 
-const fixtureRoot = path.join(os.tmpdir(), `bot-plugin-${randomUUID()}`);
+const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bot-plugin-"));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.BOT_BUNDLED_PLUGINS_DIR;
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
+let cachedBundledTelegramDir = "";
+let cachedBundledMemoryDir = "";
+const BUNDLED_TELEGRAM_PLUGIN_BODY = `module.exports = {
+  id: "telegram",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "telegram",
+        meta: {
+          id: "telegram",
+          label: "Telegram",
+          selectionLabel: "Telegram",
+          docsPath: "/channels/telegram",
+          blurb: "telegram channel",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`;
 
 function makeTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
@@ -77,7 +104,7 @@ function loadBundledMemoryPluginRegistry(options?: {
           name: options.packageMeta.name,
           version: options.packageMeta.version,
           description: options.packageMeta.description,
-          bot: { extensions: ["./index.js"] },
+          bot: { extensions: [`./${pluginFilename}`] },
         },
         null,
         2,
@@ -94,6 +121,9 @@ function loadBundledMemoryPluginRegistry(options?: {
     dir: pluginDir,
     filename: pluginFilename,
   });
+  if (!options) {
+    cachedBundledMemoryDir = bundledDir;
+  }
   process.env.BOT_BUNDLED_PLUGINS_DIR = bundledDir;
 
   return loadBotPlugins({
@@ -107,6 +137,89 @@ function loadBundledMemoryPluginRegistry(options?: {
       },
     },
   });
+}
+
+function setupBundledTelegramPlugin() {
+  if (!cachedBundledTelegramDir) {
+    cachedBundledTelegramDir = makeTempDir();
+    writePlugin({
+      id: "telegram",
+      body: BUNDLED_TELEGRAM_PLUGIN_BODY,
+      dir: cachedBundledTelegramDir,
+      filename: "telegram.cjs",
+    });
+  }
+  process.env.BOT_BUNDLED_PLUGINS_DIR = cachedBundledTelegramDir;
+}
+
+function expectTelegramLoaded(registry: ReturnType<typeof loadBotPlugins>) {
+  const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+  expect(telegram?.status).toBe("loaded");
+  expect(registry.channels.some((entry) => entry.plugin.id === "telegram")).toBe(true);
+}
+
+function useNoBundledPlugins() {
+  process.env.BOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+}
+
+function loadRegistryFromSinglePlugin(params: {
+  plugin: TempPlugin;
+  pluginConfig?: Record<string, unknown>;
+  includeWorkspaceDir?: boolean;
+  options?: Omit<Parameters<typeof loadBotPlugins>[0], "cache" | "workspaceDir" | "config">;
+}) {
+  const pluginConfig = params.pluginConfig ?? {};
+  return loadBotPlugins({
+    cache: false,
+    ...(params.includeWorkspaceDir === false ? {} : { workspaceDir: params.plugin.dir }),
+    ...params.options,
+    config: {
+      plugins: {
+        load: { paths: [params.plugin.file] },
+        ...pluginConfig,
+      },
+    },
+  });
+}
+
+function createWarningLogger(warnings: string[]) {
+  return {
+    info: () => {},
+    warn: (msg: string) => warnings.push(msg),
+    error: () => {},
+  };
+}
+
+function createEscapingEntryFixture(params: { id: string; sourceBody: string }) {
+  const pluginDir = makeTempDir();
+  const outsideDir = makeTempDir();
+  const outsideEntry = path.join(outsideDir, "outside.cjs");
+  const linkedEntry = path.join(pluginDir, "entry.cjs");
+  fs.writeFileSync(outsideEntry, params.sourceBody, "utf-8");
+  fs.writeFileSync(
+    path.join(pluginDir, "bot.plugin.json"),
+    JSON.stringify(
+      {
+        id: params.id,
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  return { pluginDir, outsideEntry, linkedEntry };
+}
+
+function createPluginSdkAliasFixture() {
+  const root = makeTempDir();
+  const srcFile = path.join(root, "src", "plugin-sdk", "index.ts");
+  const distFile = path.join(root, "dist", "plugin-sdk", "index.js");
+  fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+  fs.mkdirSync(path.dirname(distFile), { recursive: true });
+  fs.writeFileSync(srcFile, "export {};\n", "utf-8");
+  fs.writeFileSync(distFile, "export {};\n", "utf-8");
+  return { root, srcFile, distFile };
 }
 
 afterEach(() => {
@@ -150,51 +263,10 @@ describe("loadBotPlugins", () => {
 
     const bundled = registry.plugins.find((entry) => entry.id === "bundled");
     expect(bundled?.status).toBe("disabled");
-
-    const enabledRegistry = loadBotPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          allow: ["bundled"],
-          entries: {
-            bundled: { enabled: true },
-          },
-        },
-      },
-    });
-
-    const enabled = enabledRegistry.plugins.find((entry) => entry.id === "bundled");
-    expect(enabled?.status).toBe("loaded");
   });
 
   it("loads bundled telegram plugin when enabled", () => {
-    const bundledDir = makeTempDir();
-    writePlugin({
-      id: "telegram",
-      body: `export default { id: "telegram", register(api) {
-  api.registerChannel({
-    plugin: {
-      id: "telegram",
-      meta: {
-        id: "telegram",
-        label: "Telegram",
-        selectionLabel: "Telegram",
-        docsPath: "/channels/telegram",
-        blurb: "telegram channel"
-      },
-      capabilities: { chatTypes: ["direct"] },
-      config: {
-        listAccountIds: () => [],
-        resolveAccount: () => ({ accountId: "default" })
-      },
-      outbound: { deliveryMode: "direct" }
-    }
-  });
-	} };`,
-      dir: bundledDir,
-      filename: "telegram.js",
-    });
-    process.env.BOT_BUNDLED_PLUGINS_DIR = bundledDir;
+    setupBundledTelegramPlugin();
 
     const registry = loadBotPlugins({
       cache: false,
@@ -209,9 +281,53 @@ describe("loadBotPlugins", () => {
       },
     });
 
+    expectTelegramLoaded(registry);
+  });
+
+  it("loads bundled channel plugins when channels.<id>.enabled=true", () => {
+    setupBundledTelegramPlugin();
+
+    const registry = loadBotPlugins({
+      cache: false,
+      workspaceDir: cachedBundledTelegramDir,
+      config: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    expectTelegramLoaded(registry);
+  });
+
+  it("still respects explicit disable via plugins.entries for bundled channels", () => {
+    setupBundledTelegramPlugin();
+
+    const registry = loadBotPlugins({
+      cache: false,
+      workspaceDir: cachedBundledTelegramDir,
+      config: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+        plugins: {
+          entries: {
+            telegram: { enabled: false },
+          },
+        },
+      },
+    });
+
     const telegram = registry.plugins.find((entry) => entry.id === "telegram");
-    expect(telegram?.status).toBe("loaded");
-    expect(registry.channels.some((entry) => entry.plugin.id === "telegram")).toBe(true);
+    expect(telegram?.status).toBe("disabled");
+    expect(telegram?.error).toBe("disabled in config");
   });
 
   it("preserves package.json metadata for bundled memory plugins", () => {
@@ -260,22 +376,72 @@ describe("loadBotPlugins", () => {
     expect(Object.keys(registry.gatewayHandlers)).toContain("allowed.ping");
   });
 
-  it("denylist disables plugins even if allowed", () => {
+  it("re-initializes global hook runner when serving registry from cache", () => {
     process.env.BOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "cache-hook-runner",
+      filename: "cache-hook-runner.cjs",
+      body: `module.exports = { id: "cache-hook-runner", register() {} };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cache-hook-runner"],
+        },
+      },
+    };
+
+    const first = loadBotPlugins(options);
+    expect(getGlobalHookRunner()).not.toBeNull();
+
+    resetGlobalHookRunner();
+    expect(getGlobalHookRunner()).toBeNull();
+
+    const second = loadBotPlugins(options);
+    expect(second).toBe(first);
+    expect(getGlobalHookRunner()).not.toBeNull();
+
+    resetGlobalHookRunner();
+  });
+
+  it("loads plugins when source and root differ only by realpath alias", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "alias-safe",
+      filename: "alias-safe.cjs",
+      body: `module.exports = { id: "alias-safe", register() {} };`,
+    });
+    const realRoot = fs.realpathSync(plugin.dir);
+    if (realRoot === plugin.dir) {
+      return;
+    }
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["alias-safe"],
+      },
+    });
+
+    const loaded = registry.plugins.find((entry) => entry.id === "alias-safe");
+    expect(loaded?.status).toBe("loaded");
+  });
+
+  it("denylist disables plugins even if allowed", () => {
+    useNoBundledPlugins();
     const plugin = writePlugin({
       id: "blocked",
       body: `module.exports = { id: "blocked", register() {} };`,
     });
 
-    const registry = loadBotPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["blocked"],
-          deny: ["blocked"],
-        },
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["blocked"],
+        deny: ["blocked"],
       },
     });
 
@@ -284,23 +450,19 @@ describe("loadBotPlugins", () => {
   });
 
   it("fails fast on invalid plugin config", () => {
-    process.env.BOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    useNoBundledPlugins();
     const plugin = writePlugin({
       id: "configurable",
       filename: "configurable.cjs",
       body: `module.exports = { id: "configurable", register() {} };`,
     });
 
-    const registry = loadBotPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          entries: {
-            configurable: {
-              config: "nope" as unknown as Record<string, unknown>,
-            },
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        entries: {
+          configurable: {
+            config: "nope" as unknown as Record<string, unknown>,
           },
         },
       },
@@ -312,7 +474,7 @@ describe("loadBotPlugins", () => {
   });
 
   it("registers channel plugins", () => {
-    process.env.BOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    useNoBundledPlugins();
     const plugin = writePlugin({
       id: "channel-demo",
       filename: "channel-demo.cjs",
@@ -338,14 +500,10 @@ describe("loadBotPlugins", () => {
 } };`,
     });
 
-    const registry = loadBotPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["channel-demo"],
-        },
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["channel-demo"],
       },
     });
 
@@ -353,8 +511,8 @@ describe("loadBotPlugins", () => {
     expect(channel).toBeDefined();
   });
 
-  it("registers http handlers", () => {
-    process.env.BOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+  it("registers http routes with auth and match options", () => {
+    useNoBundledPlugins();
     const plugin = writePlugin({
       id: "http-demo",
       filename: "http-demo.cjs",
@@ -368,14 +526,10 @@ describe("loadBotPlugins", () => {
 } };`,
     });
 
-    const registry = loadBotPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["http-demo"],
-        },
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["http-demo"],
       },
     });
 
@@ -389,7 +543,7 @@ describe("loadBotPlugins", () => {
   });
 
   it("registers http routes", () => {
-    process.env.BOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    useNoBundledPlugins();
     const plugin = writePlugin({
       id: "http-route-demo",
       filename: "http-route-demo.cjs",
@@ -398,14 +552,10 @@ describe("loadBotPlugins", () => {
 } };`,
     });
 
-    const registry = loadBotPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["http-route-demo"],
-        },
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["http-route-demo"],
       },
     });
 
@@ -610,5 +760,241 @@ describe("loadBotPlugins", () => {
     const overridden = entries.find((entry) => entry.status === "disabled");
     expect(loaded?.origin).toBe("config");
     expect(overridden?.origin).toBe("bundled");
+  });
+
+  it("prefers bundled plugin over auto-discovered global duplicate ids", () => {
+    const bundledDir = makeTempDir();
+    writePlugin({
+      id: "feishu",
+      body: `module.exports = { id: "feishu", register() {} };`,
+      dir: bundledDir,
+      filename: "index.cjs",
+    });
+    process.env.BOT_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const stateDir = makeTempDir();
+    withEnv({ BOT_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+      const globalDir = path.join(stateDir, "extensions", "feishu");
+      fs.mkdirSync(globalDir, { recursive: true });
+      writePlugin({
+        id: "feishu",
+        body: `module.exports = { id: "feishu", register() {} };`,
+        dir: globalDir,
+        filename: "index.cjs",
+      });
+
+      const registry = loadBotPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            allow: ["feishu"],
+            entries: {
+              feishu: { enabled: true },
+            },
+          },
+        },
+      });
+
+      const entries = registry.plugins.filter((entry) => entry.id === "feishu");
+      const loaded = entries.find((entry) => entry.status === "loaded");
+      const overridden = entries.find((entry) => entry.status === "disabled");
+      expect(loaded?.origin).toBe("bundled");
+      expect(overridden?.origin).toBe("global");
+      expect(overridden?.error).toContain("overridden by bundled plugin");
+    });
+  });
+
+  it("warns when plugins.allow is empty and non-bundled plugins are discoverable", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "warn-open-allow",
+      body: `module.exports = { id: "warn-open-allow", register() {} };`,
+    });
+    const warnings: string[] = [];
+    loadBotPlugins({
+      cache: false,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+        },
+      },
+    });
+    expect(
+      warnings.some((msg) => msg.includes("plugins.allow is empty") && msg.includes(plugin.id)),
+    ).toBe(true);
+  });
+
+  it("warns when loaded non-bundled plugin has no install/load-path provenance", () => {
+    useNoBundledPlugins();
+    const stateDir = makeTempDir();
+    withEnv({ BOT_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+      const globalDir = path.join(stateDir, "extensions", "rogue");
+      fs.mkdirSync(globalDir, { recursive: true });
+      writePlugin({
+        id: "rogue",
+        body: `module.exports = { id: "rogue", register() {} };`,
+        dir: globalDir,
+        filename: "index.cjs",
+      });
+
+      const warnings: string[] = [];
+      const registry = loadBotPlugins({
+        cache: false,
+        logger: createWarningLogger(warnings),
+        config: {
+          plugins: {
+            allow: ["rogue"],
+          },
+        },
+      });
+
+      const rogue = registry.plugins.find((entry) => entry.id === "rogue");
+      expect(rogue?.status).toBe("loaded");
+      expect(
+        warnings.some(
+          (msg) =>
+            msg.includes("rogue") && msg.includes("loaded without install/load-path provenance"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("rejects plugin entry files that escape plugin root via symlink", () => {
+    useNoBundledPlugins();
+    const { outsideEntry, linkedEntry } = createEscapingEntryFixture({
+      id: "symlinked",
+      sourceBody:
+        'module.exports = { id: "symlinked", register() { throw new Error("should not run"); } };',
+    });
+    try {
+      fs.symlinkSync(outsideEntry, linkedEntry);
+    } catch {
+      return;
+    }
+
+    const registry = loadBotPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [linkedEntry] },
+          allow: ["symlinked"],
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "symlinked");
+    expect(record?.status).not.toBe("loaded");
+    expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
+  });
+
+  it("rejects plugin entry files that escape plugin root via hardlink", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    useNoBundledPlugins();
+    const { outsideEntry, linkedEntry } = createEscapingEntryFixture({
+      id: "hardlinked",
+      sourceBody:
+        'module.exports = { id: "hardlinked", register() { throw new Error("should not run"); } };',
+    });
+    try {
+      fs.linkSync(outsideEntry, linkedEntry);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+
+    const registry = loadBotPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [linkedEntry] },
+          allow: ["hardlinked"],
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "hardlinked");
+    expect(record?.status).not.toBe("loaded");
+    expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
+  });
+
+  it("allows bundled plugin entry files that are hardlinked aliases", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const bundledDir = makeTempDir();
+    const pluginDir = path.join(bundledDir, "hardlinked-bundled");
+    fs.mkdirSync(pluginDir, { recursive: true });
+
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "outside.cjs");
+    fs.writeFileSync(
+      outsideEntry,
+      'module.exports = { id: "hardlinked-bundled", register() {} };',
+      "utf-8",
+    );
+    const plugin = writePlugin({
+      id: "hardlinked-bundled",
+      body: 'module.exports = { id: "hardlinked-bundled", register() {} };',
+      dir: pluginDir,
+      filename: "index.cjs",
+    });
+    fs.rmSync(plugin.file);
+    try {
+      fs.linkSync(outsideEntry, plugin.file);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+
+    process.env.BOT_BUNDLED_PLUGINS_DIR = bundledDir;
+    const registry = loadBotPlugins({
+      cache: false,
+      workspaceDir: bundledDir,
+      config: {
+        plugins: {
+          entries: {
+            "hardlinked-bundled": { enabled: true },
+          },
+          allow: ["hardlinked-bundled"],
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "hardlinked-bundled");
+    expect(record?.status).toBe("loaded");
+    expect(registry.diagnostics.some((entry) => entry.message.includes("unsafe plugin path"))).toBe(
+      false,
+    );
+  });
+
+  it("prefers dist plugin-sdk alias when loader runs from dist", () => {
+    const { root, distFile } = createPluginSdkAliasFixture();
+
+    const resolved = __testing.resolvePluginSdkAliasFile({
+      srcFile: "index.ts",
+      distFile: "index.js",
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    expect(resolved).toBe(distFile);
+  });
+
+  it("prefers src plugin-sdk alias when loader runs from src in non-production", () => {
+    const { root, srcFile } = createPluginSdkAliasFixture();
+
+    const resolved = withEnv({ NODE_ENV: undefined }, () =>
+      __testing.resolvePluginSdkAliasFile({
+        srcFile: "index.ts",
+        distFile: "index.js",
+        modulePath: path.join(root, "src", "plugins", "loader.ts"),
+      }),
+    );
+    expect(resolved).toBe(srcFile);
   });
 });

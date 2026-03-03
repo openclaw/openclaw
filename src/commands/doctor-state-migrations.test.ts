@@ -94,8 +94,8 @@ const DIR_LINK_TYPE = process.platform === "win32" ? "junction" : "dir";
 
 function getStateDirMigrationPaths(root: string) {
   return {
-    targetDir: path.join(root, ".hanzo", "bot"),
-    legacyDir: path.join(root, ".bot"),
+    targetDir: path.join(root, ".bot"),
+    legacyDir: path.join(root, ".clawdbot"),
   };
 }
 
@@ -203,23 +203,17 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("migrates legacy agent dir with conflict fallback", async () => {
-    const root = await makeTempRoot();
-    const cfg: BotConfig = {};
-
-    const legacyAgentDir = path.join(root, "agent");
-    fs.mkdirSync(legacyAgentDir, { recursive: true });
-    fs.writeFileSync(path.join(legacyAgentDir, "foo.txt"), "legacy", "utf-8");
-    fs.writeFileSync(path.join(legacyAgentDir, "baz.txt"), "legacy2", "utf-8");
+    const { root, cfg } = await makeRootWithEmptyCfg();
+    writeLegacyAgentFiles(root, {
+      "foo.txt": "legacy",
+      "baz.txt": "legacy2",
+    });
 
     const targetAgentDir = path.join(root, "agents", "main", "agent");
     fs.mkdirSync(targetAgentDir, { recursive: true });
     fs.writeFileSync(path.join(targetAgentDir, "foo.txt"), "new", "utf-8");
 
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: { BOT_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    await runLegacyStateMigrations({ detected, now: () => 123 });
+    await detectAndRunMigrations({ root, cfg, now: () => 123 });
 
     expect(fs.readFileSync(path.join(targetAgentDir, "baz.txt"), "utf-8")).toBe("legacy2");
     const backupDir = path.join(root, "agents", "main", "agent.legacy-123");
@@ -227,12 +221,8 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("auto-migrates legacy agent dir on startup", async () => {
-    const root = await makeTempRoot();
-    const cfg: BotConfig = {};
-
-    const legacyAgentDir = path.join(root, "agent");
-    fs.mkdirSync(legacyAgentDir, { recursive: true });
-    fs.writeFileSync(path.join(legacyAgentDir, "auth.json"), "{}", "utf-8");
+    const { root, cfg } = await makeRootWithEmptyCfg();
+    writeLegacyAgentFiles(root, { "auth.json": "{}" });
 
     const { result, log } = await runAutoMigrateLegacyStateWithLog({ root, cfg });
 
@@ -243,8 +233,7 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("auto-migrates legacy sessions on startup", async () => {
-    const root = await makeTempRoot();
-    const cfg: BotConfig = {};
+    const { root, cfg } = await makeRootWithEmptyCfg();
     const legacySessionsDir = writeLegacySessionsFixture({
       root,
       sessions: {
@@ -271,20 +260,13 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("migrates legacy WhatsApp auth files without touching oauth.json", async () => {
-    const root = await makeTempRoot();
-    const cfg: BotConfig = {};
-
-    const oauthDir = path.join(root, "credentials");
-    fs.mkdirSync(oauthDir, { recursive: true });
+    const { root, cfg } = await makeRootWithEmptyCfg();
+    const oauthDir = ensureCredentialsDir(root);
     fs.writeFileSync(path.join(oauthDir, "oauth.json"), "{}", "utf-8");
     fs.writeFileSync(path.join(oauthDir, "creds.json"), "{}", "utf-8");
     fs.writeFileSync(path.join(oauthDir, "session-abc.json"), "{}", "utf-8");
 
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: { BOT_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    await runLegacyStateMigrations({ detected, now: () => 123 });
+    await detectAndRunMigrations({ root, cfg, now: () => 123 });
 
     const target = path.join(oauthDir, "whatsapp", "default");
     expect(fs.existsSync(path.join(target, "creds.json"))).toBe(true);
@@ -294,11 +276,8 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("migrates legacy Telegram pairing allowFrom store to account-scoped default file", async () => {
-    const root = await makeTempRoot();
-    const cfg: BotConfig = {};
-
-    const oauthDir = path.join(root, "credentials");
-    fs.mkdirSync(oauthDir, { recursive: true });
+    const { root, cfg } = await makeRootWithEmptyCfg();
+    const oauthDir = ensureCredentialsDir(root);
     fs.writeFileSync(
       path.join(oauthDir, "telegram-allowFrom.json"),
       JSON.stringify(
@@ -385,8 +364,7 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("canonicalizes legacy main keys inside the target sessions store", async () => {
-    const root = await makeTempRoot();
-    const cfg: BotConfig = {};
+    const { root, cfg } = await makeRootWithEmptyCfg();
     const targetDir = path.join(root, "agents", "main", "sessions");
     writeJson5(path.join(targetDir, "sessions.json"), {
       main: { sessionId: "legacy", updatedAt: 10 },
@@ -441,8 +419,7 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("auto-migrates when only target sessions contain legacy keys", async () => {
-    const root = await makeTempRoot();
-    const cfg: BotConfig = {};
+    const { root, cfg } = await makeRootWithEmptyCfg();
     const targetDir = path.join(root, "agents", "main", "sessions");
     writeJson5(path.join(targetDir, "sessions.json"), {
       main: { sessionId: "legacy", updatedAt: 10 },

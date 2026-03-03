@@ -4,7 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 import { pathExists } from "../utils.js";
+import {
+  buildFishOptionCompletionLine,
+  buildFishSubcommandCompletionLine,
+} from "./completion-fish.js";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry.js";
 import { getProgramContext } from "./program/program-context.js";
 import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis.js";
@@ -37,7 +43,7 @@ export function resolveShellFromEnv(env: NodeJS.ProcessEnv = process.env): Compl
 function sanitizeCompletionBasename(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    return "bot";
+    return "@hanzo/bot";
   }
   return trimmed.replace(/[^a-zA-Z0-9._-]/g, "-");
 }
@@ -57,7 +63,7 @@ export function resolveCompletionCachePath(shell: CompletionShell, binName: stri
 /** Check if the completion cache file exists for the given shell. */
 export async function completionCacheExists(
   shell: CompletionShell,
-  binName = "bot",
+  binName = "@hanzo/bot",
 ): Promise<boolean> {
   const cachePath = resolveCompletionCachePath(shell, binName);
   return pathExists(cachePath);
@@ -102,7 +108,7 @@ function formatCompletionSourceLine(
 }
 
 function isCompletionProfileHeader(line: string): boolean {
-  return line.trim() === "# Hanzo Bot Completion";
+  return line.trim() === "# Bot Completion";
 }
 
 function isCompletionProfileLine(line: string, binName: string, cachePath: string | null): boolean {
@@ -117,7 +123,7 @@ function isCompletionProfileLine(line: string, binName: string, cachePath: strin
 
 /** Check if a line uses the slow dynamic completion pattern (source <(...)) */
 function isSlowDynamicCompletionLine(line: string, binName: string): boolean {
-  // Matches patterns like: source <(hanzo-bot completion --shell zsh)
+  // Matches patterns like: source <(bot completion --shell zsh)
   return (
     line.includes(`<(${binName} completion`) ||
     (line.includes(`${binName} completion`) && line.includes("| source"))
@@ -149,7 +155,7 @@ function updateCompletionProfile(
   }
 
   const trimmed = filtered.join("\n").trimEnd();
-  const block = `# Hanzo Bot Completion\n${sourceLine}`;
+  const block = `# Bot Completion\n${sourceLine}`;
   const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
   return { next, changed: next !== content, hadExisting };
 }
@@ -179,7 +185,7 @@ function getShellProfilePath(shell: CompletionShell): string {
 
 export async function isCompletionInstalled(
   shell: CompletionShell,
-  binName = "bot",
+  binName = "@hanzo/bot",
 ): Promise<boolean> {
   const profilePath = getShellProfilePath(shell);
 
@@ -197,11 +203,11 @@ export async function isCompletionInstalled(
 
 /**
  * Check if the profile uses the slow dynamic completion pattern.
- * Returns true if profile has `source <(hanzo-bot completion ...)` instead of cached file.
+ * Returns true if profile has `source <(bot completion ...)` instead of cached file.
  */
 export async function usesSlowDynamicCompletion(
   shell: CompletionShell,
-  binName = "bot",
+  binName = "@hanzo/bot",
 ): Promise<boolean> {
   const profilePath = getShellProfilePath(shell);
 
@@ -226,6 +232,11 @@ export function registerCompletionCli(program: Command) {
   program
     .command("completion")
     .description("Generate shell completion script")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/completion", "docs.hanzo.bot/cli/completion")}\n`,
+    )
     .addOption(
       new Option("-s, --shell <shell>", "Shell to generate completion for (default: zsh)").choices(
         COMPLETION_SHELLS,
@@ -286,7 +297,7 @@ export function registerCompletionCli(program: Command) {
     });
 }
 
-export async function installCompletion(shell: string, yes: boolean, binName = "bot") {
+export async function installCompletion(shell: string, yes: boolean, binName = "@hanzo/bot") {
   const home = process.env.HOME || os.homedir();
   let profilePath = "";
   let sourceLine = "";
@@ -589,32 +600,27 @@ function generateFishCompletion(program: Command): string {
     } // Only push if not root, or consistent root handling
 
     // Fish uses 'seen_subcommand_from' to determine context.
-    // For root: complete -c hanzo-bot -n "__fish_use_subcommand" -a "subcmd" -d "desc"
+    // For root: complete -c bot -n "__fish_use_subcommand" -a "subcmd" -d "desc"
 
     // Root logic
     if (parents.length === 0) {
       // Subcommands of root
       for (const sub of cmd.commands) {
-        const desc = sub.description().replace(/'/g, "'\\''");
-        script += `complete -c ${rootCmd} -n "__fish_use_subcommand" -a "${sub.name()}" -d '${desc}'\n`;
+        script += buildFishSubcommandCompletionLine({
+          rootCmd,
+          condition: "__fish_use_subcommand",
+          name: sub.name(),
+          description: sub.description(),
+        });
       }
       // Options of root
       for (const opt of cmd.options) {
-        const flags = opt.flags.split(/[ ,|]+/);
-        const long = flags.find((f) => f.startsWith("--"))?.replace(/^--/, "");
-        const short = flags
-          .find((f) => f.startsWith("-") && !f.startsWith("--"))
-          ?.replace(/^-/, "");
-        const desc = opt.description.replace(/'/g, "'\\''");
-        let line = `complete -c ${rootCmd} -n "__fish_use_subcommand"`;
-        if (short) {
-          line += ` -s ${short}`;
-        }
-        if (long) {
-          line += ` -l ${long}`;
-        }
-        line += ` -d '${desc}'\n`;
-        script += line;
+        script += buildFishOptionCompletionLine({
+          rootCmd,
+          condition: "__fish_use_subcommand",
+          flags: opt.flags,
+          description: opt.description,
+        });
       }
     } else {
       // Nested commands
@@ -623,31 +629,26 @@ function generateFishCompletion(program: Command): string {
       // Actually, a robust fish completion often requires defining a function to check current line.
       // For simplicity, we'll assume standard fish helper __fish_seen_subcommand_from.
 
-      // To properly scope to 'hanzo-bot gateway' and not 'hanzo-bot other gateway', we need to check the sequence.
+      // To properly scope to 'bot gateway' and not 'bot other gateway', we need to check the sequence.
       // A simplified approach:
 
       // Subcommands
       for (const sub of cmd.commands) {
-        const desc = sub.description().replace(/'/g, "'\\''");
-        script += `complete -c ${rootCmd} -n "__fish_seen_subcommand_from ${cmdName}" -a "${sub.name()}" -d '${desc}'\n`;
+        script += buildFishSubcommandCompletionLine({
+          rootCmd,
+          condition: `__fish_seen_subcommand_from ${cmdName}`,
+          name: sub.name(),
+          description: sub.description(),
+        });
       }
       // Options
       for (const opt of cmd.options) {
-        const flags = opt.flags.split(/[ ,|]+/);
-        const long = flags.find((f) => f.startsWith("--"))?.replace(/^--/, "");
-        const short = flags
-          .find((f) => f.startsWith("-") && !f.startsWith("--"))
-          ?.replace(/^-/, "");
-        const desc = opt.description.replace(/'/g, "'\\''");
-        let line = `complete -c ${rootCmd} -n "__fish_seen_subcommand_from ${cmdName}"`;
-        if (short) {
-          line += ` -s ${short}`;
-        }
-        if (long) {
-          line += ` -l ${long}`;
-        }
-        line += ` -d '${desc}'\n`;
-        script += line;
+        script += buildFishOptionCompletionLine({
+          rootCmd,
+          condition: `__fish_seen_subcommand_from ${cmdName}`,
+          flags: opt.flags,
+          description: opt.description,
+        });
       }
     }
 

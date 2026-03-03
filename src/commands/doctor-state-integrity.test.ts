@@ -88,7 +88,7 @@ describe("doctor state integrity oauth dir checks", () => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "bot-doctor-state-integrity-"));
     process.env.HOME = tempHome;
     process.env.BOT_HOME = tempHome;
-    process.env.BOT_STATE_DIR = path.join(tempHome, ".hanzo/bot");
+    process.env.BOT_STATE_DIR = path.join(tempHome, ".bot");
     delete process.env.BOT_OAUTH_DIR;
     fs.mkdirSync(process.env.BOT_STATE_DIR, { recursive: true, mode: 0o700 });
     vi.mocked(note).mockClear();
@@ -160,25 +160,13 @@ describe("doctor state integrity oauth dir checks", () => {
 
   it("prints bot-only verification hints when recent sessions are missing transcripts", async () => {
     const cfg: BotConfig = {};
-    setupSessionState(cfg, process.env, process.env.HOME ?? "");
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "missing-transcript",
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-    );
-
-    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive: vi.fn(async () => false) });
-
-    const text = stateIntegrityText();
+    writeSessionStore(cfg, {
+      "agent:main:main": {
+        sessionId: "missing-transcript",
+        updatedAt: Date.now(),
+      },
+    });
+    const text = await runStateIntegrityText(cfg);
     expect(text).toContain("recent sessions are missing transcripts");
     expect(text).toMatch(/bot sessions --store ".*sessions\.json"/);
     expect(text).toMatch(/bot sessions cleanup --store ".*sessions\.json" --dry-run/);
@@ -189,25 +177,13 @@ describe("doctor state integrity oauth dir checks", () => {
 
   it("ignores slash-routing sessions for recent missing transcript warnings", async () => {
     const cfg: BotConfig = {};
-    setupSessionState(cfg, process.env, process.env.HOME ?? "");
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main:telegram:slash:6790081233": {
-            sessionId: "missing-slash-transcript",
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-    );
-
-    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive: vi.fn(async () => false) });
-
-    const text = stateIntegrityText();
+    writeSessionStore(cfg, {
+      "agent:main:telegram:slash:6790081233": {
+        sessionId: "missing-slash-transcript",
+        updatedAt: Date.now(),
+      },
+    });
+    const text = await runStateIntegrityText(cfg);
     expect(text).not.toContain("recent sessions are missing transcripts");
   });
 });

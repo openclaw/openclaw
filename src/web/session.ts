@@ -113,7 +113,7 @@ export async function createWaSocket(
     version,
     logger,
     printQRInTerminal: false,
-    browser: ["bot", "cli", VERSION],
+    browser: ["@hanzo/bot", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
   });
@@ -135,9 +135,7 @@ export async function createWaSocket(
           const status = getStatusCode(lastDisconnect?.error);
           if (status === DisconnectReason.loggedOut) {
             console.error(
-              danger(
-                `WhatsApp session logged out. Run: ${formatCliCommand("hanzo-bot channels login")}`,
-              ),
+              danger(`WhatsApp session logged out. Run: ${formatCliCommand("bot channels login")}`),
             );
           }
         }

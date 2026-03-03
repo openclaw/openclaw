@@ -60,8 +60,37 @@ export async function resolveSlackEffectiveAllowFrom(
   options?: { includePairingStore?: boolean },
 ) {
   const includePairingStore = options?.includePairingStore === true;
-  let storeAllowFrom: string[] = [];
-  if (includePairingStore) {
+  const cache = getAllowFromCacheState(ctx);
+  const baseSignature = JSON.stringify(ctx.allowFrom);
+  if (cache.baseSignature !== baseSignature || !cache.base) {
+    cache.baseSignature = baseSignature;
+    cache.base = buildBaseAllowFrom(ctx);
+    cache.pairing = undefined;
+    cache.pairingKey = undefined;
+    cache.pairingExpiresAtMs = undefined;
+    cache.pairingPending = undefined;
+  }
+  if (!includePairingStore) {
+    return cache.base;
+  }
+
+  const ttlMs = getPairingAllowFromCacheTtlMs();
+  const nowMs = Date.now();
+  const pairingKey = `${ctx.accountId}:${ctx.dmPolicy}`;
+  if (
+    ttlMs > 0 &&
+    cache.pairing &&
+    cache.pairingKey === pairingKey &&
+    (cache.pairingExpiresAtMs ?? 0) >= nowMs
+  ) {
+    return cache.pairing;
+  }
+  if (cache.pairingPending && cache.pairingKey === pairingKey) {
+    return await cache.pairingPending;
+  }
+
+  const pairingPending = (async (): Promise<ResolvedAllowFromLists> => {
+    let storeAllowFrom: string[] = [];
     try {
       const resolved = await readStoreAllowFromForDmPolicy({
         provider: "slack",
@@ -72,10 +101,34 @@ export async function resolveSlackEffectiveAllowFrom(
     } catch {
       storeAllowFrom = [];
     }
+    const allowFrom = normalizeAllowList([...(cache.base?.allowFrom ?? []), ...storeAllowFrom]);
+    return {
+      allowFrom,
+      allowFromLower: normalizeAllowListLower(allowFrom),
+    };
+  })();
+
+  cache.pairingKey = pairingKey;
+  cache.pairingPending = pairingPending;
+  try {
+    const resolved = await pairingPending;
+    if (ttlMs > 0) {
+      cache.pairing = resolved;
+      cache.pairingExpiresAtMs = nowMs + ttlMs;
+    } else {
+      cache.pairing = undefined;
+      cache.pairingExpiresAtMs = undefined;
+    }
+    return resolved;
+  } finally {
+    if (cache.pairingPending === pairingPending) {
+      cache.pairingPending = undefined;
+    }
   }
-  const allowFrom = normalizeAllowList([...ctx.allowFrom, ...storeAllowFrom]);
-  const allowFromLower = normalizeAllowListLower(allowFrom);
-  return { allowFrom, allowFromLower };
+}
+
+export function clearSlackAllowFromCacheForTest(): void {
+  slackAllowFromCache = new WeakMap<SlackMonitorContext, SlackAllowFromCacheState>();
 }
 
 export function isSlackSenderAllowListed(params: {

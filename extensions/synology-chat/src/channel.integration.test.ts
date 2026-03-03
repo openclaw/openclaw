@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 
@@ -12,12 +11,21 @@ type RegisteredRoute = {
 const registerPluginHttpRouteMock = vi.fn<(params: RegisteredRoute) => () => void>(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.fn().mockResolvedValue({ counts: {} });
 
-vi.mock("bot/plugin-sdk", () => ({
-  DEFAULT_ACCOUNT_ID: "default",
-  setAccountEnabledInConfigSection: vi.fn((_opts: any) => ({})),
-  registerPluginHttpRoute: registerPluginHttpRouteMock,
-  buildChannelConfigSchema: vi.fn((schema: any) => ({ schema })),
-}));
+vi.mock("bot/plugin-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("bot/plugin-sdk")>();
+  return {
+    ...actual,
+    DEFAULT_ACCOUNT_ID: "default",
+    setAccountEnabledInConfigSection: vi.fn((_opts: any) => ({})),
+    registerPluginHttpRoute: registerPluginHttpRouteMock,
+    buildChannelConfigSchema: vi.fn((schema: any) => ({ schema })),
+    createFixedWindowRateLimiter: vi.fn(() => ({
+      isRateLimited: vi.fn(() => false),
+      size: vi.fn(() => 0),
+      clear: vi.fn(),
+    })),
+  };
+});
 
 vi.mock("./runtime.js", () => ({
   getSynologyRuntime: vi.fn(() => ({

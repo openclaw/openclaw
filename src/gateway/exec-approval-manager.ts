@@ -1,34 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import type {
+  ExecApprovalDecision,
+  ExecApprovalRequestPayload as InfraExecApprovalRequestPayload,
+} from "../infra/exec-approvals.js";
 
 // Grace period to keep resolved entries for late awaitDecision calls
 const RESOLVED_ENTRY_GRACE_MS = 15_000;
 
-/**
- * Flat request payload stored with each approval record. This is NOT the same
- * as `ExecApprovalRequest` from infra (which wraps the command fields in a
- * nested `.request` object). Here, all command/metadata fields live at the
- * top level so gateway approval logic can access them directly.
- */
-export type ExecApprovalRequestPayload = {
-  command: string;
-  commandArgv?: string[];
-  envKeys?: string[];
-  systemRunBindingV1?: unknown;
-  systemRunPlanV2?: unknown;
-  cwd?: string | null;
-  nodeId?: string | null;
-  host?: string | null;
-  security?: string | null;
-  ask?: string | null;
-  agentId?: string | null;
-  resolvedPath?: string | null;
-  sessionKey?: string | null;
-  turnSourceChannel?: string | null;
-  turnSourceTo?: string | null;
-  turnSourceAccountId?: string | null;
-  turnSourceThreadId?: string | number | null;
-};
+export type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
 
 export type ExecApprovalRecord = {
   id: string;

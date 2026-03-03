@@ -9,7 +9,7 @@ describe("buildSystemdUnit", () => {
       environment: {},
     });
     const execStart = unit.split("\n").find((line) => line.startsWith("ExecStart="));
-    expect(execStart).toBe('ExecStart=/usr/bin/hanzo-bot gateway --name "My Bot"');
+    expect(execStart).toBe('ExecStart=/usr/bin/bot gateway --name "My Bot"');
   });
 
   it("rejects environment values with line breaks", () => {

@@ -143,11 +143,14 @@ describe("security fix", () => {
 
   it("applies allowlist per-account and seeds WhatsApp groupAllowFrom from store", async () => {
     const stateDir = await createStateDir("per-account");
-
     const configPath = path.join(stateDir, "bot.json");
-    await writeWhatsAppConfig(configPath, {
-      accounts: {
-        a1: { groupPolicy: "open" },
+    const { res, channels } = await runWhatsAppFixScenario({
+      stateDir,
+      configPath,
+      whatsapp: {
+        accounts: {
+          a1: { groupPolicy: "open" },
+        },
       },
       allowFromStore: ["+15550001111"],
     });
@@ -162,11 +165,15 @@ describe("security fix", () => {
 
   it("does not seed WhatsApp groupAllowFrom if allowFrom is set", async () => {
     const stateDir = await createStateDir("no-seed");
-
     const configPath = path.join(stateDir, "bot.json");
-    await writeWhatsAppConfig(configPath, {
-      groupPolicy: "open",
-      allowFrom: ["+15552223333"],
+    const { res, channels } = await runWhatsAppFixScenario({
+      stateDir,
+      configPath,
+      whatsapp: {
+        groupPolicy: "open",
+        allowFrom: ["+15552223333"],
+      },
+      allowFromStore: ["+15550001111"],
     });
     expect(res.ok).toBe(true);
 

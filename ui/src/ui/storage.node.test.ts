@@ -42,11 +42,11 @@ describe("loadSettings default gateway URL derivation", () => {
       host: "gateway.example:8443",
       pathname: "/ignored/path",
     } as Location);
-    vi.stubGlobal("window", { __BOT_CONTROL_UI_BASE_PATH__: " /__bot__/ " } as Window &
+    vi.stubGlobal("window", { __BOT_CONTROL_UI_BASE_PATH__: " /bot/ " } as Window &
       typeof globalThis);
 
     const { loadSettings } = await import("./storage.ts");
-    expect(loadSettings().gatewayUrl).toBe("wss://gateway.example:8443/__bot__");
+    expect(loadSettings().gatewayUrl).toBe("wss://gateway.example:8443/bot");
   });
 
   it("infers base path from nested pathname when configured base path is not set", async () => {

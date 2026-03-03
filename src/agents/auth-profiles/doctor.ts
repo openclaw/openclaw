@@ -42,6 +42,6 @@ export function formatAuthDoctorHint(params: {
     }`,
     `- auth store oauth profiles: ${storeOauthProfiles || "(none)"}`,
     `- suggested profile: ${suggested}`,
-    `Fix: run "${formatCliCommand("hanzo-bot doctor --yes")}"`,
+    `Fix: run "${formatCliCommand("bot doctor --yes")}"`,
   ].join("\n");
 }

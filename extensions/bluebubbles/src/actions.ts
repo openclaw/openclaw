@@ -2,6 +2,7 @@ import {
   BLUEBUBBLES_ACTION_NAMES,
   BLUEBUBBLES_ACTIONS,
   createActionGate,
+  extractToolSend,
   jsonResult,
   readNumberParam,
   readBooleanParam,
@@ -9,7 +10,6 @@ import {
   readStringParam,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
-  type ChannelToolSend,
 } from "bot/plugin-sdk";
 import type { BlueBubblesSendTarget } from "./types.js";
 import { resolveBlueBubblesAccount } from "./accounts.js";
@@ -97,18 +97,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     return Array.from(actions);
   },
   supportsAction: ({ action }) => SUPPORTED_ACTIONS.has(action),
-  extractToolSend: ({ args }): ChannelToolSend | null => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") {
-      return null;
-    }
-    const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) {
-      return null;
-    }
-    const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-    return { to, accountId };
-  },
+  extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     const account = resolveBlueBubblesAccount({
       cfg: cfg,

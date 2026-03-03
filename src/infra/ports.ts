@@ -1,4 +1,3 @@
-import net from "node:net";
 import type { RuntimeEnv } from "../runtime.js";
 import type { PortListener, PortListenerKind, PortUsage, PortUsageStatus } from "./ports-types.js";
 import { danger, info, shouldLogVerbose, warn } from "../globals.js";
@@ -7,6 +6,7 @@ import { defaultRuntime } from "../runtime.js";
 import { isErrno } from "./errors.js";
 import { formatPortDiagnostics } from "./ports-format.js";
 import { inspectPortUsage } from "./ports-inspect.js";
+import { tryListenOnPort } from "./ports-probe.js";
 
 class PortInUseError extends Error {
   port: number;
@@ -31,15 +31,7 @@ export async function describePortOwner(port: number): Promise<string | undefine
 export async function ensurePortAvailable(port: number): Promise<void> {
   // Detect EADDRINUSE early with a friendly message.
   try {
-    await new Promise<void>((resolve, reject) => {
-      const tester = net
-        .createServer()
-        .once("error", (err) => reject(err))
-        .once("listening", () => {
-          tester.close(() => resolve());
-        })
-        .listen(port);
-    });
+    await tryListenOnPort({ port });
   } catch (err) {
     if (isErrno(err) && err.code === "EADDRINUSE") {
       throw new PortInUseError(port);
@@ -67,7 +59,7 @@ export async function handlePortError(
       if (/bot|src\/index\.ts|dist\/index\.js/.test(details)) {
         runtime.error(
           warn(
-            "It looks like another Hanzo Bot instance is already running. Stop it or pick a different port.",
+            "It looks like another Bot instance is already running. Stop it or pick a different port.",
           ),
         );
       }
@@ -89,7 +81,7 @@ export async function handlePortError(
     }
   }
   runtime.exit(1);
-  throw new Error(`${context} failed: ${String(err)}`);
+  throw new Error("unreachable");
 }
 
 export { PortInUseError };

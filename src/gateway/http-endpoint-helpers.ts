@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { GatewayAuthResult, ResolvedGatewayAuth } from "./auth.js";
-import { authorizeGatewayBearerRequest } from "./http-auth-helpers.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
+import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 import { readJsonBodyOrError, sendMethodNotAllowed } from "./http-common.js";
 
 export async function handleGatewayPostJsonEndpoint(
@@ -12,9 +12,10 @@ export async function handleGatewayPostJsonEndpoint(
     auth: ResolvedGatewayAuth;
     maxBodyBytes: number;
     trustedProxies?: string[];
+    allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
   },
-): Promise<false | { body: unknown; authResult?: GatewayAuthResult } | undefined> {
+): Promise<false | { body: unknown } | undefined> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
   if (url.pathname !== opts.pathname) {
     return false;
@@ -25,14 +26,15 @@ export async function handleGatewayPostJsonEndpoint(
     return undefined;
   }
 
-  const authResult = await authorizeGatewayBearerRequest({
+  const authorized = await authorizeGatewayBearerRequestOrReply({
     req,
     res,
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
-  if (!authResult) {
+  if (!authorized) {
     return undefined;
   }
 
@@ -41,5 +43,5 @@ export async function handleGatewayPostJsonEndpoint(
     return undefined;
   }
 
-  return { body, authResult };
+  return { body };
 }

@@ -25,21 +25,6 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   byteplus: ["BYTEPLUS_API_KEY"],
 };
 
-export const TOOL_ENV_VARS: Record<string, readonly string[]> = {
-  "web.search.brave": ["BRAVE_API_KEY", "BRAVE_SEARCH_API_KEY"],
-  "web.search.perplexity": ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
-  "web.search.grok": ["XAI_API_KEY"],
-  "web.search.gemini": ["GEMINI_API_KEY"],
-  "web.search.kimi": ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
-  "web.fetch.firecrawl": ["FIRECRAWL_API_KEY"],
-  "web.search.google": ["GOOGLE_SEARCH_API_KEY", "GOOGLE_CSE_ID"],
-};
-
 export function listKnownSecretEnvVarNames(): string[] {
-  return [
-    ...new Set([
-      ...Object.values(PROVIDER_ENV_VARS).flatMap((keys) => keys),
-      ...Object.values(TOOL_ENV_VARS).flatMap((keys) => keys),
-    ]),
-  ];
+  return [...new Set(Object.values(PROVIDER_ENV_VARS).flatMap((keys) => keys))];
 }

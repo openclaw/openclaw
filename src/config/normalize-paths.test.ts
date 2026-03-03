@@ -9,16 +9,16 @@ describe("normalizeConfigPaths", () => {
       const cfg = normalizeConfigPaths({
         tools: { exec: { pathPrepend: ["~/bin"] } },
         plugins: { load: { paths: ["~/plugins/a"] } },
-        logging: { file: "~/.bot/logs/bot.log" },
+        logging: { file: "~/.hanzo/bot/logs/bot.log" },
         hooks: {
-          path: "~/.bot/hooks.json5",
+          path: "~/.hanzo/bot/hooks.json5",
           transformsDir: "~/hooks-xform",
         },
         channels: {
           telegram: {
             accounts: {
               personal: {
-                tokenFile: "~/.bot/telegram.token",
+                tokenFile: "~/.hanzo/bot/telegram.token",
               },
             },
           },
@@ -32,7 +32,7 @@ describe("normalizeConfigPaths", () => {
             {
               id: "main",
               workspace: "~/ws-agent",
-              agentDir: "~/.bot/agents/main",
+              agentDir: "~/.hanzo/bot/agents/main",
               identity: {
                 name: "~not-a-path",
               },

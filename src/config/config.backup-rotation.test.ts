@@ -1,17 +1,23 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { BotConfig } from "./types.js";
-import { rotateConfigBackups } from "./backup-rotation.js";
+import {
+  maintainConfigBackups,
+  rotateConfigBackups,
+  hardenBackupPermissions,
+  cleanOrphanBackups,
+} from "./backup-rotation.js";
+import {
+  expectPosixMode,
+  IS_WINDOWS,
+  resolveConfigPathFromTempState,
+} from "./config.backup-rotation.test-helpers.js";
 import { withTempHome } from "./test-helpers.js";
 
 describe("config backup rotation", () => {
   it("keeps a 5-deep backup ring for config writes", async () => {
     await withTempHome(async () => {
-      const stateDir = process.env.BOT_STATE_DIR?.trim();
-      if (!stateDir) {
-        throw new Error("Expected BOT_STATE_DIR to be set by withTempHome");
-      }
-      const configPath = path.join(stateDir, "bot.json");
+      const configPath = resolveConfigPathFromTempState();
       const buildConfig = (version: number): BotConfig =>
         ({
           agents: { list: [{ id: `v${version}` }] },

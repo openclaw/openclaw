@@ -1,4 +1,3 @@
-import type { LookupFn } from "bot/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UrbitSSEClient } from "./sse-client.js";
 

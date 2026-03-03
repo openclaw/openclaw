@@ -6,7 +6,7 @@ import {
   unsetConfigValueAtPath,
 } from "./config-paths.js";
 import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
-import { withTempHome } from "./test-helpers.js";
+import { buildWebSearchProviderConfig, withTempHome, writeBotConfig } from "./test-helpers.js";
 import { BotSchema } from "./zod-schema.js";
 
 describe("$schema key in config (#14998)", () => {
@@ -49,22 +49,17 @@ describe("ui.seamColor", () => {
 });
 
 describe("web search provider config", () => {
-  it("accepts perplexity provider and config", () => {
-    const res = validateConfigObject({
-      tools: {
-        web: {
-          search: {
-            enabled: true,
-            provider: "perplexity",
-            perplexity: {
-              apiKey: "test-key",
-              baseUrl: "https://api.perplexity.ai",
-              model: "perplexity/sonar-pro",
-            },
-          },
+  it("accepts kimi provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "kimi",
+        providerConfig: {
+          apiKey: "test-key",
+          baseUrl: "https://api.moonshot.ai/v1",
+          model: "moonshot-v1-128k",
         },
-      },
-    });
+      }),
+    );
 
     expect(res.ok).toBe(true);
   });
@@ -75,7 +70,7 @@ describe("talk.voiceAliases", () => {
     const res = validateConfigObject({
       talk: {
         voiceAliases: {
-          Botd: "EXAVITQu4vr4xnSDxMaL",
+          Clawd: "EXAVITQu4vr4xnSDxMaL",
           Roger: "CwhRBWXzGAHq8TQ4Fs17",
         },
       },
@@ -87,7 +82,7 @@ describe("talk.voiceAliases", () => {
     const res = validateConfigObject({
       talk: {
         voiceAliases: {
-          Botd: 123,
+          Clawd: 123,
         },
       },
     });
@@ -147,6 +142,29 @@ describe("gateway.tools config", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("gateway.tools.allow");
+    }
+  });
+});
+
+describe("gateway.channelHealthCheckMinutes", () => {
+  it("accepts zero to disable monitor", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthCheckMinutes: 0,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects negative intervals", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthCheckMinutes: -1,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.channelHealthCheckMinutes");
     }
   });
 });
@@ -299,16 +317,10 @@ describe("config strict validation", () => {
 
   it("flags legacy config entries without auto-migrating", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".bot");
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(
-        path.join(configDir, "bot.json"),
-        JSON.stringify({
-          agents: { list: [{ id: "pi" }] },
-          routing: { allowFrom: ["+15555550123"] },
-        }),
-        "utf-8",
-      );
+      await writeBotConfig(home, {
+        agents: { list: [{ id: "pi" }] },
+        routing: { allowFrom: ["+15555550123"] },
+      });
 
       const snap = await readConfigFileSnapshot();
 

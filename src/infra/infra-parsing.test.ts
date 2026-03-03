@@ -56,14 +56,14 @@ describe("infra parsing", () => {
       ).toBe(true);
     });
 
-    it("returns true for dist/entry.js when launched via hanzo-bot.mjs wrapper", () => {
+    it("returns true for dist/entry.js when launched via bot.mjs wrapper", () => {
       expect(
         isMainModule({
           currentFile: "/repo/dist/entry.js",
-          argv: ["node", "/repo/hanzo-bot.mjs"],
+          argv: ["node", "/repo/bot.mjs"],
           cwd: "/repo",
           env: {},
-          wrapperEntryPairs: [{ wrapperBasename: "hanzo-bot.mjs", entryBasename: "entry.js" }],
+          wrapperEntryPairs: [{ wrapperBasename: "bot.mjs", entryBasename: "entry.js" }],
         }),
       ).toBe(true);
     });
@@ -72,7 +72,7 @@ describe("infra parsing", () => {
       expect(
         isMainModule({
           currentFile: "/repo/dist/entry.js",
-          argv: ["node", "/repo/hanzo-bot.mjs"],
+          argv: ["node", "/repo/bot.mjs"],
           cwd: "/repo",
           env: {},
         }),
@@ -83,10 +83,10 @@ describe("infra parsing", () => {
       expect(
         isMainModule({
           currentFile: "/repo/dist/index.js",
-          argv: ["node", "/repo/hanzo-bot.mjs"],
+          argv: ["node", "/repo/bot.mjs"],
           cwd: "/repo",
           env: {},
-          wrapperEntryPairs: [{ wrapperBasename: "hanzo-bot.mjs", entryBasename: "entry.js" }],
+          wrapperEntryPairs: [{ wrapperBasename: "bot.mjs", entryBasename: "entry.js" }],
         }),
       ).toBe(false);
     });
