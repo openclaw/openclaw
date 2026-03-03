@@ -1,6 +1,7 @@
 package ai.openclaw.android.ui
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.util.Log
 import android.view.View
 import android.webkit.ConsoleMessage
@@ -22,6 +23,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import ai.openclaw.android.MainViewModel
+import java.net.URI
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -88,6 +90,25 @@ fun CanvasScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               )
             }
 
+            override fun shouldOverrideUrlLoading(
+              view: WebView,
+              request: WebResourceRequest,
+            ): Boolean {
+              val requestedUrl = request.url?.toString()
+              if (!shouldOpenCanvasLinkInExternalBrowser(requestedUrl, request.isForMainFrame)) {
+                return false
+              }
+              return try {
+                context.startActivity(Intent(Intent.ACTION_VIEW, request.url))
+                true
+              } catch (err: Throwable) {
+                if (isDebuggable) {
+                  Log.w("OpenClawWebView", "failed to open external link: $requestedUrl", err)
+                }
+                false
+              }
+            }
+
             override fun onPageFinished(view: WebView, url: String?) {
               if (isDebuggable) {
                 Log.d("OpenClawWebView", "onPageFinished: $url")
@@ -146,5 +167,31 @@ private class CanvasA2UIActionBridge(private val onMessage: (String) -> Unit) {
 
   companion object {
     const val interfaceName: String = "openclawCanvasA2UIAction"
+  }
+}
+
+private val canvasInternalPathMarkers = listOf("/__openclaw__/cap/", "/__openclaw__/a2ui", "/__openclaw__/canvas")
+
+internal fun shouldOpenCanvasLinkInExternalBrowser(
+  requestedUrl: String?,
+  isMainFrame: Boolean,
+): Boolean {
+  if (!isMainFrame) return false
+  val raw = requestedUrl?.trim().orEmpty()
+  if (raw.isEmpty()) return false
+  val parsed = parseUriOrNull(raw) ?: return false
+  val scheme = parsed.scheme?.lowercase().orEmpty()
+  if (scheme == "about" || scheme == "javascript" || scheme == "data" || scheme == "file") return false
+  if (scheme != "http" && scheme != "https") return true
+  val path = parsed.path?.lowercase().orEmpty()
+  if (canvasInternalPathMarkers.any { path.contains(it) }) return false
+  return true
+}
+
+private fun parseUriOrNull(raw: String): URI? {
+  return try {
+    URI(raw)
+  } catch (_: Throwable) {
+    null
   }
 }
