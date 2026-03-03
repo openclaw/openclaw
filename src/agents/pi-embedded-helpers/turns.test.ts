@@ -15,6 +15,9 @@ function toolMsg(toolCallId: string, text: string): AgentMessage {
   return {
     role: "tool",
     toolCallId,
+    toolName: "test_tool",
+    isError: false,
+    timestamp: Date.now(),
     content: [{ type: "text", text }],
   } as AgentMessage;
 }
