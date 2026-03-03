@@ -43,28 +43,20 @@ const GITHUB_RE = /github\.com\//i;
  * Returns null if content routing is not configured or disabled.
  */
 export function resolveContentRoutingConfig(cfg: OpenClawConfig): ContentRoutingConfig | null {
-  const raw = (cfg as Record<string, unknown>).agents;
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const contentRouting = (raw as Record<string, unknown>).contentRouting;
-  if (!contentRouting || typeof contentRouting !== "object") {
-    return null;
-  }
-  const cr = contentRouting as Record<string, unknown>;
-  if (!cr.enabled) {
+  const cr = cfg.agents?.contentRouting;
+  if (!cr?.enabled) {
     return null;
   }
   const agents = cr.agents;
-  if (!agents || typeof agents !== "object" || Object.keys(agents).length === 0) {
+  if (!agents || Object.keys(agents).length === 0) {
     return null;
   }
   return {
     enabled: true,
-    model: typeof cr.model === "string" ? cr.model : undefined,
-    ollamaUrl: typeof cr.ollamaUrl === "string" ? cr.ollamaUrl : undefined,
-    stickyTimeoutMs: typeof cr.stickyTimeoutMs === "number" ? cr.stickyTimeoutMs : undefined,
-    agents: agents as Record<string, string>,
+    model: cr.model,
+    ollamaUrl: cr.ollamaUrl,
+    stickyTimeoutMs: cr.stickyTimeoutMs,
+    agents,
   };
 }
 

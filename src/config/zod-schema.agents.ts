@@ -3,10 +3,24 @@ import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 import { TranscribeAudioSchema } from "./zod-schema.core.js";
 
+export const ContentRoutingAgentsSchema = z.record(z.string(), z.string());
+
+export const ContentRoutingSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    model: z.string().optional(),
+    ollamaUrl: z.string().optional(),
+    stickyTimeoutMs: z.number().optional(),
+    agents: ContentRoutingAgentsSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
     list: z.array(AgentEntrySchema).optional(),
+    contentRouting: ContentRoutingSchema,
   })
   .strict()
   .optional();

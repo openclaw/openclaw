@@ -37,9 +37,18 @@ export type AgentConfig = {
   workflowLane?: WorkflowLaneConfig;
 };
 
+export type ContentRoutingConfig = {
+  enabled?: boolean;
+  model?: string;
+  ollamaUrl?: string;
+  stickyTimeoutMs?: number;
+  agents?: Record<string, string>;
+};
+
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
   list?: AgentConfig[];
+  contentRouting?: ContentRoutingConfig;
 };
 
 export type AgentBinding = {
