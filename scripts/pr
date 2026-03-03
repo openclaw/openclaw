@@ -28,6 +28,7 @@ Usage:
   scripts/pr prepare-validate-commit <PR>
   scripts/pr prepare-gates <PR>
   scripts/pr prepare-push <PR>
+  scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR>
@@ -252,10 +253,13 @@ resolve_head_push_url() {
 # the git-protocol 403 that occurs even when maintainer_can_modify is true.
 # Usage: graphql_push_to_fork <owner/repo> <branch> <expected_head_oid>
 # Pushes the diff between expected_head_oid and local HEAD as file additions/deletions.
+# File bytes are read from git objects (not the working tree) to avoid
+# symlink/special-file dereference risks from untrusted fork content.
 graphql_push_to_fork() {
   local repo_nwo="$1"   # e.g. Oncomatic/openclaw
   local branch="$2"     # e.g. fix/memory-flush-not-executing
   local expected_oid="$3"
+  local max_blob_bytes=$((5 * 1024 * 1024))
 
   # Build file changes JSON from the diff between expected_oid and HEAD.
   local additions="[]"
@@ -268,8 +272,36 @@ graphql_push_to_fork() {
     additions="["
     local first=true
     while IFS= read -r fpath; do
+      [ -n "$fpath" ] || continue
+
+      local tree_entry
+      tree_entry=$(git ls-tree HEAD -- "$fpath")
+      if [ -z "$tree_entry" ]; then
+        echo "GraphQL push could not resolve path in HEAD tree: $fpath" >&2
+        return 1
+      fi
+
+      local file_mode
+      file_mode=$(printf '%s\n' "$tree_entry" | awk '{print $1}')
+      local file_type
+      file_type=$(printf '%s\n' "$tree_entry" | awk '{print $2}')
+      local file_oid
+      file_oid=$(printf '%s\n' "$tree_entry" | awk '{print $3}')
+
+      if [ "$file_type" != "blob" ] || [ "$file_mode" = "160000" ]; then
+        echo "GraphQL push only supports blob files; refusing $fpath (mode=$file_mode type=$file_type)" >&2
+        return 1
+      fi
+
+      local blob_size
+      blob_size=$(git cat-file -s "$file_oid")
+      if [ "$blob_size" -gt "$max_blob_bytes" ]; then
+        echo "GraphQL push refused large file $fpath (${blob_size} bytes > ${max_blob_bytes})" >&2
+        return 1
+      fi
+
       local b64
-      b64=$(base64 < "$fpath" | tr -d '\n')
+      b64=$(git cat-file -p "$file_oid" | base64 | tr -d '\n')
       if [ "$first" = true ]; then first=false; else additions+=","; fi
       additions+="{\"path\":$(printf '%s' "$fpath" | jq -Rs .),\"contents\":$(printf '%s' "$b64" | jq -Rs .)}"
     done <<< "$added_files"
@@ -283,6 +315,7 @@ graphql_push_to_fork() {
     deletions="["
     local first=true
     while IFS= read -r fpath; do
+      [ -n "$fpath" ] || continue
       if [ "$first" = true ]; then first=false; else deletions+=","; fi
       deletions+="{\"path\":$(printf '%s' "$fpath" | jq -Rs .)}"
     done <<< "$deleted_files"
@@ -319,18 +352,19 @@ GRAPHQL
 
   local result
   result=$(gh api graphql -f query="$query" --input - <<< "$variables" 2>&1) || {
-    echo "GraphQL push failed: $result"
+    echo "GraphQL push failed: $result" >&2
     return 1
   }
 
   local new_oid
   new_oid=$(printf '%s' "$result" | jq -r '.data.createCommitOnBranch.commit.oid // empty')
   if [ -z "$new_oid" ]; then
-    echo "GraphQL push returned no commit OID: $result"
+    echo "GraphQL push returned no commit OID: $result" >&2
     return 1
   fi
 
-  echo "GraphQL push succeeded: $new_oid"
+  echo "GraphQL push succeeded: $new_oid" >&2
+  printf '%s\n' "$new_oid"
 }
 
 # Resolve HTTPS fallback URL for prhead push (used if SSH fails).
@@ -981,7 +1015,7 @@ prepare_push() {
       git remote set-url prhead "$https_url"
       git remote set-url --push prhead "$https_url"
       push_url="$https_url"
-      remote_sha=$(git ls-remote prhead "refs/heads/$PR_HEAD" | awk '{print $1}')
+      remote_sha=$(git ls-remote prhead "refs/heads/$PR_HEAD" 2>/dev/null | awk '{print $1}' || true)
     fi
     if [ -z "$remote_sha" ]; then
       echo "Remote branch refs/heads/$PR_HEAD not found on prhead"
@@ -1007,9 +1041,9 @@ prepare_push() {
       if printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)'; then
         echo "Permission denied on git push; trying GraphQL createCommitOnBranch fallback..."
         if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
-          graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$PR_HEAD" "$lease_sha"
-          # GraphQL creates a new commit server-side; refresh prep_head_sha to match.
-          prep_head_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+          local graphql_oid
+          graphql_oid=$(graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$PR_HEAD" "$lease_sha")
+          prep_head_sha="$graphql_oid"
         else
           echo "Git push permission denied and no fork owner/repo info for GraphQL fallback."
           exit 1
@@ -1035,8 +1069,9 @@ prepare_push() {
           # Retry also failed — try GraphQL as last resort.
           if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
             echo "Git push retry failed; trying GraphQL createCommitOnBranch fallback..."
-            graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$PR_HEAD" "$lease_sha"
-            prep_head_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+            local graphql_oid
+            graphql_oid=$(graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$PR_HEAD" "$lease_sha")
+            prep_head_sha="$graphql_oid"
           else
             echo "Git push failed and no fork owner/repo info for GraphQL fallback."
             exit 1
@@ -1090,6 +1125,158 @@ EOF_ENV
   ls -la .local/prep.md .local/prep.env >/dev/null
 
   echo "prepare-push complete"
+  echo "prep_branch=$(git branch --show-current)"
+  echo "prep_head_sha=$prep_head_sha"
+  echo "pr_head_sha=$pr_head_sha_after"
+  echo "artifacts=.local/prep.md .local/prep.env"
+}
+
+prepare_sync_head() {
+  local pr="$1"
+  enter_worktree "$pr" false
+
+  require_artifact .local/pr-meta.env
+  require_artifact .local/prep-context.env
+
+  checkout_prep_branch "$pr"
+
+  # shellcheck disable=SC1091
+  source .local/pr-meta.env
+  # shellcheck disable=SC1091
+  source .local/prep-context.env
+
+  local prep_head_sha
+  prep_head_sha=$(git rev-parse HEAD)
+
+  local current_head
+  current_head=$(gh pr view "$pr" --json headRefName --jq .headRefName)
+  local lease_sha
+  lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+
+  if [ "$current_head" != "$PR_HEAD" ]; then
+    echo "PR head branch changed from $PR_HEAD to $current_head. Re-run prepare-init."
+    exit 1
+  fi
+
+  local push_url
+  push_url=$(resolve_head_push_url) || {
+    echo "Unable to resolve PR head repo push URL."
+    exit 1
+  }
+
+  # Always set prhead to the correct fork URL for this PR.
+  # The remote is repo-level (shared across worktrees), so a previous
+  # run for a different fork PR can leave a stale URL.
+  git remote remove prhead 2>/dev/null || true
+  git remote add prhead "$push_url"
+
+  local remote_sha
+  remote_sha=$(git ls-remote prhead "refs/heads/$PR_HEAD" 2>/dev/null | awk '{print $1}' || true)
+  if [ -z "$remote_sha" ]; then
+    local https_url
+    https_url=$(resolve_head_push_url_https 2>/dev/null) || true
+    if [ -n "$https_url" ] && [ "$https_url" != "$push_url" ]; then
+      echo "SSH remote failed; falling back to HTTPS..."
+      git remote set-url prhead "$https_url"
+      git remote set-url --push prhead "$https_url"
+      push_url="$https_url"
+      remote_sha=$(git ls-remote prhead "refs/heads/$PR_HEAD" 2>/dev/null | awk '{print $1}' || true)
+    fi
+    if [ -z "$remote_sha" ]; then
+      echo "Remote branch refs/heads/$PR_HEAD not found on prhead"
+      exit 1
+    fi
+  fi
+
+  local pushed_from_sha="$remote_sha"
+  if [ "$remote_sha" = "$prep_head_sha" ]; then
+    echo "Remote branch already at local prep HEAD; skipping push."
+  else
+    if [ "$remote_sha" != "$lease_sha" ]; then
+      echo "Remote SHA $remote_sha differs from PR head SHA $lease_sha. Refreshing lease SHA from remote."
+      lease_sha="$remote_sha"
+    fi
+    pushed_from_sha="$lease_sha"
+    local push_output
+    if ! push_output=$(git push --force-with-lease=refs/heads/$PR_HEAD:$lease_sha prhead HEAD:$PR_HEAD 2>&1); then
+      echo "Push failed: $push_output"
+
+      if printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)'; then
+        echo "Permission denied on git push; trying GraphQL createCommitOnBranch fallback..."
+        if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
+          local graphql_oid
+          graphql_oid=$(graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$PR_HEAD" "$lease_sha")
+          prep_head_sha="$graphql_oid"
+        else
+          echo "Git push permission denied and no fork owner/repo info for GraphQL fallback."
+          exit 1
+        fi
+      else
+        echo "Lease push failed, retrying once with fresh PR head lease..."
+        lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+        pushed_from_sha="$lease_sha"
+
+        if ! push_output=$(git push --force-with-lease=refs/heads/$PR_HEAD:$lease_sha prhead HEAD:$PR_HEAD 2>&1); then
+          echo "Retry push failed: $push_output"
+          if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
+            echo "Retry failed; trying GraphQL createCommitOnBranch fallback..."
+            local graphql_oid
+            graphql_oid=$(graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$PR_HEAD" "$lease_sha")
+            prep_head_sha="$graphql_oid"
+          else
+            echo "Git push failed and no fork owner/repo info for GraphQL fallback."
+            exit 1
+          fi
+        fi
+      fi
+    fi
+  fi
+
+  if ! wait_for_pr_head_sha "$pr" "$prep_head_sha" 8 3; then
+    local observed_sha
+    observed_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+    echo "Pushed head SHA propagation timed out. expected=$prep_head_sha observed=$observed_sha"
+    exit 1
+  fi
+
+  local pr_head_sha_after
+  pr_head_sha_after=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+
+  git fetch origin main
+  git fetch origin "pull/$pr/head:pr-$pr-verify" --force
+  git merge-base --is-ancestor origin/main "pr-$pr-verify" || {
+    echo "PR branch is behind main after push."
+    exit 1
+  }
+  git branch -D "pr-$pr-verify" 2>/dev/null || true
+
+  local contrib="${PR_AUTHOR:-}"
+  if [ -z "$contrib" ]; then
+    contrib=$(gh pr view "$pr" --json author --jq .author.login)
+  fi
+  local contrib_id
+  contrib_id=$(gh api "users/$contrib" --jq .id)
+  local coauthor_email="${contrib_id}+${contrib}@users.noreply.github.com"
+
+  cat >> .local/prep.md <<EOF_PREP
+- Prep head sync completed to branch $PR_HEAD.
+- Verified PR head SHA matches local prep HEAD.
+- Verified PR head contains origin/main.
+- Note: prep sync flow does not re-run prepare gates.
+EOF_PREP
+
+  cat > .local/prep.env <<EOF_ENV
+PR_NUMBER=$PR_NUMBER
+PR_AUTHOR=$contrib
+PR_HEAD=$PR_HEAD
+PR_HEAD_SHA_BEFORE=$pushed_from_sha
+PREP_HEAD_SHA=$prep_head_sha
+COAUTHOR_EMAIL=$coauthor_email
+EOF_ENV
+
+  ls -la .local/prep.md .local/prep.env >/dev/null
+
+  echo "prepare-sync-head complete"
   echo "prep_branch=$(git branch --show-current)"
   echo "prep_head_sha=$prep_head_sha"
   echo "pr_head_sha=$pr_head_sha_after"
@@ -1408,6 +1595,9 @@ main() {
       ;;
     prepare-push)
       prepare_push "$pr"
+      ;;
+    prepare-sync-head)
+      prepare_sync_head "$pr"
       ;;
     prepare-run)
       prepare_run "$pr"
