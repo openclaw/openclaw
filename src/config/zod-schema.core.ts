@@ -403,6 +403,7 @@ export const TtsConfigSchema = z
         apiKey: SecretInputSchema.optional().register(sensitive),
         model: z.string().optional(),
         voice: z.string().optional(),
+        speed: z.number().min(0.25).max(4).optional(),
       })
       .strict()
       .optional(),

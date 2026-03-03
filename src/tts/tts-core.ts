@@ -254,6 +254,11 @@ export function parseTtsDirectives(
                 ...overrides.elevenlabs,
                 voiceSettings: { ...overrides.elevenlabs?.voiceSettings, speed: value },
               };
+              // Also set OpenAI speed (API supports 0.25–4.0, we use same 0.5–2.0 range for consistency)
+              overrides.openai = {
+                ...overrides.openai,
+                speed: value,
+              };
             }
             break;
           case "speakerboost":
@@ -594,9 +599,10 @@ export async function openaiTTS(params: {
   model: string;
   voice: string;
   responseFormat: "mp3" | "opus" | "pcm";
+  speed?: number;
   timeoutMs: number;
 }): Promise<Buffer> {
-  const { text, apiKey, model, voice, responseFormat, timeoutMs } = params;
+  const { text, apiKey, model, voice, responseFormat, speed, timeoutMs } = params;
 
   if (!isValidOpenAIModel(model)) {
     throw new Error(`Invalid model: ${model}`);
@@ -620,6 +626,7 @@ export async function openaiTTS(params: {
         input: text,
         voice,
         response_format: responseFormat,
+        ...(speed != null && speed !== 1 && { speed }),
       }),
       signal: controller.signal,
     });
