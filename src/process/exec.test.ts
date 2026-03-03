@@ -3,12 +3,32 @@ import { captureEnv } from "../test-utils/env.js";
 import { runCommandWithTimeout, shouldSpawnWithShell } from "./exec.js";
 
 describe("runCommandWithTimeout", () => {
-  it("never enables shell execution (Windows cmd.exe injection hardening)", () => {
+  it("enables shell for known .cmd package-manager wrappers on Windows", () => {
+    for (const cmd of ["npm.cmd", "pnpm.cmd", "yarn.cmd", "npx.cmd"]) {
+      expect(
+        shouldSpawnWithShell({ resolvedCommand: cmd, platform: "win32" }),
+      ).toBe(true);
+    }
+  });
+
+  it("does not enable shell for .cmd wrappers on non-Windows platforms", () => {
     expect(
-      shouldSpawnWithShell({
-        resolvedCommand: "npm.cmd",
-        platform: "win32",
-      }),
+      shouldSpawnWithShell({ resolvedCommand: "npm.cmd", platform: "linux" }),
+    ).toBe(false);
+    expect(
+      shouldSpawnWithShell({ resolvedCommand: "npm.cmd", platform: "darwin" }),
+    ).toBe(false);
+  });
+
+  it("does not enable shell for arbitrary commands on Windows", () => {
+    expect(
+      shouldSpawnWithShell({ resolvedCommand: "node", platform: "win32" }),
+    ).toBe(false);
+    expect(
+      shouldSpawnWithShell({ resolvedCommand: "malicious.cmd", platform: "win32" }),
+    ).toBe(false);
+    expect(
+      shouldSpawnWithShell({ resolvedCommand: "git", platform: "win32" }),
     ).toBe(false);
   });
 
