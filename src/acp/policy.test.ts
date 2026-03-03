@@ -47,11 +47,12 @@ describe("acp policy", () => {
   it("applies allowlist filtering for ACP agents", () => {
     const cfg = {
       acp: {
-        allowedAgents: ["Codex", "claude-code"],
+        allowedAgents: ["Codex", "claude-code", "kimi"],
       },
     } satisfies OpenClawConfig;
     expect(isAcpAgentAllowedByPolicy(cfg, "codex")).toBe(true);
     expect(isAcpAgentAllowedByPolicy(cfg, "claude-code")).toBe(true);
+    expect(isAcpAgentAllowedByPolicy(cfg, "KIMI")).toBe(true);
     expect(isAcpAgentAllowedByPolicy(cfg, "gemini")).toBe(false);
     expect(resolveAcpAgentPolicyError(cfg, "gemini")?.code).toBe("ACP_SESSION_INIT_FAILED");
     expect(resolveAcpAgentPolicyError(cfg, "codex")).toBeNull();
