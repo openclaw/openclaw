@@ -96,16 +96,45 @@ vi.mock("./common.js", async () => {
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { createBrowserTool } from "./browser-tool.js";
 
-describe("browser tool snapshot maxChars", () => {
+function mockSingleBrowserProxyNode() {
+  nodesUtilsMocks.listNodes.mockResolvedValue([
+    {
+      nodeId: "node-1",
+      displayName: "Browser Node",
+      connected: true,
+      caps: ["browser"],
+      commands: ["browser.proxy"],
+    },
+  ]);
+}
+
+function resetBrowserToolMocks() {
+  vi.clearAllMocks();
+  configMocks.loadConfig.mockReturnValue({ browser: {} });
+  nodesUtilsMocks.listNodes.mockResolvedValue([]);
+}
+
+function registerBrowserToolAfterEachReset() {
   afterEach(() => {
-    vi.clearAllMocks();
-    configMocks.loadConfig.mockReturnValue({ browser: {} });
-    nodesUtilsMocks.listNodes.mockResolvedValue([]);
+    resetBrowserToolMocks();
   });
+}
+
+async function runSnapshotToolCall(params: {
+  snapshotFormat: "ai" | "aria";
+  refs?: "aria" | "dom";
+  maxChars?: number;
+  profile?: string;
+}) {
+  const tool = createBrowserTool();
+  await tool.execute?.("call-1", { action: "snapshot", ...params });
+}
+
+describe("browser tool snapshot maxChars", () => {
+  registerBrowserToolAfterEachReset();
 
   it("applies the default ai snapshot limit", async () => {
-    const tool = createBrowserTool();
-    await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "ai" });
+    await runSnapshotToolCall({ snapshotFormat: "ai" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       undefined,
@@ -172,8 +201,7 @@ describe("browser tool snapshot maxChars", () => {
     configMocks.loadConfig.mockReturnValue({
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
-    const tool = createBrowserTool();
-    await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "ai" });
+    await runSnapshotToolCall({ snapshotFormat: "ai" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       undefined,
@@ -210,15 +238,7 @@ describe("browser tool snapshot maxChars", () => {
   });
 
   it("routes to node proxy when target=node", async () => {
-    nodesUtilsMocks.listNodes.mockResolvedValue([
-      {
-        nodeId: "node-1",
-        displayName: "Browser Node",
-        connected: true,
-        caps: ["browser"],
-        commands: ["browser.proxy"],
-      },
-    ]);
+    mockSingleBrowserProxyNode();
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "status", target: "node" });
 
@@ -234,15 +254,7 @@ describe("browser tool snapshot maxChars", () => {
   });
 
   it("keeps sandbox bridge url when node proxy is available", async () => {
-    nodesUtilsMocks.listNodes.mockResolvedValue([
-      {
-        nodeId: "node-1",
-        displayName: "Browser Node",
-        connected: true,
-        caps: ["browser"],
-        commands: ["browser.proxy"],
-      },
-    ]);
+    mockSingleBrowserProxyNode();
     const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
     await tool.execute?.("call-1", { action: "status" });
 
@@ -254,15 +266,7 @@ describe("browser tool snapshot maxChars", () => {
   });
 
   it("keeps chrome profile on host when node proxy is available", async () => {
-    nodesUtilsMocks.listNodes.mockResolvedValue([
-      {
-        nodeId: "node-1",
-        displayName: "Browser Node",
-        connected: true,
-        caps: ["browser"],
-        commands: ["browser.proxy"],
-      },
-    ]);
+    mockSingleBrowserProxyNode();
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "status", profile: "chrome" });
 
@@ -274,11 +278,101 @@ describe("browser tool snapshot maxChars", () => {
   });
 });
 
-describe("browser tool snapshot labels", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-    configMocks.loadConfig.mockReturnValue({ browser: {} });
+describe("browser tool url alias support", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("accepts url alias for open", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://example.com",
+      expect.objectContaining({ profile: undefined }),
+    );
   });
+
+  it("accepts url alias for navigate", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "navigate",
+      url: "https://example.com",
+      targetId: "tab-1",
+    });
+
+    expect(browserActionsMocks.browserNavigate).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        url: "https://example.com",
+        targetId: "tab-1",
+        profile: undefined,
+      }),
+    );
+  });
+
+  it("keeps targetUrl required error label when both params are missing", async () => {
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { action: "open" })).rejects.toThrow(
+      "targetUrl required",
+    );
+  });
+});
+
+describe("browser tool act compatibility", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("accepts flattened act params for backward compatibility", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      kind: "type",
+      ref: "f1e3",
+      text: "Test Title",
+      targetId: "tab-1",
+      timeoutMs: 5000,
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        kind: "type",
+        ref: "f1e3",
+        text: "Test Title",
+        targetId: "tab-1",
+        timeoutMs: 5000,
+      }),
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
+
+  it("prefers request payload when both request and flattened fields are present", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      kind: "click",
+      ref: "legacy-ref",
+      request: {
+        kind: "press",
+        key: "Enter",
+        targetId: "tab-2",
+      },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      {
+        kind: "press",
+        key: "Enter",
+        targetId: "tab-2",
+      },
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
+});
+
+describe("browser tool snapshot labels", () => {
+  registerBrowserToolAfterEachReset();
 
   it("returns image + text when labels are requested", async () => {
     const tool = createBrowserTool();
@@ -320,11 +414,7 @@ describe("browser tool snapshot labels", () => {
 });
 
 describe("browser tool external content wrapping", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-    configMocks.loadConfig.mockReturnValue({ browser: {} });
-    nodesUtilsMocks.listNodes.mockResolvedValue([]);
-  });
+  registerBrowserToolAfterEachReset();
 
   it("wraps aria snapshots as external content", async () => {
     browserClientMocks.browserSnapshot.mockResolvedValueOnce({
@@ -432,5 +522,41 @@ describe("browser tool external content wrapping", () => {
         kind: "console",
       }),
     });
+  });
+});
+
+describe("browser tool act stale target recovery", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("retries chrome act once without targetId when tab id is stale", async () => {
+    browserActionsMocks.browserAct
+      .mockRejectedValueOnce(new Error("404: tab not found"))
+      .mockResolvedValueOnce({ ok: true });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "act",
+      profile: "chrome",
+      request: {
+        action: "click",
+        targetId: "stale-tab",
+        ref: "btn-1",
+      },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(2);
+    expect(browserActionsMocks.browserAct).toHaveBeenNthCalledWith(
+      1,
+      undefined,
+      expect.objectContaining({ targetId: "stale-tab", action: "click", ref: "btn-1" }),
+      expect.objectContaining({ profile: "chrome" }),
+    );
+    expect(browserActionsMocks.browserAct).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+      expect.not.objectContaining({ targetId: expect.anything() }),
+      expect.objectContaining({ profile: "chrome" }),
+    );
+    expect(result?.details).toMatchObject({ ok: true });
   });
 });

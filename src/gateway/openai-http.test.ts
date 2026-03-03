@@ -69,6 +69,7 @@ async function expectChatCompletionsDisabled(
       messages: [{ role: "user", content: "hi" }],
     });
     expect(res.status).toBe(404);
+    await res.text();
   } finally {
     await server.close({ reason: "test done" });
   }
@@ -83,7 +84,7 @@ function parseSseDataLines(text: string): string[] {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
-  it("rejects when disabled (default + config)", { timeout: 120_000 }, async () => {
+  it("rejects when disabled (default + config)", { timeout: 15_000 }, async () => {
     await expectChatCompletionsDisabled(startServerWithDefaultConfig);
     await expectChatCompletionsDisabled((port) =>
       startServer(port, {
@@ -135,6 +136,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           }
         | undefined;
     const getFirstAgentMessage = () => getFirstAgentCall()?.message ?? "";
+    const postSyncUserMessage = async (message: string) => {
+      const res = await postChatCompletions(port, {
+        stream: false,
+        model: "openclaw",
+        messages: [{ role: "user", content: message }],
+      });
+      expect(res.status).toBe(200);
+      return (await res.json()) as Record<string, unknown>;
+    };
 
     try {
       {
@@ -319,13 +329,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(port, {
-          stream: false,
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(res.status).toBe(200);
-        const json = (await res.json()) as Record<string, unknown>;
+        const json = await postSyncUserMessage("hi");
         expect(json.object).toBe("chat.completion");
         expect(Array.isArray(json.choices)).toBe(true);
         const choice0 = (json.choices as Array<Record<string, unknown>>)[0] ?? {};
@@ -337,13 +341,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         agentCommand.mockClear();
         agentCommand.mockResolvedValueOnce({ payloads: [{ text: "" }] } as never);
-        const res = await postChatCompletions(port, {
-          stream: false,
-          model: "openclaw",
-          messages: [{ role: "user", content: "hi" }],
-        });
-        expect(res.status).toBe(200);
-        const json = (await res.json()) as Record<string, unknown>;
+        const json = await postSyncUserMessage("hi");
         const choice0 = (json.choices as Array<Record<string, unknown>>)[0] ?? {};
         const msg = (choice0.message as Record<string, unknown> | undefined) ?? {};
         expect(msg.content).toBe("No response from OpenClaw.");

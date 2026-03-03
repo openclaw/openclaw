@@ -14,6 +14,7 @@ import type { TelegramProbe } from "../../telegram/probe.js";
 import type { TelegramTokenResolution } from "../../telegram/token.js";
 import {
   createChannelTestPluginBase,
+  createMSTeamsTestPluginBase,
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
@@ -74,6 +75,29 @@ describe("channel plugin registry", () => {
     const pluginIds = listChannelPlugins().map((plugin) => plugin.id);
     expect(pluginIds).toEqual(["telegram", "slack", "signal"]);
   });
+
+  it("refreshes cached channel lookups when the same registry instance is re-activated", () => {
+    const registry = createTestRegistry([
+      {
+        pluginId: "slack",
+        plugin: createPlugin("slack"),
+        source: "test",
+      },
+    ]);
+    setActivePluginRegistry(registry, "registry-test");
+    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["slack"]);
+
+    registry.channels = [
+      {
+        pluginId: "telegram",
+        plugin: createPlugin("telegram"),
+        source: "test",
+      },
+    ] as typeof registry.channels;
+    setActivePluginRegistry(registry, "registry-test");
+
+    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["telegram"]);
+  });
 });
 
 describe("channel plugin catalog", () => {
@@ -131,20 +155,7 @@ const msteamsOutbound: ChannelOutboundAdapter = {
 };
 
 const msteamsPlugin: ChannelPlugin = {
-  id: "msteams",
-  meta: {
-    id: "msteams",
-    label: "Microsoft Teams",
-    selectionLabel: "Microsoft Teams (Bot Framework)",
-    docsPath: "/channels/msteams",
-    blurb: "Bot Framework; enterprise support.",
-    aliases: ["teams"],
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
+  ...createMSTeamsTestPluginBase(),
   outbound: msteamsOutbound,
 };
 

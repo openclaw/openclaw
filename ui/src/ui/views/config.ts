@@ -1,8 +1,8 @@
 import { html, nothing } from "lit";
-import { icons } from "../icons.ts";
 import type { ConfigUiHints } from "../types.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
+import { getTagFilters, replaceTagFilters } from "./config-search.ts";
 
 export type ConfigProps = {
   raw: string;
@@ -23,7 +23,6 @@ export type ConfigProps = {
   searchQuery: string;
   activeSection: string | null;
   activeSubsection: string | null;
-  streamMode: boolean;
   onRawChange: (next: string) => void;
   onFormModeChange: (mode: "form" | "raw") => void;
   onFormPatch: (path: Array<string | number>, value: unknown) => void;
@@ -35,6 +34,24 @@ export type ConfigProps = {
   onApply: () => void;
   onUpdate: () => void;
 };
+
+const TAG_SEARCH_PRESETS = [
+  "security",
+  "auth",
+  "network",
+  "access",
+  "privacy",
+  "observability",
+  "performance",
+  "reliability",
+  "storage",
+  "models",
+  "media",
+  "automation",
+  "channels",
+  "tools",
+  "advanced",
+] as const;
 
 // SVG Icons for sidebar (Lucide-style)
 const sidebarIcons = {
@@ -385,44 +402,6 @@ function truncateValue(value: unknown, maxLen = 40): string {
   return str.slice(0, maxLen - 3) + "...";
 }
 
-const SENSITIVE_KEY_RE = /token|password|secret|api.?key/i;
-const SENSITIVE_KEY_WHITELIST_RE =
-  /maxtokens|maxoutputtokens|maxinputtokens|maxcompletiontokens|contexttokens|totaltokens|tokencount|tokenlimit|tokenbudget|passwordfile/i;
-
-function countSensitiveValues(formValue: Record<string, unknown> | null): number {
-  if (!formValue) {
-    return 0;
-  }
-  let count = 0;
-  function walk(obj: unknown, key?: string) {
-    if (obj == null) {
-      return;
-    }
-    if (typeof obj === "object" && !Array.isArray(obj)) {
-      for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-        walk(v, k);
-      }
-    } else if (Array.isArray(obj)) {
-      for (const item of obj) {
-        walk(item);
-      }
-    } else if (
-      key &&
-      typeof obj === "string" &&
-      SENSITIVE_KEY_RE.test(key) &&
-      !SENSITIVE_KEY_WHITELIST_RE.test(key)
-    ) {
-      if (obj.trim() && !/^\$\{[^}]*\}$/.test(obj.trim())) {
-        count++;
-      }
-    }
-  }
-  walk(formValue);
-  return count;
-}
-
-let rawRevealed = false;
-
 export function renderConfig(props: ConfigProps) {
   const validity = props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
   const analysis = analyzeConfigSchema(props.schema);
@@ -483,6 +462,7 @@ export function renderConfig(props: ConfigProps) {
     hasChanges &&
     (props.formMode === "raw" ? true : canSaveForm);
   const canUpdate = props.connected && !props.applying && !props.updating;
+  const selectedTags = new Set(getTagFilters(props.searchQuery));
 
   return html`
     <div class="config-layout">
@@ -500,35 +480,91 @@ export function renderConfig(props: ConfigProps) {
 
         <!-- Search -->
         <div class="config-search">
-          <svg
-            class="config-search__icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <circle cx="11" cy="11" r="8"></circle>
-            <path d="M21 21l-4.35-4.35"></path>
-          </svg>
-          <input
-            type="text"
-            class="config-search__input"
-            placeholder="Search settings..."
-            .value=${props.searchQuery}
-            @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
-          />
-          ${
-            props.searchQuery
-              ? html`
-                <button
-                  class="config-search__clear"
-                  @click=${() => props.onSearchChange("")}
-                >
-                  ×
-                </button>
-              `
-              : nothing
-          }
+          <div class="config-search__input-row">
+            <svg
+              class="config-search__icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <circle cx="11" cy="11" r="8"></circle>
+              <path d="M21 21l-4.35-4.35"></path>
+            </svg>
+            <input
+              type="text"
+              class="config-search__input"
+              placeholder="Search settings..."
+              .value=${props.searchQuery}
+              @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
+            />
+            ${
+              props.searchQuery
+                ? html`
+                  <button
+                    class="config-search__clear"
+                    @click=${() => props.onSearchChange("")}
+                  >
+                    ×
+                  </button>
+                `
+                : nothing
+            }
+          </div>
+          <div class="config-search__hint">
+            <span class="config-search__hint-label" id="config-tag-filter-label">Tag filters:</span>
+            <details class="config-search__tag-picker">
+              <summary class="config-search__tag-trigger" aria-labelledby="config-tag-filter-label">
+                ${
+                  selectedTags.size === 0
+                    ? html`
+                        <span class="config-search__tag-placeholder">Add tags</span>
+                      `
+                    : html`
+                        <div class="config-search__tag-chips">
+                          ${Array.from(selectedTags)
+                            .slice(0, 2)
+                            .map(
+                              (tag) =>
+                                html`<span class="config-search__tag-chip">tag:${tag}</span>`,
+                            )}
+                          ${
+                            selectedTags.size > 2
+                              ? html`
+                                  <span class="config-search__tag-chip config-search__tag-chip--count"
+                                    >+${selectedTags.size - 2}</span
+                                  >
+                                `
+                              : nothing
+                          }
+                        </div>
+                      `
+                }
+                <span class="config-search__tag-caret" aria-hidden="true">▾</span>
+              </summary>
+              <div class="config-search__tag-menu">
+                ${TAG_SEARCH_PRESETS.map((tag) => {
+                  const active = selectedTags.has(tag);
+                  return html`
+                    <button
+                      type="button"
+                      class="config-search__tag-option ${active ? "active" : ""}"
+                      data-tag="${tag}"
+                      aria-pressed=${active ? "true" : "false"}
+                      @click=${() => {
+                        const nextTags = active
+                          ? Array.from(selectedTags).filter((value) => value !== tag)
+                          : [...selectedTags, tag];
+                        props.onSearchChange(replaceTagFilters(props.searchQuery, nextTags));
+                      }}
+                    >
+                      tag:${tag}
+                    </button>
+                  `;
+                })}
+              </div>
+            </details>
+          </div>
         </div>
 
         <!-- Section nav -->
@@ -689,32 +725,6 @@ export function renderConfig(props: ConfigProps) {
                       : nothing
                   }
                 </div>
-                ${
-                  props.activeSection === "env"
-                    ? html`
-                      <button
-                        class="config-env-peek-btn"
-                        title="Toggle value visibility"
-                        @click=${(e: Event) => {
-                          const btn = e.currentTarget as HTMLElement;
-                          const content = btn
-                            .closest(".config-main")
-                            ?.querySelector(".config-content");
-                          if (content) {
-                            content.classList.toggle("config-env-values--visible");
-                          }
-                          btn.classList.toggle("config-env-peek-btn--active");
-                        }}
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
-                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                          <circle cx="12" cy="12" r="3"></circle>
-                        </svg>
-                        Peek
-                      </button>
-                    `
-                    : nothing
-                }
               </div>
             `
             : nothing
@@ -748,7 +758,7 @@ export function renderConfig(props: ConfigProps) {
         }
 
         <!-- Form content -->
-        <div class="config-content ${props.activeSection === "env" ? "config-env-values--blurred" : ""}">
+        <div class="config-content">
           ${
             props.formMode === "form"
               ? html`
@@ -782,43 +792,16 @@ export function renderConfig(props: ConfigProps) {
                     : nothing
                 }
               `
-              : (() => {
-                  const sensitiveCount = countSensitiveValues(props.formValue);
-                  const blurred = sensitiveCount > 0 && (props.streamMode || !rawRevealed);
-                  return html`
-                    <label class="field config-raw-field">
-                      <span style="display:flex;align-items:center;gap:8px;">
-                        Raw JSON5
-                        ${
-                          sensitiveCount > 0
-                            ? html`
-                              <span class="pill pill--sm">${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"} ${blurred ? "redacted" : "visible"}</span>
-                              <button
-                                class="btn btn--icon ${blurred ? "" : "active"}"
-                                style="width:28px;height:28px;padding:0;"
-                                title=${blurred ? "Reveal sensitive values" : "Hide sensitive values"}
-                                aria-label="Toggle raw config redaction"
-                                aria-pressed=${!blurred}
-                                @click=${() => {
-                                  rawRevealed = !rawRevealed;
-                                  props.onRawChange(props.raw);
-                                }}
-                              >
-                                ${blurred ? icons.eyeOff : icons.eye}
-                              </button>
-                            `
-                            : nothing
-                        }
-                      </span>
-                      <textarea
-                        class="${blurred ? "config-raw-redacted" : ""}"
-                        .value=${props.raw}
-                        @input=${(e: Event) =>
-                          props.onRawChange((e.target as HTMLTextAreaElement).value)}
-                      ></textarea>
-                    </label>
-                  `;
-                })()
+              : html`
+                <label class="field config-raw-field">
+                  <span>Raw JSON5</span>
+                  <textarea
+                    .value=${props.raw}
+                    @input=${(e: Event) =>
+                      props.onRawChange((e.target as HTMLTextAreaElement).value)}
+                  ></textarea>
+                </label>
+              `
           }
         </div>
 

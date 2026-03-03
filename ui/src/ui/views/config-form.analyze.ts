@@ -118,39 +118,56 @@ function normalizeSchemaNode(
   };
 }
 
-function mergeAllOf(schema: JsonSchema, path: Array<string | number>): ConfigSchemaAnalysis | null {
-  const branches = schema.allOf;
-  if (!branches || branches.length === 0) {
+function isSecretRefVariant(entry: JsonSchema): boolean {
+  if (schemaType(entry) !== "object") {
+    return false;
+  }
+  const source = entry.properties?.source;
+  const provider = entry.properties?.provider;
+  const id = entry.properties?.id;
+  if (!source || !provider || !id) {
+    return false;
+  }
+  return (
+    typeof source.const === "string" &&
+    schemaType(provider) === "string" &&
+    schemaType(id) === "string"
+  );
+}
+
+function isSecretRefUnion(entry: JsonSchema): boolean {
+  const variants = entry.oneOf ?? entry.anyOf;
+  if (!variants || variants.length === 0) {
+    return false;
+  }
+  return variants.every((variant) => isSecretRefVariant(variant));
+}
+
+function normalizeSecretInputUnion(
+  schema: JsonSchema,
+  path: Array<string | number>,
+  remaining: JsonSchema[],
+  nullable: boolean,
+): ConfigSchemaAnalysis | null {
+  const stringIndex = remaining.findIndex((entry) => schemaType(entry) === "string");
+  if (stringIndex < 0) {
     return null;
   }
-  const merged: JsonSchema = { ...schema, allOf: undefined };
-  for (const branch of branches) {
-    if (!branch || typeof branch !== "object") {
-      return null;
-    }
-    if (branch.type) {
-      merged.type = merged.type ?? branch.type;
-    }
-    if (branch.properties) {
-      merged.properties = { ...merged.properties, ...branch.properties };
-    }
-    if (branch.items && !merged.items) {
-      merged.items = branch.items;
-    }
-    if (branch.enum) {
-      merged.enum = branch.enum;
-    }
-    if (branch.description && !merged.description) {
-      merged.description = branch.description;
-    }
-    if (branch.title && !merged.title) {
-      merged.title = branch.title;
-    }
-    if (branch.default !== undefined && merged.default === undefined) {
-      merged.default = branch.default;
-    }
+  const nonString = remaining.filter((_, index) => index !== stringIndex);
+  if (nonString.length !== 1 || !isSecretRefUnion(nonString[0])) {
+    return null;
   }
-  return normalizeSchemaNode(merged, path);
+  return normalizeSchemaNode(
+    {
+      ...schema,
+      ...remaining[stringIndex],
+      nullable,
+      anyOf: undefined,
+      oneOf: undefined,
+      allOf: undefined,
+    },
+    path,
+  );
 }
 
 function normalizeUnion(
@@ -158,7 +175,7 @@ function normalizeUnion(
   path: Array<string | number>,
 ): ConfigSchemaAnalysis | null {
   if (schema.allOf) {
-    return mergeAllOf(schema, path);
+    return null;
   }
   const union = schema.anyOf ?? schema.oneOf;
   if (!union) {
@@ -196,6 +213,13 @@ function normalizeUnion(
     remaining.push(entry);
   }
 
+  // Config secrets accept either a raw key string or a structured secret ref object.
+  // The form only supports editing the string path for now.
+  const secretInput = normalizeSecretInputUnion(schema, path, remaining, nullable);
+  if (secretInput) {
+    return secretInput;
+  }
+
   if (literals.length > 0 && remaining.length === 0) {
     const unique: unknown[] = [];
     for (const value of literals) {
@@ -216,47 +240,12 @@ function normalizeUnion(
     };
   }
 
-  if (remaining.length === 1 && literals.length === 0) {
+  if (remaining.length === 1) {
     const res = normalizeSchemaNode(remaining[0], path);
     if (res.schema) {
       res.schema.nullable = nullable || res.schema.nullable;
     }
     return res;
-  }
-
-  // Literals + single typed remainder (e.g. boolean | enum["off","partial"]):
-  // merge literals into an enum on the combined schema so segmented/select renders all options.
-  if (remaining.length === 1 && literals.length > 0) {
-    const remType = schemaType(remaining[0]);
-    if (remType === "boolean") {
-      const all = [true, false, ...literals];
-      const unique: unknown[] = [];
-      for (const v of all) {
-        if (!unique.some((e) => Object.is(e, v))) {
-          unique.push(v);
-        }
-      }
-      return {
-        schema: {
-          ...schema,
-          enum: unique,
-          nullable,
-          anyOf: undefined,
-          oneOf: undefined,
-          allOf: undefined,
-        },
-        unsupportedPaths: [],
-      };
-    }
-    // Single remaining primitive — pass through as-is so the renderer picks the right widget
-    const primitiveTypes = new Set(["string", "number", "integer"]);
-    if (remType && primitiveTypes.has(remType)) {
-      const res = normalizeSchemaNode(remaining[0], path);
-      if (res.schema) {
-        res.schema.nullable = nullable || res.schema.nullable;
-      }
-      return res;
-    }
   }
 
   const primitiveTypes = new Set(["string", "number", "integer", "boolean"]);
@@ -274,9 +263,5 @@ function normalizeUnion(
     };
   }
 
-  // Fallback: pass the schema through and let the renderer show a JSON textarea
-  return {
-    schema: { ...schema, nullable },
-    unsupportedPaths: [],
-  };
+  return null;
 }

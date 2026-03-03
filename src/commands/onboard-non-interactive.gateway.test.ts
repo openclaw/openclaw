@@ -3,11 +3,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  createThrowingRuntime,
-  readJsonFile,
-  runNonInteractiveOnboarding,
-} from "./onboard-non-interactive.test-helpers.js";
+import { createThrowingRuntime, readJsonFile } from "./onboard-non-interactive.test-helpers.js";
 
 const gatewayClientCalls: Array<{
   url?: string;
@@ -52,6 +48,11 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => {
     ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
   };
 });
+
+const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
+const { resolveConfigPath: resolveStateConfigPath } = await import("../config/paths.js");
+const { resolveConfigPath } = await import("../config/config.js");
+const { callGateway } = await import("../gateway/call.js");
 
 function getPseudoPort(base: number): number {
   return base + (process.pid % 1000);
@@ -136,16 +137,57 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const { resolveConfigPath } = await import("../config/paths.js");
-      const configPath = resolveConfigPath(process.env, stateDir);
+      const configPath = resolveStateConfigPath(process.env, stateDir);
       const cfg = await readJsonFile<{
         gateway?: { auth?: { mode?: string; token?: string } };
         agents?: { defaults?: { workspace?: string } };
+        tools?: { profile?: string };
       }>(configPath);
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
+      expect(cfg?.tools?.profile).toBe("messaging");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
+    });
+  }, 60_000);
+
+  it("uses OPENCLAW_GATEWAY_TOKEN when --gateway-token is omitted", async () => {
+    await withStateDir("state-env-token-", async (stateDir) => {
+      const envToken = "tok_env_fallback_123";
+      const workspace = path.join(stateDir, "openclaw");
+      const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      process.env.OPENCLAW_GATEWAY_TOKEN = envToken;
+
+      try {
+        await runNonInteractiveOnboarding(
+          {
+            nonInteractive: true,
+            mode: "local",
+            workspace,
+            authChoice: "skip",
+            skipSkills: true,
+            skipHealth: true,
+            installDaemon: false,
+            gatewayBind: "loopback",
+            gatewayAuth: "token",
+          },
+          runtime,
+        );
+
+        const configPath = resolveStateConfigPath(process.env, stateDir);
+        const cfg = await readJsonFile<{
+          gateway?: { auth?: { mode?: string; token?: string } };
+        }>(configPath);
+
+        expect(cfg?.gateway?.auth?.mode).toBe("token");
+        expect(cfg?.gateway?.auth?.token).toBe(envToken);
+      } finally {
+        if (prevToken === undefined) {
+          delete process.env.OPENCLAW_GATEWAY_TOKEN;
+        } else {
+          process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+        }
+      }
     });
   }, 60_000);
 
@@ -165,7 +207,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const { resolveConfigPath } = await import("../config/config.js");
       const cfg = await readJsonFile<{
         gateway?: { mode?: string; remote?: { url?: string; token?: string } };
       }>(resolveConfigPath());
@@ -175,7 +216,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.gateway?.remote?.token).toBe(token);
 
       gatewayClientCalls.length = 0;
-      const { callGateway } = await import("../gateway/call.js");
       const health = await callGateway<{ ok?: boolean }>({ method: "health" });
       expect(health?.ok).toBe(true);
       const lastCall = gatewayClientCalls[gatewayClientCalls.length - 1];
@@ -211,8 +251,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const { resolveConfigPath } = await import("../config/paths.js");
-      const configPath = resolveConfigPath(process.env, stateDir);
+      const configPath = resolveStateConfigPath(process.env, stateDir);
       const cfg = await readJsonFile<{
         gateway?: {
           bind?: string;

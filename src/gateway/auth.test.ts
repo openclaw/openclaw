@@ -120,6 +120,24 @@ describe("gateway auth", () => {
     });
   });
 
+  it("keeps gateway auth config values ahead of env overrides", () => {
+    expect(
+      resolveGatewayAuth({
+        authConfig: {
+          token: "config-token",
+          password: "config-password",
+        },
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "env-token",
+          OPENCLAW_GATEWAY_PASSWORD: "env-password",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toMatchObject({
+      token: "config-token",
+      password: "config-password",
+    });
+  });
+
   it("resolves explicit auth mode none from config", () => {
     expect(
       resolveGatewayAuth({

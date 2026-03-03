@@ -10,6 +10,7 @@ import {
 import { loggingState } from "./state.js";
 
 const testLogPath = path.join(os.tmpdir(), "openclaw-test-env-log-level.log");
+const defaultMaxFileBytes = 500 * 1024 * 1024;
 
 describe("OPENCLAW_LOG_LEVEL", () => {
   let originalEnv: string | undefined;
@@ -46,6 +47,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
     expect(getResolvedLoggerSettings()).toEqual({
       level: "debug",
       file: testLogPath,
+      maxFileBytes: defaultMaxFileBytes,
     });
     expect(getResolvedConsoleSettings()).toEqual({
       level: "debug",
@@ -66,6 +68,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
     );
 
     expect(getResolvedLoggerSettings().level).toBe("error");
+    expect(getResolvedLoggerSettings().maxFileBytes).toBe(defaultMaxFileBytes);
     expect(getResolvedConsoleSettings().level).toBe("warn");
     expect(getResolvedLoggerSettings().level).toBe("error");
 

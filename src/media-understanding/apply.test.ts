@@ -1,11 +1,16 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
+import { runExec } from "../process/exec.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.js";
+import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider: vi.fn(async () => ({
@@ -29,19 +34,30 @@ vi.mock("../process/exec.js", () => ({
   runExec: vi.fn(),
 }));
 
-async function loadApply() {
-  return await import("./apply.js");
-}
+let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
+const mockedRunExec = vi.mocked(runExec);
 
 const TEMP_MEDIA_PREFIX = "openclaw-media-";
-const tempMediaDirs: string[] = [];
+let suiteTempMediaRootDir = "";
+let tempMediaDirCounter = 0;
+let sharedTempMediaCacheDir = "";
+const tempMediaFileCache = new Map<string, string>();
 
 async function createTempMediaDir() {
-  const baseDir = resolvePreferredOpenClawTmpDir();
-  await fs.mkdir(baseDir, { recursive: true });
-  const dir = await fs.mkdtemp(path.join(baseDir, TEMP_MEDIA_PREFIX));
-  tempMediaDirs.push(dir);
+  if (!suiteTempMediaRootDir) {
+    throw new Error("suite temp media root not initialized");
+  }
+  const dir = path.join(suiteTempMediaRootDir, `case-${String(tempMediaDirCounter)}`);
+  tempMediaDirCounter += 1;
+  await fs.mkdir(dir, { recursive: true });
   return dir;
+}
+
+async function getSharedTempMediaCacheDir() {
+  if (!sharedTempMediaCacheDir) {
+    sharedTempMediaCacheDir = await createTempMediaDir();
+  }
+  return sharedTempMediaCacheDir;
 }
 
 function createGroqAudioConfig(): OpenClawConfig {
@@ -92,11 +108,63 @@ function createMediaDisabledConfig(): OpenClawConfig {
   };
 }
 
+function createMediaDisabledConfigWithAllowedMimes(allowedMimes: string[]): OpenClawConfig {
+  return {
+    ...createMediaDisabledConfig(),
+    gateway: {
+      http: {
+        endpoints: {
+          responses: {
+            files: { allowedMimes },
+          },
+        },
+      },
+    },
+  };
+}
+
 async function createTempMediaFile(params: { fileName: string; content: Buffer | string }) {
-  const dir = await createTempMediaDir();
-  const mediaPath = path.join(dir, params.fileName);
+  const normalizedContent =
+    typeof params.content === "string" ? Buffer.from(params.content) : params.content;
+  const contentHash = crypto.createHash("sha1").update(normalizedContent).digest("hex");
+  const cacheKey = `${params.fileName}:${contentHash}`;
+  const cachedPath = tempMediaFileCache.get(cacheKey);
+  if (cachedPath) {
+    return cachedPath;
+  }
+  const cacheRootDir = await getSharedTempMediaCacheDir();
+  const cacheDir = path.join(cacheRootDir, contentHash);
+  await fs.mkdir(cacheDir, { recursive: true });
+  const mediaPath = path.join(cacheDir, params.fileName);
   await fs.writeFile(mediaPath, params.content);
+  tempMediaFileCache.set(cacheKey, mediaPath);
   return mediaPath;
+}
+
+async function createMockExecutable(dir: string, name: string) {
+  const executablePath = path.join(dir, name);
+  await fs.writeFile(executablePath, "echo mocked\n", { mode: 0o755 });
+  return executablePath;
+}
+
+async function withMediaAutoDetectEnv<T>(
+  env: Record<string, string | undefined>,
+  run: () => Promise<T>,
+): Promise<T> {
+  return await withEnvAsync(
+    {
+      SHERPA_ONNX_MODEL_DIR: undefined,
+      WHISPER_CPP_MODEL: undefined,
+      OPENAI_API_KEY: undefined,
+      GROQ_API_KEY: undefined,
+      DEEPGRAM_API_KEY: undefined,
+      GEMINI_API_KEY: undefined,
+      OPENCLAW_AGENT_DIR: undefined,
+      PI_CODING_AGENT_DIR: undefined,
+      ...env,
+    },
+    run,
+  );
 }
 
 async function createAudioCtx(params?: {
@@ -104,10 +172,10 @@ async function createAudioCtx(params?: {
   fileName?: string;
   mediaType?: string;
   content?: Buffer | string;
-}) {
+}): Promise<MsgContext> {
   const mediaPath = await createTempMediaFile({
     fileName: params?.fileName ?? "note.ogg",
-    content: params?.content ?? Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]),
+    content: params?.content ?? createSafeAudioFixtureBuffer(2048),
   });
   return {
     Body: params?.body ?? "<media:audio>",
@@ -116,13 +184,29 @@ async function createAudioCtx(params?: {
   } satisfies MsgContext;
 }
 
+async function setupAudioAutoDetectCase(stdout: string): Promise<{
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+}> {
+  const ctx = await createAudioCtx({
+    fileName: "sample.wav",
+    mediaType: "audio/wav",
+    content: createSafeAudioFixtureBuffer(2048),
+  });
+  const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+  mockedRunExec.mockResolvedValueOnce({
+    stdout,
+    stderr: "",
+  });
+  return { ctx, cfg };
+}
+
 async function applyWithDisabledMedia(params: {
   body: string;
   mediaPath: string;
   mediaType?: string;
   cfg?: OpenClawConfig;
 }) {
-  const { applyMediaUnderstanding } = await loadApply();
   const ctx: MsgContext = {
     Body: params.body,
     MediaPath: params.mediaPath,
@@ -135,30 +219,55 @@ async function applyWithDisabledMedia(params: {
   return { ctx, result };
 }
 
+function expectFileNotApplied(params: {
+  ctx: MsgContext;
+  result: { appliedFile: boolean };
+  body: string;
+}) {
+  expect(params.result.appliedFile).toBe(false);
+  expect(params.ctx.Body).toBe(params.body);
+  expect(params.ctx.Body).not.toContain("<file");
+}
+
 describe("applyMediaUnderstanding", () => {
   const mockedResolveApiKey = vi.mocked(resolveApiKeyForProvider);
   const mockedFetchRemoteMedia = vi.mocked(fetchRemoteMedia);
 
+  beforeAll(async () => {
+    const baseDir = resolvePreferredOpenClawTmpDir();
+    await fs.mkdir(baseDir, { recursive: true });
+    suiteTempMediaRootDir = await fs.mkdtemp(path.join(baseDir, TEMP_MEDIA_PREFIX));
+    ({ applyMediaUnderstanding } = await import("./apply.js"));
+  });
+
   beforeEach(() => {
-    mockedResolveApiKey.mockClear();
+    mockedResolveApiKey.mockReset();
+    mockedResolveApiKey.mockResolvedValue({
+      apiKey: "test-key",
+      source: "test",
+      mode: "api-key",
+    });
     mockedFetchRemoteMedia.mockClear();
+    mockedRunExec.mockReset();
     mockedFetchRemoteMedia.mockResolvedValue({
-      buffer: Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+      buffer: createSafeAudioFixtureBuffer(2048),
       contentType: "audio/ogg",
       fileName: "note.ogg",
     });
+    clearMediaUnderstandingBinaryCacheForTests();
   });
 
-  afterEach(async () => {
-    await Promise.all(
-      tempMediaDirs.splice(0).map(async (dir) => {
-        await fs.rm(dir, { recursive: true, force: true });
-      }),
-    );
+  afterAll(async () => {
+    if (!suiteTempMediaRootDir) {
+      return;
+    }
+    await fs.rm(suiteTempMediaRootDir, { recursive: true, force: true });
+    suiteTempMediaRootDir = "";
+    sharedTempMediaCacheDir = "";
+    tempMediaFileCache.clear();
   });
 
   it("sets Transcript and replaces Body when audio transcription succeeds", async () => {
-    const { applyMediaUnderstanding } = await loadApply();
     const ctx = await createAudioCtx();
     const result = await applyMediaUnderstanding({
       ctx,
@@ -177,11 +286,10 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("skips file blocks for text-like audio when transcription succeeds", async () => {
-    const { applyMediaUnderstanding } = await loadApply();
     const ctx = await createAudioCtx({
       fileName: "data.mp3",
       mediaType: "audio/mpeg",
-      content: '"a","b"\n"1","2"',
+      content: `"a","b"\n"1","2"\n${"x".repeat(2048)}`,
     });
     const result = await applyMediaUnderstanding({
       ctx,
@@ -196,10 +304,10 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("keeps caption for command parsing when audio has user text", async () => {
-    const { applyMediaUnderstanding } = await loadApply();
     const ctx = await createAudioCtx({
       body: "<media:audio> /capture status",
     });
+    ctx.CommandAuthorized = false;
     const result = await applyMediaUnderstanding({
       ctx,
       cfg: createGroqAudioConfig(),
@@ -213,10 +321,10 @@ describe("applyMediaUnderstanding", () => {
       body: "[Audio]\nUser text:\n/capture status\nTranscript:\ntranscribed text",
       commandBody: "/capture status",
     });
+    expect(ctx.CommandAuthorized).toBe(false);
   });
 
   it("handles URL-only attachments for audio transcription", async () => {
-    const { applyMediaUnderstanding } = await loadApply();
     const ctx: MsgContext = {
       Body: "<media:audio>",
       MediaUrl: "https://example.com/note.ogg",
@@ -255,8 +363,84 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Audio]\nTranscript:\nremote transcript");
   });
 
+  it("transcribes WhatsApp audio with parameterized MIME despite casing/whitespace", async () => {
+    const ctx = await createAudioCtx({
+      fileName: "voice-note",
+      mediaType: " Audio/Ogg; codecs=opus ",
+    });
+    ctx.Surface = "whatsapp";
+
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            maxBytes: 1024 * 1024,
+            scope: {
+              default: "deny",
+              rules: [{ action: "allow", match: { channel: "whatsapp" } }],
+            },
+            models: [{ provider: "groq" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      providers: createGroqProviders("whatsapp transcript"),
+    });
+
+    expect(result.appliedAudio).toBe(true);
+    expect(ctx.Transcript).toBe("whatsapp transcript");
+    expect(ctx.Body).toBe("[Audio]\nTranscript:\nwhatsapp transcript");
+  });
+
+  it("skips URL-only audio when remote file is too small", async () => {
+    // Override the default mock to return a tiny buffer (below MIN_AUDIO_FILE_BYTES)
+    mockedFetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.alloc(100),
+      contentType: "audio/ogg",
+      fileName: "tiny.ogg",
+    });
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaUrl: "https://example.com/tiny.ogg",
+      MediaType: "audio/ogg",
+      ChatType: "dm",
+    };
+    const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            maxBytes: 1024 * 1024,
+            scope: {
+              default: "deny",
+              rules: [{ action: "allow", match: { chatType: "direct" } }],
+            },
+            models: [{ provider: "groq" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      providers: {
+        groq: { id: "groq", transcribeAudio },
+      },
+    });
+
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(result.appliedAudio).toBe(false);
+  });
+
   it("skips audio transcription when attachment exceeds maxBytes", async () => {
-    const { applyMediaUnderstanding } = await loadApply();
     const ctx = await createAudioCtx({
       fileName: "large.wav",
       mediaType: "audio/wav",
@@ -287,7 +471,6 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("falls back to CLI model when provider fails", async () => {
-    const { applyMediaUnderstanding } = await loadApply();
     const ctx = await createAudioCtx();
     const cfg: OpenClawConfig = {
       tools: {
@@ -307,8 +490,7 @@ describe("applyMediaUnderstanding", () => {
       },
     };
 
-    const execModule = await import("../process/exec.js");
-    vi.mocked(execModule.runExec).mockResolvedValue({
+    mockedRunExec.mockResolvedValue({
       stdout: "cli transcript\n",
       stderr: "",
     });
@@ -331,8 +513,172 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Audio]\nTranscript:\ncli transcript");
   });
 
+  it("reads parakeet-mlx transcript from output-dir txt file", async () => {
+    const ctx = await createAudioCtx({ fileName: "sample.wav", mediaType: "audio/wav" });
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            models: [
+              {
+                type: "cli",
+                command: "parakeet-mlx",
+                args: ["{{MediaPath}}", "--output-format", "txt", "--output-dir", "{{OutputDir}}"],
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    mockedRunExec.mockImplementationOnce(async (_cmd, args) => {
+      const mediaPath = args[0];
+      const outputDirArgIndex = args.indexOf("--output-dir");
+      const outputDir = outputDirArgIndex >= 0 ? args[outputDirArgIndex + 1] : undefined;
+      const transcriptPath =
+        mediaPath && outputDir ? path.join(outputDir, `${path.parse(mediaPath).name}.txt`) : "";
+      if (transcriptPath) {
+        await fs.writeFile(transcriptPath, "parakeet transcript\n");
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedAudio).toBe(true);
+    expect(ctx.Transcript).toBe("parakeet transcript");
+    expect(ctx.Body).toBe("[Audio]\nTranscript:\nparakeet transcript");
+  });
+
+  it("falls back to stdout for parakeet-mlx when output format is not txt", async () => {
+    const ctx = await createAudioCtx({ fileName: "sample.wav", mediaType: "audio/wav" });
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            models: [
+              {
+                type: "cli",
+                command: "parakeet-mlx",
+                args: ["{{MediaPath}}", "--output-format", "json", "--output-dir", "{{OutputDir}}"],
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    mockedRunExec.mockImplementationOnce(async (_cmd, args) => {
+      const mediaPath = args[0];
+      const outputDirArgIndex = args.indexOf("--output-dir");
+      const outputDir = outputDirArgIndex >= 0 ? args[outputDirArgIndex + 1] : undefined;
+      const transcriptPath =
+        mediaPath && outputDir ? path.join(outputDir, `${path.parse(mediaPath).name}.txt`) : "";
+      if (transcriptPath) {
+        await fs.writeFile(transcriptPath, "should-not-be-used\n");
+      }
+      return { stdout: "stdout transcript\n", stderr: "" };
+    });
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedAudio).toBe(true);
+    expect(ctx.Transcript).toBe("stdout transcript");
+    expect(ctx.Body).toBe("[Audio]\nTranscript:\nstdout transcript");
+  });
+
+  it("auto-detects sherpa for audio when binary and model files are available", async () => {
+    const binDir = await createTempMediaDir();
+    const modelDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "sherpa-onnx-offline");
+    await fs.writeFile(path.join(modelDir, "tokens.txt"), "a");
+    await fs.writeFile(path.join(modelDir, "encoder.onnx"), "a");
+    await fs.writeFile(path.join(modelDir, "decoder.onnx"), "a");
+    await fs.writeFile(path.join(modelDir, "joiner.onnx"), "a");
+
+    const { ctx, cfg } = await setupAudioAutoDetectCase('{"text":"sherpa ok"}');
+
+    await withMediaAutoDetectEnv(
+      {
+        PATH: binDir,
+        SHERPA_ONNX_MODEL_DIR: modelDir,
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({ ctx, cfg });
+        expect(result.appliedAudio).toBe(true);
+      },
+    );
+
+    expect(ctx.Transcript).toBe("sherpa ok");
+    expect(mockedRunExec).toHaveBeenCalledWith(
+      "sherpa-onnx-offline",
+      expect.any(Array),
+      expect.any(Object),
+    );
+  });
+
+  it("auto-detects whisper-cli when sherpa is unavailable", async () => {
+    const binDir = await createTempMediaDir();
+    const modelDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "whisper-cli");
+    const modelPath = path.join(modelDir, "tiny.bin");
+    await fs.writeFile(modelPath, "model");
+
+    const { ctx, cfg } = await setupAudioAutoDetectCase("whisper cpp ok\n");
+
+    await withMediaAutoDetectEnv(
+      {
+        PATH: binDir,
+        WHISPER_CPP_MODEL: modelPath,
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({ ctx, cfg });
+        expect(result.appliedAudio).toBe(true);
+      },
+    );
+
+    expect(ctx.Transcript).toBe("whisper cpp ok");
+    expect(mockedRunExec).toHaveBeenCalledWith(
+      "whisper-cli",
+      expect.any(Array),
+      expect.any(Object),
+    );
+  });
+
+  it("skips audio auto-detect when no supported binaries or provider keys are available", async () => {
+    const emptyBinDir = await createTempMediaDir();
+    const isolatedAgentDir = await createTempMediaDir();
+    const ctx = await createAudioCtx({
+      fileName: "sample.wav",
+      mediaType: "audio/wav",
+      content: createSafeAudioFixtureBuffer(2048),
+    });
+    const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+    mockedResolveApiKey.mockResolvedValue({
+      source: "none",
+      mode: "api-key",
+    });
+
+    await withMediaAutoDetectEnv(
+      {
+        PATH: emptyBinDir,
+        OPENCLAW_AGENT_DIR: isolatedAgentDir,
+        PI_CODING_AGENT_DIR: isolatedAgentDir,
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({ ctx, cfg });
+        expect(result.appliedAudio).toBe(false);
+      },
+    );
+
+    expect(ctx.Transcript).toBeUndefined();
+    expect(ctx.Body).toBe("<media:audio>");
+    expect(mockedRunExec).not.toHaveBeenCalled();
+  });
+
   it("uses CLI image understanding and preserves caption for commands", async () => {
-    const { applyMediaUnderstanding } = await loadApply();
     const imagePath = await createTempMediaFile({
       fileName: "photo.jpg",
       content: "image-bytes",
@@ -360,8 +706,7 @@ describe("applyMediaUnderstanding", () => {
       },
     };
 
-    const execModule = await import("../process/exec.js");
-    vi.mocked(execModule.runExec).mockResolvedValue({
+    mockedRunExec.mockResolvedValue({
       stdout: "image description\n",
       stderr: "",
     });
@@ -380,7 +725,6 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("uses shared media models list when capability config is missing", async () => {
-    const { applyMediaUnderstanding } = await loadApply();
     const imagePath = await createTempMediaFile({
       fileName: "shared.jpg",
       content: "image-bytes",
@@ -406,8 +750,7 @@ describe("applyMediaUnderstanding", () => {
       },
     };
 
-    const execModule = await import("../process/exec.js");
-    vi.mocked(execModule.runExec).mockResolvedValue({
+    mockedRunExec.mockResolvedValue({
       stdout: "shared description\n",
       stderr: "",
     });
@@ -422,10 +765,9 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("uses active model when enabled and models are missing", async () => {
-    const { applyMediaUnderstanding } = await loadApply();
     const audioPath = await createTempMediaFile({
       fileName: "fallback.ogg",
-      content: Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6]),
+      content: createSafeAudioFixtureBuffer(2048),
     });
 
     const ctx: MsgContext = {
@@ -460,9 +802,8 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("handles multiple audio attachments when attachment mode is all", async () => {
-    const { applyMediaUnderstanding } = await loadApply();
     const dir = await createTempMediaDir();
-    const audioBytes = Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]);
+    const audioBytes = createSafeAudioFixtureBuffer(2048);
     const audioPathA = path.join(dir, "note-a.ogg");
     const audioPathB = path.join(dir, "note-b.ogg");
     await fs.writeFile(audioPathA, audioBytes);
@@ -504,13 +845,12 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("orders mixed media outputs as image, audio, video", async () => {
-    const { applyMediaUnderstanding } = await loadApply();
     const dir = await createTempMediaDir();
     const imagePath = path.join(dir, "photo.jpg");
     const audioPath = path.join(dir, "note.ogg");
     const videoPath = path.join(dir, "clip.mp4");
     await fs.writeFile(imagePath, "image-bytes");
-    await fs.writeFile(audioPath, Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]));
+    await fs.writeFile(audioPath, createSafeAudioFixtureBuffer(2048));
     await fs.writeFile(videoPath, "video-bytes");
 
     const ctx: MsgContext = {
@@ -627,9 +967,7 @@ describe("applyMediaUnderstanding", () => {
       mediaType: "audio/mpeg",
     });
 
-    expect(result.appliedFile).toBe(false);
-    expect(ctx.Body).toBe("<media:audio>");
-    expect(ctx.Body).not.toContain("<file");
+    expectFileNotApplied({ ctx, result, body: "<media:audio>" });
   });
 
   it("does not reclassify PDF attachments as text/plain", async () => {
@@ -639,18 +977,7 @@ describe("applyMediaUnderstanding", () => {
       content: pseudoPdf,
     });
 
-    const cfg: OpenClawConfig = {
-      ...createMediaDisabledConfig(),
-      gateway: {
-        http: {
-          endpoints: {
-            responses: {
-              files: { allowedMimes: ["text/plain"] },
-            },
-          },
-        },
-      },
-    };
+    const cfg = createMediaDisabledConfigWithAllowedMimes(["text/plain"]);
 
     const { ctx, result } = await applyWithDisabledMedia({
       body: "<media:file>",
@@ -659,9 +986,7 @@ describe("applyMediaUnderstanding", () => {
       cfg,
     });
 
-    expect(result.appliedFile).toBe(false);
-    expect(ctx.Body).toBe("<media:file>");
-    expect(ctx.Body).not.toContain("<file");
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
   });
 
   it("respects configured allowedMimes for text-like attachments", async () => {
@@ -671,27 +996,14 @@ describe("applyMediaUnderstanding", () => {
       content: tsvText,
     });
 
-    const cfg: OpenClawConfig = {
-      ...createMediaDisabledConfig(),
-      gateway: {
-        http: {
-          endpoints: {
-            responses: {
-              files: { allowedMimes: ["text/plain"] },
-            },
-          },
-        },
-      },
-    };
+    const cfg = createMediaDisabledConfigWithAllowedMimes(["text/plain"]);
     const { ctx, result } = await applyWithDisabledMedia({
       body: "<media:file>",
       mediaPath: tsvPath,
       cfg,
     });
 
-    expect(result.appliedFile).toBe(false);
-    expect(ctx.Body).toBe("<media:file>");
-    expect(ctx.Body).not.toContain("<file");
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
   });
 
   it("escapes XML special characters in filenames to prevent injection", async () => {
@@ -824,9 +1136,7 @@ describe("applyMediaUnderstanding", () => {
       mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
 
-    expect(result.appliedFile).toBe(false);
-    expect(ctx.Body).toBe("<media:file>");
-    expect(ctx.Body).not.toContain("<file");
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
   });
 
   it("keeps vendor +json attachments eligible for text extraction", async () => {

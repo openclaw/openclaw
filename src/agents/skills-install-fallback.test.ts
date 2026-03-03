@@ -3,11 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installSkill } from "./skills-install.js";
+import {
+  hasBinaryMock,
+  runCommandWithTimeoutMock,
+  scanDirectoryWithSummaryMock,
+} from "./skills-install.test-mocks.js";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
-
-const runCommandWithTimeoutMock = vi.fn();
-const scanDirectoryWithSummaryMock = vi.fn();
-const hasBinaryMock = vi.fn();
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -17,19 +18,16 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
 
-vi.mock("../security/skill-scanner.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../security/skill-scanner.js")>();
-  return {
-    ...actual,
-    scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
-  };
-});
+vi.mock("../security/skill-scanner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../security/skill-scanner.js")>()),
+  scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
+}));
 
 vi.mock("../shared/config-eval.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../shared/config-eval.js")>();
   return {
     ...actual,
-    hasBinary: (...args: unknown[]) => hasBinaryMock(...args),
+    hasBinary: (bin: string) => hasBinaryMock(bin),
   };
 });
 
@@ -69,6 +67,18 @@ async function writeSkillWithInstaller(
   return writeSkillWithInstallers(workspaceDir, name, [{ id: "deps", kind, ...extra }]);
 }
 
+function mockAvailableBinaries(binaries: string[]) {
+  const available = new Set(binaries);
+  hasBinaryMock.mockImplementation((bin: string) => available.has(bin));
+}
+
+function assertNoAptGetFallbackCalls() {
+  const aptCalls = runCommandWithTimeoutMock.mock.calls.filter(
+    (call) => Array.isArray(call[0]) && (call[0] as string[]).includes("apt-get"),
+  );
+  expect(aptCalls).toHaveLength(0);
+}
+
 describe("skills-install fallback edge cases", () => {
   let workspaceDir: string;
 
@@ -97,62 +107,55 @@ describe("skills-install fallback edge cases", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
   });
 
-  it("apt-get available but sudo missing/unusable returns helpful error for go install", async () => {
-    // go not available, brew not available, apt-get + sudo are available, sudo check fails
-    hasBinaryMock.mockImplementation((bin: string) => {
-      if (bin === "go") {
-        return false;
-      }
-      if (bin === "brew") {
-        return false;
-      }
-      if (bin === "apt-get" || bin === "sudo") {
-        return true;
-      }
-      return false;
-    });
+  it("handles sudo probe failures for go install without apt fallback", async () => {
+    for (const testCase of [
+      {
+        label: "sudo returns password required",
+        setup: () =>
+          runCommandWithTimeoutMock.mockResolvedValueOnce({
+            code: 1,
+            stdout: "",
+            stderr: "sudo: a password is required",
+          }),
+        assert: (result: { message: string; stderr: string }) => {
+          expect(result.message).toContain("sudo");
+          expect(result.message).toContain("https://go.dev/doc/install");
+        },
+      },
+      {
+        label: "sudo probe throws executable-not-found",
+        setup: () =>
+          runCommandWithTimeoutMock.mockRejectedValueOnce(
+            new Error('Executable not found in $PATH: "sudo"'),
+          ),
+        assert: (result: { message: string; stderr: string }) => {
+          expect(result.message).toContain("sudo is not usable");
+          expect(result.stderr).toContain("Executable not found");
+        },
+      },
+    ]) {
+      runCommandWithTimeoutMock.mockClear();
+      mockAvailableBinaries(["apt-get", "sudo"]);
+      testCase.setup();
 
-    // sudo -n true fails (no passwordless sudo)
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 1,
-      stdout: "",
-      stderr: "sudo: a password is required",
-    });
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "go-tool-single",
+        installId: "deps",
+      });
 
-    const result = await installSkill({
-      workspaceDir,
-      skillName: "go-tool-single",
-      installId: "deps",
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain("sudo");
-    expect(result.message).toContain("https://go.dev/doc/install");
-
-    // Verify sudo -n true was called
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      ["sudo", "-n", "true"],
-      expect.objectContaining({ timeoutMs: 5_000 }),
-    );
-
-    // Verify apt-get install was NOT called
-    const aptCalls = runCommandWithTimeoutMock.mock.calls.filter(
-      (call) => Array.isArray(call[0]) && (call[0] as string[]).includes("apt-get"),
-    );
-    expect(aptCalls).toHaveLength(0);
+      expect(result.ok, testCase.label).toBe(false);
+      testCase.assert(result);
+      expect(runCommandWithTimeoutMock, testCase.label).toHaveBeenCalledWith(
+        ["sudo", "-n", "true"],
+        expect.objectContaining({ timeoutMs: 5_000 }),
+      );
+      assertNoAptGetFallbackCalls();
+    }
   });
 
   it("status-selected go installer fails gracefully when apt fallback needs sudo", async () => {
-    // no go/brew, but apt and sudo are present
-    hasBinaryMock.mockImplementation((bin: string) => {
-      if (bin === "go" || bin === "brew") {
-        return false;
-      }
-      if (bin === "apt-get" || bin === "sudo") {
-        return true;
-      }
-      return false;
-    });
+    mockAvailableBinaries(["apt-get", "sudo"]);
 
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       code: 1,
@@ -174,56 +177,8 @@ describe("skills-install fallback edge cases", () => {
     expect(result.message).toContain("sudo is not usable");
   });
 
-  it("handles sudo probe spawn failures without throwing", async () => {
-    // go not available, brew not available, apt-get + sudo appear available
-    hasBinaryMock.mockImplementation((bin: string) => {
-      if (bin === "go") {
-        return false;
-      }
-      if (bin === "brew") {
-        return false;
-      }
-      if (bin === "apt-get" || bin === "sudo") {
-        return true;
-      }
-      return false;
-    });
-
-    runCommandWithTimeoutMock.mockRejectedValueOnce(
-      new Error('Executable not found in $PATH: "sudo"'),
-    );
-
-    const result = await installSkill({
-      workspaceDir,
-      skillName: "go-tool-single",
-      installId: "deps",
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain("sudo is not usable");
-    expect(result.stderr).toContain("Executable not found");
-
-    // Verify apt-get install was NOT called
-    const aptCalls = runCommandWithTimeoutMock.mock.calls.filter(
-      (call) => Array.isArray(call[0]) && (call[0] as string[]).includes("apt-get"),
-    );
-    expect(aptCalls).toHaveLength(0);
-  });
-
   it("uv not installed and no brew returns helpful error without curl auto-install", async () => {
-    // uv not available, brew not available, curl IS available
-    hasBinaryMock.mockImplementation((bin: string) => {
-      if (bin === "uv") {
-        return false;
-      }
-      if (bin === "brew") {
-        return false;
-      }
-      if (bin === "curl") {
-        return true;
-      }
-      return false;
-    });
+    mockAvailableBinaries(["curl"]);
 
     const result = await installSkill({
       workspaceDir,

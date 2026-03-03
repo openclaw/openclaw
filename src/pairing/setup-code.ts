@@ -1,8 +1,12 @@
 import os from "node:os";
+import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
+import { secretRefKey } from "../secrets/ref-contract.js";
+import { resolveSecretRefValues } from "../secrets/resolve.js";
+import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import { isCarrierGradeNatIpv4Address, isRfc1918Ipv4Address } from "../shared/net/ip.js";
-
-const DEFAULT_GATEWAY_PORT = 18789;
+import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 
 export type PairingSetupPayload = {
   url: string;
@@ -87,21 +91,6 @@ function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null 
   return `${schemeFallback}://${withoutPath}`;
 }
 
-function resolveGatewayPort(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): number {
-  const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim();
-  if (envRaw) {
-    const parsed = Number.parseInt(envRaw, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
-  }
-  const configPort = cfg.gateway?.port;
-  if (typeof configPort === "number" && Number.isFinite(configPort) && configPort > 0) {
-    return configPort;
-  }
-  return DEFAULT_GATEWAY_PORT;
-}
-
 function resolveScheme(
   cfg: OpenClawConfig,
   opts?: {
@@ -161,58 +150,6 @@ function pickTailnetIPv4(
   return pickIPv4Matching(networkInterfaces, isTailnetIPv4);
 }
 
-function parsePossiblyNoisyJsonObject(raw: string): Record<string, unknown> {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start === -1 || end <= start) {
-    return {};
-  }
-  try {
-    return JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
-async function resolveTailnetHost(
-  runCommandWithTimeout?: PairingSetupCommandRunner,
-): Promise<string | null> {
-  if (!runCommandWithTimeout) {
-    return null;
-  }
-  const candidates = ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
-  for (const candidate of candidates) {
-    try {
-      const result = await runCommandWithTimeout([candidate, "status", "--json"], {
-        timeoutMs: 5000,
-      });
-      if (result.code !== 0) {
-        continue;
-      }
-      const raw = result.stdout.trim();
-      if (!raw) {
-        continue;
-      }
-      const parsed = parsePossiblyNoisyJsonObject(raw);
-      const self =
-        typeof parsed.Self === "object" && parsed.Self !== null
-          ? (parsed.Self as Record<string, unknown>)
-          : undefined;
-      const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
-      if (dns && dns.length > 0) {
-        return dns.replace(/\.$/, "");
-      }
-      const ips = Array.isArray(self?.TailscaleIPs) ? (self.TailscaleIPs as string[]) : [];
-      if (ips.length > 0) {
-        return ips[0] ?? null;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
 function resolveAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): ResolveAuthResult {
   const mode = cfg.gateway?.auth?.mode;
   const token =
@@ -222,7 +159,7 @@ function resolveAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): ResolveAuthRe
   const password =
     env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
     env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
-    cfg.gateway?.auth?.password?.trim();
+    normalizeSecretInputString(cfg.gateway?.auth?.password);
 
   if (mode === "password") {
     if (!password) {
@@ -243,6 +180,56 @@ function resolveAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): ResolveAuthRe
     return { password, label: "password" };
   }
   return { error: "Gateway auth is not configured (no token or password)." };
+}
+
+async function resolveGatewayPasswordSecretRef(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<OpenClawConfig> {
+  const authPassword = cfg.gateway?.auth?.password;
+  const { ref } = resolveSecretInputRef({
+    value: authPassword,
+    defaults: cfg.secrets?.defaults,
+  });
+  if (!ref) {
+    return cfg;
+  }
+  const hasPasswordEnvCandidate = Boolean(
+    env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim(),
+  );
+  if (hasPasswordEnvCandidate) {
+    return cfg;
+  }
+  const mode = cfg.gateway?.auth?.mode;
+  if (mode === "token" || mode === "none" || mode === "trusted-proxy") {
+    return cfg;
+  }
+  if (mode !== "password") {
+    const hasTokenCandidate =
+      Boolean(env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim()) ||
+      Boolean(cfg.gateway?.auth?.token?.trim());
+    if (hasTokenCandidate) {
+      return cfg;
+    }
+  }
+  const resolved = await resolveSecretRefValues([ref], {
+    config: cfg,
+    env,
+  });
+  const value = resolved.get(secretRefKey(ref));
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("gateway.auth.password resolved to an empty or non-string value.");
+  }
+  return {
+    ...cfg,
+    gateway: {
+      ...cfg.gateway,
+      auth: {
+        ...cfg.gateway?.auth,
+        password: value.trim(),
+      },
+    },
+  };
 }
 
 async function resolveGatewayUrl(
@@ -278,7 +265,7 @@ async function resolveGatewayUrl(
 
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   if (tailscaleMode === "serve" || tailscaleMode === "funnel") {
-    const host = await resolveTailnetHost(opts.runCommandWithTimeout);
+    const host = await resolveTailnetHostWithRunner(opts.runCommandWithTimeout);
     if (!host) {
       return { error: "Tailscale Serve is enabled, but MagicDNS could not be resolved." };
     }
@@ -289,29 +276,16 @@ async function resolveGatewayUrl(
     return { url: remoteUrl, source: "gateway.remote.url" };
   }
 
-  const bind = cfg.gateway?.bind ?? "loopback";
-  if (bind === "custom") {
-    const host = cfg.gateway?.customBindHost?.trim();
-    if (host) {
-      return { url: `${scheme}://${host}:${port}`, source: "gateway.bind=custom" };
-    }
-    return { error: "gateway.bind=custom requires gateway.customBindHost." };
-  }
-
-  if (bind === "tailnet") {
-    const host = pickTailnetIPv4(opts.networkInterfaces);
-    if (host) {
-      return { url: `${scheme}://${host}:${port}`, source: "gateway.bind=tailnet" };
-    }
-    return { error: "gateway.bind=tailnet set, but no tailnet IP was found." };
-  }
-
-  if (bind === "lan") {
-    const host = pickLanIPv4(opts.networkInterfaces);
-    if (host) {
-      return { url: `${scheme}://${host}:${port}`, source: "gateway.bind=lan" };
-    }
-    return { error: "gateway.bind=lan set, but no private LAN IP was found." };
+  const bindResult = resolveGatewayBindUrl({
+    bind: cfg.gateway?.bind,
+    customBindHost: cfg.gateway?.customBindHost,
+    scheme,
+    port,
+    pickTailnetHost: () => pickTailnetIPv4(opts.networkInterfaces),
+    pickLanHost: () => pickLanIPv4(opts.networkInterfaces),
+  });
+  if (bindResult) {
+    return bindResult;
   }
 
   return {
@@ -331,12 +305,13 @@ export async function resolvePairingSetupFromConfig(
   options: ResolvePairingSetupOptions = {},
 ): Promise<PairingSetupResolution> {
   const env = options.env ?? process.env;
-  const auth = resolveAuth(cfg, env);
+  const cfgForAuth = await resolveGatewayPasswordSecretRef(cfg, env);
+  const auth = resolveAuth(cfgForAuth, env);
   if (auth.error) {
     return { ok: false, error: auth.error };
   }
 
-  const urlResult = await resolveGatewayUrl(cfg, {
+  const urlResult = await resolveGatewayUrl(cfgForAuth, {
     env,
     publicUrl: options.publicUrl,
     preferRemoteUrl: options.preferRemoteUrl,

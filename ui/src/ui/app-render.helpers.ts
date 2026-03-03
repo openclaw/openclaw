@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
@@ -49,12 +49,10 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
 
 export function renderTab(state: AppViewState, tab: Tab) {
   const href = pathForTab(tab, state.basePath);
-  const isActive = state.tab === tab;
-  const collapsed = state.settings.navCollapsed;
   return html`
     <a
       href=${href}
-      class="nav-item ${isActive ? "nav-item--active" : ""}"
+      class="nav-item ${state.tab === tab ? "active" : ""}"
       @click=${(event: MouseEvent) => {
         if (
           event.defaultPrevented ||
@@ -79,64 +77,68 @@ export function renderTab(state: AppViewState, tab: Tab) {
       title=${titleForTab(tab)}
     >
       <span class="nav-item__icon" aria-hidden="true">${icons[iconForTab(tab)]}</span>
-      ${!collapsed ? html`<span class="nav-item__text">${titleForTab(tab)}</span>` : nothing}
+      <span class="nav-item__text">${titleForTab(tab)}</span>
     </a>
   `;
 }
 
-export function renderChatSessionSelect(state: AppViewState) {
-  const mainSessionKey = resolveMainSessionKey(state.hello, state.sessionsResult);
-  const sessionOptions = resolveSessionOptions(
-    state.sessionKey,
-    state.sessionsResult,
-    mainSessionKey,
-  );
+function renderCronFilterIcon(hiddenCount: number) {
   return html`
-    <label class="field chat-controls__session">
-      <select
-        .value=${state.sessionKey}
-        ?disabled=${!state.connected}
-        @change=${(e: Event) => {
-          const next = (e.target as HTMLSelectElement).value;
-          state.sessionKey = next;
-          state.chatMessage = "";
-          state.chatStream = null;
-          (state as unknown as OpenClawApp).chatStreamStartedAt = null;
-          state.chatRunId = null;
-          (state as unknown as OpenClawApp).resetToolStream();
-          (state as unknown as OpenClawApp).resetChatScroll();
-          state.applySettings({
-            ...state.settings,
-            sessionKey: next,
-            lastActiveSessionKey: next,
-          });
-          void state.loadAssistantIdentity();
-          syncUrlWithSessionKey(
-            state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
-            next,
-            true,
-          );
-          void loadChatHistory(state as unknown as ChatState);
-        }}
+    <span style="position: relative; display: inline-flex; align-items: center;">
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
       >
-        ${repeat(
-          sessionOptions,
-          (entry) => entry.key,
-          (entry) =>
-            html`<option value=${entry.key} title=${entry.key}>
-              ${entry.displayName ?? entry.key}
-            </option>`,
-        )}
-      </select>
-    </label>
+        <circle cx="12" cy="12" r="10"></circle>
+        <polyline points="12 6 12 12 16 14"></polyline>
+      </svg>
+      ${
+        hiddenCount > 0
+          ? html`<span
+            style="
+              position: absolute;
+              top: -5px;
+              right: -6px;
+              background: var(--color-accent, #6366f1);
+              color: #fff;
+              border-radius: 999px;
+              font-size: 9px;
+              line-height: 1;
+              padding: 1px 3px;
+              pointer-events: none;
+            "
+          >${hiddenCount}</span
+          >`
+          : ""
+      }
+    </span>
   `;
 }
 
 export function renderChatControls(state: AppViewState) {
+  const mainSessionKey = resolveMainSessionKey(state.hello, state.sessionsResult);
+  const hideCron = state.sessionsHideCron ?? true;
+  const hiddenCronCount = hideCron
+    ? countHiddenCronSessions(state.sessionKey, state.sessionsResult)
+    : 0;
+  const sessionOptions = resolveSessionOptions(
+    state.sessionKey,
+    state.sessionsResult,
+    mainSessionKey,
+    hideCron,
+  );
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  // Refresh icon
   const refreshIcon = html`
     <svg
       width="18"
@@ -172,6 +174,43 @@ export function renderChatControls(state: AppViewState) {
   `;
   return html`
     <div class="chat-controls">
+      <label class="field chat-controls__session">
+        <select
+          .value=${state.sessionKey}
+          ?disabled=${!state.connected}
+          @change=${(e: Event) => {
+            const next = (e.target as HTMLSelectElement).value;
+            state.sessionKey = next;
+            state.chatMessage = "";
+            state.chatStream = null;
+            (state as unknown as OpenClawApp).chatStreamStartedAt = null;
+            state.chatRunId = null;
+            (state as unknown as OpenClawApp).resetToolStream();
+            (state as unknown as OpenClawApp).resetChatScroll();
+            state.applySettings({
+              ...state.settings,
+              sessionKey: next,
+              lastActiveSessionKey: next,
+            });
+            void state.loadAssistantIdentity();
+            syncUrlWithSessionKey(
+              state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+              next,
+              true,
+            );
+            void loadChatHistory(state as unknown as ChatState);
+          }}
+        >
+          ${repeat(
+            sessionOptions,
+            (entry) => entry.key,
+            (entry) =>
+              html`<option value=${entry.key} title=${entry.key}>
+                ${entry.displayName ?? entry.key}
+              </option>`,
+          )}
+        </select>
+      </label>
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
@@ -232,6 +271,22 @@ export function renderChatControls(state: AppViewState) {
       >
         ${focusIcon}
       </button>
+      <button
+        class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
+        @click=${() => {
+          state.sessionsHideCron = !hideCron;
+        }}
+        aria-pressed=${hideCron}
+        title=${
+          hideCron
+            ? hiddenCronCount > 0
+              ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+              : t("chat.showCronSessions")
+            : t("chat.hideCronSessions")
+        }
+      >
+        ${renderCronFilterIcon(hiddenCronCount)}
+      </button>
     </div>
   `;
 }
@@ -287,6 +342,8 @@ function capitalize(s: string): string {
  * fallback display name.  Exported for testing.
  */
 export function parseSessionKey(key: string): SessionKeyInfo {
+  const normalized = key.toLowerCase();
+
   // ── Main session ─────────────────────────────────
   if (key === "main" || key === "agent:main:main") {
     return { prefix: "", fallbackName: "Main Session" };
@@ -298,7 +355,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
   }
 
   // ── Cron job ─────────────────────────────────────
-  if (key.includes(":cron:")) {
+  if (normalized.startsWith("cron:") || key.includes(":cron:")) {
     return { prefix: "Cron:", fallbackName: "Cron Job:" };
   }
 
@@ -355,10 +412,30 @@ export function resolveSessionDisplayName(
   return fallbackName;
 }
 
+export function isCronSessionKey(key: string): boolean {
+  const normalized = key.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith("cron:")) {
+    return true;
+  }
+  if (!normalized.startsWith("agent:")) {
+    return false;
+  }
+  const parts = normalized.split(":").filter(Boolean);
+  if (parts.length < 3) {
+    return false;
+  }
+  const rest = parts.slice(2).join(":");
+  return rest.startsWith("cron:");
+}
+
 function resolveSessionOptions(
   sessionKey: string,
   sessions: SessionsListResult | null,
   mainSessionKey?: string | null,
+  hideCron = false,
 ) {
   const seen = new Set<string>();
   const options: Array<{ key: string; displayName?: string }> = [];
@@ -375,7 +452,8 @@ function resolveSessionOptions(
     });
   }
 
-  // Add current session key next
+  // Add current session key next — always include it even if it's a cron session,
+  // so the active session is never silently dropped from the select.
   if (!seen.has(sessionKey)) {
     seen.add(sessionKey);
     options.push({
@@ -384,10 +462,10 @@ function resolveSessionOptions(
     });
   }
 
-  // Add sessions from the result
+  // Add sessions from the result, optionally filtering out cron sessions.
   if (sessions?.sessions) {
     for (const s of sessions.sessions) {
-      if (!seen.has(s.key)) {
+      if (!seen.has(s.key) && !(hideCron && isCronSessionKey(s.key))) {
         seen.add(s.key);
         options.push({
           key: s.key,
@@ -400,30 +478,97 @@ function resolveSessionOptions(
   return options;
 }
 
-type ThemeOption = { id: ThemeMode; label: string };
-const THEME_OPTIONS: ThemeOption[] = [
-  { id: "dark", label: "Claw" },
-  { id: "light", label: "Light" },
-  { id: "openknot", label: "Knot" },
-  { id: "fieldmanual", label: "Field" },
-  { id: "clawdash", label: "Chrome" },
-];
+/** Count sessions with a cron: key that would be hidden when hideCron=true. */
+function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResult | null): number {
+  if (!sessions?.sessions) {
+    return 0;
+  }
+  // Don't count the currently active session even if it's a cron.
+  return sessions.sessions.filter((s) => isCronSessionKey(s.key) && s.key !== sessionKey).length;
+}
+
+const THEME_ORDER: ThemeMode[] = ["system", "light", "dark"];
 
 export function renderThemeToggle(state: AppViewState) {
+  const index = Math.max(0, THEME_ORDER.indexOf(state.theme));
+  const applyTheme = (next: ThemeMode) => (event: MouseEvent) => {
+    const element = event.currentTarget as HTMLElement;
+    const context: ThemeTransitionContext = { element };
+    if (event.clientX || event.clientY) {
+      context.pointerClientX = event.clientX;
+      context.pointerClientY = event.clientY;
+    }
+    state.setTheme(next, context);
+  };
+
   return html`
-    <select
-      class="theme-select"
-      .value=${state.theme}
-      aria-label="Theme"
-      title="Theme"
-      @change=${(e: Event) => {
-        const select = e.target as HTMLSelectElement;
-        const next = select.value as ThemeMode;
-        const context: ThemeTransitionContext = { element: select };
-        state.setTheme(next, context);
-      }}
-    >
-      ${THEME_OPTIONS.map((opt) => html`<option value=${opt.id}>${opt.label}</option>`)}
-    </select>
+    <div class="theme-toggle" style="--theme-index: ${index};">
+      <div class="theme-toggle__track" role="group" aria-label="Theme">
+        <span class="theme-toggle__indicator"></span>
+        <button
+          class="theme-toggle__button ${state.theme === "system" ? "active" : ""}"
+          @click=${applyTheme("system")}
+          aria-pressed=${state.theme === "system"}
+          aria-label="System theme"
+          title="System"
+        >
+          ${renderMonitorIcon()}
+        </button>
+        <button
+          class="theme-toggle__button ${state.theme === "light" ? "active" : ""}"
+          @click=${applyTheme("light")}
+          aria-pressed=${state.theme === "light"}
+          aria-label="Light theme"
+          title="Light"
+        >
+          ${renderSunIcon()}
+        </button>
+        <button
+          class="theme-toggle__button ${state.theme === "dark" ? "active" : ""}"
+          @click=${applyTheme("dark")}
+          aria-pressed=${state.theme === "dark"}
+          aria-label="Dark theme"
+          title="Dark"
+        >
+          ${renderMoonIcon()}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function renderSunIcon() {
+  return html`
+    <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="4"></circle>
+      <path d="M12 2v2"></path>
+      <path d="M12 20v2"></path>
+      <path d="m4.93 4.93 1.41 1.41"></path>
+      <path d="m17.66 17.66 1.41 1.41"></path>
+      <path d="M2 12h2"></path>
+      <path d="M20 12h2"></path>
+      <path d="m6.34 17.66-1.41 1.41"></path>
+      <path d="m19.07 4.93-1.41 1.41"></path>
+    </svg>
+  `;
+}
+
+function renderMoonIcon() {
+  return html`
+    <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"
+      ></path>
+    </svg>
+  `;
+}
+
+function renderMonitorIcon() {
+  return html`
+    <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect width="20" height="14" x="2" y="3" rx="2"></rect>
+      <line x1="8" x2="16" y1="21" y2="21"></line>
+      <line x1="12" x2="12" y1="17" y2="21"></line>
+    </svg>
   `;
 }

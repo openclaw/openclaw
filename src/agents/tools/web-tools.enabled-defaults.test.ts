@@ -1,3 +1,4 @@
+import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
@@ -29,6 +30,45 @@ function createPerplexitySearchTool(perplexityConfig?: { apiKey?: string; baseUr
   });
 }
 
+function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; model?: string }) {
+  return createWebSearchTool({
+    config: {
+      tools: {
+        web: {
+          search: {
+            provider: "kimi",
+            ...(kimiConfig ? { kimi: kimiConfig } : {}),
+          },
+        },
+      },
+    },
+    sandboxed: true,
+  });
+}
+
+function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
+  const searchConfig =
+    provider === "perplexity"
+      ? { provider, perplexity: { apiKey: "pplx-config-test" } }
+      : provider === "grok"
+        ? { provider, grok: { apiKey: "xai-config-test" } }
+        : provider === "gemini"
+          ? { provider, gemini: { apiKey: "gemini-config-test" } }
+          : provider === "kimi"
+            ? { provider, kimi: { apiKey: "moonshot-config-test" } }
+            : { provider, apiKey: "brave-config-test" };
+  return createWebSearchTool({
+    config: {
+      tools: {
+        web: {
+          search: searchConfig,
+        },
+      },
+    },
+    sandboxed: true,
+  });
+}
+
 function parseFirstRequestBody(mockFetch: ReturnType<typeof installMockFetch>) {
   const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
   const requestBody = request?.body;
@@ -43,6 +83,34 @@ function installPerplexitySuccessFetch() {
     choices: [{ message: { content: "ok" } }],
     citations: [],
   });
+}
+
+function createProviderSuccessPayload(
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi",
+) {
+  if (provider === "brave") {
+    return { web: { results: [] } };
+  }
+  if (provider === "perplexity") {
+    return { choices: [{ message: { content: "ok" } }], citations: [] };
+  }
+  if (provider === "grok") {
+    return { output_text: "ok", citations: [] };
+  }
+  if (provider === "gemini") {
+    return {
+      candidates: [
+        {
+          content: { parts: [{ text: "ok" }] },
+          groundingMetadata: { groundingChunks: [] },
+        },
+      ],
+    };
+  }
+  return {
+    choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
+    search_results: [],
+  };
 }
 
 async function executePerplexitySearch(
@@ -112,7 +180,7 @@ describe("web_search country and language parameters", () => {
   it.each([
     { key: "country", value: "DE" },
     { key: "search_lang", value: "de" },
-    { key: "ui_lang", value: "de" },
+    { key: "ui_lang", value: "de-DE" },
     { key: "freshness", value: "pw" },
   ])("passes $key parameter to Brave API", async ({ key, value }) => {
     const url = await runBraveSearchAndGetUrl({ [key]: value });
@@ -127,6 +195,45 @@ describe("web_search country and language parameters", () => {
     expect(mockFetch).not.toHaveBeenCalled();
     expect(result?.details).toMatchObject({ error: "invalid_freshness" });
   });
+
+  it("uses proxy-aware dispatcher when HTTP_PROXY is configured", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const mockFetch = installMockFetch({ web: { results: [] } });
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+
+    await tool?.execute?.("call-1", { query: "proxy-test" });
+
+    const requestInit = mockFetch.mock.calls[0]?.[1] as
+      | (RequestInit & { dispatcher?: unknown })
+      | undefined;
+    expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+});
+
+describe("web_search provider proxy dispatch", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+
+  it.each(["brave", "perplexity", "grok", "gemini", "kimi"] as const)(
+    "uses proxy-aware dispatcher for %s provider when HTTP_PROXY is configured",
+    async (provider) => {
+      vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+      const mockFetch = installMockFetch(createProviderSuccessPayload(provider));
+      const tool = createProviderSearchTool(provider);
+      expect(tool).not.toBeNull();
+
+      await tool?.execute?.("call-1", { query: `proxy-${provider}-test` });
+
+      const requestInit = mockFetch.mock.calls[0]?.[1] as
+        | (RequestInit & { dispatcher?: unknown })
+        | undefined;
+      expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    },
+  );
 });
 
 describe("web_search perplexity baseUrl defaults", () => {
@@ -203,6 +310,99 @@ describe("web_search perplexity baseUrl defaults", () => {
       const body = parseFirstRequestBody(mockFetch);
       expect(body.model).toBe(expectedModel);
     }
+  });
+});
+
+describe("web_search kimi provider", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+
+  it("returns a setup hint when Kimi key is missing", async () => {
+    vi.stubEnv("KIMI_API_KEY", "");
+    vi.stubEnv("MOONSHOT_API_KEY", "");
+    const tool = createKimiSearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+    expect(result?.details).toMatchObject({ error: "missing_kimi_api_key" });
+  });
+
+  it("runs the Kimi web_search tool flow and echoes tool results", async () => {
+    const mockFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      const idx = mockFetch.mock.calls.length;
+      if (idx === 1) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                finish_reason: "tool_calls",
+                message: {
+                  role: "assistant",
+                  content: "",
+                  reasoning_content: "searching",
+                  tool_calls: [
+                    {
+                      id: "call_1",
+                      type: "function",
+                      function: {
+                        name: "$web_search",
+                        arguments: JSON.stringify({ q: "openclaw" }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+            search_results: [
+              { title: "OpenClaw", url: "https://openclaw.ai/docs", content: "docs" },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          choices: [
+            { finish_reason: "stop", message: { role: "assistant", content: "final answer" } },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const tool = createKimiSearchTool({
+      apiKey: "kimi-config-key",
+      baseUrl: "https://api.moonshot.ai/v1",
+      model: "moonshot-v1-128k",
+    });
+    const result = await tool?.execute?.("call-1", { query: "latest openclaw release" });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const secondRequest = mockFetch.mock.calls[1]?.[1];
+    const secondBody = JSON.parse(
+      typeof secondRequest?.body === "string" ? secondRequest.body : "{}",
+    ) as {
+      messages?: Array<Record<string, unknown>>;
+    };
+    const toolMessage = secondBody.messages?.find((message) => message.role === "tool") as
+      | { content?: string; tool_call_id?: string }
+      | undefined;
+    expect(toolMessage?.tool_call_id).toBe("call_1");
+    expect(JSON.parse(toolMessage?.content ?? "{}")).toMatchObject({
+      search_results: [{ url: "https://openclaw.ai/docs" }],
+    });
+
+    const details = result?.details as {
+      citations?: string[];
+      content?: string;
+      provider?: string;
+    };
+    expect(details.provider).toBe("kimi");
+    expect(details.citations).toEqual(["https://openclaw.ai/docs"]);
+    expect(details.content).toContain("final answer");
   });
 });
 

@@ -1,12 +1,13 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import {
   isValidCloudCodeAssistToolId,
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "./tool-call-id.js";
 
 const buildDuplicateIdCollisionInput = () =>
-  [
+  castAgentMessages([
     {
       role: "assistant",
       content: [
@@ -26,7 +27,7 @@ const buildDuplicateIdCollisionInput = () =>
       toolName: "read",
       content: [{ type: "text", text: "two" }],
     },
-  ] as unknown as AgentMessage[];
+  ]);
 
 function expectCollisionIdsRemainDistinct(
   out: AgentMessage[],
@@ -48,10 +49,24 @@ function expectCollisionIdsRemainDistinct(
   return { aId: a.id as string, bId: b.id as string };
 }
 
+function expectSingleToolCallRewrite(
+  out: AgentMessage[],
+  expectedId: string,
+  mode: "strict" | "strict9",
+): void {
+  const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+  const toolCall = assistant.content?.[0] as { id?: string };
+  expect(toolCall.id).toBe(expectedId);
+  expect(isValidCloudCodeAssistToolId(toolCall.id as string, mode)).toBe(true);
+
+  const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+  expect(result.toolCallId).toBe(toolCall.id);
+}
+
 describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   describe("strict mode (default)", () => {
     it("is a no-op for already-valid non-colliding IDs", () => {
-      const input = [
+      const input = castAgentMessages([
         {
           role: "assistant",
           content: [{ type: "toolCall", id: "call1", name: "read", arguments: {} }],
@@ -62,14 +77,14 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
           toolName: "read",
           content: [{ type: "text", text: "ok" }],
         },
-      ] as unknown as AgentMessage[];
+      ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input);
       expect(out).toBe(input);
     });
 
     it("strips non-alphanumeric characters from tool call IDs", () => {
-      const input = [
+      const input = castAgentMessages([
         {
           role: "assistant",
           content: [{ type: "toolCall", id: "call|item:123", name: "read", arguments: {} }],
@@ -80,19 +95,12 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
           toolName: "read",
           content: [{ type: "text", text: "ok" }],
         },
-      ] as unknown as AgentMessage[];
+      ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input);
       expect(out).not.toBe(input);
-
-      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-      const toolCall = assistant.content?.[0] as { id?: string };
       // Strict mode strips all non-alphanumeric characters
-      expect(toolCall.id).toBe("callitem123");
-      expect(isValidCloudCodeAssistToolId(toolCall.id as string, "strict")).toBe(true);
-
-      const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
-      expect(result.toolCallId).toBe(toolCall.id);
+      expectSingleToolCallRewrite(out, "callitem123", "strict");
     });
 
     it("avoids collisions when sanitization would produce duplicate IDs", () => {
@@ -106,7 +114,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
     it("caps tool call IDs at 40 chars while preserving uniqueness", () => {
       const longA = `call_${"a".repeat(60)}`;
       const longB = `call_${"a".repeat(59)}b`;
-      const input = [
+      const input = castAgentMessages([
         {
           role: "assistant",
           content: [
@@ -126,7 +134,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
           toolName: "read",
           content: [{ type: "text", text: "two" }],
         },
-      ] as unknown as AgentMessage[];
+      ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input);
       const { aId, bId } = expectCollisionIdsRemainDistinct(out, "strict");
@@ -137,7 +145,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
   describe("strict mode (alphanumeric only)", () => {
     it("strips underscores and hyphens from tool call IDs", () => {
-      const input = [
+      const input = castAgentMessages([
         {
           role: "assistant",
           content: [
@@ -155,19 +163,12 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
           toolName: "login",
           content: [{ type: "text", text: "ok" }],
         },
-      ] as unknown as AgentMessage[];
+      ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
       expect(out).not.toBe(input);
-
-      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-      const toolCall = assistant.content?.[0] as { id?: string };
       // Strict mode strips all non-alphanumeric characters
-      expect(toolCall.id).toBe("whatsapplogin17687998415271");
-      expect(isValidCloudCodeAssistToolId(toolCall.id as string, "strict")).toBe(true);
-
-      const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
-      expect(result.toolCallId).toBe(toolCall.id);
+      expectSingleToolCallRewrite(out, "whatsapplogin17687998415271", "strict");
     });
 
     it("avoids collisions with alphanumeric-only suffixes", () => {
@@ -183,8 +184,26 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   });
 
   describe("strict9 mode (Mistral tool call IDs)", () => {
+    it("is a no-op for already-valid 9-char alphanumeric IDs", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "abc123XYZ", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "abc123XYZ",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict9");
+      expect(out).toBe(input);
+    });
+
     it("enforces alphanumeric IDs with length 9", () => {
-      const input = [
+      const input = castAgentMessages([
         {
           role: "assistant",
           content: [
@@ -204,7 +223,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
           toolName: "read",
           content: [{ type: "text", text: "two" }],
         },
-      ] as unknown as AgentMessage[];
+      ]);
 
       const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict9");
       expect(out).not.toBe(input);
