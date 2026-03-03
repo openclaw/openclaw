@@ -41,7 +41,10 @@ if [[ "$PLATFORM" == "linux" ]]; then
     systemctl --user restart chrome-cleanup.service
 
     echo "[chrome-cleanup] Service status:"
-    systemctl --user status chrome-cleanup.service --no-pager | head -6
+    # Avoid SIGPIPE under set -euo pipefail: capture output first, then truncate
+    _svc_status=$(systemctl --user status chrome-cleanup.service --no-pager 2>&1 || true)
+    echo "$_svc_status" | head -6
+    unset _svc_status
 
 elif [[ "$PLATFORM" == "macos" ]]; then
     LAUNCHD_DIR="$HOME/Library/LaunchAgents"
