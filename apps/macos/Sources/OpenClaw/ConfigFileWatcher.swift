@@ -30,5 +30,4 @@ final class ConfigFileWatcher: @unchecked Sendable, SimpleFileWatcherOwner {
             },
             onChange: onChange))
     }
-
 }
