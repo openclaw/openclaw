@@ -810,7 +810,7 @@ export async function runReplyAgent(params: {
               : undefined;
 
             try {
-              await spawnSubagentDirect(
+              const spawnResult = await spawnSubagentDirect(
                 {
                   task: `[continuation] Delegated task (turn ${nextChainCount}/${maxChainLength}): ${delegateTask}`,
                   attachments,
@@ -823,6 +823,15 @@ export async function runReplyAgent(params: {
                   agentThreadId: followupRun.originatingThreadId ?? undefined,
                 },
               );
+              if (spawnResult.status !== "accepted") {
+                defaultRuntime.log(
+                  `DELEGATE spawn rejected (${spawnResult.status}) for session ${sessionKey}`,
+                );
+                enqueueSystemEvent(
+                  `[continuation] DELEGATE spawn ${spawnResult.status}: delegation was not accepted. Use sessions_spawn manually. Original task: ${delegateTask}`,
+                  { sessionKey },
+                );
+              }
             } catch (err) {
               defaultRuntime.log(`DELEGATE spawn failed for session ${sessionKey}: ${String(err)}`);
               enqueueSystemEvent(

@@ -160,10 +160,15 @@ export function stripContinuationSignal(text: string): {
     return { text, signal: null };
   }
 
-  const stripped = text
-    .replace(/\bCONTINUE_DELEGATE:.+$/s, "")
-    .replace(/\bCONTINUE_WORK(?::\d+)?\s*$/, "")
-    .trimEnd();
+  let stripped: string;
+  if (signal.kind === "delegate") {
+    // Only strip the final CONTINUE_DELEGATE occurrence (anchor to end of string)
+    stripped = text.replace(/\bCONTINUE_DELEGATE:[^\n]*(?:\n---CONTEXT---\n[\s\S]*)?\s*$/, "");
+  } else {
+    // Only strip CONTINUE_WORK when it's the signal type parsed
+    stripped = text.replace(/\bCONTINUE_WORK(?::\d+)?\s*$/, "");
+  }
+  stripped = stripped.trimEnd();
 
   return { text: stripped, signal };
 }
