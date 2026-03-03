@@ -66,6 +66,23 @@ export type {
   DiscordMessagePreflightParams,
 } from "./message-handler.preflight.types.js";
 
+const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
+
+function isBoundThreadBotSystemMessage(params: {
+  isBoundThreadSession: boolean;
+  isBotAuthor: boolean;
+  text?: string;
+}): boolean {
+  if (!params.isBoundThreadSession || !params.isBotAuthor) {
+    return false;
+  }
+  const text = params.text?.trim();
+  if (!text) {
+    return false;
+  }
+  return DISCORD_BOUND_THREAD_SYSTEM_PREFIXES.some((prefix) => text.startsWith(prefix));
+}
+
 export function resolvePreflightMentionRequirement(params: {
   shouldRequireMention: boolean;
   isBoundThreadSession: boolean;
@@ -324,6 +341,17 @@ export async function preflightDiscordMessage(
         agentId: boundAgentId ?? route.agentId,
       }
     : route;
+  const isBoundThreadSession = Boolean(boundSessionKey && earlyThreadChannel);
+  if (
+    isBoundThreadBotSystemMessage({
+      isBoundThreadSession,
+      isBotAuthor: Boolean(author.bot),
+      text: messageText,
+    })
+  ) {
+    logVerbose(`discord: drop bound-thread bot system message ${message.id}`);
+    return null;
+  }
   const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
   const explicitlyMentioned = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
@@ -492,7 +520,6 @@ export async function preflightDiscordMessage(
     channelConfig,
     guildInfo,
   });
-  const isBoundThreadSession = Boolean(boundSessionKey && threadChannel);
   const shouldRequireMention = resolvePreflightMentionRequirement({
     shouldRequireMention: shouldRequireMentionByConfig,
     isBoundThreadSession,
