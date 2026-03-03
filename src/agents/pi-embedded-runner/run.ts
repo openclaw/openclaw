@@ -1055,9 +1055,11 @@ export async function runEmbeddedPiAgent(
               profileId: lastProfileId,
               reason: promptFailoverReason,
             });
+            const promptProviderWide = fallbackConfigured && promptFailoverReason === "rate_limit";
             if (
               isFailoverErrorMessage(errorText) &&
               promptFailoverReason !== "timeout" &&
+              !promptProviderWide &&
               (await advanceAuthProfile())
             ) {
               continue;
@@ -1164,7 +1166,9 @@ export async function runEmbeddedPiAgent(
               }
             }
 
-            const rotated = await advanceAuthProfile();
+            const assistantProviderWide =
+              fallbackConfigured && assistantFailoverReason === "rate_limit";
+            const rotated = !assistantProviderWide && (await advanceAuthProfile());
             if (rotated) {
               continue;
             }
