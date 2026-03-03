@@ -625,7 +625,12 @@ export async function runCronIsolatedAgentTurn(params: {
   // Tool wrappers can emit transient/false-positive error payloads before a valid final
   // assistant payload.  Only treat payload errors as recoverable when (a) the run itself
   // did not report a model/context-level error and (b) a non-error payload follows.
-  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
+  // Also treat errors as recoverable when the run produced a non-error deliverable
+  // payload — the agent completed its primary task despite a tool-level warning (#32244).
+  const hasNonErrorDeliverablePayload =
+    !runLevelError && deliveryPayload !== undefined && deliveryPayload.isError !== true;
+  const hasFatalErrorPayload =
+    hasErrorPayload && !hasSuccessfulPayloadAfterLastError && !hasNonErrorDeliverablePayload;
   const lastErrorPayloadText = [...payloads]
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
