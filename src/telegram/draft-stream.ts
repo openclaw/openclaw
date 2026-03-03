@@ -10,6 +10,9 @@ const DRAFT_METHOD_UNAVAILABLE_RE =
   /(unknown method|method .*not (found|available|supported)|unsupported)/i;
 const DRAFT_CHAT_UNSUPPORTED_RE = /(can't be used|can be used only)/i;
 
+// RTL script detection: Hebrew (0590-05FF), Arabic (0600-08FF), Arabic Presentation Forms (FB1D-FDFF, FE70-FEFC)
+const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
+
 type TelegramSendMessageDraft = (
   chatId: number,
   draftId: number,
@@ -51,6 +54,18 @@ function shouldFallbackFromDraftTransport(err: unknown): boolean {
     return false;
   }
   return DRAFT_METHOD_UNAVAILABLE_RE.test(text) || DRAFT_CHAT_UNSUPPORTED_RE.test(text);
+}
+
+/**
+ * Prepends RTL Mark (RLM) to text if it contains RTL scripts.
+ * This helps Telegram render RTL languages (Hebrew, Arabic) correctly in draft previews.
+ * The RLM is a zero-width character that signals text direction without affecting display.
+ */
+function prependRTLMarkIfNeeded(text: string): string {
+  if (RTL_SCRIPT_RE.test(text)) {
+    return "\u200F" + text;
+  }
+  return text;
 }
 
 export type TelegramDraftStream = {
@@ -203,6 +218,8 @@ export function createTelegramDraftStream(params: {
   }: PreviewSendParams): Promise<boolean> => {
     const draftId = streamDraftId ?? allocateTelegramDraftId();
     streamDraftId = draftId;
+    // Prepend RLM for RTL languages when not using HTML parse mode (which handles directionality automatically)
+    const rtlText = renderedParseMode ? renderedText : prependRTLMarkIfNeeded(renderedText);
     const draftParams = {
       ...(threadParams?.message_thread_id != null
         ? { message_thread_id: threadParams.message_thread_id }
@@ -212,7 +229,7 @@ export function createTelegramDraftStream(params: {
     await resolvedDraftApi!(
       chatId,
       draftId,
-      renderedText,
+      rtlText,
       Object.keys(draftParams).length > 0 ? draftParams : undefined,
     );
     return true;
