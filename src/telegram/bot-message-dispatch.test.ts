@@ -401,7 +401,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it.each(["block", "partial"] as const)(
-    "forces new message when assistant message restarts (%s mode)",
+    "reuses the same preview message when assistant message restarts (%s mode)",
     async (streamMode) => {
       const draftStream = createDraftStream(999);
       createTelegramDraftStream.mockReturnValue(draftStream);
@@ -418,7 +418,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
       await dispatchWithContext({ context: createContext(), streamMode });
 
-      expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+      expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
     },
   );
 
@@ -444,7 +444,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 
-  it("finalizes multi-message assistant stream to matching preview messages in order", async () => {
+  it("suppresses superseded answer finals and keeps only the latest preview final", async () => {
     const answerDraftStream = createSequencedDraftStream(1001);
     const reasoningDraftStream = createDraftStream();
     createTelegramDraftStream
@@ -469,32 +469,18 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(2);
-    expect(editMessageTelegram).toHaveBeenNthCalledWith(
-      1,
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
       123,
       1001,
-      "Message A final",
-      expect.any(Object),
-    );
-    expect(editMessageTelegram).toHaveBeenNthCalledWith(
-      2,
-      123,
-      1002,
-      "Message B final",
-      expect.any(Object),
-    );
-    expect(editMessageTelegram).toHaveBeenNthCalledWith(
-      3,
-      123,
-      1003,
       "Message C final",
       expect.any(Object),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("maps finals correctly when first preview id resolves after message boundary", async () => {
+  it("skips superseded finals when first preview id resolves after a message boundary", async () => {
     let answerMessageId: number | undefined;
     let answerDraftParams:
       | {
@@ -543,17 +529,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(editMessageTelegram).toHaveBeenNthCalledWith(
-      1,
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
       123,
       1001,
-      "Message A final",
-      expect.any(Object),
-    );
-    expect(editMessageTelegram).toHaveBeenNthCalledWith(
-      2,
-      123,
-      1002,
       "Message B final",
       expect.any(Object),
     );
@@ -606,7 +585,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     },
   );
 
-  it("maps finals correctly when archived preview id arrives during final flush", async () => {
+  it("keeps only the latest final when archived preview id arrives during final flush", async () => {
     let answerMessageId: number | undefined;
     let answerDraftParams:
       | {
@@ -658,17 +637,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(editMessageTelegram).toHaveBeenNthCalledWith(
-      1,
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
       123,
       1001,
-      "Message A final",
-      expect.any(Object),
-    );
-    expect(editMessageTelegram).toHaveBeenNthCalledWith(
-      2,
-      123,
-      1002,
       "Message B final",
       expect.any(Object),
     );

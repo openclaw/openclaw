@@ -234,6 +234,7 @@ export const dispatchTelegramMessage = async ({
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
   let splitReasoningOnNextStream = false;
+  let skippedSupersededAnswerFinals = 0;
   const reasoningStepState = createTelegramReasoningStepState();
   type SplitLaneSegment = { lane: LaneName; text: string };
   type SplitLaneSegmentsResult = {
@@ -500,6 +501,14 @@ export const dispatchTelegramMessage = async ({
             if (
               segment.lane === "answer" &&
               info.kind === "final" &&
+              skippedSupersededAnswerFinals > 0
+            ) {
+              skippedSupersededAnswerFinals -= 1;
+              continue;
+            }
+            if (
+              segment.lane === "answer" &&
+              info.kind === "final" &&
               reasoningStepState.shouldBufferFinalAnswer()
             ) {
               reasoningStepState.bufferFinalAnswer({ payload, text: segment.text });
@@ -597,18 +606,10 @@ export const dispatchTelegramMessage = async ({
           ? async () => {
               reasoningStepState.resetForNextStep();
               if (answerLane.hasStreamedMessage) {
-                const previewMessageId = answerLane.stream?.messageId();
-                // Only archive previews that still need a matching final text update.
-                // Once a preview has already been finalized, archiving it here causes
-                // cleanup to delete a user-visible final message on later media-only turns.
-                if (typeof previewMessageId === "number" && !finalizedPreviewByLane.answer) {
-                  archivedAnswerPreviews.push({
-                    messageId: previewMessageId,
-                    textSnapshot: answerLane.lastPartialText,
-                  });
-                }
-                answerLane.stream?.forceNewMessage();
+                skippedSupersededAnswerFinals += 1;
               }
+              // Keep answer previews on a single Telegram message across tool rounds.
+              // Rotating to new messages leaks intermediate text as standalone messages.
               resetDraftLaneState(answerLane);
               // New assistant message boundary: this lane now tracks a fresh preview lifecycle.
               finalizedPreviewByLane.answer = false;
