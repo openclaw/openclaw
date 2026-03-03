@@ -193,6 +193,44 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 - See [/concepts/model-providers](/concepts/model-providers) for provider rules.
 - Use `openclaw models list` and `openclaw models set minimax/MiniMax-M2.5` to switch.
 
+## MiniMax Coding Plan MCP tools (web_search & understand_image)
+
+MiniMax provides a dedicated **Coding Plan MCP server** that exposes two tools:
+
+- `web_search` — web search with result snippets and related suggestions.
+- `understand_image` — image understanding and analysis.
+
+Official docs: see [Web Search & Image Understanding MCP](https://platform.minimax.io/docs/coding-plan/mcp-guide).
+
+### Installing the MCP server
+
+Install the MCP server binary with `uvx`:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uvx minimax-coding-plan-mcp -y
+```
+
+You will need:
+
+- `MINIMAX_API_KEY` — your Coding Plan API key.
+- `MINIMAX_API_HOST` — usually `https://api.minimax.io` (global) or `https://api.minimaxi.com` (CN).
+- Optional: `MINIMAX_MCP_BASE_PATH` — local output directory (must exist and be writable).
+- Optional: `MINIMAX_API_RESOURCE_MODE` — `url` or `local` (defaults to `url`).
+
+### Using with IDEs and OpenClaw-based workflows
+
+MiniMax documents how to wire this MCP server into:
+
+- Claude Code (`claude mcp add -s user MiniMax ...`).
+- Cursor (add a `MiniMax` entry to `mcp.json`).
+- OpenCode and other IDEs.
+
+If you already use MiniMax Coding Plan MCP for `web_search` and `understand_image` in your editor:
+
+- You **do not need** a Brave Search API key for basic browsing.
+- You can keep OpenClaw’s `web_search` tool disabled or configured with another provider, while relying on MiniMax’s own MCP tools for browsing and image understanding.
+
 ## Troubleshooting
 
 ### “Unknown model: minimax/MiniMax-M2.5”

@@ -82,6 +82,22 @@ const WebSearchSchema = Type.Object({
   ),
 });
 
+function hasNativeWebSearchProviderHint(): {
+  minimax: boolean;
+  openai: boolean;
+} {
+  const minimax =
+    Boolean(normalizeSecretInput(process.env.MINIMAX_API_KEY)) ||
+    Boolean(normalizeSecretInput(process.env.MINIMAX_CODE_PLAN_KEY));
+
+  const openai =
+    Boolean(normalizeSecretInput(process.env.OPENAI_API_KEY)) ||
+    Boolean(normalizeSecretInput(process.env.OPENAI_ORG)) ||
+    Boolean(normalizeSecretInput(process.env.OPENAI_BASE_URL));
+
+  return { minimax, openai };
+}
+
 type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { search?: infer Search }
     ? Search
@@ -328,6 +344,31 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
         "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure tools.web.search.kimi.apiKey.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
+  }
+  if (provider === "brave") {
+    const hints = hasNativeWebSearchProviderHint();
+    if (hints.minimax || hints.openai) {
+      const providers = [
+        hints.minimax ? "MiniMax Coding Plan" : undefined,
+        hints.openai ? "OpenAI models with built-in browsing" : undefined,
+      ]
+        .filter(Boolean)
+        .join(" / ");
+
+      return {
+        error: "missing_brave_api_key",
+        message: [
+          "web_search is not configured with a Brave Search API key.",
+          providers
+            ? `We detected ${providers}, which already provide their own network access for search in many setups, so Brave Search is optional.`
+            : "",
+          "If you prefer to rely on a provider's built-in browsing (for example via its MCP tools), you can disable tools.web.search in OpenClaw or switch the web_search provider in tools.web.search.provider instead of setting BRAVE_API_KEY.",
+        ]
+          .filter(Boolean)
+          .join(" "),
+        docs: "https://docs.openclaw.ai/tools/web",
+      };
+    }
   }
   return {
     error: "missing_brave_api_key",

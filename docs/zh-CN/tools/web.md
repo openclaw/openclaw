@@ -41,6 +41,12 @@ OpenClaw 提供两个轻量级 Web 工具：
 
 参见 [Brave Search 设置](/brave-search) 和 [Perplexity Sonar](/perplexity) 了解提供商特定详情。
 
+部分模型提供商（例如 **MiniMax 编程计划 MCP** 或某些 OpenAI 配置）自带 `web_search` / `understand_image` 等联网工具。在这些场景下：
+
+- 你可以直接依赖提供商的一方 Web 工具，而不是强制配置 Brave。
+- 通常可以在 OpenClaw 中关闭 `web_search` 工具，或者将其配置为其他提供商，以避免重复的 Brave API 提示。
+- MiniMax 相关配置示例参见 [/providers/minimax](/providers/minimax)。
+
 在配置中设置提供商：
 
 ```json5
