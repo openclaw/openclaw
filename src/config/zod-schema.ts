@@ -584,6 +584,12 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    voice: z
+      .object({
+        requireConfirmForDangerousTools: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     gateway: z
       .object({
         port: z.number().int().positive().optional(),
@@ -653,6 +659,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
+        maxCommandQueueSize: z.number().int().min(0).optional(),
         tailscale: z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),

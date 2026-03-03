@@ -770,11 +770,34 @@ export async function runEmbeddedAttempt(
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
 
+    // Voice safety: when input originated from voice and the operator has
+    // enabled voice.requireConfirmForDangerousTools, inject a system prompt
+    // hint instructing the model to request explicit confirmation before
+    // using dangerous tools (exec, fs write, message send).
+    const voiceSafetyHint = (() => {
+      if (!params.inputProvenance || params.inputProvenance.sourceChannel !== "voice") {
+        return undefined;
+      }
+      if (params.config?.voice?.requireConfirmForDangerousTools !== true) {
+        return undefined;
+      }
+      return (
+        "VOICE INPUT SAFETY: This message originated from voice input (speech-to-text). " +
+        "Before executing any potentially dangerous tool (system commands, file writes, " +
+        "message sends, or destructive operations), you MUST ask the user for explicit " +
+        "confirmation first. Describe what you intend to do and wait for approval. " +
+        "Read-only operations (file reads, searches, status checks) may proceed without confirmation."
+      );
+    })();
+
+    const effectiveExtraSystemPrompt =
+      [params.extraSystemPrompt, voiceSafetyHint].filter(Boolean).join("\n\n") || undefined;
+
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
-      extraSystemPrompt: params.extraSystemPrompt,
+      extraSystemPrompt: effectiveExtraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
       ownerDisplay: ownerDisplay.ownerDisplay,
       ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
