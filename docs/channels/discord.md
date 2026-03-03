@@ -867,6 +867,7 @@ Core examples:
 - reactions: `react`, `reactions`, `emojiList`
 - moderation: `timeout`, `kick`, `ban`
 - presence: `setPresence`
+- self profile (bot-only): `self-profile`
 
 Action gates live under `channels.discord.actions.*`.
 
@@ -878,6 +879,42 @@ Default gate behavior:
 | roles                                                                                                                                                                    | disabled |
 | moderation                                                                                                                                                               | disabled |
 | presence                                                                                                                                                                 | disabled |
+| selfProfile                                                                                                                                                              | disabled |
+
+### `self-profile` (strict bot self-only updates)
+
+`self-profile` lets the bot update only its own Discord profile/presence fields:
+
+- guild nickname (`nickname`, requires `guildId`)
+- account avatar (`avatar` or `media`/`path`/`filePath`/`buffer`)
+- status (`online`/`idle`/`dnd`/`invisible`)
+- activity/custom status text (`activity*` or `statusMessage`)
+
+Safety behavior:
+
+- action defaults to self (bot account)
+- if `userId` or `memberId` is provided and does not match the bot user id, the action is rejected
+- channel/member edits for other users are not permitted through this action
+
+Examples:
+
+```json
+{
+  "action": "self-profile",
+  "channel": "discord",
+  "guildId": "123456789012345678",
+  "nickname": "OpenClaw Bot"
+}
+```
+
+```json
+{
+  "action": "self-profile",
+  "channel": "discord",
+  "status": "idle",
+  "statusMessage": "Shipping fixes"
+}
+```
 
 ## Components v2 UI
 
