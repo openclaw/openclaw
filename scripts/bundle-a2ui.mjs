@@ -19,6 +19,18 @@ const inputPaths = [
   a2uiAppDir,
 ];
 
+function isWindowsUncPath(filePath) {
+  return process.platform === "win32" && filePath.startsWith("\\\\");
+}
+
+function resolveCommandCwd(useShell) {
+  if (useShell && isWindowsUncPath(rootDir)) {
+    const drive = process.env.SystemDrive || "C:";
+    return `${drive}\\`;
+  }
+  return rootDir;
+}
+
 function resolveExecutables(command) {
   if (process.platform !== "win32") {
     return [command];
@@ -77,7 +89,7 @@ function runCommand(command, args) {
     }
     const useShell = process.platform === "win32" && candidate.toLowerCase().endsWith(".cmd");
     const result = spawnSync(candidate, args, {
-      cwd: rootDir,
+      cwd: resolveCommandCwd(useShell),
       stdio: "inherit",
       shell: useShell,
     });
@@ -117,7 +129,7 @@ function hasRolldown() {
     }
     const useShell = process.platform === "win32" && candidate.toLowerCase().endsWith(".cmd");
     const result = spawnSync(candidate, ["--version"], {
-      cwd: rootDir,
+      cwd: resolveCommandCwd(useShell),
       stdio: "ignore",
       shell: useShell,
     });
