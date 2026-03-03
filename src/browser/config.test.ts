@@ -165,6 +165,17 @@ describe("browser config", () => {
     expect(work?.cdpUrl).toBe("https://example.com:18801");
   });
 
+  it("preserves wss:// cdpUrl with query params for the default profile", () => {
+    const resolved = resolveBrowserConfig({
+      cdpUrl: "wss://connect.browserbase.com?apiKey=test-key",
+    });
+    const profile = resolveProfile(resolved, "openclaw");
+    expect(profile?.cdpUrl).toBe("wss://connect.browserbase.com/?apiKey=test-key");
+    expect(profile?.cdpHost).toBe("connect.browserbase.com");
+    expect(profile?.cdpPort).toBe(443);
+    expect(profile?.cdpIsLoopback).toBe(false);
+  });
+
   it("rejects unsupported protocols", () => {
     expect(() => resolveBrowserConfig({ cdpUrl: "ftp://127.0.0.1:18791" })).toThrow(
       "must be http(s) or ws(s)",
