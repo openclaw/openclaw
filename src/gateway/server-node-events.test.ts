@@ -32,6 +32,7 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
 }));
 vi.mock("../commands/agent.js", () => ({
   agentCommand: vi.fn(),
+  agentCommandFromIngress: vi.fn(() => Promise.resolve()),
 }));
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
@@ -329,6 +330,33 @@ describe("voice transcript events", () => {
         sourceTool: "gateway.voice.transcript",
       },
     });
+  });
+
+  it("preserves sessionFile when touching session store (fixes transcriptPath persistence)", async () => {
+    const ctx = buildCtx();
+    const sessionKey = "agent:main:main";
+    const existingSessionFile = "/data/sessions/agent/main/sess-123.jsonl";
+    const store: Record<string, { sessionId: string; updatedAt: number; sessionFile?: string }> = {
+      [sessionKey]: {
+        sessionId: "sess-123",
+        updatedAt: 1,
+        sessionFile: existingSessionFile,
+      },
+    };
+    updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
+      update(store);
+    });
+
+    await handleNodeEvent(ctx, "node-v3", {
+      event: "voice.transcript",
+      payloadJSON: JSON.stringify({
+        text: "preserve sessionFile",
+        sessionKey,
+      }),
+    });
+    await Promise.resolve();
+
+    expect(store[sessionKey]?.sessionFile).toBe(existingSessionFile);
   });
 
   it("does not block agent dispatch when session-store touch fails", async () => {
