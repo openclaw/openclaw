@@ -225,6 +225,7 @@ export function getChromeExtensionRelayAuthHeaders(url: string): Record<string, 
 export async function ensureChromeExtensionRelayServer(opts: {
   cdpUrl: string;
   bindHost?: string;
+  lockTab?: boolean;
 }): Promise<ChromeExtensionRelayServer> {
   const info = parseBaseUrl(opts.cdpUrl);
   if (!isLoopbackHost(info.host)) {
@@ -594,7 +595,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
       if (path === "/extension/status") {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ connected: extensionConnected() }));
+        res.end(JSON.stringify({ connected: extensionConnected(), lockTab: !!opts.lockTab }));
         return;
       }
 
