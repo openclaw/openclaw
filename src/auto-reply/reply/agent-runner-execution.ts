@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -68,20 +69,6 @@ export type AgentRunLoopResult =
       directlySentBlockKeys?: Set<string>;
     }
   | { kind: "final"; payload: ReplyPayload };
-
-function resolveBootstrapWarningSignaturesSeen(
-  report?: SessionEntry["systemPromptReport"],
-): string[] {
-  const truncation = report?.bootstrapTruncation;
-  const seenFromReport = (truncation?.warningSignaturesSeen ?? []).filter(
-    (value): value is string => typeof value === "string" && value.trim().length > 0,
-  );
-  if (seenFromReport.length > 0) {
-    return Array.from(new Set(seenFromReport));
-  }
-  const single = truncation?.promptWarningSignature;
-  return typeof single === "string" && single.trim().length > 0 ? [single] : [];
-}
 
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;

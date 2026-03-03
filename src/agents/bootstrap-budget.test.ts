@@ -6,6 +6,7 @@ import {
   buildBootstrapTruncationReportMeta,
   buildBootstrapTruncationSignature,
   formatBootstrapTruncationWarningLines,
+  resolveBootstrapWarningSignaturesSeen,
 } from "./bootstrap-budget.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -103,6 +104,27 @@ describe("analyzeBootstrapBudget", () => {
 });
 
 describe("bootstrap prompt warnings", () => {
+  it("resolves seen signatures from report history or legacy single signature", () => {
+    expect(
+      resolveBootstrapWarningSignaturesSeen({
+        bootstrapTruncation: {
+          warningSignaturesSeen: ["sig-a", " ", "sig-b", "sig-a"],
+          promptWarningSignature: "legacy-ignored",
+        },
+      }),
+    ).toEqual(["sig-a", "sig-b"]);
+
+    expect(
+      resolveBootstrapWarningSignaturesSeen({
+        bootstrapTruncation: {
+          promptWarningSignature: "legacy-only",
+        },
+      }),
+    ).toEqual(["legacy-only"]);
+
+    expect(resolveBootstrapWarningSignaturesSeen(undefined)).toEqual([]);
+  });
+
   it("dedupes warnings in once mode by signature", () => {
     const analysis = analyzeBootstrapBudget({
       files: [

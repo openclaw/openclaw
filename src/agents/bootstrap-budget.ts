@@ -98,6 +98,24 @@ function appendSeenSignature(signatures: string[], signature: string): string[] 
   return next.slice(-DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX);
 }
 
+export function resolveBootstrapWarningSignaturesSeen(report?: {
+  bootstrapTruncation?: {
+    warningSignaturesSeen?: string[];
+    promptWarningSignature?: string;
+  };
+}): string[] {
+  const truncation = report?.bootstrapTruncation;
+  const seenFromReport = normalizeSeenSignatures(truncation?.warningSignaturesSeen);
+  if (seenFromReport.length > 0) {
+    return seenFromReport;
+  }
+  const single =
+    typeof truncation?.promptWarningSignature === "string"
+      ? truncation.promptWarningSignature.trim()
+      : "";
+  return single ? [single] : [];
+}
+
 export function buildBootstrapInjectionStats(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
