@@ -135,12 +135,20 @@ function createPluginHandler(
   params: ChannelHandlerParams & { outbound?: ChannelOutboundAdapter },
 ): ChannelHandler | null {
   const outbound = params.outbound;
-  if (!outbound?.sendText || !outbound?.sendMedia) {
+  if (!outbound?.sendText) {
     return null;
   }
   const baseCtx = createChannelOutboundContextBase(params);
   const sendText = outbound.sendText;
-  const sendMedia = outbound.sendMedia;
+  // When sendMedia is absent, degrade media payloads to caption-only text delivery.
+  const sendMedia =
+    outbound.sendMedia ??
+    ((ctx: ChannelOutboundContext) => {
+      log.warn("sendMedia not implemented; degrading to sendText", {
+        channel: params.channel,
+      });
+      return sendText({ ...ctx, mediaUrl: undefined });
+    });
   const chunker = outbound.chunker ?? null;
   const chunkerMode = outbound.chunkerMode;
   const resolveCtx = (overrides?: {

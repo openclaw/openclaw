@@ -775,6 +775,68 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("delivers text via plugin that only implements sendText (no sendMedia)", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "line", messageId: "ln-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "line",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "line",
+      to: "U123",
+      payloads: [{ text: "text-only message" }],
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "text-only message" }));
+    expect(results).toEqual([{ channel: "line", messageId: "ln-1" }]);
+  });
+
+  it("degrades media payloads to sendText when plugin omits sendMedia", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "line", messageId: "ln-2" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "line",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "line",
+      to: "U123",
+      payloads: [{ text: "photo caption", mediaUrl: "https://example.com/photo.png" }],
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    // The fallback should pass the caption text but strip mediaUrl
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "photo caption", mediaUrl: undefined }),
+    );
+    expect(results).toEqual([{ channel: "line", messageId: "ln-2" }]);
+    // Should emit a warning log for the degradation
+    expect(logMocks.warn).toHaveBeenCalledWith(
+      "sendMedia not implemented; degrading to sendText",
+      expect.objectContaining({ channel: "line" }),
+    );
+  });
+
   it("emits message_sent success for sendPayload deliveries", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
