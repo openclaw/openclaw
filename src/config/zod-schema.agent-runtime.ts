@@ -310,7 +310,7 @@ export const ToolsWebSearchSchema = z
       .optional(),
     exa: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         numResults: z.number().int().positive().optional(),
         highlightsMaxChars: z.number().int().positive().optional(),
       })
