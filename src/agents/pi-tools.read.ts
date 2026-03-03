@@ -462,7 +462,14 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  // For sandbox mode, use bridge.readFile to read files from within the container
+  const sandboxReadFile = async (absolutePath: string) => {
+    const resolved = params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root });
+    const buffer = await params.bridge.readFile({ filePath: resolved.containerPath });
+    return buffer.toString("utf-8");
+  };
+  const withRecovery = wrapHostEditToolWithPostWriteRecovery(base, params.root, sandboxReadFile);
+  return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
 }
 
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {

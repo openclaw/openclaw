@@ -18,10 +18,15 @@ function resolveHostEditPath(root: string, pathParam: string): string {
  * the file may be correctly updated but the tool reports failure. This wrapper catches errors and
  * if the target file on disk contains the intended newText, returns success so we don't surface
  * a false "edit failed" to the user (fixes #32333, same pattern as #30773 for write).
+ *
+ * @param readFileFn - Optional custom readFile function. When provided (e.g., for sandbox mode),
+ *   it will be used instead of Node.js fs.readFile. This allows the wrapper to work in sandbox
+ *   environments where files exist in containers inaccessible to the host filesystem.
  */
 export function wrapHostEditToolWithPostWriteRecovery(
   base: AnyAgentTool,
   root: string,
+  readFileFn?: (absolutePath: string) => Promise<string>,
 ): AnyAgentTool {
   return {
     ...base,
@@ -54,7 +59,9 @@ export function wrapHostEditToolWithPostWriteRecovery(
         }
         try {
           const absolutePath = resolveHostEditPath(root, pathParam);
-          const content = await fs.readFile(absolutePath, "utf-8");
+          // Use custom readFileFn if provided (e.g., for sandbox mode), otherwise fall back to fs.readFile
+          const readFile = readFileFn ?? ((p: string) => fs.readFile(p, "utf-8"));
+          const content = await readFile(absolutePath);
           // Only recover when the replacement likely occurred: newText is present and oldText
           // is no longer present. This avoids false success when upstream threw before writing
           // (e.g. oldText not found) but the file already contained newText (review feedback).
