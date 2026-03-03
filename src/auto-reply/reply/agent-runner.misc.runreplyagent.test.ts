@@ -1710,6 +1710,7 @@ describe("runReplyAgent continuation signal handling", () => {
     sessionEntry: SessionEntry;
     sessionStore?: Record<string, SessionEntry>;
     isHeartbeat?: boolean;
+    isContinuationWake?: boolean;
   }) {
     const typing = createMockTypingController();
     const sessionCtx = {
@@ -1743,6 +1744,7 @@ describe("runReplyAgent continuation signal handling", () => {
       shouldInjectGroupIntro: false,
       typingMode: "instant",
       opts: params.isHeartbeat ? { isHeartbeat: true } : undefined,
+      isContinuationWake: params.isContinuationWake,
     });
   }
 
@@ -1839,20 +1841,17 @@ describe("runReplyAgent continuation signal handling", () => {
       },
     });
 
-    // First turn: heartbeat continuation that schedules a WORK timer
-    peekSystemEventEntriesMock.mockReturnValue([
-      { text: "[continuation] Turn 1/10. The agent elected to continue working." },
-    ]);
+    // First turn: continuation wake that schedules a WORK timer
     await runTurn({
       commandBody: "heartbeat",
       followupRun,
       sessionKey,
       sessionEntry,
       isHeartbeat: true,
+      isContinuationWake: true,
     });
 
     // Second turn: external message — should cancel the timer
-    peekSystemEventEntriesMock.mockReturnValue([]);
     await runTurn({
       commandBody: "Actually, new input from user",
       followupRun,
@@ -2053,10 +2052,7 @@ describe("runReplyAgent continuation signal handling", () => {
       },
     });
 
-    // First DELEGATE — simulate heartbeat with continuation system event
-    peekSystemEventEntriesMock.mockReturnValue([
-      { text: "[continuation] Turn 1/2. The agent elected to continue working." },
-    ]);
+    // First DELEGATE — continuation wake
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Delegating step 1.\n[[CONTINUE_DELEGATE: do step 1]]" }],
       meta: {},
@@ -2069,6 +2065,7 @@ describe("runReplyAgent continuation signal handling", () => {
       sessionEntry,
       sessionStore,
       isHeartbeat: true,
+      isContinuationWake: true,
     });
 
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
@@ -2076,9 +2073,6 @@ describe("runReplyAgent continuation signal handling", () => {
     expect(sessionEntry.continuationChainCount).toBe(1);
 
     // Second DELEGATE — count goes to 2 = maxChainLength
-    peekSystemEventEntriesMock.mockReturnValue([
-      { text: "[continuation] Turn 2/2. The agent elected to continue working." },
-    ]);
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Delegating step 2.\n[[CONTINUE_DELEGATE: do step 2]]" }],
       meta: {},
@@ -2091,15 +2085,13 @@ describe("runReplyAgent continuation signal handling", () => {
       sessionEntry,
       sessionStore,
       isHeartbeat: true,
+      isContinuationWake: true,
     });
 
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
     expect(sessionEntry.continuationChainCount).toBe(2);
 
     // Third DELEGATE — should be CAPPED (count >= maxChainLength)
-    peekSystemEventEntriesMock.mockReturnValue([
-      { text: "[continuation] Turn 3/2. The agent elected to continue working." },
-    ]);
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Trying step 3.\n[[CONTINUE_DELEGATE: do step 3]]" }],
       meta: {},
@@ -2112,6 +2104,7 @@ describe("runReplyAgent continuation signal handling", () => {
       sessionEntry,
       sessionStore,
       isHeartbeat: true,
+      isContinuationWake: true,
     });
 
     // Spawn should NOT have been called a third time — capped

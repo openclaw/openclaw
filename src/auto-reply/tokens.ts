@@ -119,8 +119,12 @@ export function parseContinuationSignal(text: string | undefined): ContinuationS
 
   // Check for [[CONTINUE_DELEGATE: task]] at end of response.
   // The bracket pair [[ ... ]] delimits the body, so multiline tasks are safe.
-  // The `s` flag lets the body span newlines within the brackets.
-  const delegateMatch = trimmed.match(/\[\[\s*CONTINUE_DELEGATE:\s*([\s\S]+?)\s*\]\]\s*$/);
+  // The negative lookahead (?!\]\]) prevents ]] inside the body from prematurely
+  // closing the bracket, and ensures we match the LAST [[CONTINUE_DELEGATE:]] when
+  // the same token appears mid-text earlier in the response.
+  const delegateMatch = trimmed.match(
+    /\[\[\s*CONTINUE_DELEGATE:\s*((?:(?!\]\])[\s\S])+?)\s*\]\]\s*$/,
+  );
   if (delegateMatch) {
     const task = delegateMatch[1].trim();
     if (task) {
@@ -158,7 +162,7 @@ export function stripContinuationSignal(text: string): {
   if (signal.kind === "delegate") {
     // Strip the [[CONTINUE_DELEGATE: ...]] bracket directive.
     // Mirrors the parser grammar exactly.
-    stripped = text.replace(/\[\[\s*CONTINUE_DELEGATE:\s*[\s\S]+?\s*\]\]\s*$/, "");
+    stripped = text.replace(/\[\[\s*CONTINUE_DELEGATE:\s*(?:(?!\]\])[\s\S])+?\s*\]\]\s*$/, "");
   } else {
     // Only strip CONTINUE_WORK when it's the signal type parsed
     stripped = text.replace(/\bCONTINUE_WORK(?::\d+)?\s*$/, "");

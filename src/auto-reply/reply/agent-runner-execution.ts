@@ -154,8 +154,8 @@ export async function runAgentTurnWithFallback(params: {
           return { skip: true };
         }
         // Strip continuation signal from display text during streaming to avoid
-        // showing the raw token to users. Detection happens post-run on final payloads.
-        if (text) {
+        // showing the raw token to users. Only when continuation feature is enabled.
+        if (text && params.followupRun.run.config?.agents?.defaults?.continuation?.enabled) {
           const continuationResult = stripContinuationSignal(text);
           if (continuationResult.signal) {
             text = continuationResult.text;

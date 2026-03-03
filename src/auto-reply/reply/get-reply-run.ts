@@ -16,6 +16,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { peekSystemEventEntries } from "../../infra/system-events.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -332,6 +333,12 @@ export async function runPreparedReply(
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
+  // Peek system events BEFORE buildQueuedSystemPrompt drains them.
+  // This detects continuation wakes so runReplyAgent can skip chain-state reset.
+  const hasContinuationSystemEvent = peekSystemEventEntries(sessionKey)?.some((e) =>
+    e.text?.startsWith("[continuation]"),
+  );
+
   const queuedSystemPrompt = await buildQueuedSystemPrompt({
     cfg,
     sessionKey,
@@ -542,5 +549,6 @@ export async function runPreparedReply(
     sessionCtx,
     shouldInjectGroupIntro,
     typingMode,
+    isContinuationWake: isHeartbeat && hasContinuationSystemEvent,
   });
 }

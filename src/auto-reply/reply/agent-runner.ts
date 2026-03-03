@@ -20,7 +20,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
-import { enqueueSystemEvent, peekSystemEventEntries } from "../../infra/system-events.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
@@ -111,6 +111,8 @@ export async function runReplyAgent(params: {
   sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
+  /** True when this turn was triggered by a continuation timer (detected before system events are drained). */
+  isContinuationWake?: boolean;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
@@ -137,6 +139,7 @@ export async function runReplyAgent(params: {
     sessionCtx,
     shouldInjectGroupIntro,
     typingMode,
+    isContinuationWake,
   } = params;
 
   let activeSessionEntry = sessionEntry;
@@ -146,12 +149,10 @@ export async function runReplyAgent(params: {
   const isHeartbeat = opts?.isHeartbeat === true;
 
   // Detect whether this turn is a continuation wake or an external message.
-  // Continuation turns arrive as system events enqueued by our own timer callback.
-  // We ONLY check the out-of-band system event queue — never raw commandBody, which
-  // is user-supplied and could be spoofed to bypass preemption.
-  const isContinuationEvent =
-    isHeartbeat &&
-    peekSystemEventEntries(sessionKey ?? "")?.some((e) => e.text?.startsWith("[continuation]"));
+  // The isContinuationWake flag is set by the caller (get-reply-run) by peeking
+  // system events BEFORE they are drained by buildQueuedSystemPrompt. This avoids
+  // the race where draining empties the queue before we can check it here.
+  const isContinuationEvent = isContinuationWake === true;
 
   if (!isContinuationEvent && sessionKey) {
     // External message — reset chain tracking
@@ -447,10 +448,12 @@ export async function runReplyAgent(params: {
 
     const payloadArray = runResult.payloads ?? [];
 
-    // Detect continuation signal on the FINAL assembled payloads (not during streaming).
-    // Only check the last payload — the signal must be at the end of the agent's response.
+    // Detect and strip continuation signal only when the feature is enabled.
+    // This prevents output mutation on disabled deployments where a model might
+    // mention CONTINUE_WORK or [[CONTINUE_DELEGATE:]] in explanatory text.
+    const continuationFeatureEnabled = cfg.agents?.defaults?.continuation?.enabled === true;
     let continuationSignal: ContinuationSignal | null = null;
-    if (payloadArray.length > 0) {
+    if (continuationFeatureEnabled && payloadArray.length > 0) {
       const lastPayload = payloadArray[payloadArray.length - 1];
       if (lastPayload.text) {
         const continuationResult = stripContinuationSignal(lastPayload.text);
@@ -790,8 +793,8 @@ export async function runReplyAgent(params: {
             defaultRuntime.log(
               `Continuation cost cap exceeded (${accumulatedChainTokens} > ${costCapTokens}) for session ${sessionKey}`,
             );
-          } else if (continuationSignal.kind === "delegate") {
-            // DELEGATE: spawn sub-agent with the task
+          } else {
+            // Persist chain state for both DELEGATE and WORK paths
             const nextChainCount = currentChainCount + 1;
             const chainStartedAt = activeSessionEntry?.continuationChainStartedAt ?? Date.now();
             if (activeSessionEntry) {
@@ -807,74 +810,79 @@ export async function runReplyAgent(params: {
                 continuationChainTokens: accumulatedChainTokens,
               };
             }
-
-            const delegateTask = continuationSignal.task;
-
-            try {
-              const spawnResult = await spawnSubagentDirect(
-                {
-                  task: `[continuation] Delegated task (turn ${nextChainCount}/${maxChainLength}): ${delegateTask}`,
-                },
-                {
-                  agentSessionKey: sessionKey,
-                  agentChannel: followupRun.originatingChannel ?? undefined,
-                  agentAccountId: followupRun.originatingAccountId ?? undefined,
-                  agentTo: followupRun.originatingTo ?? undefined,
-                  agentThreadId: followupRun.originatingThreadId ?? undefined,
-                },
-              );
-              if (spawnResult.status !== "accepted") {
+            // Persist to disk so chain counters survive across turns
+            if (storePath) {
+              try {
+                await updateSessionStore(storePath, (store) => {
+                  const entry = store[sessionKey];
+                  if (entry) {
+                    entry.continuationChainCount = nextChainCount;
+                    entry.continuationChainStartedAt = chainStartedAt;
+                    entry.continuationChainTokens = accumulatedChainTokens;
+                  }
+                });
+              } catch (err) {
                 defaultRuntime.log(
-                  `DELEGATE spawn rejected (${spawnResult.status}) for session ${sessionKey}`,
+                  `Failed to persist continuation chain state for ${sessionKey}: ${String(err)}`,
+                );
+              }
+            }
+
+            if (continuationSignal.kind === "delegate") {
+              const delegateTask = continuationSignal.task;
+
+              try {
+                const spawnResult = await spawnSubagentDirect(
+                  {
+                    task: `[continuation] Delegated task (turn ${nextChainCount}/${maxChainLength}): ${delegateTask}`,
+                  },
+                  {
+                    agentSessionKey: sessionKey,
+                    agentChannel: followupRun.originatingChannel ?? undefined,
+                    agentAccountId: followupRun.originatingAccountId ?? undefined,
+                    agentTo: followupRun.originatingTo ?? undefined,
+                    agentThreadId: followupRun.originatingThreadId ?? undefined,
+                  },
+                );
+                if (spawnResult.status !== "accepted") {
+                  defaultRuntime.log(
+                    `DELEGATE spawn rejected (${spawnResult.status}) for session ${sessionKey}`,
+                  );
+                  enqueueSystemEvent(
+                    `[continuation] DELEGATE spawn ${spawnResult.status}: delegation was not accepted. Use sessions_spawn manually. Original task: ${delegateTask}`,
+                    { sessionKey },
+                  );
+                }
+              } catch (err) {
+                defaultRuntime.log(
+                  `DELEGATE spawn failed for session ${sessionKey}: ${String(err)}`,
                 );
                 enqueueSystemEvent(
-                  `[continuation] DELEGATE spawn ${spawnResult.status}: delegation was not accepted. Use sessions_spawn manually. Original task: ${delegateTask}`,
+                  `[continuation] DELEGATE spawn failed: ${String(err)}. Original task: ${delegateTask}`,
                   { sessionKey },
                 );
               }
-            } catch (err) {
-              defaultRuntime.log(`DELEGATE spawn failed for session ${sessionKey}: ${String(err)}`);
-              enqueueSystemEvent(
-                `[continuation] DELEGATE spawn failed: ${String(err)}. Original task: ${delegateTask}`,
-                { sessionKey },
-              );
-            }
-          } else {
-            // WORK: schedule a continuation turn after delay
-            const requestedDelay = continuationSignal.delayMs ?? defaultDelayMs;
-            const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, requestedDelay));
-            const nextChainCount = currentChainCount + 1;
-            const chainStartedAt = activeSessionEntry?.continuationChainStartedAt ?? Date.now();
+            } else {
+              // WORK: schedule a continuation turn after delay
+              const requestedDelay = continuationSignal.delayMs ?? defaultDelayMs;
+              const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, requestedDelay));
 
-            if (activeSessionEntry) {
-              activeSessionEntry.continuationChainCount = nextChainCount;
-              activeSessionEntry.continuationChainStartedAt = chainStartedAt;
-              activeSessionEntry.continuationChainTokens = accumulatedChainTokens;
+              // Schedule continuation with generation guard
+              const generation = bumpContinuationGeneration(sessionKey);
+              setTimeout(() => {
+                if (currentContinuationGeneration(sessionKey) !== generation) {
+                  return; // External message arrived — cancel
+                }
+                enqueueSystemEvent(
+                  `[continuation] Turn ${nextChainCount + 1}/${maxChainLength}. ` +
+                    `Chain started at ${new Date(chainStartedAt).toISOString()}. ` +
+                    `Accumulated tokens: ${accumulatedChainTokens}. ` +
+                    `The agent elected to continue working.`,
+                  { sessionKey },
+                );
+                requestHeartbeatNow({ sessionKey, reason: "continuation" });
+              }, clampedDelay);
             }
-            if (activeSessionStore) {
-              activeSessionStore[sessionKey] = {
-                ...(activeSessionStore[sessionKey] ?? activeSessionEntry!),
-                continuationChainCount: nextChainCount,
-                continuationChainStartedAt: chainStartedAt,
-                continuationChainTokens: accumulatedChainTokens,
-              };
-            }
-
-            // Schedule continuation with generation guard
-            const generation = bumpContinuationGeneration(sessionKey);
-            setTimeout(() => {
-              if (currentContinuationGeneration(sessionKey) !== generation) {
-                return; // External message arrived — cancel
-              }
-              enqueueSystemEvent(
-                `[continuation] Turn ${nextChainCount + 1}/${maxChainLength}. ` +
-                  `Chain started at ${new Date(chainStartedAt).toISOString()}. ` +
-                  `Accumulated tokens: ${accumulatedChainTokens}. ` +
-                  `The agent elected to continue working.`,
-                { sessionKey },
-              );
-              requestHeartbeatNow({ sessionKey, reason: "continuation" });
-            }, clampedDelay);
           }
         }
       }

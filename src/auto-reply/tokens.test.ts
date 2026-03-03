@@ -116,6 +116,16 @@ describe("parseContinuationSignal", () => {
     expect(result).toBeNull();
   });
 
+  it("does not match adversarial bare pattern with nested brackets (single-line)", () => {
+    const result = parseContinuationSignal('CONTINUE_DELEGATE:[[[["bc annoying"]]]]');
+    expect(result).toBeNull();
+  });
+
+  it("does not match adversarial bare pattern with nested brackets (multiline)", () => {
+    const result = parseContinuationSignal('CONTINUE_DELEGATE:[[[["bc\nannoying"]]]]');
+    expect(result).toBeNull();
+  });
+
   it("does not match unclosed bracket", () => {
     const result = parseContinuationSignal("[[CONTINUE_DELEGATE: run the tests");
     expect(result).toBeNull();
@@ -125,6 +135,18 @@ describe("parseContinuationSignal", () => {
     const result = parseContinuationSignal(
       "Use [[CONTINUE_DELEGATE: example]] to delegate.\nMore text here.",
     );
+    expect(result).toBeNull();
+  });
+
+  it("matches only the LAST bracket directive when same token appears mid-text", () => {
+    const result = parseContinuationSignal(
+      "I used [[CONTINUE_DELEGATE: example]] earlier.\n[[CONTINUE_DELEGATE: real task]]",
+    );
+    expect(result).toEqual({ kind: "delegate", task: "real task" });
+  });
+
+  it("rejects ]] inside the task body", () => {
+    const result = parseContinuationSignal("[[CONTINUE_DELEGATE: task with ]] inside]]");
     expect(result).toBeNull();
   });
 
