@@ -167,4 +167,54 @@ describe("gateway server channels", () => {
     expect(snap.config?.channels?.telegram?.botToken).toBeUndefined();
     expect(snap.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
   });
+
+  test("channels.status with probe isolates single-account probe failure", async () => {
+    const probeFailingPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "probe-fails",
+        label: "ProbeFails",
+        config: {
+          listAccountIds: () => ["default"],
+          isConfigured: async () => true,
+        },
+      }),
+      status: {
+        buildChannelSummary: async () => ({ configured: true }),
+        probeAccount: async () => {
+          throw new Error("probe unreachable");
+        },
+        buildAccountSnapshot: async ({ account, probe, audit }) => ({
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          probe,
+          audit,
+        }),
+      },
+    };
+    const registryWithFailingProbe = createRegistry([
+      {
+        pluginId: "whatsapp",
+        source: "test",
+        plugin: createStubChannelPlugin({ id: "whatsapp", label: "WhatsApp" }),
+      },
+      { pluginId: "probe-fails", source: "test", plugin: probeFailingPlugin },
+    ]);
+    setRegistry(registryWithFailingProbe);
+    const res = await rpcReq<{
+      channelAccounts?: Record<
+        string,
+        Array<{ accountId?: string; probe?: { ok?: boolean; error?: string } }>
+      >;
+    }>(ws, "channels.status", { probe: true, timeoutMs: 2000 });
+    expect(res.ok).toBe(true);
+    const accounts = res.payload?.channelAccounts?.["probe-fails"];
+    expect(accounts).toBeDefined();
+    expect(Array.isArray(accounts) && accounts.length).toBe(1);
+    expect(accounts![0].probe).toEqual({
+      ok: false,
+      error: expect.stringContaining("probe unreachable"),
+    });
+    expect(res.payload?.channelAccounts?.whatsapp).toBeDefined();
+  });
 });
