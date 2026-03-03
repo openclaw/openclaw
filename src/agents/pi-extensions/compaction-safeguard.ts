@@ -209,9 +209,23 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const { preparation, customInstructions, signal } = event;
     if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
       log.warn(
-        "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
+        "Compaction safeguard: no real conversation messages to summarize, skipping summarization.",
       );
-      return { cancel: true };
+      // Instead of cancelling (which throws in the SDK's compact() path and
+      // leaves context oversized in auto-compaction), provide a minimal
+      // compaction result so the session can still free up space.
+      const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
+      const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
+      const summary =
+        (preparation.previousSummary ?? "No conversation history to summarize.") + fileOpsSummary;
+      return {
+        compaction: {
+          summary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          details: { readFiles, modifiedFiles },
+        },
+      };
     }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
