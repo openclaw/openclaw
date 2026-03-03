@@ -29,7 +29,7 @@ describe("vault", () => {
     const vault = makeVault();
     await vault.ensureKey();
 
-    const plaintext = '{"token":"sk-abc123","provider":"openai"}';
+    const plaintext = '{"token":"test-token-abc123","provider":"openai"}';
     const encrypted = await vault.encrypt(plaintext);
     const decrypted = await vault.decrypt(encrypted);
 
@@ -110,7 +110,7 @@ describe("vault", () => {
     const vault = makeVault();
     await vault.ensureKey();
 
-    const plaintext = '{"profiles":{"openai:default":{"type":"api_key","key":"sk-123"}}}';
+    const plaintext = '{"profiles":{"openai:default":{"type":"api_key","key":"test-key-123"}}}';
 
     // Plaintext is not recognized as encrypted
     expect(vault.isEncrypted(plaintext)).toBe(false);
