@@ -87,6 +87,7 @@ type DmGroupAccessInputParams = {
   groupAllowFrom?: Array<string | number> | null;
   storeAllowFrom?: Array<string | number> | null;
   groupAllowFromFallbackToAllowFrom?: boolean | null;
+  groupAuthIncludesPairingStore?: boolean | null;
   isSenderAllowed: (allowFrom: string[]) => boolean;
 };
 
@@ -203,6 +204,7 @@ export function resolveDmGroupAccessWithLists(params: DmGroupAccessInputParams):
     storeAllowFrom: params.storeAllowFrom,
     dmPolicy: params.dmPolicy,
     groupAllowFromFallbackToAllowFrom: params.groupAllowFromFallbackToAllowFrom,
+    groupAuthIncludesPairingStore: params.groupAuthIncludesPairingStore,
   });
   const access = resolveDmGroupAccessDecision({
     isGroup: params.isGroup,
@@ -243,6 +245,7 @@ export function resolveDmGroupAccessWithCommandGate(
     groupAllowFrom: params.groupAllowFrom,
     storeAllowFrom: params.storeAllowFrom,
     groupAllowFromFallbackToAllowFrom: params.groupAllowFromFallbackToAllowFrom,
+    groupAuthIncludesPairingStore: params.groupAuthIncludesPairingStore,
     isSenderAllowed: params.isSenderAllowed,
   });
 
