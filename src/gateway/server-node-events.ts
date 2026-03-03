@@ -4,6 +4,7 @@ import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -156,21 +157,28 @@ async function touchSessionStore(params: {
       key: params.sessionKey,
       store,
     });
+    // Preserve existing entry (e.g. sessionFile) before pruning; touch must not drop transcript path.
+    const existing: SessionEntry | undefined =
+      (store[target.canonicalKey] as SessionEntry | undefined) ??
+      [...target.storeKeys]
+        .map((k) => store[k] as SessionEntry | undefined)
+        .find((e): e is SessionEntry => Boolean(e?.sessionId));
     pruneLegacyStoreKeys({
       store,
       canonicalKey: target.canonicalKey,
       candidates: target.storeKeys,
     });
     store[params.canonicalKey] = {
+      ...existing,
       sessionId: params.sessionId,
       updatedAt: params.now,
-      thinkingLevel: params.entry?.thinkingLevel,
-      verboseLevel: params.entry?.verboseLevel,
-      reasoningLevel: params.entry?.reasoningLevel,
-      systemSent: params.entry?.systemSent,
-      sendPolicy: params.entry?.sendPolicy,
-      lastChannel: params.entry?.lastChannel,
-      lastTo: params.entry?.lastTo,
+      thinkingLevel: params.entry?.thinkingLevel ?? existing?.thinkingLevel,
+      verboseLevel: params.entry?.verboseLevel ?? existing?.verboseLevel,
+      reasoningLevel: params.entry?.reasoningLevel ?? existing?.reasoningLevel,
+      systemSent: params.entry?.systemSent ?? existing?.systemSent,
+      sendPolicy: params.entry?.sendPolicy ?? existing?.sendPolicy,
+      lastChannel: params.entry?.lastChannel ?? existing?.lastChannel,
+      lastTo: params.entry?.lastTo ?? existing?.lastTo,
     };
   });
 }
