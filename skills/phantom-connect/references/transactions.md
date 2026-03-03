@@ -24,6 +24,7 @@ import {
 } from "@solana/web3.js";
 
 async function transferSol(solana, recipient: string, lamports: number) {
+  // Use "https://api.devnet.solana.com" for testing
   const connection = new Connection("https://api.mainnet-beta.solana.com");
   const { blockhash } = await connection.getLatestBlockhash();
 

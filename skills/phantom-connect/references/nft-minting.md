@@ -86,6 +86,7 @@ import {
   publicKey,
   keypairIdentity,
   createKeypairFromSecretKey,
+  transactionBuilder,
 } from "@metaplex-foundation/umi";
 
 export async function POST(req: Request) {
@@ -100,16 +101,21 @@ export async function POST(req: Request) {
     .use(mplCore())
     .use(keypairIdentity(authorityKeypair));
 
-  const asset = generateSigner(umi);
+  // Build one create instruction per requested quantity
+  let builder = transactionBuilder();
+  for (let i = 0; i < quantity; i++) {
+    const asset = generateSigner(umi);
+    builder = builder.add(
+      create(umi, {
+        asset,
+        name: `NFT #${i + 1}`,
+        uri: "https://arweave.net/metadata.json",
+        owner: publicKey(wallet),
+      }),
+    );
+  }
 
-  const tx = create(umi, {
-    asset,
-    name: "NFT #1",
-    uri: "https://arweave.net/metadata.json",
-    owner: publicKey(wallet),
-  });
-
-  const built = await tx.build(umi);
+  const built = await builder.build(umi);
   const serialized = Buffer.from(umi.transactions.serialize(built)).toString("base64");
 
   return Response.json({ transaction: serialized });

@@ -84,7 +84,7 @@ async function verifyAccess() {
   const res = await fetch("/api/verify-access", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ address, signature, message, timestamp }),
+    body: JSON.stringify({ address, signature, message }),
   });
 
   return await res.json();
@@ -101,14 +101,9 @@ import bs58 from "bs58";
 import jwt from "jsonwebtoken";
 
 export async function POST(req: Request) {
-  const { address, signature, message, timestamp } = await req.json();
+  const { address, signature, message } = await req.json();
 
-  // 1. Check timestamp (5 min window)
-  if (Date.now() - timestamp > 5 * 60 * 1000) {
-    return Response.json({ error: "Expired" }, { status: 400 });
-  }
-
-  // 2. Verify signature
+  // 1. Verify signature FIRST
   const isValid = nacl.sign.detached.verify(
     new TextEncoder().encode(message),
     bs58.decode(signature),
@@ -116,6 +111,12 @@ export async function POST(req: Request) {
   );
   if (!isValid) {
     return Response.json({ error: "Invalid signature" }, { status: 401 });
+  }
+
+  // 2. Parse timestamp from the verified message (not from untrusted request field)
+  const timestampMatch = message.match(/Timestamp:\s*(\d+)/);
+  if (!timestampMatch || Date.now() - Number(timestampMatch[1]) > 5 * 60 * 1000) {
+    return Response.json({ error: "Expired" }, { status: 400 });
   }
 
   // 3. Check token balance
