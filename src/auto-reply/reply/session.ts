@@ -601,6 +601,9 @@ export async function initSessionState(params: {
           if (key !== sessionKey && other?.label === entry.label) {
             // Label conflict detected — clear the auto-assigned label
             delete entry.label;
+            // Also clear sessionEntry.label to prevent later persistence code paths
+            // from reintroducing the duplicate label
+            delete sessionEntry.label;
             break;
           }
         }

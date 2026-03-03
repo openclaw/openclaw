@@ -6,6 +6,7 @@ import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
+import { parseSessionLabel } from "../../sessions/session-label.js";
 
 const mergeOrigin = (
   existing: SessionOrigin | undefined,
@@ -198,6 +199,34 @@ export function deriveSessionMetaPatch(params: {
   const mergedOrigin = mergeOrigin(params.existing?.origin, origin);
   if (mergedOrigin) {
     patch.origin = mergedOrigin;
+  }
+
+  // Auto-label group/channel sessions with a human-friendly name when no
+  // explicit label has been set yet. Only applies when existing label is undefined.
+  if (params.existing?.label === undefined && !patch.label) {
+    const nextGroupChannel = (groupPatch as any)?.groupChannel;
+    const nextSubject = (groupPatch as any)?.subject;
+    const autoLabel =
+      nextGroupChannel ?? params.existing?.groupChannel ?? nextSubject ?? params.existing?.subject;
+    if (autoLabel) {
+      // Validate the auto-generated label using parseSessionLabel to avoid creating unresolvable labels
+      const parsed = parseSessionLabel(autoLabel);
+      if (parsed.ok) {
+        // Check for label uniqueness if we have access to all sessions
+        if (params.allSessions) {
+          const isUnique = Object.entries(params.allSessions).every(([key, entry]) => {
+            if (key === params.sessionKey) return true;
+            return entry?.label !== parsed.label;
+          });
+          if (isUnique) {
+            patch.label = parsed.label;
+          }
+        } else {
+          // Fallback: set the label without uniqueness check (best-effort)
+          patch.label = parsed.label;
+        }
+      }
+    }
   }
 
   return Object.keys(patch).length > 0 ? patch : null;
