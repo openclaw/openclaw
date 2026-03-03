@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
+import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import { captureEnv } from "../test-utils/env.js";
 
 const bundledPluginsDirSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
@@ -67,6 +68,8 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   return { ...mod, resolveExecApprovals: () => approvals };
 });
 
+const { createOpenClawCodingTools } = await import("./pi-tools.js");
+
 type ExecToolResult = {
   content: Array<{ type: string; text?: string }>;
   details?: { status?: string };
@@ -86,9 +89,9 @@ type ExecTool = {
 async function createSafeBinsExecTool(params: {
   tmpPrefix: string;
   safeBins: string[];
+  safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   files?: Array<{ name: string; contents: string }>;
 }): Promise<{ tmpDir: string; execTool: ExecTool }> {
-  const { createOpenClawCodingTools } = await import("./pi-tools.js");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix));
   for (const file of params.files ?? []) {
     fs.writeFileSync(path.join(tmpDir, file.name), file.contents, "utf8");
@@ -101,6 +104,7 @@ async function createSafeBinsExecTool(params: {
         security: "allowlist",
         ask: "off",
         safeBins: params.safeBins,
+        safeBinProfiles: params.safeBinProfiles,
       },
     },
   };
@@ -139,6 +143,9 @@ describe("createOpenClawCodingTools safeBins", () => {
       {
         tmpPrefix: "openclaw-safe-bins-",
         safeBins: ["echo"],
+        safeBinProfiles: {
+          echo: { maxPositional: 1 },
+        },
       },
       async ({ tmpDir, execTool }) => {
         const marker = `safe-bins-${Date.now()}`;
@@ -151,6 +158,23 @@ describe("createOpenClawCodingTools safeBins", () => {
         const resultDetails = result.details as { status?: string };
         expect(resultDetails.status).toBe("completed");
         expect(text).toContain(marker);
+      },
+    );
+  });
+
+  it("rejects unprofiled custom safe-bin entries", async () => {
+    await withSafeBinsExecTool(
+      {
+        tmpPrefix: "openclaw-safe-bins-unprofiled-",
+        safeBins: ["echo"],
+      },
+      async ({ tmpDir, execTool }) => {
+        await expect(
+          execTool.execute("call1", {
+            command: "echo hello",
+            workdir: tmpDir,
+          }),
+        ).rejects.toThrow("exec denied: allowlist miss");
       },
     );
   });

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
+import { writeCronStoreSnapshot } from "./service.test-harness.js";
 
 const noopLogger = {
   debug: vi.fn(),
@@ -161,35 +162,83 @@ describe("CronService read ops while job is running", () => {
     }
   });
 
+  it("keeps list and status responsive during manual cron.run execution", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const isolatedRun = createDeferredIsolatedRun();
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
+    });
+
+    try {
+      await cron.start();
+      const job = await cron.add({
+        name: "manual run isolation",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: {
+          kind: "at",
+          at: new Date("2030-01-01T00:00:00.000Z").toISOString(),
+        },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "manual run" },
+        delivery: { mode: "none" },
+      });
+
+      const runPromise = cron.run(job.id, "force");
+      await isolatedRun.runStarted;
+
+      await expect(
+        withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during cron.run"),
+      ).resolves.toBeTypeOf("object");
+      await expect(withTimeout(cron.status(), 300, "cron.status during cron.run")).resolves.toEqual(
+        expect.objectContaining({ enabled: true, storePath: store.storePath }),
+      );
+
+      isolatedRun.completeRun({ status: "ok", summary: "manual done" });
+      await expect(runPromise).resolves.toEqual({ ok: true, ran: true });
+
+      const completed = await cron.list({ includeDisabled: true });
+      expect(completed[0]?.state.lastStatus).toBe("ok");
+      expect(completed[0]?.state.runningAtMs).toBeUndefined();
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
   it("keeps list and status responsive during startup catch-up runs", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({
-        version: 1,
-        jobs: [
-          {
-            id: "startup-catchup",
-            name: "startup catch-up",
-            enabled: true,
-            createdAtMs: nowMs - 86_400_000,
-            updatedAtMs: nowMs - 86_400_000,
-            schedule: { kind: "at", at: new Date(nowMs - 60_000).toISOString() },
-            sessionTarget: "isolated",
-            wakeMode: "next-heartbeat",
-            payload: { kind: "agentTurn", message: "startup replay" },
-            delivery: { mode: "none" },
-            state: { nextRunAtMs: nowMs - 60_000 },
-          },
-        ],
-      }),
-      "utf-8",
-    );
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [
+        {
+          id: "startup-catchup",
+          name: "startup catch-up",
+          enabled: true,
+          createdAtMs: nowMs - 86_400_000,
+          updatedAtMs: nowMs - 86_400_000,
+          schedule: { kind: "at", at: new Date(nowMs - 60_000).toISOString() },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "startup replay" },
+          delivery: { mode: "none" },
+          state: { nextRunAtMs: nowMs - 60_000 },
+        },
+      ],
+    });
 
     const isolatedRun = createDeferredIsolatedRun();
 

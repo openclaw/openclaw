@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "openclaw/plugin-sdk/account-id";
 import type { GoogleChatAccountConfig } from "./types.config.js";
 
 export type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
@@ -35,8 +39,12 @@ export function listGoogleChatAccountIds(cfg: OpenClawConfig): string[] {
 
 export function resolveDefaultGoogleChatAccountId(cfg: OpenClawConfig): string {
   const channel = cfg.channels?.["googlechat"];
-  if (channel?.defaultAccount?.trim()) {
-    return channel.defaultAccount.trim();
+  const preferred = normalizeOptionalAccountId(channel?.defaultAccount);
+  if (
+    preferred &&
+    listGoogleChatAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
+  ) {
+    return preferred;
   }
   const ids = listGoogleChatAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {

@@ -47,6 +47,26 @@ function getRequiredFetch(): typeof fetch {
   return fetchImpl;
 }
 
+function parseSignalRpcResponse<T>(text: string, status: number): SignalRpcResponse<T> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`Signal RPC returned malformed JSON (status ${status})`, { cause: err });
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error(`Signal RPC returned invalid response envelope (status ${status})`);
+  }
+
+  const rpc = parsed as SignalRpcResponse<T>;
+  const hasResult = Object.hasOwn(rpc, "result");
+  if (!rpc.error && !hasResult) {
+    throw new Error(`Signal RPC returned invalid response envelope (status ${status})`);
+  }
+  return rpc;
+}
+
 export async function signalRpcRequest<T = unknown>(
   method: string,
   params: Record<string, unknown> | undefined,
@@ -77,7 +97,7 @@ export async function signalRpcRequest<T = unknown>(
   if (!text) {
     throw new Error(`Signal RPC empty response (status ${res.status})`);
   }
-  const parsed = JSON.parse(text) as SignalRpcResponse<T>;
+  const parsed = parseSignalRpcResponse<T>(text, res.status);
   if (parsed.error) {
     const code = parsed.error.code ?? "unknown";
     const msg = parsed.error.message ?? "Signal RPC error";

@@ -173,33 +173,71 @@ export function composeThinkingAndContent(params: {
   return parts.join("\n\n").trim();
 }
 
+function asMessageRecord(message: unknown): Record<string, unknown> | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  return message as Record<string, unknown>;
+}
+
+function resolveMessageRecord(
+  message: unknown,
+): { record: Record<string, unknown>; content: unknown } | undefined {
+  const record = asMessageRecord(message);
+  if (!record) {
+    return undefined;
+  }
+  return { record, content: record.content };
+}
+
+function formatAssistantErrorFromRecord(record: Record<string, unknown>): string {
+  const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
+  if (stopReason !== "error") {
+    return "";
+  }
+  const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
+  return formatRawAssistantErrorForUi(errorMessage);
+}
+
+function collectSanitizedBlockStrings(params: {
+  content: unknown;
+  blockType: "text" | "thinking";
+  valueKey: "text" | "thinking";
+}): string[] {
+  if (!Array.isArray(params.content)) {
+    return [];
+  }
+  const parts: string[] = [];
+  for (const block of params.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const rec = block as Record<string, unknown>;
+    if (rec.type === params.blockType && typeof rec[params.valueKey] === "string") {
+      parts.push(sanitizeRenderableText(rec[params.valueKey] as string));
+    }
+  }
+  return parts;
+}
+
 /**
  * Extract ONLY thinking blocks from message content.
  * Model-agnostic: returns empty string if no thinking blocks exist.
  */
 export function extractThinkingFromMessage(message: unknown): string {
-  if (!message || typeof message !== "object") {
+  const resolved = resolveMessageRecord(message);
+  if (!resolved) {
     return "";
   }
-  const record = message as Record<string, unknown>;
-  const content = record.content;
+  const { content } = resolved;
   if (typeof content === "string") {
     return "";
   }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const rec = block as Record<string, unknown>;
-    if (rec.type === "thinking" && typeof rec.thinking === "string") {
-      parts.push(sanitizeRenderableText(rec.thinking));
-    }
-  }
+  const parts = collectSanitizedBlockStrings({
+    content,
+    blockType: "thinking",
+    valueKey: "thinking",
+  });
   return parts.join("\n").trim();
 }
 
@@ -208,47 +246,25 @@ export function extractThinkingFromMessage(message: unknown): string {
  * Model-agnostic: works for any model with text content blocks.
  */
 export function extractContentFromMessage(message: unknown): string {
-  if (!message || typeof message !== "object") {
+  const resolved = resolveMessageRecord(message);
+  if (!resolved) {
     return "";
   }
-  const record = message as Record<string, unknown>;
-  const content = record.content;
+  const { record, content } = resolved;
 
   if (typeof content === "string") {
     return sanitizeRenderableText(content).trim();
   }
 
-  // Check for error BEFORE returning empty for non-array content
-  if (!Array.isArray(content)) {
-    const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
-    if (stopReason === "error") {
-      const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
-      return formatRawAssistantErrorForUi(errorMessage);
-    }
-    return "";
+  const parts = collectSanitizedBlockStrings({
+    content,
+    blockType: "text",
+    valueKey: "text",
+  });
+  if (parts.length > 0) {
+    return parts.join("\n").trim();
   }
-
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const rec = block as Record<string, unknown>;
-    if (rec.type === "text" && typeof rec.text === "string") {
-      parts.push(sanitizeRenderableText(rec.text));
-    }
-  }
-
-  // If no text blocks found, check for error
-  if (parts.length === 0) {
-    const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
-    if (stopReason === "error") {
-      const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
-      return formatRawAssistantErrorForUi(errorMessage);
-    }
-  }
-
-  return parts.join("\n").trim();
+  return formatAssistantErrorFromRecord(record);
 }
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
@@ -259,25 +275,19 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
     return "";
   }
 
-  const thinkingParts: string[] = [];
-  const textParts: string[] = [];
-
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as Record<string, unknown>;
-    if (record.type === "text" && typeof record.text === "string") {
-      textParts.push(sanitizeRenderableText(record.text));
-    }
-    if (
-      opts?.includeThinking &&
-      record.type === "thinking" &&
-      typeof record.thinking === "string"
-    ) {
-      thinkingParts.push(sanitizeRenderableText(record.thinking));
-    }
-  }
+  const textParts = collectSanitizedBlockStrings({
+    content,
+    blockType: "text",
+    valueKey: "text",
+  });
+  const thinkingParts =
+    opts?.includeThinking === true
+      ? collectSanitizedBlockStrings({
+          content,
+          blockType: "thinking",
+          valueKey: "thinking",
+        })
+      : [];
 
   return composeThinkingAndContent({
     thinkingText: thinkingParts.join("\n").trim(),
@@ -290,10 +300,10 @@ export function extractTextFromMessage(
   message: unknown,
   opts?: { includeThinking?: boolean },
 ): string {
-  if (!message || typeof message !== "object") {
+  const record = asMessageRecord(message);
+  if (!record) {
     return "";
   }
-  const record = message as Record<string, unknown>;
   const text = extractTextBlocks(record.content, opts);
   if (text) {
     if (record.role === "user") {
@@ -302,13 +312,11 @@ export function extractTextFromMessage(
     return text;
   }
 
-  const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
-  if (stopReason !== "error") {
+  const errorText = formatAssistantErrorFromRecord(record);
+  if (!errorText) {
     return "";
   }
-
-  const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
-  return formatRawAssistantErrorForUi(errorMessage);
+  return errorText;
 }
 
 export function isCommandMessage(message: unknown): boolean {

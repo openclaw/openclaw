@@ -2,13 +2,14 @@ import {
   BLUEBUBBLES_ACTION_NAMES,
   BLUEBUBBLES_ACTIONS,
   createActionGate,
+  extractToolSend,
   jsonResult,
   readNumberParam,
+  readBooleanParam,
   readReactionParams,
   readStringParam,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
-  type ChannelToolSend,
 } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
@@ -50,23 +51,6 @@ function mapTarget(raw: string): BlueBubblesSendTarget {
 
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
-}
-
-function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
-  const raw = params[key];
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (typeof raw === "string") {
-    const trimmed = raw.trim().toLowerCase();
-    if (trimmed === "true") {
-      return true;
-    }
-    if (trimmed === "false") {
-      return false;
-    }
-  }
-  return undefined;
 }
 
 /** Supported action names for BlueBubbles */
@@ -112,18 +96,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     return Array.from(actions);
   },
   supportsAction: ({ action }) => SUPPORTED_ACTIONS.has(action),
-  extractToolSend: ({ args }): ChannelToolSend | null => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") {
-      return null;
-    }
-    const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) {
-      return null;
-    }
-    const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-    return { to, accountId };
-  },
+  extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     const account = resolveBlueBubblesAccount({
       cfg: cfg,

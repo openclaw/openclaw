@@ -28,6 +28,10 @@ type LastToolError = {
   mutatingAction?: boolean;
   actionFingerprint?: string;
 };
+type ToolErrorWarningPolicy = {
+  showWarning: boolean;
+  includeDetails: boolean;
+};
 
 const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "required",
@@ -44,30 +48,43 @@ function isRecoverableToolError(error: string | undefined): boolean {
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
 }
 
-function shouldShowToolErrorWarning(params: {
+function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
+  return level === "on" || level === "full";
+}
+
+function resolveToolErrorWarningPolicy(params: {
   lastToolError: LastToolError;
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
   verboseLevel?: VerboseLevel;
-}): boolean {
+}): ToolErrorWarningPolicy {
+  const includeDetails = isVerboseToolDetailEnabled(params.verboseLevel);
   if (params.suppressToolErrorWarnings) {
-    return false;
+    return { showWarning: false, includeDetails };
   }
   const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
-  const verboseEnabled = params.verboseLevel === "on" || params.verboseLevel === "full";
-  if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !verboseEnabled) {
-    return false;
+  if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !includeDetails) {
+    return { showWarning: false, includeDetails };
+  }
+  // sessions_send timeouts and errors are transient inter-session communication
+  // issues — the message may still have been delivered. Suppress warnings to
+  // prevent raw error text from leaking into the chat surface (#23989).
+  if (normalizedToolName === "sessions_send") {
+    return { showWarning: false, includeDetails };
   }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
-    return true;
+    return { showWarning: true, includeDetails };
   }
   if (params.suppressToolErrors) {
-    return false;
+    return { showWarning: false, includeDetails };
   }
-  return !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error);
+  return {
+    showWarning: !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error),
+    includeDetails,
+  };
 }
 
 export function buildEmbeddedRunPayloads(params: {
@@ -84,12 +101,14 @@ export function buildEmbeddedRunPayloads(params: {
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
+  didSendViaMessagingTool?: boolean;
 }): Array<{
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
   replyToId?: string;
   isError?: boolean;
+  isReasoning?: boolean;
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
@@ -98,6 +117,7 @@ export function buildEmbeddedRunPayloads(params: {
     text: string;
     media?: string[];
     isError?: boolean;
+    isReasoning?: boolean;
     audioAsVoice?: boolean;
     replyToId?: string;
     replyToTag?: boolean;
@@ -169,7 +189,7 @@ export function buildEmbeddedRunPayloads(params: {
       ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
       : "";
   if (reasoningText) {
-    replyItems.push({ text: reasoningText });
+    replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
   const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
@@ -256,7 +276,7 @@ export function buildEmbeddedRunPayloads(params: {
   }
 
   if (params.lastToolError) {
-    const shouldShowToolError = shouldShowToolErrorWarning({
+    const warningPolicy = resolveToolErrorWarningPolicy({
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
@@ -266,13 +286,16 @@ export function buildEmbeddedRunPayloads(params: {
 
     // Always surface mutating tool failures so we do not silently confirm actions that did not happen.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
-    if (shouldShowToolError) {
+    if (warningPolicy.showWarning) {
       const toolSummary = formatToolAggregate(
         params.lastToolError.toolName,
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
         { markdown: useMarkdown },
       );
-      const errorSuffix = params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+      const errorSuffix =
+        warningPolicy.includeDetails && params.lastToolError.error
+          ? `: ${params.lastToolError.error}`
+          : "";
       const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
       const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning
@@ -294,7 +317,7 @@ export function buildEmbeddedRunPayloads(params: {
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
-  const payloads = replyItems
+  return replyItems
     .map((item) => ({
       text: item.text?.trim() ? item.text.trim() : undefined,
       mediaUrls: item.media?.length ? item.media : undefined,
@@ -314,13 +337,4 @@ export function buildEmbeddedRunPayloads(params: {
       }
       return true;
     });
-  if (
-    payloads.length === 0 &&
-    params.toolMetas.length > 0 &&
-    !params.lastToolError &&
-    !lastAssistantErrored
-  ) {
-    return [{ text: "✅ Done." }];
-  }
-  return payloads;
 }

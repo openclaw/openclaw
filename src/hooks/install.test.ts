@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
-  expectSingleNpmInstallIgnoreScriptsCall,
-  expectSingleNpmPackIgnoreScriptsCall,
-} from "../test-utils/exec-assertions.js";
+  expectInstallUsesIgnoreScripts,
+  expectIntegrityDriftRejected,
+  expectUnsupportedNpmSpec,
+  mockNpmPackMetadataResult,
+} from "../test-utils/npm-spec-install-test-helpers.js";
 import { isAddressInUseError } from "./gmail-watcher.js";
 
 const fixtureRoot = path.join(os.tmpdir(), `openclaw-hook-install-${randomUUID()}`);
@@ -26,7 +29,6 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 function makeTempDir() {
-  fs.mkdirSync(fixtureRoot, { recursive: true });
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
@@ -48,6 +50,10 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+beforeAll(() => {
+  fs.mkdirSync(fixtureRoot, { recursive: true });
+});
+
 function writeArchiveFixture(params: { fileName: string; contents: Buffer }) {
   const stateDir = makeTempDir();
   const workDir = makeTempDir();
@@ -58,17 +64,6 @@ function writeArchiveFixture(params: { fileName: string; contents: Buffer }) {
     archivePath,
     hooksDir: path.join(stateDir, "hooks"),
   };
-}
-
-async function expectUnsupportedNpmSpec(
-  install: (spec: string) => Promise<{ ok: boolean; error?: string }>,
-) {
-  const result = await install("github:evil/evil");
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    return;
-  }
-  expect(result.error).toContain("unsupported npm spec");
 }
 
 function expectInstallFailureContains(
@@ -196,26 +191,13 @@ describe("installHooksFromPath", () => {
     );
 
     const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-
-    const res = await installHooksFromPath({
-      path: pkgDir,
-      hooksDir: path.join(stateDir, "hooks"),
-    });
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expectSingleNpmInstallIgnoreScriptsCall({
-      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
-      expectedCwd: res.targetDir,
+    await expectInstallUsesIgnoreScripts({
+      run,
+      install: async () =>
+        await installHooksFromPath({
+          path: pkgDir,
+          hooksDir: path.join(stateDir, "hooks"),
+        }),
     });
   });
 
@@ -383,22 +365,13 @@ describe("installHooksFromNpmSpec", () => {
 
   it("aborts when integrity drift callback rejects the fetched artifact", async () => {
     const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({
-      code: 0,
-      stdout: JSON.stringify([
-        {
-          id: "@openclaw/test-hooks@0.0.1",
-          name: "@openclaw/test-hooks",
-          version: "0.0.1",
-          filename: "test-hooks-0.0.1.tgz",
-          integrity: "sha512-new",
-          shasum: "newshasum",
-        },
-      ]),
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
+    mockNpmPackMetadataResult(run, {
+      id: "@openclaw/test-hooks@0.0.1",
+      name: "@openclaw/test-hooks",
+      version: "0.0.1",
+      filename: "test-hooks-0.0.1.tgz",
+      integrity: "sha512-new",
+      shasum: "newshasum",
     });
 
     const onIntegrityDrift = vi.fn(async () => false);
@@ -407,18 +380,12 @@ describe("installHooksFromNpmSpec", () => {
       expectedIntegrity: "sha512-old",
       onIntegrityDrift,
     });
-
-    expect(onIntegrityDrift).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedIntegrity: "sha512-old",
-        actualIntegrity: "sha512-new",
-      }),
-    );
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.error).toContain("integrity drift");
+    expectIntegrityDriftRejected({
+      onIntegrityDrift,
+      result,
+      expectedIntegrity: "sha512-old",
+      actualIntegrity: "sha512-new",
+    });
   });
 });
 

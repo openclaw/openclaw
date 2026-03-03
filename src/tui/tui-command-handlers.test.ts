@@ -9,6 +9,7 @@ function createHarness(params?: {
   resetSession?: ReturnType<typeof vi.fn>;
   loadHistory?: LoadHistoryMock;
   setActivityStatus?: SetActivityStatusMock;
+  isConnected?: boolean;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
@@ -27,6 +28,7 @@ function createHarness(params?: {
     state: {
       currentSessionKey: "agent:main:main",
       activeChatRunId: null,
+      isConnected: params?.isConnected ?? true,
       sessionInfo: {},
     } as never,
     deliverDefault: false,
@@ -59,40 +61,18 @@ function createHarness(params?: {
 
 describe("tui command handlers", () => {
   it("renders the sending indicator before chat.send resolves", async () => {
-    let resolveSend: ((value: { runId: string }) => void) | null = null;
-    const sendChat = vi.fn(
-      () =>
-        new Promise<{ runId: string }>((resolve) => {
-          resolveSend = resolve;
-        }),
-    );
-    const addUser = vi.fn();
-    const requestRender = vi.fn();
+    let resolveSend: (value: { runId: string }) => void = () => {
+      throw new Error("sendChat promise resolver was not initialized");
+    };
+    const sendPromise = new Promise<{ runId: string }>((resolve) => {
+      resolveSend = (value) => resolve(value);
+    });
+    const sendChat = vi.fn(() => sendPromise);
     const setActivityStatus = vi.fn();
 
-    const { handleCommand } = createCommandHandlers({
-      client: { sendChat } as never,
-      chatLog: { addUser, addSystem: vi.fn() } as never,
-      tui: { requestRender } as never,
-      opts: {},
-      state: {
-        currentSessionKey: "agent:main:main",
-        activeChatRunId: null,
-        sessionInfo: {},
-      } as never,
-      deliverDefault: false,
-      openOverlay: vi.fn(),
-      closeOverlay: vi.fn(),
-      refreshSessionInfo: vi.fn(),
-      loadHistory: vi.fn(),
-      setSession: vi.fn(),
-      refreshAgents: vi.fn(),
-      abortActive: vi.fn(),
+    const { handleCommand, requestRender } = createHarness({
+      sendChat,
       setActivityStatus,
-      formatSessionKey: vi.fn(),
-      applySessionInfoFromPatch: vi.fn(),
-      noteLocalRunId: vi.fn(),
-      requestExit: vi.fn(),
     });
 
     const pending = handleCommand("/context");
@@ -103,10 +83,7 @@ describe("tui command handlers", () => {
     const renderOrders = requestRender.mock.invocationCallOrder;
     expect(renderOrders.some((order) => order > sendingOrder)).toBe(true);
 
-    if (typeof resolveSend !== "function") {
-      throw new Error("expected sendChat to be pending");
-    }
-    (resolveSend as (value: { runId: string }) => void)({ runId: "r1" });
+    resolveSend({ runId: "r1" });
     await pending;
     expect(setActivityStatus).toHaveBeenCalledWith("waiting");
   });
@@ -150,5 +127,18 @@ describe("tui command handlers", () => {
 
     expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
+  });
+
+  it("reports disconnected status and skips gateway send when offline", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, setActivityStatus } = createHarness({
+      isConnected: false,
+    });
+
+    await handleCommand("/context");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
   });
 });

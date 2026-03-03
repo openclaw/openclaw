@@ -1,4 +1,6 @@
+import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import {
+  isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type SsrFPolicy,
@@ -56,8 +58,47 @@ export async function assertBrowserNavigationAllowed(
     );
   }
 
+  // Browser network stacks may apply env proxy routing at connect-time, which
+  // can bypass strict destination-binding intent from pre-navigation DNS checks.
+  // In strict mode, fail closed unless private-network navigation is explicitly
+  // enabled by policy.
+  if (hasProxyEnvConfigured() && !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy)) {
+    throw new InvalidBrowserNavigationUrlError(
+      "Navigation blocked: strict browser SSRF policy cannot be enforced while env proxy variables are set",
+    );
+  }
+
   await resolvePinnedHostnameWithPolicy(parsed.hostname, {
     lookupFn: opts.lookupFn,
     policy: opts.ssrfPolicy,
   });
+}
+
+/**
+ * Best-effort post-navigation guard for final page URLs.
+ * Only validates network URLs (http/https) and about:blank to avoid false
+ * positives on browser-internal error pages (e.g. chrome-error://).
+ */
+export async function assertBrowserNavigationResultAllowed(
+  opts: {
+    url: string;
+    lookupFn?: LookupFn;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
+  const rawUrl = String(opts.url ?? "").trim();
+  if (!rawUrl) {
+    return;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return;
+  }
+  if (
+    NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol) ||
+    isAllowedNonNetworkNavigationUrl(parsed)
+  ) {
+    await assertBrowserNavigationAllowed(opts);
+  }
 }
