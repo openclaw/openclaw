@@ -14,6 +14,10 @@ const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
 const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
 
+const ANTHROPIC_HAIKU_46_MODEL_ID = "claude-haiku-4-6";
+const ANTHROPIC_HAIKU_46_DOT_MODEL_ID = "claude-haiku-4.6";
+const ANTHROPIC_HAIKU_TEMPLATE_MODEL_IDS = ["claude-haiku-4-5", "claude-haiku-4.5"] as const;
+
 const ZAI_GLM5_MODEL_ID = "glm-5";
 const ZAI_GLM5_TEMPLATE_MODEL_IDS = ["glm-4.7"] as const;
 
@@ -168,6 +172,23 @@ function resolveAnthropicSonnet46ForwardCompatModel(
   });
 }
 
+function resolveAnthropicHaiku46ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  return resolveAnthropic46ForwardCompatModel({
+    provider,
+    modelId,
+    modelRegistry,
+    dashModelId: ANTHROPIC_HAIKU_46_MODEL_ID,
+    dotModelId: ANTHROPIC_HAIKU_46_DOT_MODEL_ID,
+    dashTemplateId: "claude-haiku-4-5",
+    dotTemplateId: "claude-haiku-4.5",
+    fallbackTemplateIds: ANTHROPIC_HAIKU_TEMPLATE_MODEL_IDS,
+  });
+}
+
 // gemini-3.1-pro-preview / gemini-3.1-flash-preview are not present in pi-ai's built-in
 // google-gemini-cli catalog yet. Clone the nearest gemini-3 template so users don't get
 // "Unknown model" errors when Google Gemini CLI gains new minor-version models.
@@ -251,6 +272,7 @@ export function resolveForwardCompatModel(
     resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveAnthropicHaiku46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry)
   );

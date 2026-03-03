@@ -127,6 +127,8 @@ const MODEL_COSTS: Record<
     cacheWrite: 0,
   },
   "claude-opus-4-6": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "claude-sonnet-4-6": { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 1.875 },
+  "claude-haiku-4-6": { input: 0.25, output: 1.25, cacheRead: 0.025, cacheWrite: 0.3125 },
   "claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "gemini-3-pro": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
   "gpt-5.1-codex-mini": {
@@ -152,6 +154,8 @@ const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5.1-codex": 400000,
   "claude-opus-4-6": 1000000,
+  "claude-sonnet-4-6": 1000000,
+  "claude-haiku-4-6": 1000000,
   "claude-opus-4-5": 200000,
   "gemini-3-pro": 1048576,
   "gpt-5.1-codex-mini": 400000,
@@ -169,6 +173,8 @@ function getDefaultContextWindow(modelId: string): number {
 const MODEL_MAX_TOKENS: Record<string, number> = {
   "gpt-5.1-codex": 128000,
   "claude-opus-4-6": 128000,
+  "claude-sonnet-4-6": 128000,
+  "claude-haiku-4-6": 128000,
   "claude-opus-4-5": 64000,
   "gemini-3-pro": 65536,
   "gpt-5.1-codex-mini": 128000,
@@ -206,6 +212,8 @@ function buildModelDefinition(modelId: string): ModelDefinitionConfig {
 const MODEL_NAMES: Record<string, string> = {
   "gpt-5.1-codex": "GPT-5.1 Codex",
   "claude-opus-4-6": "Claude Opus 4.6",
+  "claude-sonnet-4-6": "Claude Sonnet 4.6",
+  "claude-haiku-4-6": "Claude Haiku 4.6",
   "claude-opus-4-5": "Claude Opus 4.5",
   "gemini-3-pro": "Gemini 3 Pro",
   "gpt-5.1-codex-mini": "GPT-5.1 Codex Mini",
@@ -234,6 +242,8 @@ export function getOpencodeZenStaticFallbackModels(): ModelDefinitionConfig[] {
   const modelIds = [
     "gpt-5.1-codex",
     "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-6",
     "claude-opus-4-5",
     "gemini-3-pro",
     "gpt-5.1-codex-mini",
