@@ -23,6 +23,7 @@ export function createHooksConfig(): HooksConfigResolved {
 export function createGatewayRequest(params: {
   path: string;
   authorization?: string;
+  headers?: Record<string, string>;
   method?: string;
   remoteAddress?: string;
   host?: string;
@@ -30,6 +31,11 @@ export function createGatewayRequest(params: {
   const headers: Record<string, string> = {
     host: params.host ?? "localhost:18789",
   };
+  if (params.headers) {
+    for (const [key, value] of Object.entries(params.headers)) {
+      headers[key] = value;
+    }
+  }
   if (params.authorization) {
     headers.authorization = params.authorization;
   }

@@ -27,11 +27,13 @@ export const AUTH_TOKEN: ResolvedGatewayAuth = {
 export function createRequest(params: {
   path: string;
   authorization?: string;
+  headers?: Record<string, string>;
   method?: string;
 }): IncomingMessage {
   return createGatewayRequest({
     path: params.path,
     authorization: params.authorization,
+    headers: params.headers,
     method: params.method,
   });
 }
@@ -126,6 +128,7 @@ export async function sendRequest(
   params: {
     path: string;
     authorization?: string;
+    headers?: Record<string, string>;
     method?: string;
   },
 ): Promise<ReturnType<typeof createResponse>> {
