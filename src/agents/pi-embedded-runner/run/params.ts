@@ -85,6 +85,10 @@ export type RunEmbeddedPiAgentParams = {
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for context mode behavior. */
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
+  bootstrapPromptWarningSignaturesSeen?: string[];
+  /** Last shown bootstrap truncation warning signature for this session. */
+  bootstrapPromptWarningSignature?: string;
   execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
