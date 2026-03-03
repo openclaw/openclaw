@@ -331,6 +331,41 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("treats append messages with non-finite timestamps as stale", async () => {
+    const { onMessage, listener, sock } = await openInboxMonitor();
+
+    const upsert = {
+      type: "append",
+      messages: [
+        {
+          key: {
+            id: "append-nan-1",
+            fromMe: false,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: { conversation: "nan timestamp append" },
+          messageTimestamp: "not-a-number",
+          pushName: "Edge Sender",
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(sock.readMessages).toHaveBeenCalledWith([
+      {
+        remoteJid: "999@s.whatsapp.net",
+        id: "append-nan-1",
+        participant: undefined,
+        fromMe: false,
+      },
+    ]);
+    expect(onMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
   it("normalizes participant phone numbers to JIDs in sendReaction", async () => {
     const listener = await monitorWebInbox({
       verbose: false,

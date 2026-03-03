@@ -416,7 +416,10 @@ export async function monitorWebInbox(options: {
       // Keep suppressing old history sync while allowing recent append events through.
       if (upsert.type === "append") {
         const messageTimestampMs =
-          typeof inbound.messageTimestampMs === "number" ? inbound.messageTimestampMs : 0;
+          typeof inbound.messageTimestampMs === "number" &&
+          Number.isFinite(inbound.messageTimestampMs)
+            ? inbound.messageTimestampMs
+            : 0;
         if (messageTimestampMs < connectedAtMs - APPEND_RECENT_GRACE_MS) {
           continue;
         }
