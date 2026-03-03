@@ -412,7 +412,9 @@ jobs:
         with:
           pnpm-version: "10.23.0"
           cache-key-suffix: "node22"
-          use-sticky-disk: "true"
+          # Sticky disk mount currently retries/fails on every shard and adds ~50s
+          # before install while still yielding zero pnpm store reuse.
+          use-sticky-disk: "false"
           use-restore-keys: "false"
           use-actions-cache: "false"
 
