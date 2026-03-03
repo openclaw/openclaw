@@ -13,6 +13,10 @@ inputs:
     description: Use Blacksmith sticky disks instead of actions/cache for pnpm store.
     required: false
     default: "false"
+  use-restore-keys:
+    description: Whether to use restore-keys fallback for actions/cache.
+    required: false
+    default: "true"
 runs:
   using: composite
   steps:
@@ -49,8 +53,15 @@ runs:
         key: ${{ github.repository }}-pnpm-store-${{ runner.os }}-${{ inputs.cache-key-suffix }}
         path: ${{ steps.pnpm-store.outputs.path }}
 
-    - name: Restore pnpm store cache
-      if: inputs.use-sticky-disk != 'true'
+    - name: Restore pnpm store cache (exact key only)
+      if: inputs.use-sticky-disk != 'true' && inputs.use-restore-keys != 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: ${{ runner.os }}-pnpm-store-${{ inputs.cache-key-suffix }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+    - name: Restore pnpm store cache (with fallback keys)
+      if: inputs.use-sticky-disk != 'true' && inputs.use-restore-keys == 'true'
       uses: actions/cache@v4
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
