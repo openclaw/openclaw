@@ -115,9 +115,10 @@ function buildDiscordCommandOptions(params: {
       };
     }
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
+    const forceAutocomplete = command.key === "acp" && arg.name === "action";
     const shouldAutocomplete =
       resolvedChoices.length > 0 &&
-      (typeof arg.choices === "function" || resolvedChoices.length > 25);
+      (forceAutocomplete || typeof arg.choices === "function" || resolvedChoices.length > 25);
     const autocomplete = shouldAutocomplete
       ? async (interaction: AutocompleteInteraction) => {
           const focused = interaction.options.getFocused();
@@ -1207,6 +1208,10 @@ export function createDiscordNativeCommand(params: {
     }
   })();
 }
+
+export const __testing = {
+  buildDiscordCommandOptions,
+};
 
 async function dispatchDiscordCommandInteraction(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
