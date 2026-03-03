@@ -101,6 +101,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [I set `gateway.bind: "lan"` (or `"tailnet"`) and now nothing listens / the UI says unauthorized](#i-set-gatewaybind-lan-or-tailnet-and-now-nothing-listens-the-ui-says-unauthorized)
   - [Why do I need a token on localhost now?](#why-do-i-need-a-token-on-localhost-now)
   - [Do I have to restart after changing config?](#do-i-have-to-restart-after-changing-config)
+  - [How do I disable funny CLI taglines?](#how-do-i-disable-funny-cli-taglines)
   - [How do I enable web search (and web fetch)?](#how-do-i-enable-web-search-and-web-fetch)
   - [config.apply wiped my config. How do I recover and avoid this?](#configapply-wiped-my-config-how-do-i-recover-and-avoid-this)
   - [How do I run a central Gateway with specialized workers across devices?](#how-do-i-run-a-central-gateway-with-specialized-workers-across-devices)
@@ -1465,6 +1466,25 @@ The Gateway watches the config and supports hot-reload:
 
 - `gateway.reload.mode: "hybrid"` (default): hot-apply safe changes, restart for critical ones
 - `hot`, `restart`, `off` are also supported
+
+### How do I disable funny CLI taglines
+
+Set `cli.banner.taglineMode` in config:
+
+```json5
+{
+  cli: {
+    banner: {
+      taglineMode: "off", // random | default | off
+    },
+  },
+}
+```
+
+- `off`: hides tagline text but keeps the banner title/version line.
+- `default`: uses `All your chats, one OpenClaw.` every time.
+- `random`: rotating funny/seasonal taglines (default behavior).
+- If you want no banner at all, set env `OPENCLAW_HIDE_BANNER=1`.
 
 ### How do I enable web search and web fetch
 
