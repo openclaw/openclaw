@@ -693,12 +693,24 @@ export const dispatchTelegramMessage = async ({
         );
       }
     }
+    // Finalize reasoning previews (edit to spoiler format instead of deleting)
     for (const messageId of archivedReasoningPreviewIds) {
       try {
-        await bot.api.deleteMessage(chatId, messageId);
+        // Get the final reasoning text from the reasoning lane
+        const finalReasoningText = reasoningLane.lastPartialText || "";
+        if (finalReasoningText.trim().length > 0) {
+          // Wrap in spoiler tags so users can still view it if interested
+          const spoilerText = `<tg-spoiler>${renderTelegramHtmlText(finalReasoningText)}</tg-spoiler>`;
+          await bot.api.editMessageText(chatId, messageId, spoilerText, {
+            parse_mode: "HTML",
+          });
+        } else {
+          // If no reasoning text available, fall back to deletion
+          await bot.api.deleteMessage(chatId, messageId);
+        }
       } catch (err) {
         logVerbose(
-          `telegram: archived reasoning preview cleanup failed (${messageId}): ${String(err)}`,
+          `telegram: reasoning preview finalization failed (${messageId}): ${String(err)}`,
         );
       }
     }
