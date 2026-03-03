@@ -225,6 +225,7 @@ export const OpenClawSchema = z
     update: z
       .object({
         channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
+        gitRepo: z.string().optional(),
         checkOnStart: z.boolean().optional(),
         auto: z
           .object({

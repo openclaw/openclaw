@@ -20,7 +20,7 @@ set -euo pipefail
 #   OPENCLAW_SPEC=<npm-install-spec>       # optional direct spec (e.g. file:/path, git+https://...)
 #   OPENCLAW_RELEASE_REPO=<github-url>     # repo URL for release tarballs (default: daydreamsai/openclaw-x402-router)
 #   OPENCLAW_REPO=https://github.com/<org>/<repo>.git  # for git+https:// fallback
-#   OPENCLAW_REF=<tag-or-commit>         # preferred (immutable)
+#   OPENCLAW_REF=<tag-or-commit>         # preferred (immutable); if omitted, resolves latest stable release tag
 #   OPENCLAW_BRANCH=<branch>             # fallback for development
 #   OPENCLAW_INSTALLER=npm|pnpm|auto
 #   OPENCLAW_BIN=openclaw|moltbot
@@ -51,6 +51,28 @@ set -euo pipefail
 
 OPENCLAW_SPEC="${OPENCLAW_SPEC:-}"
 OPENCLAW_REPO="${OPENCLAW_REPO:-https://github.com/daydreamsai/openclaw-x402-router.git}"
+OPENCLAW_RELEASE_REPO="${OPENCLAW_RELEASE_REPO:-https://github.com/daydreamsai/openclaw-x402-router}"
+normalize_openclaw_release_slug() {
+  local slug="${OPENCLAW_RELEASE_REPO%.git}"
+  slug="${slug#https://github.com/}"
+  slug="${slug#http://github.com/}"
+  slug="${slug#git@github.com:}"
+  slug="${slug#github.com/}"
+  slug="${slug#/}"
+  printf '%s\n' "$slug"
+}
+
+resolve_latest_openclaw_release_tag() {
+  local slug
+  slug="$(normalize_openclaw_release_slug)"
+  if [[ -z "$slug" || "$slug" != */* ]]; then
+    return 1
+  fi
+  curl -fsSL -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${slug}/releases/latest" \
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    | head -n 1
+}
 OPENCLAW_REF="${OPENCLAW_REF:-}"
 OPENCLAW_BRANCH="${OPENCLAW_BRANCH:-}"
 OPENCLAW_INSTALLER="${OPENCLAW_INSTALLER:-npm}"
@@ -62,10 +84,6 @@ OPENCLAW_INSTALL_REMOTE_SKILLS="${OPENCLAW_INSTALL_REMOTE_SKILLS:-1}"
 OPENCLAW_SKILLS_DIR="${OPENCLAW_SKILLS_DIR:-$HOME/.openclaw/skills}"
 OPENCLAW_LUCID_SDK_SKILL_URL="${OPENCLAW_LUCID_SDK_SKILL_URL:-https://raw.githubusercontent.com/daydreamsai/skills-market/main/plugins/lucid-agents-sdk/skills/SKILL.md}"
 OPENCLAW_XGATE_ROUTER_SKILL_URL="${OPENCLAW_XGATE_ROUTER_SKILL_URL:-https://ai.xgate.run/SKILL.md}"
-
-if [[ -z "$OPENCLAW_SPEC" && -z "$OPENCLAW_REF" && -z "$OPENCLAW_BRANCH" ]]; then
-  OPENCLAW_REF="v2026.2.25.daydreams.1"
-fi
 
 if [[ -n "$OPENCLAW_SPEC" && ( -n "$OPENCLAW_REF" || -n "$OPENCLAW_BRANCH" ) ]]; then
   echo "ERROR: set OPENCLAW_SPEC or OPENCLAW_REF/OPENCLAW_BRANCH, not both" >&2
@@ -586,8 +604,6 @@ echo "  Phase 2: OpenClaw Gateway Install"
 echo "============================================"
 echo ""
 
-OPENCLAW_RELEASE_REPO="${OPENCLAW_RELEASE_REPO:-https://github.com/daydreamsai/openclaw-x402-router}"
-
 resolve_release_tarball_url() {
   local tag="$1"
   local repo_url="${OPENCLAW_RELEASE_REPO%.git}"
@@ -598,6 +614,16 @@ resolve_release_tarball_url() {
   fi
   return 1
 }
+
+if [[ -z "$OPENCLAW_SPEC" && -z "$OPENCLAW_REF" && -z "$OPENCLAW_BRANCH" ]]; then
+  OPENCLAW_REF="$(resolve_latest_openclaw_release_tag || true)"
+  if [[ -z "$OPENCLAW_REF" ]]; then
+    echo "ERROR: could not determine latest stable release tag from ${OPENCLAW_RELEASE_REPO}" >&2
+    echo "Set OPENCLAW_REF=<tag> explicitly and retry." >&2
+    exit 1
+  fi
+  echo "==> Resolved latest stable release tag: ${OPENCLAW_REF}"
+fi
 
 if [[ -n "$OPENCLAW_SPEC" ]]; then
   SPEC="$OPENCLAW_SPEC"
@@ -765,6 +791,21 @@ CLI_BIN_NAME="$(basename "$CLI_BIN_PATH")"
 echo "==> Installed CLI: ${CLI_BIN_NAME} (${CLI_BIN_PATH})"
 INSTALLED_VERSION="$("$CLI_BIN_PATH" --version 2>/dev/null || true)"
 echo "==> Installed version: ${INSTALLED_VERSION:-unknown}"
+
+echo "==> Configuring fork-aware update defaults..."
+if "$CLI_BIN_PATH" config set update.channel stable >/dev/null 2>&1; then
+  echo "==> Set update.channel=stable"
+else
+  echo "WARNING: failed to set update.channel=stable; run manually:" >&2
+  echo "  $CLI_BIN_PATH config set update.channel stable" >&2
+fi
+
+if "$CLI_BIN_PATH" config set update.gitRepo "$OPENCLAW_REPO" >/dev/null 2>&1; then
+  echo "==> Set update.gitRepo=${OPENCLAW_REPO}"
+else
+  echo "WARNING: failed to set update.gitRepo; run manually:" >&2
+  echo "  $CLI_BIN_PATH config set update.gitRepo \"$OPENCLAW_REPO\"" >&2
+fi
 
 install_remote_skill() {
   local skill_name="$1"

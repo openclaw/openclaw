@@ -27,6 +27,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "logging.redactPatterns": "Custom Redaction Patterns",
   update: "Updates",
   "update.channel": "Update Channel",
+  "update.gitRepo": "Update Git Repository",
   "update.checkOnStart": "Update Check on Start",
   "update.auto.enabled": "Auto Update Enabled",
   "update.auto.stableDelayHours": "Auto Update Stable Delay (hours)",

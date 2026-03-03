@@ -57,6 +57,37 @@ const MAX_LOG_CHARS = 8000;
 export const DEFAULT_PACKAGE_NAME = "openclaw";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
+export type UpdateGitRepoSource = "default" | "config" | "env";
+
+export type ResolvedUpdateGitRepo = {
+  url: string;
+  source: UpdateGitRepoSource;
+};
+
+function normalizeGitRepoUrl(value?: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+export function resolveUpdateGitRepo(configuredRepo?: string | null): ResolvedUpdateGitRepo {
+  const envOverride =
+    normalizeGitRepoUrl(process.env.OPENCLAW_UPDATE_GIT_REPO) ??
+    normalizeGitRepoUrl(process.env.OPENCLAW_REPO);
+  if (envOverride) {
+    return { url: envOverride, source: "env" };
+  }
+
+  const configRepo = normalizeGitRepoUrl(configuredRepo);
+  if (configRepo) {
+    return { url: configRepo, source: "config" };
+  }
+
+  return { url: OPENCLAW_REPO_URL, source: "default" };
+}
+
 export function normalizeTag(value?: string | null): string | null {
   if (!value) {
     return null;
@@ -198,12 +229,15 @@ export async function ensureGitCheckout(params: {
   dir: string;
   timeoutMs: number;
   progress?: UpdateStepProgress;
+  repoUrl?: string;
+  enforceRepo?: boolean;
 }): Promise<UpdateStepResult | null> {
+  const repoUrl = normalizeGitRepoUrl(params.repoUrl) ?? OPENCLAW_REPO_URL;
   const dirExists = await pathExists(params.dir);
   if (!dirExists) {
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", repoUrl, params.dir],
       timeoutMs: params.timeoutMs,
       progress: params.progress,
     });
@@ -219,7 +253,7 @@ export async function ensureGitCheckout(params: {
 
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", repoUrl, params.dir],
       cwd: params.dir,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
@@ -228,6 +262,29 @@ export async function ensureGitCheckout(params: {
 
   if (!(await isCorePackage(params.dir))) {
     throw new Error(`OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
+  }
+
+  if (params.enforceRepo) {
+    const originRes = await runCommandWithTimeout(
+      ["git", "-C", params.dir, "remote", "get-url", "origin"],
+      {
+        cwd: params.dir,
+        timeoutMs: params.timeoutMs,
+      },
+    ).catch(() => null);
+
+    const currentOrigin = originRes?.code === 0 ? originRes.stdout.trim() : null;
+    if (currentOrigin !== repoUrl) {
+      return await runUpdateStep({
+        name: currentOrigin ? "git remote set-url origin" : "git remote add origin",
+        argv: currentOrigin
+          ? ["git", "-C", params.dir, "remote", "set-url", "origin", repoUrl]
+          : ["git", "-C", params.dir, "remote", "add", "origin", repoUrl],
+        cwd: params.dir,
+        timeoutMs: params.timeoutMs,
+        progress: params.progress,
+      });
+    }
   }
 
   return null;

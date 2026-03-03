@@ -476,6 +476,52 @@ describe("update-cli", () => {
     expect(call?.tag).toBe("latest");
   });
 
+  it("uses configured update.gitRepo when switching package installs to dev", async () => {
+    const tempDir = createCaseDir("openclaw-update-git-dir");
+    await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
+      mockPackageInstallStatus(createCaseDir("openclaw-update"));
+      vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+        ...baseSnapshot,
+        config: {
+          update: {
+            gitRepo: "https://github.com/daydreamsai/openclaw-x402-router.git",
+          },
+        } as OpenClawConfig,
+      });
+
+      await updateCommand({ channel: "dev", yes: true });
+
+      expect(runCommandWithTimeout).toHaveBeenCalledWith(
+        ["git", "clone", "https://github.com/daydreamsai/openclaw-x402-router.git", tempDir],
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      );
+    });
+  });
+
+  it("uses git stable-tag flow when update.gitRepo and update.channel=stable are configured", async () => {
+    const tempDir = createCaseDir("openclaw-update-git-stable-dir");
+    await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
+      mockPackageInstallStatus(createCaseDir("openclaw-update"));
+      vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+        ...baseSnapshot,
+        config: {
+          update: {
+            channel: "stable",
+            gitRepo: "https://github.com/daydreamsai/openclaw-x402-router.git",
+          },
+        } as OpenClawConfig,
+      });
+
+      await updateCommand({ yes: true });
+
+      expect(runCommandWithTimeout).toHaveBeenCalledWith(
+        ["git", "clone", "https://github.com/daydreamsai/openclaw-x402-router.git", tempDir],
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      );
+      expectUpdateCallChannel("stable");
+    });
+  });
+
   it("honors --tag override", async () => {
     const tempDir = createCaseDir("openclaw-update");
 
