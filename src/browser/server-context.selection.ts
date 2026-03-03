@@ -84,7 +84,30 @@ export function createProfileSelectionOps({
       return page ?? candidates.at(0) ?? null;
     };
 
-    const chosen = targetId ? resolveById(targetId) : pickDefault();
+    let chosen: BrowserTab | "AMBIGUOUS" | null = null;
+
+    if (profile.lockTab && profileState.lastTargetId) {
+      chosen = resolveById(profileState.lastTargetId);
+      // If the locked tab is still valid, we use it regardless of whether targetId was passed.
+      if (chosen !== "AMBIGUOUS" && !chosen) {
+        // Tab is gone, unlock it
+        profileState.lastTargetId = null;
+      }
+    }
+
+    if (!chosen) {
+      chosen = targetId ? resolveById(targetId) : pickDefault();
+    }
+
+    if (
+      !chosen &&
+      (profile.driver === "extension" || !profile.cdpIsLoopback) &&
+      candidates.length === 1
+    ) {
+      // If an agent passes a stale/foreign targetId but only one candidate remains,
+      // recover by using that tab instead of failing hard.
+      chosen = candidates[0] ?? null;
+    }
 
     if (chosen === "AMBIGUOUS") {
       throw new BrowserTargetAmbiguousError();
@@ -92,7 +115,11 @@ export function createProfileSelectionOps({
     if (!chosen) {
       throw new BrowserTabNotFoundError();
     }
-    profileState.lastTargetId = chosen.targetId;
+
+    // If locked, we don't update lastTargetId to some new tab if we were already locked.
+    if (!profile.lockTab || !profileState.lastTargetId) {
+      profileState.lastTargetId = chosen.targetId;
+    }
     return chosen;
   };
 

@@ -32,6 +32,7 @@ export type ResolvedBrowserConfig = {
   headless: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
+  disableLaunch: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
@@ -48,6 +49,7 @@ export type ResolvedBrowserProfile = {
   color: string;
   driver: "openclaw" | "extension";
   attachOnly: boolean;
+  lockTab: boolean;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -260,7 +262,8 @@ export function resolveBrowserConfig(
 
   const headless = cfg?.headless === true;
   const noSandbox = cfg?.noSandbox === true;
-  const attachOnly = cfg?.attachOnly === true;
+  const disableLaunch = cfg?.disableLaunch === true;
+  const attachOnly = cfg?.attachOnly === true || disableLaunch;
   const executablePath = cfg?.executablePath?.trim() || undefined;
 
   const defaultProfileFromConfig = cfg?.defaultProfile?.trim() || undefined;
@@ -310,6 +313,7 @@ export function resolveBrowserConfig(
     headless,
     noSandbox,
     attachOnly,
+    disableLaunch,
     defaultProfile,
     profiles,
     ssrfPolicy,
@@ -357,6 +361,7 @@ export function resolveProfile(
     color: profile.color,
     driver,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
+    lockTab: profile.lockTab === true,
   };
 }
 
