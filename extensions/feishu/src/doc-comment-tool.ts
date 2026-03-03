@@ -12,7 +12,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuDocCommentSchema, type FeishuDocCommentParams } from "./doc-comment-schema.js";
 import {
-  listDocComments,
+  listAllDocComments,
   getDocComment,
   replyToDocComment,
   createDocComment,
@@ -75,7 +75,7 @@ export function registerFeishuDocCommentTool(api: OpenClawPluginApi) {
 
             switch (p.action) {
               case "list_comments":
-                return json(await listDocComments(client, p.file_token, p.file_type));
+                return json(await listAllDocComments(client, p.file_token, p.file_type));
 
               case "get_comment":
                 return json(await getDocComment(client, p.file_token, p.file_type, p.comment_id));

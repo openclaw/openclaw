@@ -19,9 +19,20 @@ export interface DocCommentInfo {
   replyId?: string;
 }
 
+export interface CommentContentElement {
+  type: "text_run" | "docs_link" | "person";
+  text_run?: { text: string };
+  docs_link?: { url: string };
+  person?: { user_id: string };
+}
+
+export interface CommentContent {
+  elements: CommentContentElement[];
+}
+
 export interface CommentReply {
   reply_id: string;
-  content: string;
+  content: CommentContent;
   create_time: number;
   update_time: number;
 }
@@ -33,7 +44,8 @@ export interface Comment {
   update_time: number;
   is_solved: boolean;
   quote: string;
-  replies: CommentReply[];
+  content?: CommentContent;
+  replies?: CommentReply[];
 }
 
 // ============ HTTP Helper ============
@@ -81,6 +93,13 @@ async function feishuHttpRequest<T>(
 // ============ URL Parsing ============
 
 /**
+ * Check if a hostname is a valid Feishu/Lark domain.
+ */
+function isFeishuDomain(hostname: string): boolean {
+  return hostname.endsWith(".feishu.cn") || hostname.endsWith(".larksuite.com");
+}
+
+/**
  * Extract document info from a Feishu document URL.
  *
  * Supported URL formats:
@@ -89,10 +108,18 @@ async function feishuHttpRequest<T>(
  * - https://xxx.feishu.cn/sheets/ABC123
  * - https://xxx.feishu.cn/base/ABC123
  * - With comment anchor: ...#comment-XYZ
+ *
+ * Only accepts URLs from feishu.cn or larksuite.com domains.
  */
 export function parseDocUrl(url: string): DocCommentInfo | null {
   try {
     const parsed = new URL(url);
+
+    // Validate domain - only accept feishu.cn and larksuite.com
+    if (!isFeishuDomain(parsed.hostname)) {
+      return null;
+    }
+
     const pathname = parsed.pathname;
 
     // Match /docx/, /docs/, /sheets/, /base/ patterns
@@ -172,8 +199,15 @@ export function extractDocUrls(text: string): DocCommentInfo[] {
 
 // ============ Comment API ============
 
+export interface ListCommentsResult {
+  comments: Comment[];
+  hasMore: boolean;
+  pageToken?: string;
+}
+
 /**
  * List comments on a document.
+ * Handles pagination - use pageToken to fetch subsequent pages.
  *
  * API: GET /open-apis/drive/v1/files/:file_token/comments
  */
@@ -181,19 +215,57 @@ export async function listDocComments(
   client: Lark.Client,
   fileToken: string,
   fileType: DocFileType,
-): Promise<Comment[]> {
-  const res = await feishuHttpRequest<{ items?: Comment[] }>(
-    client,
-    "GET",
-    `/open-apis/drive/v1/files/${fileToken}/comments`,
-    { file_type: fileType },
-  );
+  options?: { pageToken?: string; pageSize?: number },
+): Promise<ListCommentsResult> {
+  const params: Record<string, string> = { file_type: fileType };
+  if (options?.pageToken) {
+    params.page_token = options.pageToken;
+  }
+  if (options?.pageSize) {
+    params.page_size = String(options.pageSize);
+  }
+
+  const res = await feishuHttpRequest<{
+    items?: Comment[];
+    has_more?: boolean;
+    page_token?: string;
+  }>(client, "GET", `/open-apis/drive/v1/files/${fileToken}/comments`, params);
 
   if (res.code !== 0) {
     throw new Error(`Failed to list comments: ${res.msg}`);
   }
 
-  return res.data?.items || [];
+  return {
+    comments: res.data?.items || [],
+    hasMore: res.data?.has_more ?? false,
+    pageToken: res.data?.page_token,
+  };
+}
+
+/**
+ * List all comments on a document (handles pagination automatically).
+ * Use with caution for documents with many comments.
+ *
+ * API: GET /open-apis/drive/v1/files/:file_token/comments
+ */
+export async function listAllDocComments(
+  client: Lark.Client,
+  fileToken: string,
+  fileType: DocFileType,
+  maxPages = 10,
+): Promise<Comment[]> {
+  const allComments: Comment[] = [];
+  let pageToken: string | undefined;
+  let pageCount = 0;
+
+  do {
+    const result = await listDocComments(client, fileToken, fileType, { pageToken });
+    allComments.push(...result.comments);
+    pageToken = result.hasMore ? result.pageToken : undefined;
+    pageCount++;
+  } while (pageToken && pageCount < maxPages);
+
+  return allComments;
 }
 
 /**

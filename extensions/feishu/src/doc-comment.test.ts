@@ -78,6 +78,14 @@ describe("parseDocUrl", () => {
       replyId: undefined,
     });
   });
+
+  it("should reject non-Feishu domain with valid doc path", () => {
+    // Security: must reject URLs from arbitrary domains even if path looks valid
+    expect(parseDocUrl("https://evil.com/docx/ABC123")).toBeNull();
+    expect(parseDocUrl("https://fake-feishu.cn/docx/ABC123")).toBeNull();
+    expect(parseDocUrl("https://feishu.cn.evil.com/docx/ABC123")).toBeNull();
+    expect(parseDocUrl("https://not-larksuite.com/docx/ABC123")).toBeNull();
+  });
 });
 
 describe("extractDocUrls", () => {
