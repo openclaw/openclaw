@@ -44,3 +44,14 @@ KEEP_TMP=1 ops/scripts/alpha_smoke.sh
 cd ~/openclaw-workspace/repos/openclaw
 KEEP_TMP=1 bash ops/scripts/gate.sh
 ```
+
+## Reviewer Determinism Guard
+
+- `alpha_smoke.sh` supports `ALPHA_REVIEWER_AGENT` override (default `president-a`).
+- Reviewer checks are deterministic token checks; `HEARTBEAT_OK` triggers one hard retry and still FAILs if token mismatches.
+- During smoke, any provider/model mismatch is FAIL.
+
+## Gate Archive Contract
+
+- `ops/scripts/gate_archive.sh` archives receipts **only on full PASS** (`health PASS+PIN_OK` and `alpha_smoke PASS 5/5`).
+- Any FAIL path exits non-zero and writes **no** ledger archive files.

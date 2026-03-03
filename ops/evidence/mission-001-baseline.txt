@@ -1,0 +1,88 @@
+== time ==
+Mon Mar  2 11:23:34 PM UTC 2026
+== head ==
+2055f872a6edcc68e52382d4e5f7ad536aa6a15b
+== gate pass sample ==
+== pwd ==
+{
+  "ok": true,
+  "nodeId": "eb5dc35848953cad45eb7a47b18e3ede90b266f9d22b45111d515b938913e730",
+  "command": "system.run",
+  "payload": {
+    "exitCode": 0,
+    "success": true,
+    "timedOut": false,
+    "stdout": "/home/spryguy\n",
+    "stderr": "",
+    "error": null
+  }
+}
+
+== strike_echo ==
+{
+  "ok": true,
+  "nodeId": "eb5dc35848953cad45eb7a47b18e3ede90b266f9d22b45111d515b938913e730",
+  "command": "system.run",
+  "payload": {
+    "exitCode": 0,
+    "success": true,
+    "timedOut": false,
+    "stdout": "[strike_echo] run_id=232337-829497\n[strike_echo] phase 1: resetting sessions...\n[strike_echo] phase 2: starting burst...\n[strike_echo] burst complete. verifying...\n[strike_echo][PASS] 10/10 echoes returned; provider/model pinned to openai-codex/gpt-5.3-codex; no error patterns detected.\n",
+    "stderr": "",
+    "error": null
+  }
+}
+
+== assert pinned codex ==
+{
+  "ok": true,
+  "nodeId": "eb5dc35848953cad45eb7a47b18e3ede90b266f9d22b45111d515b938913e730",
+  "command": "system.run",
+  "payload": {
+    "exitCode": 0,
+    "success": true,
+    "timedOut": false,
+    "stdout": "PIN_OK\n",
+    "stderr": "",
+    "error": null
+  }
+}
+
+== alpha_smoke ==
+{
+  "ok": true,
+  "nodeId": "eb5dc35848953cad45eb7a47b18e3ede90b266f9d22b45111d515b938913e730",
+  "command": "system.run",
+  "payload": {
+    "exitCode": 0,
+    "success": true,
+    "timedOut": false,
+    "stdout": "[alpha_smoke] run_id=232439-830139 tmp=/tmp/cc-alpha-232439-830139\n[alpha_smoke][OK] role=captain pinned=openai-codex/gpt-5.3-codex\n[alpha_smoke][OK] role=implementer pinned=openai-codex/gpt-5.3-codex\n[alpha_smoke][OK] role=reviewer pinned=anthropic/claude-sonnet-4-6\n[alpha_smoke][OK] role=sre pinned=openai-codex/gpt-5.3-codex\n[alpha_smoke][OK] role=docs pinned=google/gemini-2.5-pro\n[alpha_smoke][PASS] 5/5 roles ok; provider/model pinned per role; no error patterns detected.\n",
+    "stderr": "",
+    "error": null
+  }
+}
+
+== alpha receipts ==
+a3.json
+a4.json
+telemetry-post.json
+telemetry-pre.json
+
+/tmp/cc-alpha-codex-004012-534347:
+a1.json
+a2.json
+a3.json
+a4.json
+telemetry-post.json
+telemetry-pre.json
+
+/tmp/cc-alpha-codex-010838-535892:
+a1.json
+a2.json
+a3.json
+a4.json
+telemetry-post.json
+telemetry-pre.json
+== strike_echo receipt ==
+-rw-rw-r-- 1 spryguy spryguy 288 Mar  2 23:24 /tmp/strike_echo_last.txt

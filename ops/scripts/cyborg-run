@@ -27,7 +27,7 @@ case "${1:-}" in
     run "president-b ping" "cd ~/openclaw-workspace/repos/openclaw && timeout 90 ~/bin/openclaw-safe agent --agent president-b --session-id \"presB-ping-$(date +%s)\" --timeout 60 --thinking off --message \"Reply with EXACTLY: PRES_B_OK\" --json | jq -r \".result.payloads[0].text\""
     ;;
     alpha)
-      run "alpha_smoke" "cd ~/openclaw-workspace/repos/openclaw && KEEP_TMP=${KEEP_TMP:-0} ops/scripts/alpha_smoke.sh"
+      run "alpha_smoke" "cd ~/openclaw-workspace/repos/openclaw && ALPHA_REVIEWER_AGENT=${ALPHA_REVIEWER_AGENT:-} ALPHA_REVIEWER_PROVIDER=${ALPHA_REVIEWER_PROVIDER:-} ALPHA_REVIEWER_MODEL=${ALPHA_REVIEWER_MODEL:-} KEEP_TMP=${KEEP_TMP:-0} ops/scripts/alpha_smoke.sh"
       ;;
   health)
     run "pwd" "pwd"
