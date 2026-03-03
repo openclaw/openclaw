@@ -1613,6 +1613,14 @@ export async function runEmbeddedAttempt(
                 workspaceDir: params.workspaceDir,
                 messageProvider: params.messageProvider ?? undefined,
                 requestCompaction: async (customInstructions?: string) => {
+                  if (!params.sessionKey || !params.sessionFile) {
+                    // requestCompaction needs session identity + transcript path;
+                    // fail fast instead of returning true and silently skipping later.
+                    log.warn(
+                      `requestCompaction ignored: missing session context (sessionKey=${String(params.sessionKey)}, sessionFile=${String(params.sessionFile)})`,
+                    );
+                    return false;
+                  }
                   if (compactionRequested) {
                     return false;
                   }
