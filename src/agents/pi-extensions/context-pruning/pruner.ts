@@ -217,6 +217,71 @@ ${tail}`;
   return { ...msg, content: [asText(trimmed + note)] };
 }
 
+const FILE_BLOCK_RE = /<file\s+name="([^"]*)"(?:\s+mime="([^"]*)")?\s*>([\s\S]*?)<\/file>/g;
+
+export function softTrimFileBlocksInText(
+  text: string,
+  settings: EffectiveContextPruningSettings,
+): { text: string; trimmedChars: number } {
+  const { maxChars, headChars, tailChars } = settings.fileBlocks;
+  let trimmedChars = 0;
+  const result = text.replace(
+    FILE_BLOCK_RE,
+    (match, name: string, mime: string | undefined, body: string) => {
+      if (body.length <= maxChars) {
+        return match;
+      }
+      const h = Math.max(0, headChars);
+      const t = Math.max(0, tailChars);
+      if (h + t >= body.length) {
+        return match;
+      }
+      const head = body.slice(0, h);
+      const tail = body.slice(body.length - t);
+      trimmedChars += body.length - h - t;
+      const mimeAttr = mime ? ` mime="${mime}"` : "";
+      return `<file name="${name}"${mimeAttr}>${head}\n...\n[File block trimmed: kept first ${h} and last ${t} of ${body.length} chars]\n...${tail}</file>`;
+    },
+  );
+  return { text: result, trimmedChars };
+}
+
+function softTrimFileBlocksInUserMessage(
+  msg: AgentMessage,
+  settings: EffectiveContextPruningSettings,
+): AgentMessage | null {
+  if (msg.role !== "user") {
+    return null;
+  }
+  const content = msg.content;
+  if (typeof content === "string") {
+    const { text, trimmedChars } = softTrimFileBlocksInText(content, settings);
+    if (trimmedChars === 0) {
+      return null;
+    }
+    return { ...msg, content: text };
+  }
+  if (Array.isArray(content)) {
+    let changed = false;
+    const newContent = content.map((block) => {
+      if (block.type !== "text") {
+        return block;
+      }
+      const { text, trimmedChars } = softTrimFileBlocksInText(block.text, settings);
+      if (trimmedChars === 0) {
+        return block;
+      }
+      changed = true;
+      return { ...block, text };
+    });
+    if (!changed) {
+      return null;
+    }
+    return { ...msg, content: newContent };
+  }
+  return null;
+}
+
 export function pruneContextMessages(params: {
   messages: AgentMessage[];
   settings: EffectiveContextPruningSettings;
@@ -260,11 +325,38 @@ export function pruneContextMessages(params: {
     return messages;
   }
 
-  const prunableToolIndexes: number[] = [];
   let next: AgentMessage[] | null = null;
 
+  // --- File block trimming pass (before tool result trimming) ---
+  if (settings.fileBlocks.enabled) {
+    for (let i = pruneStartIndex; i < cutoffIndex; i++) {
+      const msg = (next ?? messages)[i];
+      if (!msg || msg.role !== "user") {
+        continue;
+      }
+      const updated = softTrimFileBlocksInUserMessage(msg, settings);
+      if (!updated) {
+        continue;
+      }
+      const beforeChars = estimateMessageChars(msg);
+      const afterChars = estimateMessageChars(updated);
+      totalChars += afterChars - beforeChars;
+      if (!next) {
+        next = messages.slice();
+      }
+      next[i] = updated;
+    }
+    ratio = totalChars / charWindow;
+    if (ratio < settings.softTrimRatio) {
+      return next ?? messages;
+    }
+  }
+
+  // --- Tool result soft trim pass ---
+  const prunableToolIndexes: number[] = [];
+
   for (let i = pruneStartIndex; i < cutoffIndex; i++) {
-    const msg = messages[i];
+    const msg = (next ?? messages)[i];
     if (!msg || msg.role !== "toolResult") {
       continue;
     }

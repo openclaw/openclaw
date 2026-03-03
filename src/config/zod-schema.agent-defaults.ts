@@ -71,6 +71,15 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        fileBlocks: z
+          .object({
+            enabled: z.boolean().optional(),
+            maxChars: z.number().int().nonnegative().optional(),
+            headChars: z.number().int().nonnegative().optional(),
+            tailChars: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
         hardClear: z
           .object({
             enabled: z.boolean().optional(),

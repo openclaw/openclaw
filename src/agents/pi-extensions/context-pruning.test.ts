@@ -6,6 +6,7 @@ import {
   default as contextPruningExtension,
   DEFAULT_CONTEXT_PRUNING_SETTINGS,
   pruneContextMessages,
+  softTrimFileBlocksInText,
 } from "./context-pruning.js";
 import { getContextPruningRuntime, setContextPruningRuntime } from "./context-pruning/runtime.js";
 
@@ -448,5 +449,170 @@ describe("context-pruning", () => {
     expect(text).toContain("abcdef");
     expect(text).toContain("efghij");
     expect(text).toContain("[Tool result trimmed:");
+  });
+
+  // --- File block awareness tests ---
+
+  function makeUserWithFile(name: string, mime: string, body: string): AgentMessage {
+    return {
+      role: "user",
+      content: `Here is the file:\n<file name="${name}" mime="${mime}">\n${body}\n</file>`,
+      timestamp: Date.now(),
+    };
+  }
+
+  it("softTrimFileBlocksInText trims oversized file blocks", () => {
+    const body = "x".repeat(5000);
+    const text = `prefix\n<file name="report.pdf" mime="application/pdf">${body}</file>\nsuffix`;
+    const settings = makeAggressiveSettings({
+      fileBlocks: { enabled: true, maxChars: 100, headChars: 30, tailChars: 30 },
+    });
+    const result = softTrimFileBlocksInText(text, settings);
+    expect(result.trimmedChars).toBeGreaterThan(0);
+    expect(result.text).toContain("prefix");
+    expect(result.text).toContain("suffix");
+    expect(result.text).toContain("[File block trimmed: kept first 30 and last 30 of 5000 chars]");
+    expect(result.text).toContain(`<file name="report.pdf" mime="application/pdf">`);
+    expect(result.text).toContain("</file>");
+  });
+
+  it("softTrimFileBlocksInText does not trim small file blocks", () => {
+    const body = "short content";
+    const text = `<file name="small.txt" mime="text/plain">${body}</file>`;
+    const settings = makeAggressiveSettings({
+      fileBlocks: { enabled: true, maxChars: 100, headChars: 30, tailChars: 30 },
+    });
+    const result = softTrimFileBlocksInText(text, settings);
+    expect(result.trimmedChars).toBe(0);
+    expect(result.text).toBe(text);
+  });
+
+  it("softTrimFileBlocksInText handles multiple file blocks (only trims oversized)", () => {
+    const smallBody = "ok";
+    const bigBody = "y".repeat(3000);
+    const text = `<file name="a.txt" mime="text/plain">${smallBody}</file>\nmiddle\n<file name="b.pdf" mime="application/pdf">${bigBody}</file>`;
+    const settings = makeAggressiveSettings({
+      fileBlocks: { enabled: true, maxChars: 100, headChars: 20, tailChars: 20 },
+    });
+    const result = softTrimFileBlocksInText(text, settings);
+    expect(result.trimmedChars).toBeGreaterThan(0);
+    // Small block untouched
+    expect(result.text).toContain(`<file name="a.txt" mime="text/plain">${smallBody}</file>`);
+    // Big block trimmed
+    expect(result.text).toContain("[File block trimmed:");
+    expect(result.text).toContain("middle");
+  });
+
+  it("trims file blocks in user messages with string content", () => {
+    const bigBody = "z".repeat(10_000);
+    const messages: AgentMessage[] = [
+      makeUserWithFile("report.pdf", "application/pdf", bigBody),
+      makeAssistant("a1"),
+    ];
+
+    const next = pruneWithAggressiveDefaults(messages, {
+      hardClearRatio: 10.0,
+      fileBlocks: { enabled: true, maxChars: 100, headChars: 30, tailChars: 30 },
+    });
+
+    const userMsg = next[0];
+    expect(userMsg?.role).toBe("user");
+    const content = (userMsg as { content: string }).content;
+    expect(content).toContain("[File block trimmed:");
+    expect(content.length).toBeLessThan(bigBody.length);
+  });
+
+  it("trims file blocks in user messages with array content", () => {
+    const bigBody = "w".repeat(10_000);
+    const messages: AgentMessage[] = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `Here is the file:\n<file name="doc.pdf" mime="application/pdf">${bigBody}</file>`,
+          },
+        ],
+        timestamp: Date.now(),
+      } as unknown as AgentMessage,
+      makeAssistant("a1"),
+    ];
+
+    const next = pruneWithAggressiveDefaults(messages, {
+      hardClearRatio: 10.0,
+      fileBlocks: { enabled: true, maxChars: 100, headChars: 30, tailChars: 30 },
+    });
+
+    const userMsg = next[0];
+    expect(userMsg?.role).toBe("user");
+    const content = (userMsg as { content: Array<{ type: string; text: string }> }).content;
+    expect(content[0]?.text).toContain("[File block trimmed:");
+  });
+
+  it("runs both file block and tool result trimming when both are present", () => {
+    const bigFileBody = "f".repeat(10_000);
+    const bigToolText = "t".repeat(20_000);
+    const messages: AgentMessage[] = [
+      makeUserWithFile("big.pdf", "application/pdf", bigFileBody),
+      makeAssistant("a1"),
+      makeToolResult({ toolCallId: "t1", toolName: "exec", text: bigToolText }),
+      makeAssistant("a2"),
+    ];
+
+    const next = pruneWithAggressiveDefaults(messages, {
+      fileBlocks: { enabled: true, maxChars: 100, headChars: 30, tailChars: 30 },
+    });
+
+    // File block trimmed
+    const userContent = (next[0] as { content: string }).content;
+    expect(userContent).toContain("[File block trimmed:");
+    // Tool result also trimmed or cleared
+    const toolMsg = findToolResult(next, "t1");
+    expect(toolText(toolMsg).length).toBeLessThan(bigToolText.length);
+  });
+
+  it("does not trim file blocks when fileBlocks.enabled is false", () => {
+    const bigBody = "n".repeat(10_000);
+    const messages: AgentMessage[] = [
+      makeUserWithFile("report.pdf", "application/pdf", bigBody),
+      makeAssistant("a1"),
+    ];
+
+    const next = pruneWithAggressiveDefaults(messages, {
+      hardClearRatio: 10.0,
+      fileBlocks: { enabled: false, maxChars: 100, headChars: 30, tailChars: 30 },
+    });
+
+    const userMsg = next[0];
+    const content = (userMsg as { content: string }).content;
+    expect(content).toContain(bigBody);
+    expect(content).not.toContain("[File block trimmed:");
+  });
+
+  it("keepLastAssistants protects recent user message file blocks", () => {
+    const bigBody = "p".repeat(10_000);
+    const messages: AgentMessage[] = [
+      makeUserWithFile("old.pdf", "application/pdf", bigBody),
+      makeAssistant("a1"),
+      makeAssistant("a2"),
+      makeUserWithFile("new.pdf", "application/pdf", bigBody),
+      makeAssistant("a3"),
+    ];
+
+    // keepLastAssistants=2 => cutoff is at a2 (index 2), protecting messages from index 2 onward.
+    // The user message at index 3 (new.pdf) is after cutoff, so it's protected.
+    const next = pruneWithAggressiveDefaults(messages, {
+      keepLastAssistants: 2,
+      hardClearRatio: 10.0,
+      fileBlocks: { enabled: true, maxChars: 100, headChars: 30, tailChars: 30 },
+    });
+
+    // Old file block (before cutoff) should be trimmed
+    const oldContent = (next[0] as { content: string }).content;
+    expect(oldContent).toContain("[File block trimmed:");
+
+    // New file block (after cutoff) should be preserved
+    const newContent = (next[3] as { content: string }).content;
+    expect(newContent).toContain(bigBody);
   });
 });
