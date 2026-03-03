@@ -146,6 +146,7 @@ export type ChannelAccountSnapshot = {
   profile?: unknown;
   channelAccessToken?: string;
   channelSecret?: string;
+  hasActiveResponses?: boolean;
 };
 
 export type ChannelLogSink = {

@@ -54,6 +54,64 @@ describe("evaluateChannelHealth", () => {
     );
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
   });
+    it("treats channel with active responses as healthy", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 50_000,
+        lastEventAt: 60_000,
+        hasActiveResponses: true,
+      },
+      {
+        now: 200_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "active-responses" });
+  });
+
+  it("flags disconnected channel even when active responses are set", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        lastStartAt: 50_000,
+        hasActiveResponses: true,
+      },
+      {
+        now: 55_000,
+        channelConnectGraceMs: 1_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
+  });
+
+  it("detects stale socket when no active responses", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 50_000,
+        lastEventAt: 60_000,
+        hasActiveResponses: false,
+      },
+      {
+        now: 200_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
 });
 
 describe("resolveChannelRestartReason", () => {

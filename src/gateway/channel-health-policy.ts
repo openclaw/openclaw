@@ -6,6 +6,7 @@ export type ChannelHealthSnapshot = {
   lastEventAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;
+  hasActiveResponses?: boolean;
 };
 
 export type ChannelHealthEvaluationReason =
@@ -14,6 +15,7 @@ export type ChannelHealthEvaluationReason =
   | "not-running"
   | "startup-connect-grace"
   | "disconnected"
+  | "active-responses"
   | "stale-socket";
 
 export type ChannelHealthEvaluation = {
@@ -51,6 +53,9 @@ export function evaluateChannelHealth(
   }
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
+  }
+  if (snapshot.hasActiveResponses) {
+    return { healthy: true, reason: "active-responses" };
   }
   if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
     const upSince = snapshot.lastStartAt ?? 0;
