@@ -27,6 +27,7 @@ import { createTelegramDraftStream } from "./draft-stream.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const activeDraftStreamStops = new Map<string, () => void>();
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -90,12 +91,16 @@ export const dispatchTelegramMessage = async ({
 
   const isPrivateChat = msg.chat.type === "private";
   const draftThreadId = threadSpec.id;
+  const draftStreamKey = `${chatId}:${threadSpec.scope}:${draftThreadId ?? "root"}`;
   const draftMaxChars = Math.min(textLimit, 4096);
   const canStreamDraft =
     streamMode !== "off" &&
     isPrivateChat &&
     typeof draftThreadId === "number" &&
     (await resolveBotTopicsEnabled(primaryCtx));
+  if (canStreamDraft) {
+    activeDraftStreamStops.get(draftStreamKey)?.();
+  }
   const draftStream = canStreamDraft
     ? createTelegramDraftStream({
         api: bot.api,
@@ -107,6 +112,17 @@ export const dispatchTelegramMessage = async ({
         warn: logVerbose,
       })
     : undefined;
+  const currentStop = draftStream ? () => draftStream.stop() : undefined;
+  if (currentStop) {
+    activeDraftStreamStops.set(draftStreamKey, currentStop);
+  }
+  const stopDraftStream = () => {
+    currentStop?.();
+    const registered = activeDraftStreamStops.get(draftStreamKey);
+    if (registered && registered === currentStop) {
+      activeDraftStreamStops.delete(draftStreamKey);
+    }
+  };
   const draftChunking =
     draftStream && streamMode === "block"
       ? resolveTelegramDraftStreamingChunking(cfg, route.accountId)
@@ -259,7 +275,7 @@ export const dispatchTelegramMessage = async ({
       deliver: async (payload, info) => {
         if (info.kind === "final") {
           await flushDraft();
-          draftStream?.stop();
+          stopDraftStream();
         }
         const result = await deliverReplies({
           replies: [payload],
@@ -307,7 +323,7 @@ export const dispatchTelegramMessage = async ({
       onModelSelected,
     },
   });
-  draftStream?.stop();
+  stopDraftStream();
   let sentFallback = false;
   if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {
     const result = await deliverReplies({
