@@ -44,6 +44,16 @@ x-i18n:
 4. OpenClaw 从配置的身份头提取用户标识。
 5. 全部校验通过后，请求被授权。
 
+## Control UI Pairing Behavior
+
+当 `gateway.auth.mode = "trusted-proxy"` 生效且请求通过 trusted-proxy 检查后，Control UI WebSocket 会话可以无需设备配对身份即可连接。
+
+影响：
+
+- 配对不再是此模式下 Control UI 访问的主要门槛。
+- 你的反向代理认证策略和 `allowUsers` 成为有效的访问控制。
+- 仅通过受信任代理 IP（`gateway.trustedProxies` + 防火墙）访问 Gateway。
+
 ## 配置示例
 
 ```json5
