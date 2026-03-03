@@ -60,7 +60,7 @@ export function stripThinkPrefix(text: string): { text: string; hadThinkPrefix: 
   }
 
   // Strip everything from start through the closing tag
-  const afterClose = trimmed.slice(closeIdx + closeTag.length).trim();
+  const afterClose = trimmed.slice(closeIdx + closeTag.length).trimStart();
   return { text: afterClose, hadThinkPrefix: true };
 }
 

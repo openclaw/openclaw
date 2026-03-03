@@ -55,4 +55,14 @@ describe("stripThinkPrefix", () => {
     const result = stripThinkPrefix("[THINK] reasoning [/think] actual reply");
     expect(result).toEqual({ text: "actual reply", hadThinkPrefix: true });
   });
+
+  it("should preserve trailing whitespace/formatting in reply after closing tag", () => {
+    const result = stripThinkPrefix("[THINK] reasoning [/THINK] reply\n    indented code\n");
+    expect(result).toEqual({ text: "reply\n    indented code\n", hadThinkPrefix: true });
+  });
+
+  it("should preserve markdown formatting after closing tag", () => {
+    const result = stripThinkPrefix("[THINK] internal [/THINK] - item 1\n  - item 2\n");
+    expect(result).toEqual({ text: "- item 1\n  - item 2\n", hadThinkPrefix: true });
+  });
 });

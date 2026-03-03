@@ -49,7 +49,7 @@ export function normalizeReplyPayload(
         opts.onSkip?.("think");
         return null;
       }
-      text = thinkResult.text || undefined;
+      text = thinkResult.text || "";
     }
   }
 

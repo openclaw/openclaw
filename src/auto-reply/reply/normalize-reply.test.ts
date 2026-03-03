@@ -76,6 +76,7 @@ describe("normalizeReplyPayload – [THINK] prefix filtering", () => {
     expect(result).not.toBeNull();
     // Text should be stripped but payload delivered because of media
     expect(result!.mediaUrl).toBe("file:///tmp/photo.jpg");
+    expect(result!.text).toBe("");
   });
 
   it("handles leading whitespace before [THINK]", () => {
@@ -131,5 +132,21 @@ describe("normalizeReplyPayload – [THINK] prefix filtering", () => {
     const { result, onSkip } = normalize("   [THINKING] reasoning about things");
     expect(result).toBeNull();
     expect(onSkip).toHaveBeenCalledWith("think");
+  });
+
+  it("preserves media when [THINKING] block covers all text", () => {
+    const { result } = normalize("[THINKING] reasoning about the image", {
+      mediaUrl: "file:///tmp/screenshot.png",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.mediaUrl).toBe("file:///tmp/screenshot.png");
+    expect(result!.text).toBe("");
+  });
+
+  it("preserves formatting in reply after [THINKING] closing tag", () => {
+    const { result } = normalize("[THINKING] reasoning [/THINKING] reply\n    code block\n");
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain("code block");
+    expect(result!.text).toContain("\n    ");
   });
 });
