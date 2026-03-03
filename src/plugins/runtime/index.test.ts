@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { onAgentEvent } from "../../infra/agent-events.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
@@ -46,5 +47,10 @@ describe("plugin runtime command execution", () => {
     const runtime = createPluginRuntime();
     expect(runtime.events.onAgentEvent).toBe(onAgentEvent);
     expect(runtime.events.onSessionTranscriptUpdate).toBe(onSessionTranscriptUpdate);
+  });
+
+  it("exposes runtime.system.requestHeartbeatNow", () => {
+    const runtime = createPluginRuntime();
+    expect(runtime.system.requestHeartbeatNow).toBe(requestHeartbeatNow);
   });
 });
