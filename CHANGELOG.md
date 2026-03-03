@@ -6,7 +6,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Docs/Feishu webhook setup: clarify `verificationToken` configuration with Open Platform navigation steps, and align Feishu sender-allowlist guidance plus zh-CN channel documentation with current runtime behavior. (#31555)
 - Secrets/SecretRef coverage: expand SecretRef support across the full supported user-supplied credential surface (64 targets total), including runtime collectors, `openclaw secrets` planning/apply/audit flows, onboarding SecretInput UX, and related docs; unresolved refs now fail fast on active surfaces while inactive surfaces report non-blocking diagnostics. (#29580) Thanks @joshavant.
 - Tools/PDF analysis: add a first-class `pdf` tool with native Anthropic and Google PDF provider support, extraction fallback for non-native models, configurable defaults (`agents.defaults.pdfModel`, `pdfMaxBytesMb`, `pdfMaxPages`), and docs/tests covering routing, validation, and registration. (#31319) Thanks @tyler6204.
 - Outbound adapters/plugins: add shared `sendPayload` support across direct-text-media, Discord, Slack, WhatsApp, Zalo, and Zalouser with multi-media iteration and chunk-aware text fallback. (#30144) Thanks @nohat.
@@ -27,8 +26,6 @@ Docs: https://docs.openclaw.ai
 - Plugin runtime/system: expose `runtime.system.requestHeartbeatNow(...)` so extensions can wake targeted sessions immediately after enqueueing system events. (#19464) Thanks @AustinEral.
 - Plugin runtime/events: expose `runtime.events.onAgentEvent` and `runtime.events.onSessionTranscriptUpdate` for extension-side subscriptions, and isolate transcript-listener failures so one faulty listener cannot break the entire update fanout. (#16044) Thanks @scifantastic.
 - CLI/Banner taglines: add `cli.banner.taglineMode` (`random` | `default` | `off`) to control funny tagline behavior in startup output, with docs + FAQ guidance and regression tests for config override behavior.
-- Docs/Models: refresh MiniMax, Moonshot (Kimi), GLM/Z.AI model docs to align with latest defaults (`MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `moonshot/kimi-k2.5`, `zai/glm-5`) and keep Moonshot model lists synced from shared source data.
-- README/Contributors: rank contributor avatars by composite score (commits + merged PRs + code LOC), excluding docs-only LOC to prevent bulk-generated files from inflating rankings. (#23970) Thanks @tyler6204.
 
 ### Breaking
 
