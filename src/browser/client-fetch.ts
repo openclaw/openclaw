@@ -109,22 +109,46 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   const modelHint =
     "Do NOT retry the browser tool — it will keep failing. " +
     "Use an alternative approach or inform the user that the browser is currently unavailable.";
+  // Guidance for recoverable Playwright action failures (stale refs, element not found, etc.)
+  const actionHint =
+    "Re-snapshot the page to get fresh refs, then retry with the correct selector/ref.";
   const msg = String(err);
   const msgLower = msg.toLowerCase();
+
+  // Distinguish Playwright operation errors (stale refs, element-not-found, action timeouts)
+  // from true connection failures (browser service unreachable).
+  // Playwright errors contain domain-specific terms that plain fetch timeouts never produce.
+  const isPlaywrightError =
+    msgLower.includes("locator") ||
+    msgLower.includes("page.") ||
+    msgLower.includes("frame.") ||
+    msgLower.includes("elementhandle") ||
+    msgLower.includes("waiting for") ||
+    msgLower.includes("exceeded");
+
   const looksLikeTimeout =
     msgLower.includes("timed out") ||
     msgLower.includes("timeout") ||
     msgLower.includes("aborted") ||
     msgLower.includes("abort") ||
     msgLower.includes("aborterror");
+
+  // Playwright operation errors: the browser service is fine, the action itself failed.
+  // Return actionable guidance instead of "Can't reach the browser service".
+  if (isPlaywrightError) {
+    return new Error(`Browser action failed: ${msg}. ${actionHint}`);
+  }
+
+  // True connection timeout: the browser control service is unreachable.
   if (looksLikeTimeout) {
     return new Error(
       `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${modelHint}`,
     );
   }
-  return new Error(
-    `Can't reach the OpenClaw browser control service. ${operatorHint} ${modelHint} (${msg})`,
-  );
+
+  // Other non-Playwright errors: also treat as action failures rather than service-down,
+  // since the request did reach the service but produced an unexpected error.
+  return new Error(`Browser action failed: ${msg}. ${actionHint}`);
 }
 
 async function fetchHttpJson<T>(
