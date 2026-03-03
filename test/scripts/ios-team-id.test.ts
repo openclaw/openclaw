@@ -10,7 +10,7 @@ const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const BASH_ARGS = process.platform === "win32" ? [SCRIPT] : ["--noprofile", "--norc", SCRIPT];
 const BASE_PATH = process.env.PATH ?? "/usr/bin:/bin";
 const BASE_LANG = process.env.LANG ?? "C";
-const IS_WINDOWS = process.platform === "win32";
+const IS_DARWIN = process.platform === "darwin";
 let fixtureRoot = "";
 let sharedBinDir = "";
 let sharedHomeDir = "";
@@ -211,13 +211,13 @@ printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
     expect(fallback).toBe("BBBBB22222");
   });
 
-  it.runIf(!IS_WINDOWS)("resolves a fallback team ID from Xcode team listings (smoke)", async () => {
+  it.runIf(IS_DARWIN)("resolves a fallback team ID from Xcode team listings (smoke)", async () => {
     const fallbackResult = runScript(sharedHomeDir, { IOS_PYTHON_BIN: sharedFakePythonPath });
     expect(fallbackResult.ok).toBe(true);
     expect(fallbackResult.stdout).toBe("AAAAA11111");
   });
 
-  it.runIf(!IS_WINDOWS)(
+  it.runIf(IS_DARWIN)(
     "prints actionable guidance when Xcode account exists but no Team ID is resolvable",
     async () => {
       const result = runScript(sharedHomeDir);
