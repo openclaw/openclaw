@@ -59,14 +59,56 @@ Optional env vars:
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
+- `OPENCLAW_SANDBOX` — opt in to Docker gateway sandbox bootstrap. Only explicit truthy values enable it: `1`, `true`, `yes`, `on`
+- `OPENCLAW_INSTALL_DOCKER_CLI` — build arg passthrough for local image builds (`1` installs Docker CLI in the image). `docker-setup.sh` sets this automatically when `OPENCLAW_SANDBOX=1` for local builds.
+- `OPENCLAW_DOCKER_SOCKET` — override Docker socket path (default: `DOCKER_HOST=unix://...` path, else `/var/run/docker.sock`)
 - `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` — break-glass: allow trusted private-network
   `ws://` targets for CLI/onboarding client paths (default is loopback-only)
+- `OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS=0` — disable container browser hardening flags
+  `--disable-3d-apis`, `--disable-software-rasterizer`, `--disable-gpu` when you need
+  WebGL/3D compatibility.
+- `OPENCLAW_BROWSER_DISABLE_EXTENSIONS=0` — keep extensions enabled when browser
+  flows require them (default keeps extensions disabled in sandbox browser).
+- `OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT=<N>` — set Chromium renderer process
+  limit; set to `0` to skip the flag and use Chromium default behavior.
 
 After it finishes:
 
 - Open `http://127.0.0.1:18789/` in your browser.
 - Paste the token into the Control UI (Settings → token).
 - Need the URL again? Run `docker compose run --rm openclaw-cli dashboard --no-open`.
+
+### Enable agent sandbox for Docker gateway (opt-in)
+
+`docker-setup.sh` can also bootstrap `agents.defaults.sandbox.*` for Docker
+deployments.
+
+Enable with:
+
+```bash
+export OPENCLAW_SANDBOX=1
+./docker-setup.sh
+```
+
+Custom socket path (for example rootless Docker):
+
+```bash
+export OPENCLAW_SANDBOX=1
+export OPENCLAW_DOCKER_SOCKET=/run/user/1000/docker.sock
+./docker-setup.sh
+```
+
+Notes:
+
+- The script mounts `docker.sock` only after sandbox prerequisites pass.
+- If sandbox setup cannot be completed, the script resets
+  `agents.defaults.sandbox.mode` to `off` to avoid stale/broken sandbox config
+  on reruns.
+- If `Dockerfile.sandbox` is missing, the script prints a warning and continues;
+  build `openclaw-sandbox:bookworm-slim` with `scripts/sandbox-setup.sh` if
+  needed.
+- For non-local `OPENCLAW_IMAGE` values, the image must already contain Docker
+  CLI support for sandbox execution.
 
 ### Automation/CI (non-interactive, no TTY noise)
 
@@ -637,6 +679,38 @@ Notes:
 - Browser containers default to a dedicated Docker network (`openclaw-sandbox-browser`) instead of global `bridge`.
 - Optional `agents.defaults.sandbox.browser.cdpSourceRange` restricts container-edge CDP ingress by CIDR (for example `172.21.0.1/32`).
 - noVNC observer access is password-protected by default; OpenClaw provides a short-lived observer token URL that serves a local bootstrap page and keeps the password in URL fragment (instead of URL query).
+- Browser container startup defaults are conservative for shared/container workloads, including:
+  - `--remote-debugging-address=127.0.0.1`
+  - `--remote-debugging-port=<derived from OPENCLAW_BROWSER_CDP_PORT>`
+  - `--user-data-dir=${HOME}/.chrome`
+  - `--no-first-run`
+  - `--no-default-browser-check`
+  - `--disable-3d-apis`
+  - `--disable-software-rasterizer`
+  - `--disable-gpu`
+  - `--disable-dev-shm-usage`
+  - `--disable-background-networking`
+  - `--disable-features=TranslateUI`
+  - `--disable-breakpad`
+  - `--disable-crash-reporter`
+  - `--metrics-recording-only`
+  - `--renderer-process-limit=2`
+  - `--no-zygote`
+  - `--disable-extensions`
+  - If `agents.defaults.sandbox.browser.noSandbox` is set, `--no-sandbox` and
+    `--disable-setuid-sandbox` are also appended.
+  - The three graphics hardening flags above are optional. If your workload needs
+    WebGL/3D, set `OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS=0` to run without
+    `--disable-3d-apis`, `--disable-software-rasterizer`, and `--disable-gpu`.
+  - Extension behavior is controlled by `--disable-extensions` and can be disabled
+    (enables extensions) via `OPENCLAW_BROWSER_DISABLE_EXTENSIONS=0` for
+    extension-dependent pages or extensions-heavy workflows.
+  - `--renderer-process-limit=2` is also configurable with
+    `OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT`; set `0` to let Chromium choose its
+    default process limit when browser concurrency needs tuning.
+
+Defaults are applied by default in the bundled image. If you need different
+Chromium flags, use a custom browser image and provide your own entrypoint.
 
 Use config:
 

@@ -48,4 +48,38 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).not.toContain("javascript:");
     expect(html).not.toContain("src=");
   });
+
+  it("renders GFM markdown tables (#20410)", () => {
+    const md = [
+      "| Feature | Status |",
+      "|---------|--------|",
+      "| Tables  | ✅     |",
+      "| Borders | ✅     |",
+    ].join("\n");
+    const html = toSanitizedMarkdownHtml(md);
+    expect(html).toContain("<table");
+    expect(html).toContain("<thead");
+    expect(html).toContain("<th>");
+    expect(html).toContain("Feature");
+    expect(html).toContain("Tables");
+    expect(html).not.toContain("|---------|");
+  });
+
+  it("renders GFM tables surrounded by text (#20410)", () => {
+    const md = [
+      "Text before.",
+      "",
+      "| Col1 | Col2 |",
+      "|------|------|",
+      "| A    | B    |",
+      "",
+      "Text after.",
+    ].join("\n");
+    const html = toSanitizedMarkdownHtml(md);
+    expect(html).toContain("<table");
+    expect(html).toContain("Col1");
+    expect(html).toContain("Col2");
+    // Pipes from table delimiters must not appear as raw text
+    expect(html).not.toContain("|------|");
+  });
 });
