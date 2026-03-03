@@ -328,7 +328,22 @@ async function handleDiscordReactionEvent(
   } & DiscordReactionRoutingParams,
 ) {
   try {
-    const { data, client, action, botUserId, guildEntries } = params;
+    const {
+      data,
+      client,
+      action,
+      botUserId,
+      guildEntries,
+      accountId,
+      cfg,
+      dmEnabled,
+      groupDmEnabled,
+      groupDmChannels,
+      dmPolicy,
+      allowFrom,
+      groupPolicy,
+      allowNameMatching,
+    } = params;
     if (!("user" in data)) {
       return;
     }
@@ -367,7 +382,7 @@ async function handleDiscordReactionEvent(
       channelType === ChannelType.PrivateThread ||
       channelType === ChannelType.AnnouncementThread;
     const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
-      accountId: params.accountId,
+      accountId,
       user,
       isDirectMessage,
       isGroupDm,
@@ -375,13 +390,13 @@ async function handleDiscordReactionEvent(
       channelId: data.channel_id,
       channelName,
       channelSlug,
-      dmEnabled: params.dmEnabled,
-      groupDmEnabled: params.groupDmEnabled,
-      groupDmChannels: params.groupDmChannels,
-      dmPolicy: params.dmPolicy,
-      allowFrom: params.allowFrom,
-      groupPolicy: params.groupPolicy,
-      allowNameMatching: params.allowNameMatching,
+      dmEnabled,
+      groupDmEnabled,
+      groupDmChannels,
+      dmPolicy,
+      allowFrom,
+      groupPolicy,
+      allowNameMatching,
       guildInfo,
     };
     const ingressAccess = await authorizeDiscordReactionIngress(reactionIngressBase);
@@ -420,9 +435,9 @@ async function handleDiscordReactionEvent(
     const emitReaction = (text: string, parentPeerId?: string) => {
       const { contextKey } = resolveReactionBase();
       const route = resolveAgentRoute({
-        cfg: params.cfg,
+        cfg,
         channel: "discord",
-        accountId: params.accountId,
+        accountId,
         guildId: data.guild_id ?? undefined,
         memberRoleIds,
         peer: {
@@ -448,7 +463,7 @@ async function handleDiscordReactionEvent(
         userName: user.username,
         userTag: formatDiscordUserTag(user),
         allowlist: guildInfo?.users,
-        allowNameMatching: params.allowNameMatching,
+        allowNameMatching,
       });
     const emitReactionWithAuthor = (message: { author?: User } | null) => {
       const { baseText } = resolveReactionBase();
