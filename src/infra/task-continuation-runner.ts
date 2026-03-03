@@ -365,6 +365,17 @@ function formatContinuationPrompt(task: TaskFile, pendingCount: number): string 
     `Please continue working on this task. Use task_update() to log progress and task_complete() when finished.`,
   );
 
+  // Instruct agent to report results to the originating Discord channel
+  if (task.createdBySessionKey) {
+    const channelMatch = task.createdBySessionKey.match(/discord:channel:(\d+)/);
+    if (channelMatch) {
+      lines.push(``);
+      lines.push(
+        `**IMPORTANT:** This task was started from Discord channel ${channelMatch[1]}. When you complete this task or make significant progress, you MUST report your results to that Discord channel so the team can see your work.`,
+      );
+    }
+  }
+
   if (pendingCount > 0) {
     lines.push(``);
     lines.push(`Note: You have ${pendingCount} more pending task(s) waiting after this one.`);
@@ -425,6 +436,17 @@ function formatBacklogPickupPrompt(task: TaskFile): string {
   lines.push(`DO NOT call task_start() — the task already exists.`);
   lines.push(`Use task_update(task_id="${task.id}", progress="...") to log progress.`);
   lines.push(`Use task_complete(task_id="${task.id}", result="...") when finished.`);
+
+  // Instruct agent to report results to the originating Discord channel
+  if (task.createdBySessionKey) {
+    const channelMatch = task.createdBySessionKey.match(/discord:channel:(\d+)/);
+    if (channelMatch) {
+      lines.push(``);
+      lines.push(
+        `**IMPORTANT:** This task was started from Discord channel ${channelMatch[1]}. When you complete this task or make significant progress, you MUST report your results to that Discord channel so the team can see your work.`,
+      );
+    }
+  }
 
   return lines.join("\n");
 }
