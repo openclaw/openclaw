@@ -352,13 +352,19 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+      let failErr: unknown = null;
       try {
         await failDelivery(entry.id, errMsg, opts.stateDir);
-      } catch {
-        // Best-effort update.
+      } catch (e) {
+        failErr = e;
       }
       if (isPermanentDeliveryError(errMsg)) {
-        opts.log.warn(`Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`);
+        if (failErr) {
+          const failErrMsg = failErr instanceof Error ? failErr.message : JSON.stringify(failErr);
+          opts.log.error(`Failed to move entry ${entry.id} to failed/: ${failErrMsg}`);
+        } else {
+          opts.log.warn(`Delivery ${entry.id} hit permanent error — moved to failed/: ${errMsg}`);
+        }
         failed += 1;
         continue;
       }
