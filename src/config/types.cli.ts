@@ -11,3 +11,12 @@ export type CliConfig = {
     taglineMode?: CliBannerTaglineMode;
   };
 };
+
+export type TuiConfig = {
+  /**
+   * Deliver assistant replies to stdout by default.
+   * When false (default), replies are stored but not printed.
+   * Can be overridden with --deliver flag.
+   */
+  deliver?: boolean;
+};
