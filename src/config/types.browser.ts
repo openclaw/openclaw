@@ -50,10 +50,8 @@ export type BrowserConfig = {
   headless?: boolean;
   /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
   noSandbox?: boolean;
-  /** If true: never launch; only attach to an existing browser. Default: false */
+  /** If true: prevent all browser launches (via local Chrome or Playwright) and only allow attaching. Default: false */
   attachOnly?: boolean;
-  /** If true: prevent all browser launches (via local Chrome or Playwright). Default: false */
-  disableLaunch?: boolean;
   /** Starting local CDP port for auto-assigned browser profiles. Default derives from gateway port. */
   cdpPortRangeStart?: number;
   /** Default profile to use when profile param is omitted. Default: "chrome" */

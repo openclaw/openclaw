@@ -2361,13 +2361,12 @@ See [Plugins](/tools/plugin).
     // relayBindHost: "0.0.0.0", // only when the extension relay must be reachable across namespaces (for example WSL2)
     // executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     // attachOnly: false,
-    // disableLaunch: false,
   },
 }
 ```
 
 - `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
-- `disableLaunch: true` prevents all browser launches (via local Chrome or Playwright). Forces `attachOnly: true`.
+- `attachOnly: true` (global) prevents all browser launches (via local Chrome or Playwright) and only allow attaching.
 - `profiles.<name>.lockTab: true` locks OpenClaw to the first/selected tab for this profile and prevents switching.
 - `ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` when unset (trusted-network model).
 - Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: false` for strict public-only browser navigation.
