@@ -14,6 +14,7 @@ export {
   formatBillingErrorMessage,
   classifyFailoverReason,
   formatRawAssistantErrorForUi,
+  formatAssistantErrorForTranscript,
   formatAssistantErrorText,
   getApiErrorPayloadFingerprint,
   isAuthAssistantError,

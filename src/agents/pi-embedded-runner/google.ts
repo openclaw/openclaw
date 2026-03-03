@@ -12,6 +12,7 @@ import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
+  formatAssistantErrorForTranscript,
   isCompactionFailureError,
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
@@ -197,6 +198,99 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
     } as unknown as AgentMessage;
     touched = true;
   }
+  return touched ? out : messages;
+}
+
+function normalizeAssistantErrorContent(params: {
+  content: unknown;
+  normalizedError: string;
+  rawError?: string;
+}): unknown {
+  if (!Array.isArray(params.content)) {
+    return params.content;
+  }
+  let changed = false;
+  const next = params.content.map((block) => {
+    if (!block || typeof block !== "object") {
+      return block;
+    }
+    const typed = block as { type?: unknown; text?: unknown } & Record<string, unknown>;
+    if (typed.type !== "text" || typeof typed.text !== "string") {
+      return block;
+    }
+    const text = typed.text;
+    const hasRawError =
+      typeof params.rawError === "string" &&
+      params.rawError.length > 0 &&
+      text.includes(params.rawError);
+    const shouldReplace = hasRawError || text.length > 280;
+    if (!shouldReplace) {
+      return block;
+    }
+    changed = true;
+    return {
+      ...typed,
+      text: params.normalizedError,
+    };
+  });
+  return changed ? next : params.content;
+}
+
+function sanitizeAssistantErrorsForTranscript(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  let previousFingerprint: string | null = null;
+  let repeatedCount = 1;
+
+  const out = messages.map((message) => {
+    if (!message || typeof message !== "object" || message.role !== "assistant") {
+      previousFingerprint = null;
+      repeatedCount = 1;
+      return message;
+    }
+
+    const assistant = message as AgentMessage & {
+      errorMessage?: unknown;
+      stopReason?: unknown;
+      content?: unknown;
+    };
+    const rawError =
+      typeof assistant.errorMessage === "string" ? assistant.errorMessage.trim() : undefined;
+    if (assistant.stopReason !== "error" && !rawError) {
+      previousFingerprint = null;
+      repeatedCount = 1;
+      return message;
+    }
+
+    const normalized = formatAssistantErrorForTranscript(rawError);
+    const fingerprint = normalized.toLowerCase();
+    let normalizedForMessage = normalized;
+    if (fingerprint === previousFingerprint) {
+      repeatedCount += 1;
+      normalizedForMessage = `${normalized} (repeated x${repeatedCount})`;
+    } else {
+      previousFingerprint = fingerprint;
+      repeatedCount = 1;
+    }
+
+    const nextContent = normalizeAssistantErrorContent({
+      content: assistant.content,
+      normalizedError: normalizedForMessage,
+      rawError,
+    });
+
+    const next = {
+      ...(assistant as unknown as Record<string, unknown>),
+      errorMessage: normalizedForMessage,
+      content: nextContent,
+    } as AgentMessage;
+
+    if (assistant.errorMessage !== normalizedForMessage || nextContent !== assistant.content) {
+      touched = true;
+    }
+
+    return next;
+  });
+
   return touched ? out : messages;
 }
 
@@ -427,8 +521,9 @@ export async function sanitizeSessionHistory(params: {
       modelId: params.modelId,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const sanitizedAssistantErrors = sanitizeAssistantErrorsForTranscript(withInterSessionMarkers);
   const sanitizedImages = await sanitizeSessionMessagesImages(
-    withInterSessionMarkers,
+    sanitizedAssistantErrors,
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,
