@@ -165,6 +165,7 @@ async function authorizeSlashInvocation(params: {
       groupAllowFrom: configGroupAllowFrom,
       storeAllowFrom,
       dmPolicy,
+      groupAuthIncludesPairingStore: account.config.groupAuthIncludesPairingStore,
     });
 
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({

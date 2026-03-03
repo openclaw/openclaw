@@ -44,6 +44,8 @@ export type MattermostAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   /** Group message policy (allowlist/open/disabled). */
   groupPolicy?: GroupPolicy;
+  /** Include pairing store in group auth. Defaults to true for backward compatibility. */
+  groupAuthIncludesPairingStore?: boolean;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */

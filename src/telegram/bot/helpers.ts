@@ -44,6 +44,8 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   topicConfig?: TelegramTopicConfig;
   groupAllowOverride?: Array<string | number>;
   effectiveGroupAllow: NormalizedAllowFrom;
+  /** Group allowlist without pairing store (for command authorization). */
+  configuredGroupAllowFrom: NormalizedAllowFrom;
   hasGroupAllowOverride: boolean;
 }> {
   const accountId = normalizeAccountId(params.accountId);
@@ -74,6 +76,9 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     ? [...(Array.isArray(baseGroupAllow) ? baseGroupAllow : []), ...storeAllowFrom]
     : baseGroupAllow;
   const effectiveGroupAllow = normalizeAllowFrom(groupAllowWithStore);
+  // Configured-only group allowlist (no pairing store) for command authorization.
+  // Commands should only be authorized for explicitly configured users.
+  const configuredGroupAllowFrom = normalizeAllowFrom(baseGroupAllow);
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
   return {
     resolvedThreadId,
@@ -83,6 +88,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     topicConfig,
     groupAllowOverride,
     effectiveGroupAllow,
+    configuredGroupAllowFrom,
     hasGroupAllowOverride,
   };
 }
