@@ -5,6 +5,7 @@ import { agentCommandFromIngress } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -14,7 +15,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveGatewayRequestContext } from "./http-utils.js";
+import { getHeader, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -45,7 +46,7 @@ function buildAgentCommandInput(params: {
   prompt: { message: string; extraSystemPrompt?: string };
   sessionKey: string;
   runId: string;
-  messageChannel: string;
+  messageChannel?: string;
 }) {
   return {
     message: params.prompt.message,
@@ -53,7 +54,7 @@ function buildAgentCommandInput(params: {
     sessionKey: params.sessionKey,
     runId: params.runId,
     deliver: false as const,
-    messageChannel: params.messageChannel,
+    messageChannel: params.messageChannel ?? "webchat",
     bestEffortDeliver: false as const,
     // HTTP API callers are authenticated operator clients for this gateway context.
     senderIsOwner: true as const,
@@ -240,6 +241,8 @@ export async function handleOpenAiHttpRequest(
 
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
+  const messageChannel =
+    normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel") ?? "") ?? "webchat";
   const commandInput = buildAgentCommandInput({
     prompt,
     sessionKey,
