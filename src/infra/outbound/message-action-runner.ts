@@ -16,19 +16,14 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import {
-  isDeliverableMessageChannel,
-  normalizeMessageChannel,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../../utils/message-channel.js";
+import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
-import { applyTargetToParams } from "./channel-target.js";
 import type { OutboundSendDeps } from "./deliver.js";
+import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
@@ -41,7 +36,6 @@ import {
   resolveSlackAutoThreadId,
   resolveTelegramAutoThreadId,
 } from "./message-action-params.js";
-import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
   applyCrossContextDecoration,
@@ -222,23 +216,15 @@ async function resolveChannel(
   params: Record<string, unknown>,
   toolContext?: { currentChannelProvider?: string },
 ) {
-  const channelHint = readStringParam(params, "channel");
-  try {
-    const selection = await resolveMessageChannelSelection({
-      cfg,
-      channel: channelHint,
-    });
-    return selection.channel;
-  } catch (error) {
-    if (channelHint && toolContext?.currentChannelProvider) {
-      const fallback = normalizeMessageChannel(toolContext.currentChannelProvider);
-      if (fallback && isDeliverableMessageChannel(fallback)) {
-        params.channel = fallback;
-        return fallback;
-      }
-    }
-    throw error;
+  const selection = await resolveMessageChannelSelection({
+    cfg,
+    channel: readStringParam(params, "channel"),
+    fallbackChannel: toolContext?.currentChannelProvider,
+  });
+  if (selection.source === "tool-context-fallback") {
+    params.channel = selection.channel;
   }
+  return selection.channel;
 }
 
 async function resolveActionTarget(params: {
@@ -710,7 +696,7 @@ export async function runMessageAction(
   input: RunMessageActionParams,
 ): Promise<MessageActionRunResult> {
   const cfg = input.cfg;
-  const params = { ...input.params };
+  let params = { ...input.params };
   const resolvedAgentId =
     input.agentId ??
     (input.sessionKey
@@ -724,50 +710,11 @@ export async function runMessageAction(
   if (action === "broadcast") {
     return handleBroadcastAction(input, params);
   }
-
-  const explicitTarget = typeof params.target === "string" ? params.target.trim() : "";
-  const hasLegacyTarget =
-    (typeof params.to === "string" && params.to.trim().length > 0) ||
-    (typeof params.channelId === "string" && params.channelId.trim().length > 0);
-  if (explicitTarget && hasLegacyTarget) {
-    delete params.to;
-    delete params.channelId;
-  }
-  if (
-    !explicitTarget &&
-    !hasLegacyTarget &&
-    actionRequiresTarget(action) &&
-    !actionHasTarget(action, params)
-  ) {
-    const inferredTarget = input.toolContext?.currentChannelId?.trim();
-    if (inferredTarget) {
-      params.target = inferredTarget;
-    }
-  }
-  if (!explicitTarget && actionRequiresTarget(action) && hasLegacyTarget) {
-    const legacyTo = typeof params.to === "string" ? params.to.trim() : "";
-    const legacyChannelId = typeof params.channelId === "string" ? params.channelId.trim() : "";
-    const legacyTarget = legacyTo || legacyChannelId;
-    if (legacyTarget) {
-      params.target = legacyTarget;
-      delete params.to;
-      delete params.channelId;
-    }
-  }
-  const explicitChannel = typeof params.channel === "string" ? params.channel.trim() : "";
-  if (!explicitChannel) {
-    const inferredChannel = normalizeMessageChannel(input.toolContext?.currentChannelProvider);
-    if (inferredChannel && isDeliverableMessageChannel(inferredChannel)) {
-      params.channel = inferredChannel;
-    }
-  }
-
-  applyTargetToParams({ action, args: params });
-  if (actionRequiresTarget(action)) {
-    if (!actionHasTarget(action, params)) {
-      throw new Error(`Action ${action} requires a target.`);
-    }
-  }
+  params = normalizeMessageActionInput({
+    action,
+    args: params,
+    toolContext: input.toolContext,
+  });
 
   const channel = await resolveChannel(cfg, params, input.toolContext);
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
