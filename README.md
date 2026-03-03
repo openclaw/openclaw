@@ -49,7 +49,7 @@ Model note: while many providers/models are supported, for the best experience a
 
 ## Install (recommended)
 
-Runtime: **Node ≥22**.
+Runtime: **Node >=22.12.0**.
 
 ```bash
 npm install -g openclaw@latest
@@ -62,7 +62,7 @@ The wizard installs the Gateway daemon (launchd/systemd user service) so it stay
 
 ## Quick start (TL;DR)
 
-Runtime: **Node ≥22**.
+Runtime: **Node >=22.12.0**.
 
 Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
 
