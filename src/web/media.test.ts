@@ -361,6 +361,20 @@ describe("local media root guard", () => {
     expect(result.kind).toBe("image");
   });
 
+  it("resolves relative local paths against explicit local roots", async () => {
+    const relPath = path.relative(resolvePreferredOpenClawTmpDir(), tinyPngFile);
+    const cwd = process.cwd();
+    process.chdir(path.parse(cwd).root);
+    try {
+      const result = await loadWebMedia(relPath, 1024 * 1024, {
+        localRoots: [resolvePreferredOpenClawTmpDir()],
+      });
+      expect(result.kind).toBe("image");
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
   it("accepts win32 dev=0 stat mismatch for local file loads", async () => {
     const actualLstat = await fs.lstat(tinyPngFile);
     const actualStat = await fs.stat(tinyPngFile);

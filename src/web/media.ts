@@ -81,56 +81,75 @@ export function getDefaultLocalRoots(): readonly string[] {
 async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
-): Promise<void> {
+): Promise<string> {
   if (localRoots === "any") {
-    return;
+    return mediaPath;
   }
   const roots = localRoots ?? getDefaultLocalRoots();
-  // Resolve symlinks so a symlink under /tmp pointing to /etc/passwd is caught.
-  let resolved: string;
-  try {
-    resolved = await fs.realpath(mediaPath);
-  } catch {
-    resolved = path.resolve(mediaPath);
+
+  const resolvedRoots = await Promise.all(
+    roots.map(async (root) => {
+      try {
+        const resolvedRoot = await fs.realpath(root);
+        return { raw: root, resolved: resolvedRoot };
+      } catch {
+        return { raw: root, resolved: path.resolve(root) };
+      }
+    }),
+  );
+
+  for (const root of resolvedRoots) {
+    if (root.resolved === path.parse(root.resolved).root) {
+      throw new LocalMediaAccessError(
+        "invalid-root",
+        `Invalid localRoots entry (refuses filesystem root): ${root.raw}. Pass a narrower directory.`,
+      );
+    }
   }
 
-  // Hardening: the default allowlist includes the OpenClaw temp dir, and tests/CI may
-  // override the state dir into tmp. Avoid accidentally allowing per-agent
-  // `workspace-*` state roots via the temp-root prefix match; require explicit
-  // localRoots for those.
-  if (localRoots === undefined) {
-    const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
-    if (workspaceRoot) {
-      const stateDir = path.dirname(workspaceRoot);
-      const rel = path.relative(stateDir, resolved);
-      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
-        const firstSegment = rel.split(path.sep)[0] ?? "";
-        if (firstSegment.startsWith("workspace-")) {
-          throw new LocalMediaAccessError(
-            "path-not-allowed",
-            `Local media path is not under an allowed directory: ${mediaPath}`,
-          );
+  const candidates = [mediaPath];
+  const hasUrlScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(mediaPath);
+  if (!path.isAbsolute(mediaPath) && !hasUrlScheme) {
+    for (const root of resolvedRoots) {
+      candidates.push(path.join(root.resolved, mediaPath));
+    }
+  }
+
+  for (const candidate of candidates) {
+    let resolved: string;
+    try {
+      resolved = await fs.realpath(candidate);
+    } catch {
+      resolved = path.resolve(candidate);
+    }
+
+    // Hardening: the default allowlist includes the OpenClaw temp dir, and tests/CI may
+    // override the state dir into tmp. Avoid accidentally allowing per-agent
+    // `workspace-*` state roots via the temp-root prefix match; require explicit
+    // localRoots for those.
+    if (localRoots === undefined) {
+      const workspaceRoot = resolvedRoots.find(
+        (root) => path.basename(root.resolved) === "workspace",
+      );
+      if (workspaceRoot) {
+        const stateDir = path.dirname(workspaceRoot.resolved);
+        const rel = path.relative(stateDir, resolved);
+        if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+          const firstSegment = rel.split(path.sep)[0] ?? "";
+          if (firstSegment.startsWith("workspace-")) {
+            continue;
+          }
         }
       }
     }
-  }
-  for (const root of roots) {
-    let resolvedRoot: string;
-    try {
-      resolvedRoot = await fs.realpath(root);
-    } catch {
-      resolvedRoot = path.resolve(root);
-    }
-    if (resolvedRoot === path.parse(resolvedRoot).root) {
-      throw new LocalMediaAccessError(
-        "invalid-root",
-        `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
-      );
-    }
-    if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
-      return;
+
+    for (const root of resolvedRoots) {
+      if (resolved === root.resolved || resolved.startsWith(root.resolved + path.sep)) {
+        return candidate;
+      }
     }
   }
+
   throw new LocalMediaAccessError(
     "path-not-allowed",
     `Local media path is not under an allowed directory: ${mediaPath}`,
@@ -349,44 +368,46 @@ async function loadWebMediaInternal(
     );
   }
 
+  let localPath = mediaUrl;
+
   // Guard local reads against allowed directory roots to prevent file exfiltration.
   if (!(sandboxValidated || localRoots === "any")) {
-    await assertLocalMediaAllowed(mediaUrl, localRoots);
+    localPath = await assertLocalMediaAllowed(mediaUrl, localRoots);
   }
 
   // Local path
   let data: Buffer;
   if (readFileOverride) {
-    data = await readFileOverride(mediaUrl);
+    data = await readFileOverride(localPath);
   } else {
     try {
-      data = (await readLocalFileSafely({ filePath: mediaUrl })).buffer;
+      data = (await readLocalFileSafely({ filePath: localPath })).buffer;
     } catch (err) {
       if (err instanceof SafeOpenError) {
         if (err.code === "not-found") {
-          throw new LocalMediaAccessError("not-found", `Local media file not found: ${mediaUrl}`, {
+          throw new LocalMediaAccessError("not-found", `Local media file not found: ${localPath}`, {
             cause: err,
           });
         }
         if (err.code === "not-file") {
           throw new LocalMediaAccessError(
             "not-file",
-            `Local media path is not a file: ${mediaUrl}`,
+            `Local media path is not a file: ${localPath}`,
             { cause: err },
           );
         }
         throw new LocalMediaAccessError(
           "invalid-path",
-          `Local media path is not safe to read: ${mediaUrl}`,
+          `Local media path is not safe to read: ${localPath}`,
           { cause: err },
         );
       }
       throw err;
     }
   }
-  const mime = await detectMime({ buffer: data, filePath: mediaUrl });
-  const kind = kindFromMime(mime);
-  let fileName = path.basename(mediaUrl) || undefined;
+  const mime = await detectMime({ buffer: data, filePath: localPath });
+  const kind = mediaKindFromMime(mime);
+  let fileName = path.basename(localPath) || undefined;
   if (fileName && !path.extname(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {
