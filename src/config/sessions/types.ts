@@ -332,6 +332,7 @@ export type SessionSystemPromptReport = {
     warningMode?: "off" | "once" | "always";
     warningShown?: boolean;
     promptWarningSignature?: string;
+    warningSignaturesSeen?: string[];
     truncatedFiles?: number;
     nearLimitFiles?: number;
     totalNearLimit?: boolean;

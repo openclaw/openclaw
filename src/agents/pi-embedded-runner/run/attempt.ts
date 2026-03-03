@@ -624,6 +624,7 @@ export async function runEmbeddedAttempt(
     const bootstrapPromptWarning = buildBootstrapPromptWarning({
       analysis: bootstrapAnalysis,
       mode: bootstrapPromptWarningMode,
+      seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
       previousSignature: params.bootstrapPromptWarningSignature,
     });
     const workspaceNotes = hookAdjustedBootstrapFiles.some(
@@ -1710,6 +1711,7 @@ export async function runEmbeddedAttempt(
         timedOutDuringCompaction,
         promptError,
         sessionIdUsed,
+        bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
         systemPromptReport,
         messagesSnapshot,

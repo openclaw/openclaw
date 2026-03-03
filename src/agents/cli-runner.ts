@@ -62,6 +62,8 @@ export async function runCliAgent(params: {
   streamParams?: import("../commands/agent/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
+  bootstrapPromptWarningSignaturesSeen?: string[];
+  /** Backward-compat fallback when only the previous signature is available. */
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
 }): Promise<EmbeddedPiRunResult> {
@@ -121,6 +123,7 @@ export async function runCliAgent(params: {
   const bootstrapPromptWarning = buildBootstrapPromptWarning({
     analysis: bootstrapAnalysis,
     mode: bootstrapPromptWarningMode,
+    seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({

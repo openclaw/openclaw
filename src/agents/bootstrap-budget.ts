@@ -4,6 +4,7 @@ import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 export const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
 export const DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES = 3;
+export const DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX = 32;
 
 export type BootstrapTruncationCause = "per-file-limit" | "total-limit";
 export type BootstrapPromptWarningMode = "off" | "once" | "always";
@@ -42,12 +43,14 @@ export type BootstrapPromptWarning = {
   signature?: string;
   warningShown: boolean;
   lines: string[];
+  warningSignaturesSeen: string[];
 };
 
 export type BootstrapTruncationReportMeta = {
   warningMode: BootstrapPromptWarningMode;
   warningShown: boolean;
   promptWarningSignature?: string;
+  warningSignaturesSeen?: string[];
   truncatedFiles: number;
   nearLimitFiles: number;
   totalNearLimit: boolean;
@@ -62,6 +65,37 @@ function normalizePositiveLimit(value: number): number {
 
 function formatWarningCause(cause: BootstrapTruncationCause): string {
   return cause === "per-file-limit" ? "max/file" : "max/total";
+}
+
+function normalizeSeenSignatures(signatures?: string[]): string[] {
+  if (!Array.isArray(signatures) || signatures.length === 0) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const signature of signatures) {
+    const value = typeof signature === "string" ? signature.trim() : "";
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function appendSeenSignature(signatures: string[], signature: string): string[] {
+  if (!signature.trim()) {
+    return signatures;
+  }
+  if (signatures.includes(signature)) {
+    return signatures;
+  }
+  const next = [...signatures, signature];
+  if (next.length <= DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX) {
+    return next;
+  }
+  return next.slice(-DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX);
 }
 
 export function buildBootstrapInjectionStats(params: {
@@ -122,8 +156,8 @@ export function analyzeBootstrapBudget(params: {
   const nonMissing = params.files.filter((file) => !file.missing);
   const rawChars = nonMissing.reduce((sum, file) => sum + file.rawChars, 0);
   const injectedChars = nonMissing.reduce((sum, file) => sum + file.injectedChars, 0);
-  const totalNearLimit = rawChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio);
-  const totalOverLimit = rawChars > bootstrapTotalMaxChars;
+  const totalNearLimit = injectedChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio);
+  const totalOverLimit = injectedChars >= bootstrapTotalMaxChars;
 
   const files = params.files.map((file) => {
     if (file.missing) {
@@ -208,6 +242,10 @@ export function formatBootstrapTruncationWarningLines(params: {
       ? Math.floor(params.maxFiles)
       : DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES;
   const lines: string[] = [];
+  const duplicateNameCounts = params.analysis.truncatedFiles.reduce((acc, file) => {
+    acc.set(file.name, (acc.get(file.name) ?? 0) + 1);
+    return acc;
+  }, new Map<string, number>());
   const topFiles = params.analysis.truncatedFiles.slice(0, maxFiles);
   for (const file of topFiles) {
     const pct =
@@ -218,8 +256,12 @@ export function formatBootstrapTruncationWarningLines(params: {
       file.causes.length > 0
         ? file.causes.map((cause) => formatWarningCause(cause)).join(", ")
         : "";
+    const nameLabel =
+      (duplicateNameCounts.get(file.name) ?? 0) > 1 && file.path.trim().length > 0
+        ? `${file.name} (${file.path})`
+        : file.name;
     lines.push(
-      `${file.name}: ${file.rawChars} raw -> ${file.injectedChars} injected (~${Math.max(0, pct)}% removed${causeText ? `; ${causeText}` : ""}).`,
+      `${nameLabel}: ${file.rawChars} raw -> ${file.injectedChars} injected (~${Math.max(0, pct)}% removed${causeText ? `; ${causeText}` : ""}).`,
     );
   }
   if (params.analysis.truncatedFiles.length > topFiles.length) {
@@ -237,13 +279,21 @@ export function buildBootstrapPromptWarning(params: {
   analysis: BootstrapBudgetAnalysis;
   mode: BootstrapPromptWarningMode;
   previousSignature?: string;
+  seenSignatures?: string[];
   maxFiles?: number;
 }): BootstrapPromptWarning {
   const signature = buildBootstrapTruncationSignature(params.analysis);
+  let seenSignatures = normalizeSeenSignatures(params.seenSignatures);
+  if (params.previousSignature && !seenSignatures.includes(params.previousSignature)) {
+    seenSignatures = appendSeenSignature(seenSignatures, params.previousSignature);
+  }
+  const hasSeenSignature = Boolean(signature && seenSignatures.includes(signature));
   const warningShown =
-    params.mode !== "off" &&
-    Boolean(signature) &&
-    (params.mode === "always" || signature !== params.previousSignature);
+    params.mode !== "off" && Boolean(signature) && (params.mode === "always" || !hasSeenSignature);
+  const warningSignaturesSeen =
+    signature && params.mode !== "off"
+      ? appendSeenSignature(seenSignatures, signature)
+      : seenSignatures;
   return {
     signature,
     warningShown,
@@ -253,6 +303,7 @@ export function buildBootstrapPromptWarning(params: {
           maxFiles: params.maxFiles,
         })
       : [],
+    warningSignaturesSeen,
   };
 }
 
@@ -265,6 +316,9 @@ export function buildBootstrapTruncationReportMeta(params: {
     warningMode: params.warningMode,
     warningShown: params.warning.warningShown,
     promptWarningSignature: params.warning.signature,
+    ...(params.warning.warningSignaturesSeen.length > 0
+      ? { warningSignaturesSeen: params.warning.warningSignaturesSeen }
+      : {}),
     truncatedFiles: params.analysis.truncatedFiles.length,
     nearLimitFiles: params.analysis.nearLimitFiles.length,
     totalNearLimit: params.analysis.totalNearLimit,

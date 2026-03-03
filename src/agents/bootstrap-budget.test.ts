@@ -58,7 +58,7 @@ describe("analyzeBootstrapBudget", () => {
           path: "/tmp/AGENTS.md",
           missing: false,
           rawChars: 150,
-          injectedChars: 100,
+          injectedChars: 120,
           truncated: true,
         },
         {
@@ -66,7 +66,7 @@ describe("analyzeBootstrapBudget", () => {
           path: "/tmp/SOUL.md",
           missing: false,
           rawChars: 90,
-          injectedChars: 10,
+          injectedChars: 80,
           truncated: true,
         },
       ],
@@ -129,10 +129,58 @@ describe("bootstrap prompt warnings", () => {
     const second = buildBootstrapPromptWarning({
       analysis,
       mode: "once",
-      previousSignature: first.signature,
+      seenSignatures: first.warningSignaturesSeen,
     });
     expect(second.warningShown).toBe(false);
     expect(second.lines).toEqual([]);
+  });
+
+  it("dedupes once mode across non-consecutive repeated signatures", () => {
+    const analysisA = analyzeBootstrapBudget({
+      files: [
+        {
+          name: "A.md",
+          path: "/tmp/A.md",
+          missing: false,
+          rawChars: 150,
+          injectedChars: 100,
+          truncated: true,
+        },
+      ],
+      bootstrapMaxChars: 120,
+      bootstrapTotalMaxChars: 200,
+    });
+    const analysisB = analyzeBootstrapBudget({
+      files: [
+        {
+          name: "B.md",
+          path: "/tmp/B.md",
+          missing: false,
+          rawChars: 150,
+          injectedChars: 100,
+          truncated: true,
+        },
+      ],
+      bootstrapMaxChars: 120,
+      bootstrapTotalMaxChars: 200,
+    });
+    const firstA = buildBootstrapPromptWarning({
+      analysis: analysisA,
+      mode: "once",
+    });
+    expect(firstA.warningShown).toBe(true);
+    const firstB = buildBootstrapPromptWarning({
+      analysis: analysisB,
+      mode: "once",
+      seenSignatures: firstA.warningSignaturesSeen,
+    });
+    expect(firstB.warningShown).toBe(true);
+    const secondA = buildBootstrapPromptWarning({
+      analysis: analysisA,
+      mode: "once",
+      seenSignatures: firstB.warningSignaturesSeen,
+    });
+    expect(secondA.warningShown).toBe(false);
   });
 
   it("includes overflow line when more files are truncated than shown", () => {
@@ -173,6 +221,36 @@ describe("bootstrap prompt warnings", () => {
     expect(lines).toContain("+1 more truncated file(s).");
   });
 
+  it("disambiguates duplicate file names in warning lines", () => {
+    const analysis = analyzeBootstrapBudget({
+      files: [
+        {
+          name: "AGENTS.md",
+          path: "/tmp/a/AGENTS.md",
+          missing: false,
+          rawChars: 150,
+          injectedChars: 100,
+          truncated: true,
+        },
+        {
+          name: "AGENTS.md",
+          path: "/tmp/b/AGENTS.md",
+          missing: false,
+          rawChars: 140,
+          injectedChars: 100,
+          truncated: true,
+        },
+      ],
+      bootstrapMaxChars: 120,
+      bootstrapTotalMaxChars: 300,
+    });
+    const lines = formatBootstrapTruncationWarningLines({
+      analysis,
+    });
+    expect(lines.join("\n")).toContain("AGENTS.md (/tmp/a/AGENTS.md)");
+    expect(lines.join("\n")).toContain("AGENTS.md (/tmp/b/AGENTS.md)");
+  });
+
   it("respects off/always warning modes", () => {
     const analysis = analyzeBootstrapBudget({
       files: [
@@ -192,6 +270,7 @@ describe("bootstrap prompt warnings", () => {
     const off = buildBootstrapPromptWarning({
       analysis,
       mode: "off",
+      seenSignatures: [signature ?? ""],
       previousSignature: signature,
     });
     expect(off.warningShown).toBe(false);
@@ -200,6 +279,7 @@ describe("bootstrap prompt warnings", () => {
     const always = buildBootstrapPromptWarning({
       analysis,
       mode: "always",
+      seenSignatures: [signature ?? ""],
       previousSignature: signature,
     });
     expect(always.warningShown).toBe(true);
@@ -269,5 +349,6 @@ describe("bootstrap prompt warnings", () => {
     expect(meta.truncatedFiles).toBe(1);
     expect(meta.nearLimitFiles).toBeGreaterThanOrEqual(1);
     expect(meta.promptWarningSignature).toBeTruthy();
+    expect(meta.warningSignaturesSeen?.length).toBeGreaterThan(0);
   });
 });

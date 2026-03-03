@@ -69,6 +69,20 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
+function resolveBootstrapWarningSignaturesSeen(
+  report?: SessionEntry["systemPromptReport"],
+): string[] {
+  const truncation = report?.bootstrapTruncation;
+  const seenFromReport = (truncation?.warningSignaturesSeen ?? []).filter(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  if (seenFromReport.length > 0) {
+    return Array.from(new Set(seenFromReport));
+  }
+  const single = truncation?.promptWarningSignature;
+  return typeof single === "string" && single.trim().length > 0 ? [single] : [];
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -125,8 +139,9 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
-  let bootstrapPromptWarningSignature =
-    params.getActiveSessionEntry()?.systemPromptReport?.bootstrapTruncation?.promptWarningSignature;
+  let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+    params.getActiveSessionEntry()?.systemPromptReport,
+  );
 
   while (true) {
     try {
@@ -224,11 +239,16 @@ export async function runAgentTurnWithFallback(params: {
                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                   ownerNumbers: params.followupRun.run.ownerNumbers,
                   cliSessionId,
-                  bootstrapPromptWarningSignature,
+                  bootstrapPromptWarningSignaturesSeen,
+                  bootstrapPromptWarningSignature:
+                    bootstrapPromptWarningSignaturesSeen[
+                      bootstrapPromptWarningSignaturesSeen.length - 1
+                    ],
                   images: params.opts?.images,
                 });
-                bootstrapPromptWarningSignature =
-                  result.meta?.systemPromptReport?.bootstrapTruncation?.promptWarningSignature;
+                bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                  result.meta?.systemPromptReport,
+                );
 
                 // CLI backends don't emit streaming assistant events, so we need to
                 // emit one with the final text so server-chat can populate its buffer
@@ -401,7 +421,11 @@ export async function runAgentTurnWithFallback(params: {
                   : undefined,
               shouldEmitToolResult: params.shouldEmitToolResult,
               shouldEmitToolOutput: params.shouldEmitToolOutput,
-              bootstrapPromptWarningSignature,
+              bootstrapPromptWarningSignaturesSeen,
+              bootstrapPromptWarningSignature:
+                bootstrapPromptWarningSignaturesSeen[
+                  bootstrapPromptWarningSignaturesSeen.length - 1
+                ],
               onToolResult: onToolResult
                 ? (() => {
                     // Serialize tool result delivery to preserve message ordering.
@@ -434,8 +458,9 @@ export async function runAgentTurnWithFallback(params: {
                   })()
                 : undefined,
             });
-            bootstrapPromptWarningSignature =
-              result.meta?.systemPromptReport?.bootstrapTruncation?.promptWarningSignature;
+            bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+              result.meta?.systemPromptReport,
+            );
             return result;
           })();
         },

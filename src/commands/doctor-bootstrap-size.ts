@@ -64,7 +64,6 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
     lines.push("Workspace bootstrap files are near configured limits:");
   }
 
-  const nearLimitSet = new Set(analysis.nearLimitFiles.map((file) => file.name));
   const nonTruncatedNearLimit = analysis.nearLimitFiles.filter((file) => !file.truncated);
   if (nonTruncatedNearLimit.length > 0) {
     for (const file of nonTruncatedNearLimit) {
@@ -75,12 +74,15 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
   }
 
   lines.push(
-    `Total bootstrap raw chars: ${formatInt(analysis.totals.rawChars)} (${formatPercent(analysis.totals.rawChars, bootstrapTotalMaxChars)} of max/total ${formatInt(bootstrapTotalMaxChars)}).`,
+    `Total bootstrap injected chars: ${formatInt(analysis.totals.injectedChars)} (${formatPercent(analysis.totals.injectedChars, bootstrapTotalMaxChars)} of max/total ${formatInt(bootstrapTotalMaxChars)}).`,
+  );
+  lines.push(
+    `Total bootstrap raw chars (before truncation): ${formatInt(analysis.totals.rawChars)}.`,
   );
 
   const needsPerFileTip =
     analysis.truncatedFiles.some((file) => file.causes.includes("per-file-limit")) ||
-    Array.from(nearLimitSet).length > 0;
+    analysis.nearLimitFiles.length > 0;
   const needsTotalTip =
     analysis.truncatedFiles.some((file) => file.causes.includes("total-limit")) ||
     analysis.totalNearLimit;
