@@ -7,6 +7,7 @@ const {
   clientFetchUserMock,
   clientGetPluginMock,
   clientConstructorOptionsMock,
+  createDiscordAutoPresenceControllerMock,
   createDiscordNativeCommandMock,
   createNoopThreadBindingManagerMock,
   createThreadBindingManagerMock,
@@ -23,6 +24,13 @@ const {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
   return {
     clientConstructorOptionsMock: vi.fn(),
+    createDiscordAutoPresenceControllerMock: vi.fn(() => ({
+      enabled: false,
+      start: vi.fn(),
+      stop: vi.fn(),
+      refresh: vi.fn(),
+      runNow: vi.fn(),
+    })),
     clientFetchUserMock: vi.fn(async (_target: string) => ({ id: "bot-1" })),
     clientGetPluginMock: vi.fn<(_name: string) => unknown>(() => undefined),
     createDiscordNativeCommandMock: vi.fn(() => ({ name: "mock-command" })),
@@ -220,6 +228,10 @@ vi.mock("./presence.js", () => ({
   resolveDiscordPresenceUpdate: () => undefined,
 }));
 
+vi.mock("./auto-presence.js", () => ({
+  createDiscordAutoPresenceController: createDiscordAutoPresenceControllerMock,
+}));
+
 vi.mock("./provider.allowlist.js", () => ({
   resolveDiscordAllowlistConfig: resolveDiscordAllowlistConfigMock,
 }));
@@ -268,6 +280,13 @@ describe("monitorDiscordProvider", () => {
 
   beforeEach(() => {
     clientConstructorOptionsMock.mockClear();
+    createDiscordAutoPresenceControllerMock.mockClear().mockImplementation(() => ({
+      enabled: false,
+      start: vi.fn(),
+      stop: vi.fn(),
+      refresh: vi.fn(),
+      runNow: vi.fn(),
+    }));
     clientFetchUserMock.mockClear().mockResolvedValue({ id: "bot-1" });
     clientGetPluginMock.mockClear().mockReturnValue(undefined);
     createDiscordNativeCommandMock.mockClear().mockReturnValue({ name: "mock-command" });

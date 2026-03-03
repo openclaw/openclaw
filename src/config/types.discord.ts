@@ -96,6 +96,8 @@ export type DiscordActionConfig = {
   channels?: boolean;
   /** Enable bot presence/activity changes (default: false). */
   presence?: boolean;
+  /** Enable self-only bot profile updates (nickname/avatar/status/activity). Default: false. */
+  selfProfile?: boolean;
 };
 
 export type DiscordIntentsConfig = {
@@ -188,6 +190,21 @@ export type DiscordThreadBindingsConfig = {
 export type DiscordSlashCommandConfig = {
   /** Reply ephemerally (default: true). */
   ephemeral?: boolean;
+};
+
+export type DiscordAutoPresenceConfig = {
+  /** Enable automatic runtime/quota-based Discord presence updates. Default: false. */
+  enabled?: boolean;
+  /** Poll interval for evaluating runtime availability state (ms). Default: 30000. */
+  intervalMs?: number;
+  /** Minimum spacing between actual gateway presence updates (ms). Default: 15000. */
+  minUpdateIntervalMs?: number;
+  /** Optional custom status text while runtime is healthy; supports plain text. */
+  healthyText?: string;
+  /** Optional custom status text while runtime/quota state is degraded/unknown. */
+  degradedText?: string;
+  /** Optional custom status text while runtime detects quota/token exhaustion. */
+  exhaustedText?: string;
 };
 
 export type DiscordAccountConfig = {
@@ -308,6 +325,8 @@ export type DiscordAccountConfig = {
   activity?: string;
   /** Bot status (online|dnd|idle|invisible). Defaults to online when presence is configured. */
   status?: "online" | "dnd" | "idle" | "invisible";
+  /** Automatic runtime/quota presence signaling (status text + status mapping). */
+  autoPresence?: DiscordAutoPresenceConfig;
   /** Activity type (0=Game, 1=Streaming, 2=Listening, 3=Watching, 4=Custom, 5=Competing). Defaults to 4 (Custom) when activity is set. */
   activityType?: 0 | 1 | 2 | 3 | 4 | 5;
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */

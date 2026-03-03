@@ -836,6 +836,36 @@ Default slash command settings:
     - 4: Custom (uses the activity text as the status state; emoji is optional)
     - 5: Competing
 
+    Automatic runtime/quota signaling (optional):
+
+```json5
+{
+  channels: {
+    discord: {
+      autoPresence: {
+        enabled: true,
+        intervalMs: 30000,
+        minUpdateIntervalMs: 15000,
+        exhaustedText: "token exhausted",
+        degradedText: "runtime degraded",
+      },
+    },
+  },
+}
+```
+
+    Auto-presence state mapping:
+
+    - healthy + usable auth profile available → `online`
+    - degraded/unknown runtime or auth visibility → `idle`
+    - no usable profile with strong unavailable signal (`rate_limit`, `billing`, `auth`) → `dnd`
+
+    Notes:
+
+    - This uses auth profile cooldown/disable state as the strongest available runtime quota signal (not direct token counters).
+    - Updates are throttled (`minUpdateIntervalMs`) and deduped to avoid status spam.
+    - Manual `setPresence` / `self-profile` calls still work; auto-presence may overwrite them on the next auto evaluation when enabled.
+
   </Accordion>
 
   <Accordion title="Exec approvals in Discord">
@@ -867,6 +897,7 @@ Core examples:
 - reactions: `react`, `reactions`, `emojiList`
 - moderation: `timeout`, `kick`, `ban`
 - presence: `setPresence`
+- self profile (bot-only): `self-profile`
 
 Action gates live under `channels.discord.actions.*`.
 
@@ -878,6 +909,42 @@ Default gate behavior:
 | roles                                                                                                                                                                    | disabled |
 | moderation                                                                                                                                                               | disabled |
 | presence                                                                                                                                                                 | disabled |
+| selfProfile                                                                                                                                                              | disabled |
+
+### `self-profile` (strict bot self-only updates)
+
+`self-profile` lets the bot update only its own Discord profile/presence fields:
+
+- guild nickname (`nickname`, requires `guildId`)
+- account avatar (`avatar` or `media`/`path`/`filePath`/`buffer`)
+- status (`online`/`idle`/`dnd`/`invisible`)
+- activity/custom status text (`activity*` or `statusMessage`)
+
+Safety behavior:
+
+- action defaults to self (bot account)
+- if `userId` or `memberId` is provided and does not match the bot user id, the action is rejected
+- channel/member edits for other users are not permitted through this action
+
+Examples:
+
+```json
+{
+  "action": "self-profile",
+  "channel": "discord",
+  "guildId": "123456789012345678",
+  "nickname": "OpenClaw Bot"
+}
+```
+
+```json
+{
+  "action": "self-profile",
+  "channel": "discord",
+  "status": "idle",
+  "statusMessage": "Shipping fixes"
+}
+```
 
 ## Components v2 UI
 
@@ -1090,7 +1157,7 @@ High-signal Discord fields:
 - streaming: `streaming` (legacy alias: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
 - actions: `actions.*`
-- presence: `activity`, `status`, `activityType`, `activityUrl`
+- presence: `activity`, `status`, `activityType`, `activityUrl`, `autoPresence.*`
 - UI: `ui.components.accentColor`
 - features: `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
 
