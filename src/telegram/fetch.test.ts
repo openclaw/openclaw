@@ -293,6 +293,7 @@ describe("resolveTelegramFetch", () => {
 
     expect(response).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(3);
   });
 
   it("does not reapply dispatcher workaround after safe restore on subsequent resolve calls", async () => {
