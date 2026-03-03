@@ -77,10 +77,15 @@ export async function resolveSlackMessageContent(params: {
       : undefined;
   const fileOnlyPlaceholder = fileOnlyFallback ? `[Slack file: ${fileOnlyFallback}]` : undefined;
 
+  // Bot messages (e.g. Prometheus, Gatus webhooks) often carry content only in
+  // non-forwarded attachments (is_share !== true). Extract their text/fallback
+  // so the message isn't silently dropped when `allowBots: true` (#27616).
+  // Skip is_share attachments since resolveSlackAttachmentContent already handles those.
   const botAttachmentText =
     params.isBotMessage && !attachmentContent?.text
       ? (params.message.attachments ?? [])
-          .map((attachment) => attachment.text?.trim() || attachment.fallback?.trim())
+          .filter((a) => !a.is_share)
+          .map((a) => a.text?.trim() || a.fallback?.trim())
           .filter(Boolean)
           .join("\n")
       : undefined;
