@@ -914,6 +914,80 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({ channelId: "whatsapp" }),
     );
   });
+
+  it("suppresses text-only NO_REPLY payload", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const results = await deliverWhatsAppPayload({
+      sendWhatsApp,
+      payload: { text: "NO_REPLY" },
+    });
+
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
+
+  it("suppresses text-only HEARTBEAT_OK payload", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const results = await deliverWhatsAppPayload({
+      sendWhatsApp,
+      payload: { text: "HEARTBEAT_OK" },
+    });
+
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
+
+  it("suppresses NO_REPLY with surrounding whitespace", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const results = await deliverWhatsAppPayload({
+      sendWhatsApp,
+      payload: { text: "  NO_REPLY  " },
+    });
+
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
+
+  it("clears NO_REPLY text but still delivers media", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    await deliverWhatsAppPayload({
+      sendWhatsApp,
+      payload: { text: "NO_REPLY", mediaUrl: "https://example.com/photo.png" },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/photo.png",
+      }),
+    );
+  });
+
+  it("does not suppress legitimate text containing NO_REPLY", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    await deliverWhatsAppPayload({
+      sendWhatsApp,
+      payload: { text: "I will send NO_REPLY when done" },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses NO_REPLY on non-WhatsApp channels", async () => {
+    const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", toJid: "jid" });
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "signal",
+      to: "+1555",
+      payloads: [{ text: "NO_REPLY" }],
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).not.toHaveBeenCalled();
+    expect(results).toEqual([]);
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);

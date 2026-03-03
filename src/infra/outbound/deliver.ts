@@ -4,6 +4,7 @@ import {
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "../../auto-reply/chunk.js";
+import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveChannelMediaMaxBytes } from "../../channels/plugins/media-limits.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
@@ -255,6 +256,11 @@ function hasChannelDataPayload(payload: ReplyPayload): boolean {
   return Boolean(payload.channelData && Object.keys(payload.channelData).length > 0);
 }
 
+/** Defensive guard: detect control tokens that survived upstream normalization. */
+function isControlTokenText(text: string): boolean {
+  return isSilentReplyText(text, SILENT_REPLY_TOKEN) || isSilentReplyText(text, HEARTBEAT_TOKEN);
+}
+
 function normalizePayloadForChannelDelivery(
   payload: ReplyPayload,
   channelId: string,
@@ -265,6 +271,17 @@ function normalizePayloadForChannelDelivery(
   const normalizedText =
     channelId === "whatsapp" ? rawText.replace(/^(?:[ \t]*\r?\n)+/, "") : rawText;
   if (!normalizedText.trim()) {
+    if (!hasMedia && !hasChannelData) {
+      return null;
+    }
+    return {
+      ...payload,
+      text: "",
+    };
+  }
+  // Defensive: suppress control tokens (NO_REPLY, HEARTBEAT_OK) that
+  // survived upstream normalization. Text-only → drop; with media/channelData → clear text.
+  if (isControlTokenText(normalizedText)) {
     if (!hasMedia && !hasChannelData) {
       return null;
     }
