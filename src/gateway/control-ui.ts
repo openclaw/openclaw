@@ -262,6 +262,7 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
+    rejectHardlinks: false,
   });
   if (!opened.ok) {
     if (opened.reason === "io") {
