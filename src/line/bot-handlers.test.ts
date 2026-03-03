@@ -411,6 +411,51 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("skips concurrent redeliveries while the first event is still processing", async () => {
+    let resolveFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const processMessage = vi.fn(async () => {
+      await firstDone;
+    });
+    const event = {
+      type: "message",
+      message: { id: "m-inflight", type: "text", text: "hello" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-inflight", userId: "user-inflight" },
+      mode: "active",
+      webhookEventId: "evt-inflight-1",
+      deliveryContext: { isRedelivery: true },
+    } as MessageEvent;
+
+    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
+      cfg: { channels: { line: { groupPolicy: "open" } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open" },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+      replayCache: createLineWebhookReplayCache(),
+    };
+
+    const firstRun = handleLineWebhookEvents([event], context);
+    await Promise.resolve();
+    const secondRun = handleLineWebhookEvents([event], context);
+    resolveFirst?.();
+    await Promise.all([firstRun, secondRun]);
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("deduplicates redeliveries by LINE message id when webhookEventId changes", async () => {
     const processMessage = vi.fn();
     const event = {

@@ -7,6 +7,8 @@ import type {
   LeaveEvent,
   PostbackEvent,
 } from "@line/bot-sdk";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
+import { resolveControlCommandGate } from "../channels/command-gating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -42,6 +44,19 @@ interface MediaRef {
   contentType?: string;
 }
 
+const LINE_DOWNLOADABLE_MESSAGE_TYPES: ReadonlySet<string> = new Set([
+  "image",
+  "video",
+  "audio",
+  "file",
+]);
+
+function isDownloadableLineMessageType(
+  messageType: MessageEvent["message"]["type"],
+): messageType is "image" | "video" | "audio" | "file" {
+  return LINE_DOWNLOADABLE_MESSAGE_TYPES.has(messageType);
+}
+
 export interface LineHandlerContext {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -56,12 +71,14 @@ const LINE_WEBHOOK_REPLAY_MAX_ENTRIES = 4096;
 const LINE_WEBHOOK_REPLAY_PRUNE_INTERVAL_MS = 1000;
 export type LineWebhookReplayCache = {
   seenEvents: Map<string, number>;
+  inFlightEvents: Set<string>;
   lastPruneAtMs: number;
 };
 
 export function createLineWebhookReplayCache(): LineWebhookReplayCache {
   return {
     seenEvents: new Map<string, number>(),
+    inFlightEvents: new Set<string>(),
     lastPruneAtMs: 0,
   };
 }
@@ -148,11 +165,23 @@ function getLineReplayCandidate(
 }
 
 function shouldSkipLineReplayEvent(candidate: LineReplayCandidate): boolean {
+  if (candidate.cache.inFlightEvents.has(candidate.key)) {
+    logVerbose(`line: skipped in-flight replayed webhook event ${candidate.eventId}`);
+    return true;
+  }
   if (candidate.cache.seenEvents.has(candidate.key)) {
     logVerbose(`line: skipped replayed webhook event ${candidate.eventId}`);
     return true;
   }
   return false;
+}
+
+function markLineReplayEventInFlight(candidate: LineReplayCandidate): void {
+  candidate.cache.inFlightEvents.add(candidate.key);
+}
+
+function clearLineReplayEventInFlight(candidate: LineReplayCandidate): void {
+  candidate.cache.inFlightEvents.delete(candidate.key);
 }
 
 function rememberLineReplayEvent(candidate: LineReplayCandidate): void {
@@ -225,7 +254,8 @@ async function sendLinePairingReply(params: {
 async function shouldProcessLineEvent(
   event: MessageEvent | PostbackEvent,
   context: LineHandlerContext,
-): Promise<boolean> {
+): Promise<{ allowed: boolean; commandAuthorized: boolean }> {
+  const denied = { allowed: false, commandAuthorized: false };
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
@@ -271,42 +301,52 @@ async function shouldProcessLineEvent(
   if (isGroup) {
     if (groupConfig?.enabled === false) {
       logVerbose(`Blocked line group ${groupId ?? roomId ?? "unknown"} (group disabled)`);
-      return false;
+      return denied;
     }
     if (typeof groupAllowOverride !== "undefined") {
       if (!senderId) {
         logVerbose("Blocked line group message (group allowFrom override, no sender ID)");
-        return false;
+        return denied;
       }
       if (!isSenderAllowed({ allow: effectiveGroupAllow, senderId })) {
         logVerbose(`Blocked line group sender ${senderId} (group allowFrom override)`);
-        return false;
+        return denied;
       }
     }
     if (groupPolicy === "disabled") {
       logVerbose("Blocked line group message (groupPolicy: disabled)");
-      return false;
+      return denied;
     }
     if (groupPolicy === "allowlist") {
       if (!senderId) {
         logVerbose("Blocked line group message (no sender ID, groupPolicy: allowlist)");
-        return false;
+        return denied;
       }
       if (!effectiveGroupAllow.hasEntries) {
         logVerbose("Blocked line group message (groupPolicy: allowlist, no groupAllowFrom)");
-        return false;
+        return denied;
       }
       if (!isSenderAllowed({ allow: effectiveGroupAllow, senderId })) {
         logVerbose(`Blocked line group message from ${senderId} (groupPolicy: allowlist)`);
-        return false;
+        return denied;
       }
     }
-    return true;
+    const allowForCommands = effectiveGroupAllow;
+    const senderAllowedForCommands = isSenderAllowed({ allow: allowForCommands, senderId });
+    const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+    const rawText = resolveEventRawText(event);
+    const commandGate = resolveControlCommandGate({
+      useAccessGroups,
+      authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommand(rawText, cfg),
+    });
+    return { allowed: true, commandAuthorized: commandGate.commandAuthorized };
   }
 
   if (dmPolicy === "disabled") {
     logVerbose("Blocked line sender (dmPolicy: disabled)");
-    return false;
+    return denied;
   }
 
   const dmAllowed = dmPolicy === "open" || isSenderAllowed({ allow: effectiveDmAllow, senderId });
@@ -314,7 +354,7 @@ async function shouldProcessLineEvent(
     if (dmPolicy === "pairing") {
       if (!senderId) {
         logVerbose("Blocked line sender (dmPolicy: pairing, no sender ID)");
-        return false;
+        return denied;
       }
       await sendLinePairingReply({
         senderId,
@@ -324,24 +364,49 @@ async function shouldProcessLineEvent(
     } else {
       logVerbose(`Blocked line sender ${senderId || "unknown"} (dmPolicy: ${dmPolicy})`);
     }
-    return false;
+    return denied;
   }
 
-  return true;
+  const allowForCommands = effectiveDmAllow;
+  const senderAllowedForCommands = isSenderAllowed({ allow: allowForCommands, senderId });
+  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const rawText = resolveEventRawText(event);
+  const commandGate = resolveControlCommandGate({
+    useAccessGroups,
+    authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
+    allowTextCommands: true,
+    hasControlCommand: hasControlCommand(rawText, cfg),
+  });
+  return { allowed: true, commandAuthorized: commandGate.commandAuthorized };
+}
+
+function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
+  if (event.type === "message") {
+    const msg = event.message;
+    if (msg.type === "text") {
+      return msg.text;
+    }
+    return "";
+  }
+  if (event.type === "postback") {
+    return event.postback?.data?.trim() ?? "";
+  }
+  return "";
 }
 
 async function handleMessageEvent(event: MessageEvent, context: LineHandlerContext): Promise<void> {
   const { cfg, account, runtime, mediaMaxBytes, processMessage } = context;
   const message = event.message;
 
-  if (!(await shouldProcessLineEvent(event, context))) {
+  const decision = await shouldProcessLineEvent(event, context);
+  if (!decision.allowed) {
     return;
   }
 
   // Download media if applicable
   const allMedia: MediaRef[] = [];
 
-  if (message.type === "image" || message.type === "video" || message.type === "audio") {
+  if (isDownloadableLineMessageType(message.type)) {
     try {
       const media = await downloadLineMedia(message.id, account.channelAccessToken, mediaMaxBytes);
       allMedia.push({
@@ -364,6 +429,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     allMedia,
     cfg,
     account,
+    commandAuthorized: decision.commandAuthorized,
   });
 
   if (!messageContext) {
@@ -407,7 +473,8 @@ async function handlePostbackEvent(
   const data = event.postback.data;
   logVerbose(`line: received postback: ${data}`);
 
-  if (!(await shouldProcessLineEvent(event, context))) {
+  const decision = await shouldProcessLineEvent(event, context);
+  if (!decision.allowed) {
     return;
   }
 
@@ -415,6 +482,7 @@ async function handlePostbackEvent(
     event,
     cfg: context.cfg,
     account: context.account,
+    commandAuthorized: decision.commandAuthorized,
   });
   if (!postbackContext) {
     return;
@@ -432,6 +500,9 @@ export async function handleLineWebhookEvents(
     const replayCandidate = getLineReplayCandidate(event, context);
     if (replayCandidate && shouldSkipLineReplayEvent(replayCandidate)) {
       continue;
+    }
+    if (replayCandidate) {
+      markLineReplayEventInFlight(replayCandidate);
     }
     try {
       switch (event.type) {
@@ -458,8 +529,12 @@ export async function handleLineWebhookEvents(
       }
       if (replayCandidate) {
         rememberLineReplayEvent(replayCandidate);
+        clearLineReplayEventInFlight(replayCandidate);
       }
     } catch (err) {
+      if (replayCandidate) {
+        clearLineReplayEventInFlight(replayCandidate);
+      }
       context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
       firstError ??= err;
     }
