@@ -19,12 +19,12 @@ export async function execFileUtf8(
       }
 
       const e = error as { code?: unknown; message?: unknown };
-      const stderrText = String(stderr ?? "");
       resolve({
         stdout: String(stdout ?? ""),
-        stderr:
-          stderrText ||
-          (typeof e.message === "string" ? e.message : typeof error === "string" ? error : ""),
+        // Keep real stderr only; never fall back to e.message which is a
+        // Node.js synthetic string ("Command failed: ...") and pollutes
+        // downstream code that inspects stderr for command-specific output.
+        stderr: String(stderr ?? ""),
         code: typeof e.code === "number" ? e.code : 1,
       });
     });
