@@ -18,6 +18,31 @@ export type ChannelsStatusOptions = {
   timeout?: string;
 };
 
+function resolvePositiveTimeoutMs(value: unknown): number | null {
+  // Only undefined/null mean "not provided"; empty or whitespace-only string is invalid.
+  if (value === undefined || value === null) {
+    return 10_000;
+  }
+  if (typeof value === "number") {
+    if (!Number.isInteger(value) || value <= 0) {
+      return null;
+    }
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      return null;
+    }
+    return parsed;
+  }
+  return null;
+}
+
 function appendEnabledConfiguredLinkedBits(bits: string[], account: Record<string, unknown>) {
   if (typeof account.enabled === "boolean") {
     bits.push(account.enabled ? "enabled" : "disabled");
@@ -241,7 +266,12 @@ export async function channelsStatusCommand(
   opts: ChannelsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const timeoutMs = Number(opts.timeout ?? 10_000);
+  const timeoutMs = resolvePositiveTimeoutMs(opts.timeout);
+  if (timeoutMs === null) {
+    runtime.error("--timeout must be a positive integer (milliseconds)");
+    runtime.exit(1);
+    return;
+  }
   const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
   const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
   if (shouldLogStatus) {
