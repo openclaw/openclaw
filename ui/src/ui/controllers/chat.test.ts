@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleChatEvent, loadChatHistory, type ChatEventPayload, type ChatState } from "./chat.ts";
+import {
+  handleChatEvent,
+  loadChatHistory,
+  sendChatMessage,
+  type ChatEventPayload,
+  type ChatState,
+} from "./chat.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -11,6 +17,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
+    chatTimeoutId: null,
     chatThinkingLevel: null,
     client: null,
     connected: true,
@@ -491,6 +498,30 @@ describe("handleChatEvent", () => {
     // entry.text takes precedence — "real reply" is NOT silent, so the message is kept.
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toHaveLength(1);
+  });
+});
+
+describe("sendChatMessage timeout", () => {
+  it("clears stuck chat run after timeout when no final/aborted/error arrives", async () => {
+    const originalSetTimeout = globalThis.setTimeout;
+    (globalThis as unknown as { setTimeout: typeof setTimeout }).setTimeout = ((
+      fn: (...args: unknown[]) => void,
+      _timeout?: number,
+    ) => {
+      fn();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+    const request = vi.fn().mockResolvedValue({});
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+
+    (globalThis as unknown as { setTimeout: typeof setTimeout }).setTimeout = originalSetTimeout;
   });
 });
 

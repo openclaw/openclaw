@@ -4,6 +4,7 @@ import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+const CHAT_STREAM_TIMEOUT_MS = 60_000;
 
 function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
@@ -26,6 +27,13 @@ function isAssistantSilentReply(message: unknown): boolean {
   return typeof text === "string" && isSilentReplyStream(text);
 }
 
+function clearChatTimeout(state: ChatState): void {
+  if (state.chatTimeoutId != null) {
+    clearTimeout(state.chatTimeoutId);
+    state.chatTimeoutId = null;
+  }
+}
+
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -39,6 +47,7 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatTimeoutId: ReturnType<typeof setTimeout> | null;
   lastError: string | null;
 };
 
@@ -178,6 +187,20 @@ export async function sendChatMessage(
   state.chatStream = "";
   state.chatStreamStartedAt = now;
 
+  clearChatTimeout(state);
+  const timeoutId = setTimeout(() => {
+    if (state.chatRunId === runId) {
+      state.chatRunId = null;
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+      state.chatSending = false;
+      if (!state.lastError) {
+        state.lastError = "Response timed out. Please try again.";
+      }
+    }
+  }, CHAT_STREAM_TIMEOUT_MS);
+  state.chatTimeoutId = timeoutId;
+
   // Convert attachments to API format
   const apiAttachments = hasAttachments
     ? attachments
@@ -209,6 +232,7 @@ export async function sendChatMessage(
     state.chatRunId = null;
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    clearChatTimeout(state);
     state.lastError = error;
     state.chatMessages = [
       ...state.chatMessages,
@@ -220,6 +244,7 @@ export async function sendChatMessage(
     ];
     return null;
   } finally {
+    clearChatTimeout(state);
     state.chatSending = false;
   }
 }
@@ -272,6 +297,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       }
     }
   } else if (payload.state === "final") {
+    clearChatTimeout(state);
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
@@ -289,6 +315,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
+    clearChatTimeout(state);
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
@@ -309,6 +336,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
+    clearChatTimeout(state);
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
