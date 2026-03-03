@@ -7,7 +7,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
-import { resolveOutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
+import {
+  ensureOutboundSessionEntry,
+  resolveOutboundSessionRoute,
+} from "../../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { logWarn } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
@@ -94,6 +97,21 @@ async function resolveCronAnnounceSessionKey(params: {
     });
     const resolved = route?.sessionKey?.trim();
     if (resolved) {
+      // Ensure the session entry exists so downstream announce / queue delivery
+      // can look up channel metadata (lastChannel, to, sessionId).  Named agents
+      // may not have a session entry for this target yet, causing announce
+      // delivery to silently fail (#32432).
+      if (route) {
+        await ensureOutboundSessionEntry({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          channel: params.delivery.channel,
+          accountId: params.delivery.accountId,
+          route,
+        }).catch(() => {
+          // Best-effort: don't block delivery on session entry creation.
+        });
+      }
       return resolved;
     }
   } catch {
@@ -443,6 +461,36 @@ export async function dispatchCronDelivery(
     } else {
       const announceResult = await deliverViaAnnounce(params.resolvedDelivery);
       if (announceResult) {
+        // If announce delivery failed (delivered=false), fall back to direct
+        // delivery.  Named agents may not have an active session for the
+        // announce flow to inject into, so sending directly to the channel
+        // is the only reliable alternative (#32432).
+        if (!delivered && !params.isAborted()) {
+          const directFallback = await deliverViaDirect(params.resolvedDelivery);
+          if (directFallback) {
+            return {
+              result: directFallback,
+              delivered,
+              deliveryAttempted,
+              summary,
+              outputText,
+              synthesizedText,
+              deliveryPayloads,
+            };
+          }
+          // If direct delivery succeeded (returned null without error),
+          // `delivered` has been set to true by deliverViaDirect.
+          if (delivered) {
+            return {
+              delivered,
+              deliveryAttempted,
+              summary,
+              outputText,
+              synthesizedText,
+              deliveryPayloads,
+            };
+          }
+        }
         return {
           result: announceResult,
           delivered,
