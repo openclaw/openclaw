@@ -24,22 +24,46 @@ function createNativeCommand(name: string): ReturnType<typeof createDiscordNativ
   });
 }
 
+type CommandOption = NonNullable<ReturnType<typeof createDiscordNativeCommand>["options"]>[number];
+
+function findOption(
+  command: ReturnType<typeof createDiscordNativeCommand>,
+  name: string,
+): CommandOption | undefined {
+  return command.options?.find((entry) => entry.name === name);
+}
+
+function readAutocomplete(option: CommandOption | undefined): unknown {
+  if (!option || typeof option !== "object") {
+    return undefined;
+  }
+  return (option as { autocomplete?: unknown }).autocomplete;
+}
+
+function readChoices(option: CommandOption | undefined): unknown[] | undefined {
+  if (!option || typeof option !== "object") {
+    return undefined;
+  }
+  const value = (option as { choices?: unknown }).choices;
+  return Array.isArray(value) ? value : undefined;
+}
+
 describe("createDiscordNativeCommand option wiring", () => {
   it("uses autocomplete for /acp action so inline action values are accepted", () => {
     const command = createNativeCommand("acp");
-    const action = command.options?.find((option) => option.name === "action");
+    const action = findOption(command, "action");
 
     expect(action).toBeDefined();
-    expect(typeof action?.autocomplete).toBe("function");
-    expect(action?.choices).toBeUndefined();
+    expect(typeof readAutocomplete(action)).toBe("function");
+    expect(readChoices(action)).toBeUndefined();
   });
 
   it("keeps static choices for non-acp string action arguments", () => {
     const command = createNativeCommand("voice");
-    const action = command.options?.find((option) => option.name === "action");
+    const action = findOption(command, "action");
 
     expect(action).toBeDefined();
-    expect(action?.autocomplete).toBeUndefined();
-    expect(action?.choices?.length).toBeGreaterThan(0);
+    expect(readAutocomplete(action)).toBeUndefined();
+    expect(readChoices(action)?.length).toBeGreaterThan(0);
   });
 });
