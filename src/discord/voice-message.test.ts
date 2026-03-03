@@ -81,7 +81,7 @@ vi.mock("../infra/tmp-openclaw-dir.js", () => ({
   resolvePreferredOpenClawTmpDir: () => "/tmp",
 }));
 
-const { ensureOggOpus } = await import("./voice-message.js");
+const { ensureOggOpus, sendDiscordVoiceMessage } = await import("./voice-message.js");
 
 describe("ensureOggOpus", () => {
   beforeEach(() => {
@@ -142,5 +142,91 @@ describe("ensureOggOpus", () => {
     expect(ffmpegCalls).toHaveLength(1);
     expect(ffmpegCalls[0].options?.timeout).toBe(45_000);
     expect(ffmpegCalls[0].args).toEqual(expect.arrayContaining(["-vn", "-sn", "-dn"]));
+  });
+});
+
+describe("sendDiscordVoiceMessage", () => {
+  const metadata = { durationSecs: 1.23, waveform: "AAAA" };
+  const audioBuffer = Buffer.from([1, 2, 3]);
+
+  it("falls back to raw REST only for slot/message request failures", async () => {
+    const rest = {
+      post: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("request client slot failed"))
+        .mockRejectedValueOnce(new Error("request client message failed")),
+    };
+    const request = async <T>(fn: () => Promise<T>) => fn();
+
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            attachments: [{ id: 0, upload_url: "https://upload.local/1", upload_filename: "up-1" }],
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "m1", channel_id: "c1" }), { status: 200 }),
+      );
+
+    const originalFetch = globalThis.fetch;
+    // @ts-expect-error test override
+    globalThis.fetch = fetchMock;
+
+    try {
+      const result = await sendDiscordVoiceMessage(
+        rest as never,
+        "c1",
+        audioBuffer,
+        metadata,
+        undefined,
+        request,
+        false,
+        "token-1",
+      );
+      expect(result).toEqual({ id: "m1", channel_id: "c1" });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not fallback when CDN upload fails", async () => {
+    const rest = {
+      post: vi.fn().mockResolvedValueOnce({
+        attachments: [{ id: 0, upload_url: "https://upload.local/1", upload_filename: "up-1" }],
+      }),
+    };
+    const request = async <T>(fn: () => Promise<T>) => fn();
+
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 500 }));
+
+    const originalFetch = globalThis.fetch;
+    // @ts-expect-error test override
+    globalThis.fetch = fetchMock;
+
+    try {
+      await expect(
+        sendDiscordVoiceMessage(
+          rest as never,
+          "c1",
+          audioBuffer,
+          metadata,
+          undefined,
+          request,
+          false,
+          "token-1",
+        ),
+      ).rejects.toThrow("Failed to upload voice message: 500");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

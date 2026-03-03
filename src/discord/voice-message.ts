@@ -230,6 +230,13 @@ type UploadUrlResponse = {
   }>;
 };
 
+function formatCauseMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return err.message;
+  }
+  return String(err);
+}
+
 /**
  * Send a voice message to Discord
  *
@@ -288,9 +295,10 @@ export async function sendDiscordVoiceMessage(
     return messagePayload;
   };
 
+  // Primary path via RequestClient
+  let uploadUrlResponse: UploadUrlResponse;
   try {
-    // Primary path via RequestClient
-    const uploadUrlResponse = await request(
+    uploadUrlResponse = await request(
       () =>
         rest.post(`/channels/${channelId}/attachments`, {
           body: {
@@ -305,25 +313,38 @@ export async function sendDiscordVoiceMessage(
         }) as Promise<UploadUrlResponse>,
       "voice-upload-url",
     );
-
-    if (!uploadUrlResponse.attachments?.[0]) {
-      throw new Error("Failed to get upload URL for voice message");
+  } catch (err) {
+    if (!token) {
+      throw err;
     }
+    uploadUrlResponse = await requestVoiceUploadSlotFallback(
+      channelId,
+      fileSize,
+      filename,
+      token,
+      err,
+    );
+  }
 
-    const { upload_url, upload_filename } = uploadUrlResponse.attachments[0];
+  if (!uploadUrlResponse.attachments?.[0]) {
+    throw new Error("Failed to get upload URL for voice message");
+  }
 
-    const uploadResponse = await fetch(upload_url, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "audio/ogg",
-      },
-      body: new Uint8Array(audioBuffer),
-    });
+  const { upload_url, upload_filename } = uploadUrlResponse.attachments[0];
 
-    if (!uploadResponse.ok) {
-      throw new Error(`Failed to upload voice message: ${uploadResponse.status}`);
-    }
+  const uploadResponse = await fetch(upload_url, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "audio/ogg",
+    },
+    body: new Uint8Array(audioBuffer),
+  });
 
+  if (!uploadResponse.ok) {
+    throw new Error(`Failed to upload voice message: ${uploadResponse.status}`);
+  }
+
+  try {
     return (await request(
       () =>
         rest.post(`/channels/${channelId}/messages`, {
@@ -332,69 +353,92 @@ export async function sendDiscordVoiceMessage(
       "voice-message",
     )) as { id: string; channel_id: string };
   } catch (err) {
-    // Fallback: raw Discord REST path (keeps behavior robust if RequestClient path fails)
     if (!token) {
       throw err;
     }
-
-    const authHeaders = {
-      Authorization: `Bot ${token}`,
-      "Content-Type": "application/json",
-    };
-
-    const slotRes = await fetch(`${DISCORD_API_BASE}/channels/${channelId}/attachments`, {
-      method: "POST",
-      headers: authHeaders,
-      body: JSON.stringify({
-        files: [
-          {
-            id: "0",
-            filename,
-            file_size: fileSize,
-          },
-        ],
-      }),
-    });
-
-    if (!slotRes.ok) {
-      const txt = await slotRes.text().catch(() => "");
-      throw new Error(
-        `Discord voice upload slot failed (${slotRes.status})${txt ? `: ${txt}` : ""}`,
-        { cause: err },
-      );
-    }
-
-    const slotPayload = (await slotRes.json()) as UploadUrlResponse;
-    const slot = slotPayload.attachments?.[0];
-    if (!slot?.upload_url || !slot?.upload_filename) {
-      throw new Error("Discord voice upload slot payload missing upload_url/upload_filename", {
-        cause: err,
-      });
-    }
-
-    const uploadRes = await fetch(slot.upload_url, {
-      method: "PUT",
-      headers: { "Content-Type": "audio/ogg" },
-      body: new Uint8Array(audioBuffer),
-    });
-
-    if (!uploadRes.ok) {
-      throw new Error(`Failed to upload voice message: ${uploadRes.status}`, { cause: err });
-    }
-
-    const msgRes = await fetch(`${DISCORD_API_BASE}/channels/${channelId}/messages`, {
-      method: "POST",
-      headers: authHeaders,
-      body: JSON.stringify(makePayload(slot.upload_filename)),
-    });
-
-    if (!msgRes.ok) {
-      const txt = await msgRes.text().catch(() => "");
-      throw new Error(`Discord voice message failed (${msgRes.status})${txt ? `: ${txt}` : ""}`, {
-        cause: err,
-      });
-    }
-
-    return (await msgRes.json()) as { id: string; channel_id: string };
+    return await sendVoiceMessageFallback(channelId, makePayload(upload_filename), token, err);
   }
+}
+
+async function requestVoiceUploadSlotFallback(
+  channelId: string,
+  fileSize: number,
+  filename: string,
+  token: string,
+  cause: unknown,
+): Promise<UploadUrlResponse> {
+  const authHeaders = {
+    Authorization: `Bot ${token}`,
+    "Content-Type": "application/json",
+  };
+
+  const slotRes = await fetch(`${DISCORD_API_BASE}/channels/${channelId}/attachments`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({
+      files: [
+        {
+          id: "0",
+          filename,
+          file_size: fileSize,
+        },
+      ],
+    }),
+  });
+
+  if (!slotRes.ok) {
+    const txt = await slotRes.text().catch(() => "");
+    throw new Error(
+      `Discord voice upload slot failed (${slotRes.status})${txt ? `: ${txt}` : ""}; fallback after request-client slot error: ${formatCauseMessage(cause)}`,
+      { cause },
+    );
+  }
+
+  const slotPayload = (await slotRes.json()) as UploadUrlResponse;
+  const slot = slotPayload.attachments?.[0];
+  if (!slot?.upload_url || !slot?.upload_filename) {
+    throw new Error("Discord voice upload slot payload missing upload_url/upload_filename", {
+      cause,
+    });
+  }
+
+  return slotPayload;
+}
+
+async function sendVoiceMessageFallback(
+  channelId: string,
+  payload: {
+    flags: number;
+    attachments: Array<{
+      id: string;
+      filename: string;
+      uploaded_filename: string;
+      duration_secs: number;
+      waveform: string;
+    }>;
+    message_reference?: { message_id: string; fail_if_not_exists: boolean };
+  },
+  token: string,
+  cause: unknown,
+): Promise<{ id: string; channel_id: string }> {
+  const authHeaders = {
+    Authorization: `Bot ${token}`,
+    "Content-Type": "application/json",
+  };
+
+  const msgRes = await fetch(`${DISCORD_API_BASE}/channels/${channelId}/messages`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify(payload),
+  });
+
+  if (!msgRes.ok) {
+    const txt = await msgRes.text().catch(() => "");
+    throw new Error(
+      `Discord voice message failed (${msgRes.status})${txt ? `: ${txt}` : ""}; fallback after request-client message error: ${formatCauseMessage(cause)}`,
+      { cause },
+    );
+  }
+
+  return (await msgRes.json()) as { id: string; channel_id: string };
 }
