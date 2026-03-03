@@ -928,10 +928,15 @@
           },
 
           loadSettings: function () {
-            Promise.all([SettingsBridge.get("trading"), SettingsBridge.get("paperTrading")])
+            Promise.all([
+              SettingsBridge.get("trading"),
+              SettingsBridge.get("paperTrading"),
+              SettingsBridge.get("exchanges"),
+            ])
               .then(function (results) {
                 var trading = results[0] || {};
                 var paper = results[1] || {};
+                var exchanges = results[2] || {};
                 var el = function (id) {
                   return document.getElementById(id);
                 };
@@ -963,6 +968,23 @@
                 if (el("s_usAdapter")) el("s_usAdapter").value = us.adapter || "alpaca";
                 if (el("s_hkAdapter")) el("s_hkAdapter").value = hk.adapter || "futu";
                 if (el("s_cnAdapter")) el("s_cnAdapter").value = cn.adapter || "openctp";
+
+                // Load exchange connections into the exchange row editor
+                _exchRows = [];
+                var exchKeys = Object.keys(exchanges);
+                for (var i = 0; i < exchKeys.length; i++) {
+                  var cfg = exchanges[exchKeys[i]];
+                  if (cfg && cfg.exchange) {
+                    _exchRows.push({
+                      exchange: cfg.exchange,
+                      apiKey: cfg.apiKey || "",
+                      secret: cfg.secret || "",
+                      passphrase: cfg.passphrase || "",
+                      testnet: cfg.testnet || false,
+                    });
+                  }
+                }
+                renderExchangeRows();
               })
               .catch(function (e) {
                 toast("Failed to load settings: " + e.message, "error");
@@ -1006,9 +1028,26 @@
               hk: { adapter: el("s_hkAdapter").value },
               cn: { adapter: el("s_cnAdapter").value },
             };
+            // Collect exchange connection rows
+            _syncExchFromForm();
+            var exchPatch = {};
+            for (var i = 0; i < _exchRows.length; i++) {
+              var ex = _exchRows[i];
+              // Use exchange type + index as key (e.g. "binance-0")
+              var key = ex.exchange + "-" + i;
+              exchPatch[key] = {
+                exchange: ex.exchange,
+                apiKey: ex.apiKey,
+                secret: ex.secret,
+                passphrase: ex.passphrase || undefined,
+                testnet: ex.testnet,
+              };
+            }
+
             Promise.all([
               SettingsBridge.patch("trading", tradingPatch),
               SettingsBridge.patch("paperTrading", paperPatch),
+              SettingsBridge.patch("exchanges", exchPatch),
             ])
               .then(function () {
                 toast("Settings saved", "success");
@@ -1083,6 +1122,10 @@
             title.textContent = "Trading Settings";
             body.innerHTML =
               '<form id="settingsForm" class="settings-form" onsubmit="event.preventDefault();CC.saveSettings()">' +
+              '<div class="settings-section"><div class="settings-section__title">Exchange Connections</div>' +
+              '<div id="exchangeList"></div>' +
+              '<button type="button" class="exch-add-btn" onclick="addExchangeRow()">+ Add Exchange</button>' +
+              '</div>' +
               '<div class="settings-section"><div class="settings-section__title">Risk Controls</div>' +
               '<div class="fg"><label class="fg__label">Trading Enabled</label>' +
               '<label class="toggle-switch"><input type="checkbox" name="enabled" id="s_enabled"><span class="toggle-slider"></span></label></div>' +
@@ -1144,6 +1187,173 @@
             toggles[i].className = "bs-toggle__btn";
           }
           btn.classList.add(side === "buy" ? "active-buy" : "active-sell");
+        };
+
+        // ════════════════════════════════════════════════════
+        // EXCHANGE CONNECTION MANAGEMENT
+        // ════════════════════════════════════════════════════
+
+        // In-memory exchange rows; populated by loadSettings, saved by saveSettings
+        var _exchRows = [];
+
+        /** Build the HTML for a single exchange row. */
+        function _exchRowHtml(idx, ex) {
+          var sel = function (val) {
+            return val === ex.exchange ? " selected" : "";
+          };
+          // Only OKX requires passphrase
+          var ppDisplay = ex.exchange === "okx" ? "" : " style=\"display:none\"";
+          return (
+            '<div class="exch-row" id="exchRow' + idx + '">' +
+            '<div class="exch-row__head">' +
+            '<select onchange="onExchTypeChange(' + idx + ',this.value)" style="width:100%">' +
+            '<option value="binance"' + sel("binance") + ">Binance</option>" +
+            '<option value="okx"' + sel("okx") + ">OKX</option>" +
+            '<option value="bybit"' + sel("bybit") + ">Bybit</option>" +
+            '<option value="hyperliquid"' + sel("hyperliquid") + ">Hyperliquid</option>" +
+            "</select>" +
+            '<div class="exch-row__actions">' +
+            '<button type="button" class="exch-row__btn exch-row__btn--test" onclick="testExchange(' +
+            idx +
+            ')">Test</button>' +
+            '<button type="button" class="exch-row__btn exch-row__btn--rm" onclick="removeExchangeRow(' +
+            idx +
+            ')">&times;</button>' +
+            "</div></div>" +
+            '<div class="exch-row__fields">' +
+            '<div class="fg fg--full"><label class="fg__label">API Key</label>' +
+            '<input name="exchKey' + idx + '" value="' + _escAttr(ex.apiKey || "") +
+            '" placeholder="Enter API key" style="width:100%"></div>' +
+            '<div class="fg fg--full"><label class="fg__label">Secret</label>' +
+            '<input name="exchSecret' + idx + '" type="password" value="' +
+            _escAttr(ex.secret || "") + '" placeholder="Enter secret" style="width:100%"></div>' +
+            '<div class="fg fg--full" id="exchPpWrap' + idx + '"' + ppDisplay + ">" +
+            '<label class="fg__label">Passphrase (OKX only)</label>' +
+            '<input name="exchPp' + idx + '" type="password" value="' +
+            _escAttr(ex.passphrase || "") + '" placeholder="Passphrase" style="width:100%"></div>' +
+            "</div>" +
+            '<label class="exch-row__testnet-label">' +
+            '<input type="checkbox" name="exchTestnet' + idx + '"' +
+            (ex.testnet ? " checked" : "") + "> Testnet / Sandbox</label>" +
+            '<div class="exch-row__status" id="exchStatus' + idx + '"></div>' +
+            "</div>"
+          );
+        }
+
+        /** Escape HTML attribute value. */
+        function _escAttr(s) {
+          return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+        }
+
+        /** Render all exchange rows into #exchangeList. */
+        window.renderExchangeRows = function () {
+          var container = document.getElementById("exchangeList");
+          if (!container) return;
+          if (_exchRows.length === 0) {
+            container.innerHTML =
+              '<div class="empty" style="padding:8px;font-size:10px">No exchanges configured</div>';
+            return;
+          }
+          var html = "";
+          for (var i = 0; i < _exchRows.length; i++) {
+            html += _exchRowHtml(i, _exchRows[i]);
+          }
+          container.innerHTML = html;
+        };
+
+        /** Add a blank exchange row. */
+        window.addExchangeRow = function () {
+          _exchRows.push({
+            exchange: "binance",
+            apiKey: "",
+            secret: "",
+            passphrase: "",
+            testnet: false,
+          });
+          renderExchangeRows();
+        };
+
+        /** Remove an exchange row by index. */
+        window.removeExchangeRow = function (idx) {
+          _exchRows.splice(idx, 1);
+          renderExchangeRows();
+        };
+
+        /** Show/hide passphrase field when exchange type changes. */
+        window.onExchTypeChange = function (idx, val) {
+          _exchRows[idx].exchange = val;
+          var wrap = document.getElementById("exchPpWrap" + idx);
+          if (wrap) {
+            wrap.style.display = val === "okx" ? "" : "none";
+          }
+        };
+
+        /** Read current form values back into _exchRows. */
+        function _syncExchFromForm() {
+          for (var i = 0; i < _exchRows.length; i++) {
+            var row = document.getElementById("exchRow" + i);
+            if (!row) continue;
+            var sel = row.querySelector("select");
+            if (sel) _exchRows[i].exchange = sel.value;
+            var key = row.querySelector("[name=exchKey" + i + "]");
+            if (key) _exchRows[i].apiKey = key.value;
+            var secret = row.querySelector("[name=exchSecret" + i + "]");
+            if (secret) _exchRows[i].secret = secret.value;
+            var pp = row.querySelector("[name=exchPp" + i + "]");
+            if (pp) _exchRows[i].passphrase = pp.value;
+            var tn = row.querySelector("[name=exchTestnet" + i + "]");
+            if (tn) _exchRows[i].testnet = tn.checked;
+          }
+        }
+
+        /** Test a single exchange connection via the REST endpoint. */
+        window.testExchange = function (idx) {
+          _syncExchFromForm();
+          var ex = _exchRows[idx];
+          if (!ex || !ex.apiKey || !ex.secret) {
+            toast("Please fill in API key and secret first", "warn");
+            return;
+          }
+          var statusEl = document.getElementById("exchStatus" + idx);
+          if (statusEl) {
+            statusEl.className = "exch-row__status show exch-row__status--loading";
+            statusEl.textContent = "Testing connection...";
+          }
+          apiPost("/api/v1/finance/exchanges/test", {
+            exchange: ex.exchange,
+            apiKey: ex.apiKey,
+            secret: ex.secret,
+            passphrase: ex.passphrase || undefined,
+            testnet: ex.testnet,
+          })
+            .then(function (d) {
+              if (statusEl) {
+                if (d.ok) {
+                  var balStr = "";
+                  if (d.balances) {
+                    var keys = Object.keys(d.balances);
+                    var top = keys.slice(0, 3);
+                    balStr = top
+                      .map(function (k) {
+                        return k + ": " + d.balances[k];
+                      })
+                      .join(", ");
+                    if (keys.length > 3) balStr += " ...";
+                  }
+                  statusEl.className = "exch-row__status show exch-row__status--ok";
+                  statusEl.textContent = "Connected" + (balStr ? " — " + balStr : "");
+                } else {
+                  statusEl.className = "exch-row__status show exch-row__status--err";
+                  statusEl.textContent = d.error || "Connection failed";
+                }
+              }
+            })
+            .catch(function (e) {
+              if (statusEl) {
+                statusEl.className = "exch-row__status show exch-row__status--err";
+                statusEl.textContent = e.error || e.message || "Connection failed";
+              }
+            });
         };
 
         window.filterFeed = function (filter, btn) {

@@ -272,6 +272,30 @@
           </div>
         </div>
 
+        <!-- Fitness Chart -->
+        <div class="panel-card fade-up d3">
+          <div class="panel-card__head" style="margin-bottom: 4px">
+            <div class="panel-card__title">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                style="width: 12px; height: 12px; opacity: 0.5"
+              >
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <path d="M7 17V13" />
+                <path d="M12 17V9" />
+                <path d="M17 17V5" />
+              </svg>
+              Strategy Fitness
+            </div>
+          </div>
+          <div class="chart-wrap" style="height: 180px">
+            <canvas id="fitnessChart"></canvas>
+          </div>
+        </div>
+
         <!-- Row 2: Backtest Results + Capital/Risk -->
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px">
           <!-- Backtest Results -->
@@ -1212,6 +1236,118 @@
         }
 
         // ═══════════════════════════════════════════════════════════
+        // RENDER: Fitness Chart (bar chart by strategy)
+        // ═══════════════════════════════════════════════════════════
+        var fitnessChart = null;
+        var LEVEL_COLORS = {
+          0: "#5c6070", // L0 grey
+          1: "#3b82f6", // L1 blue
+          2: "#22c55e", // L2 green
+          3: "#f59e0b", // L3 gold
+        };
+
+        function renderFitnessChart(strategies) {
+          var strats = (strategies || [])
+            .filter(function (s) {
+              return s.status !== "killed";
+            })
+            .slice()
+            .sort(function (a, b) {
+              return (b.fitness || 0) - (a.fitness || 0);
+            })
+            .slice(0, 20);
+
+          var labels = strats.map(function (s) {
+            return s.name || s.id || "?";
+          });
+          var values = strats.map(function (s) {
+            return s.fitness || 0;
+          });
+          var colors = strats.map(function (s) {
+            return LEVEL_COLORS[s.level] || LEVEL_COLORS[0];
+          });
+
+          var canvas = $("fitnessChart");
+          if (!canvas) return;
+
+          if (fitnessChart && labels.length > 0) {
+            fitnessChart.data.labels = labels;
+            fitnessChart.data.datasets[0].data = values;
+            fitnessChart.data.datasets[0].backgroundColor = colors;
+            fitnessChart.update("none");
+          } else if (labels.length > 0) {
+            try {
+              fitnessChart = new Chart(canvas, {
+                type: "bar",
+                data: {
+                  labels: labels,
+                  datasets: [
+                    {
+                      data: values,
+                      backgroundColor: colors,
+                      borderColor: "#151820",
+                      borderWidth: 1,
+                      borderRadius: 3,
+                    },
+                  ],
+                },
+                options: {
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  indexAxis: "x",
+                  plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                      callbacks: {
+                        label: function (ctx) {
+                          var s = strats[ctx.dataIndex];
+                          var lvl = ["L0", "L1", "L2", "L3"][s.level] || "L?";
+                          return (
+                            "Fitness: " +
+                            (ctx.parsed.y || 0).toFixed(3) +
+                            " | " +
+                            lvl +
+                            " | Sharpe: " +
+                            (s.sharpe || 0).toFixed(2)
+                          );
+                        },
+                      },
+                      backgroundColor: "#1e2230",
+                      titleColor: "#e0e6f0",
+                      bodyColor: "#9ca3af",
+                      borderColor: "#2a2f3e",
+                      borderWidth: 1,
+                      titleFont: { family: "JetBrains Mono, monospace", size: 10 },
+                      bodyFont: { family: "JetBrains Mono, monospace", size: 10 },
+                    },
+                  },
+                  scales: {
+                    x: {
+                      ticks: {
+                        color: "#5c6070",
+                        font: { size: 9, family: "JetBrains Mono, monospace" },
+                        maxRotation: 45,
+                      },
+                      grid: { display: false },
+                    },
+                    y: {
+                      beginAtZero: true,
+                      ticks: {
+                        color: "#5c6070",
+                        font: { size: 9, family: "JetBrains Mono, monospace" },
+                      },
+                      grid: { color: "rgba(92,96,112,0.15)" },
+                    },
+                  },
+                },
+              });
+            } catch (e) {
+              console.warn("Fitness chart error:", e);
+            }
+          }
+        }
+
+        // ═══════════════════════════════════════════════════════════
         // RENDER: Risk Gauge
         // ═══════════════════════════════════════════════════════════
         function updateGauge(risk) {
@@ -1438,6 +1574,7 @@
           renderEvoStats(state.strategies);
           renderTierBars(state.strategies);
           renderLeaderboard(state.strategies);
+          renderFitnessChart(state.strategies);
           renderBacktests(state.backtests);
           renderAllocChart(state.allocations);
           updateGauge(state.fund);
@@ -1550,6 +1687,7 @@
           renderTierBars(state.strategies);
           renderLeaderboard(state.strategies);
           renderPipeline(state.strategies);
+          renderFitnessChart(state.strategies);
           renderFeed((state.evolutionEvents || []).slice().reverse(), state.feedFilter);
           $("lbUpdated").textContent =
             "Sorted by Fitness \u25BE \u00B7 Updated " + new Date().toLocaleTimeString();

@@ -166,12 +166,53 @@ const plugin = {
       return edges;
     }
 
-    function gatherDashboardData(): EvolutionDashboardData {
+    function gatherDashboardData(): EvolutionDashboardData & {
+      strategies: unknown[];
+      events: unknown[];
+    } {
       const stats = gatherStats();
       const nodes = store.getAllNodes();
       const edges = buildEdges(nodes);
       const recentAudit = store.getAuditLog({ limit: 20 });
-      return { stats, tree: { nodes, edges }, recentAudit };
+
+      // ── Strategy-lab compatible view ──
+      const levelMap: Record<string, number> = {
+        L0_INCUBATE: 0,
+        L1_BACKTEST: 1,
+        L2_PAPER: 2,
+        L3_LIVE: 3,
+        KILLED: -1,
+      };
+      const latestByStrategy = new Map<string, (typeof nodes)[0]>();
+      for (const n of nodes) {
+        const existing = latestByStrategy.get(n.strategyId);
+        if (!existing || n.generation > existing.generation) {
+          latestByStrategy.set(n.strategyId, n);
+        }
+      }
+      const strategies = [...latestByStrategy.values()].map((n) => ({
+        id: n.strategyId,
+        name: n.strategyName,
+        level: levelMap[n.level] ?? 0,
+        fitness: n.fitness,
+        sharpe: n.backtestSharpe ?? n.paperSharpe ?? 0,
+        maxDrawdown: n.maxDrawdown ?? 0,
+        winRate: n.winRate ?? 0,
+        totalTrades: n.totalTrades ?? 0,
+        status: n.extinctAt ? "killed" : (n.status ?? "active"),
+        generation: n.generation,
+        mutationCount: nodes.filter((x) => x.strategyId === n.strategyId && x.mutationType).length,
+      }));
+
+      const events = recentAudit.map((a) => ({
+        type: a.type,
+        strategyId: a.strategyId,
+        strategyName: a.strategyName,
+        detail: a.detail,
+        timestamp: a.createdAt,
+      }));
+
+      return { stats, tree: { nodes, edges }, recentAudit, strategies, events };
     }
 
     // ── RDAVD dependency resolver ──
