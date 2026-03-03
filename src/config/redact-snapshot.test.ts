@@ -152,6 +152,28 @@ describe("redactConfigSnapshot", () => {
     expect(models.providers.openai.baseUrl).toBe("https://api.openai.com");
   });
 
+  it("keeps secret refs visible at whole-object sensitive paths", () => {
+    const snapshot = makeSnapshot({
+      channels: {
+        googlechat: {
+          serviceAccount: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_GOOGLECHAT_SERVICE_ACCOUNT",
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    expect(channels.googlechat.serviceAccount).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENCLAW_GOOGLECHAT_SERVICE_ACCOUNT",
+    });
+  });
+
   it("does not globally over-redact raw text from secret ref metadata values", () => {
     const config = {
       models: {
