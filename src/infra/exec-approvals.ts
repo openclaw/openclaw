@@ -11,19 +11,46 @@ export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 
+export type SystemRunApprovalBinding = {
+  argv: string[];
+  cwd: string | null;
+  agentId: string | null;
+  sessionKey: string | null;
+  envHash: string | null;
+};
+
+export type SystemRunApprovalPlan = {
+  argv: string[];
+  cwd: string | null;
+  rawCommand: string | null;
+  agentId: string | null;
+  sessionKey: string | null;
+};
+
+export type ExecApprovalRequestPayload = {
+  command: string;
+  commandArgv?: string[];
+  // Optional UI-safe env key preview for approval prompts.
+  envKeys?: string[];
+  systemRunBinding?: SystemRunApprovalBinding | null;
+  systemRunPlan?: SystemRunApprovalPlan | null;
+  cwd?: string | null;
+  nodeId?: string | null;
+  host?: string | null;
+  security?: string | null;
+  ask?: string | null;
+  agentId?: string | null;
+  resolvedPath?: string | null;
+  sessionKey?: string | null;
+  turnSourceChannel?: string | null;
+  turnSourceTo?: string | null;
+  turnSourceAccountId?: string | null;
+  turnSourceThreadId?: string | number | null;
+};
+
 export type ExecApprovalRequest = {
   id: string;
-  request: {
-    command: string;
-    cwd?: string | null;
-    nodeId?: string | null;
-    host?: string | null;
-    security?: string | null;
-    ask?: string | null;
-    agentId?: string | null;
-    resolvedPath?: string | null;
-    sessionKey?: string | null;
-  };
+  request: ExecApprovalRequestPayload;
   createdAtMs: number;
   expiresAtMs: number;
 };

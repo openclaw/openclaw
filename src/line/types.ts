@@ -32,6 +32,8 @@ interface LineAccountBaseConfig {
 export interface LineConfig extends LineAccountBaseConfig {
   /** Per-account overrides keyed by account id. */
   accounts?: Record<string, LineAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 }
 
 export interface LineAccountConfig extends LineAccountBaseConfig {}

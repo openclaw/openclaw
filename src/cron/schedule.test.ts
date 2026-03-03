@@ -1,7 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { computeNextRunAtMs } from "./schedule.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  clearCronScheduleCacheForTest,
+  computeNextRunAtMs,
+  getCronScheduleCacheSizeForTest,
+} from "./schedule.js";
 
 describe("cron schedule", () => {
+  beforeEach(() => {
+    clearCronScheduleCacheForTest();
+  });
+
   it("computes next run for cron expression with timezone", () => {
     // Saturday, Dec 13 2025 00:00:00Z
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
@@ -11,6 +19,20 @@ describe("cron schedule", () => {
     );
     // Next Wednesday at 09:00 PST -> 17:00Z
     expect(next).toBe(Date.parse("2025-12-17T17:00:00.000Z"));
+  });
+
+  it("does not roll back year for Asia/Shanghai daily cron schedules (#30351)", () => {
+    // 2026-03-01 08:00:00 in Asia/Shanghai
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+    const next = computeNextRunAtMs(
+      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      nowMs,
+    );
+
+    // Next 08:00 local should be the following day, not a past year.
+    expect(next).toBe(Date.parse("2026-03-02T00:00:00.000Z"));
+    expect(next).toBeGreaterThan(nowMs);
+    expect(new Date(next ?? 0).getUTCFullYear()).toBe(2026);
   });
 
   it("throws a clear error when cron expr is missing at runtime", () => {
@@ -23,6 +45,19 @@ describe("cron schedule", () => {
         nowMs,
       ),
     ).toThrow("invalid cron schedule: expr is required");
+  });
+
+  it("supports legacy cron field when expr is missing", () => {
+    const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
+    const next = computeNextRunAtMs(
+      {
+        kind: "cron",
+        cron: "0 9 * * 3",
+        tz: "America/Los_Angeles",
+      } as unknown as { kind: "cron"; expr: string; tz?: string },
+      nowMs,
+    );
+    expect(next).toBe(Date.parse("2025-12-17T17:00:00.000Z"));
   });
 
   it("computes next run for every schedule", () => {
@@ -44,6 +79,36 @@ describe("cron schedule", () => {
     const anchor = Date.parse("2025-12-13T00:00:00.000Z");
     const next = computeNextRunAtMs({ kind: "every", everyMs: 30_000, anchorMs: anchor }, anchor);
     expect(next).toBe(anchor + 30_000);
+  });
+
+  it("never returns a past timestamp for Asia/Shanghai daily schedule (#30351)", () => {
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+    const next = computeNextRunAtMs(
+      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      nowMs,
+    );
+    expect(next).toBeDefined();
+    expect(next!).toBeGreaterThan(nowMs);
+  });
+
+  it("reuses compiled cron evaluators for the same expression/timezone", () => {
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+    expect(getCronScheduleCacheSizeForTest()).toBe(0);
+
+    const first = computeNextRunAtMs(
+      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      nowMs,
+    );
+    const second = computeNextRunAtMs(
+      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      nowMs + 1_000,
+    );
+    const third = computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs);
+
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(third).toBeDefined();
+    expect(getCronScheduleCacheSizeForTest()).toBe(2);
   });
 
   describe("cron with specific seconds (6-field pattern)", () => {

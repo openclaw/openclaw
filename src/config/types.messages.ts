@@ -112,7 +112,7 @@ export type MessagesConfig = {
   /** Emoji reaction used to acknowledge inbound messages (empty disables). */
   ackReaction?: string;
   /** When to send ack reactions. Default: "group-mentions". */
-  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
+  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
   /** Remove ack reaction after reply is sent (default: false). */
   removeAckAfterReply?: boolean;
   /** Lifecycle status reactions configuration. */

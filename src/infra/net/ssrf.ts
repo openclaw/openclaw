@@ -4,11 +4,11 @@ import { Agent, type Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
+  isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
   type Ipv4SpecialUseBlockOptions,
   isIpv4Address,
   isLegacyIpv4Literal,
-  isPrivateOrLoopbackIpAddress,
   parseCanonicalIpAddress,
   parseLooseIpAddress,
 } from "../../shared/net/ip.js";
@@ -63,7 +63,7 @@ function normalizeHostnameAllowlist(values?: string[]): string[] {
   );
 }
 
-function resolveAllowPrivateNetwork(policy?: SsrFPolicy): boolean {
+export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {
   return policy?.dangerouslyAllowPrivateNetwork === true || policy?.allowPrivateNetwork === true;
 }
 
@@ -120,7 +120,7 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
     if (isIpv4Address(strictIp)) {
       return isBlockedSpecialUseIpv4Address(strictIp, blockOptions);
     }
-    if (isPrivateOrLoopbackIpAddress(strictIp.toString())) {
+    if (isBlockedSpecialUseIpv6Address(strictIp)) {
       return true;
     }
     const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
@@ -282,7 +282,7 @@ export async function resolvePinnedHostnameWithPolicy(
     throw new Error("Invalid hostname");
   }
 
-  const allowPrivateNetwork = resolveAllowPrivateNetwork(params.policy);
+  const allowPrivateNetwork = isPrivateNetworkAllowedByPolicy(params.policy);
   const allowedHostnames = normalizeHostnameSet(params.policy?.allowedHostnames);
   const hostnameAllowlist = normalizeHostnameAllowlist(params.policy?.hostnameAllowlist);
   const isExplicitAllowed = allowedHostnames.has(normalized);
@@ -333,8 +333,6 @@ export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
   return new Agent({
     connect: {
       lookup: pinned.lookup,
-      autoSelectFamily: true,
-      autoSelectFamilyAttemptTimeout: 300,
     },
   });
 }
