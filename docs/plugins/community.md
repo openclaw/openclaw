@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Sentinel** — Real-time endpoint security monitoring powered by osquery. Detects SSH logins, sudo commands, screen sharing, user account changes, unsigned binaries, privilege escalation, and file integrity changes with OpenClaw channel alerts.
+  npm: `openclaw-sentinel`
+  repo: `https://github.com/sunil-sadasivan/openclaw-sentinel`
+  install: `openclaw plugins install openclaw-sentinel`
