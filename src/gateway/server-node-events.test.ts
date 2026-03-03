@@ -111,7 +111,10 @@ describe("node exec events", () => {
       "Exec started (node=node-1 id=run-1): ls -la",
       { sessionKey: "agent:main:main", contextKey: "exec:run-1" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
   });
 
   it("enqueues exec.finished events with output", async () => {
@@ -185,7 +188,10 @@ describe("node exec events", () => {
       "Exec denied (node=node-3 id=run-3, allowlist-miss): rm -rf /",
       { sessionKey: "agent:demo:main", contextKey: "exec:run-3" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:demo:main",
+    });
   });
 
   it("suppresses exec.started when notifyOnExit is false", async () => {
@@ -348,6 +354,140 @@ describe("voice transcript events", () => {
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("voice session-store update failed"));
+  });
+});
+
+describe("notifications changed events", () => {
+  beforeEach(() => {
+    enqueueSystemEventMock.mockClear();
+    requestHeartbeatNowMock.mockClear();
+    loadSessionEntryMock.mockClear();
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
+    enqueueSystemEventMock.mockReturnValue(true);
+  });
+
+  it("enqueues notifications.changed posted events", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n1", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+        key: "notif-1",
+        packageName: "com.example.chat",
+        title: "Message",
+        text: "Ping from Alex",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Notification posted (node=node-n1 key=notif-1 package=com.example.chat): Message - Ping from Alex",
+      { sessionKey: "node-node-n1", contextKey: "notification:notif-1" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      sessionKey: "node-node-n1",
+    });
+  });
+
+  it("enqueues notifications.changed removed events", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n2", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "removed",
+        key: "notif-2",
+        packageName: "com.example.mail",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Notification removed (node=node-n2 key=notif-2 package=com.example.mail)",
+      { sessionKey: "node-node-n2", contextKey: "notification:notif-2" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      sessionKey: "node-node-n2",
+    });
+  });
+
+  it("wakes heartbeat on payload sessionKey when provided", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n4", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+        key: "notif-4",
+        sessionKey: "agent:main:main",
+      }),
+    });
+
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("canonicalizes notifications session key before enqueue and wake", async () => {
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup("node-node-n5"),
+      canonicalKey: "agent:main:node-node-n5",
+    });
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n5", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+        key: "notif-5",
+      }),
+    });
+
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-n5");
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Notification posted (node=node-n5 key=notif-5)",
+      { sessionKey: "agent:main:node-node-n5", contextKey: "notification:notif-5" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      sessionKey: "agent:main:node-node-n5",
+    });
+  });
+
+  it("ignores notifications.changed payloads missing required fields", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n3", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("does not wake heartbeat when notifications.changed event is deduped", async () => {
+    enqueueSystemEventMock.mockReset();
+    enqueueSystemEventMock.mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const ctx = buildCtx();
+    const payload = JSON.stringify({
+      change: "posted",
+      key: "notif-dupe",
+      packageName: "com.example.chat",
+      title: "Message",
+      text: "Ping from Alex",
+    });
+
+    await handleNodeEvent(ctx, "node-n6", {
+      event: "notifications.changed",
+      payloadJSON: payload,
+    });
+    await handleNodeEvent(ctx, "node-n6", {
+      event: "notifications.changed",
+      payloadJSON: payload,
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
+    expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
   });
 });
 

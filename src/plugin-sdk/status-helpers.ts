@@ -45,6 +45,26 @@ export function buildBaseChannelStatusSummary(snapshot: {
   };
 }
 
+export function buildProbeChannelStatusSummary<TExtra extends Record<string, unknown>>(
+  snapshot: {
+    configured?: boolean | null;
+    running?: boolean | null;
+    lastStartAt?: number | null;
+    lastStopAt?: number | null;
+    lastError?: string | null;
+    probe?: unknown;
+    lastProbeAt?: number | null;
+  },
+  extra?: TExtra,
+) {
+  return {
+    ...buildBaseChannelStatusSummary(snapshot),
+    ...(extra ?? ({} as TExtra)),
+    probe: snapshot.probe,
+    lastProbeAt: snapshot.lastProbeAt ?? null,
+  };
+}
+
 export function buildBaseAccountStatusSnapshot(params: {
   account: {
     accountId: string;
