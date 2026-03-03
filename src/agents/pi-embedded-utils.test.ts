@@ -316,6 +316,22 @@ describe("extractAssistantText", () => {
     expect(result).toBe('~~~\n<tool_call>exec tool="exec" command="ls -la /tmp" />\n~~~');
   });
 
+  it("keeps triple-backtick fenced code examples of legacy tool_call snippets", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: '```\n<tool_call>exec tool="exec" command="ls -la /tmp" />\n```',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe('```\n<tool_call>exec tool="exec" command="ls -la /tmp" />\n```');
+  });
+
   it("does not strip invoke examples when no Minimax marker is present", () => {
     const msg = makeAssistantMessage({
       role: "assistant",

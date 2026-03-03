@@ -39,10 +39,12 @@ export function stripMinimaxToolCallXml(text: string): string {
     // Remove stray minimax tool tags.
     cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
   }
-  // Remove legacy self-closing tool call snippets that can leak into user text.
-  cleaned = cleaned.replace(MARKDOWN_CODE_OR_LEGACY_TOOL_CALL_RE, (match) =>
-    match.startsWith("<tool_call") ? "" : match,
-  );
+  if (hasLegacyToolCallSnippet) {
+    // Remove legacy self-closing tool call snippets that can leak into user text.
+    cleaned = cleaned.replace(MARKDOWN_CODE_OR_LEGACY_TOOL_CALL_RE, (match) =>
+      match.startsWith("<tool_call") ? "" : match,
+    );
+  }
 
   return cleaned;
 }
