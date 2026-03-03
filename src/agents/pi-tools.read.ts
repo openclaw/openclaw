@@ -836,8 +836,13 @@ function wrapAbortAfterCommitRecovery(
           throw error;
         }
 
+        const oldText = typeof record?.oldText === "string" ? record.oldText : undefined;
         const newText = typeof record?.newText === "string" ? record.newText : undefined;
-        if (newText !== undefined && current.includes(newText)) {
+        if (
+          newText !== undefined &&
+          current.includes(newText) &&
+          (oldText === undefined || !current.includes(oldText))
+        ) {
           return {
             content: [{ type: "text", text: `Successfully replaced text in ${rawPath}.` }],
             details: undefined,

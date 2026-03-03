@@ -50,10 +50,11 @@ describe("host tool abort-after-commit recovery", () => {
     expect(text).toContain("Successfully wrote");
   });
 
-  it("treats edit as success when file already contains newText", async () => {
+  it("treats edit as success when file already reflects committed replacement", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-abort-"));
     const file = path.join(tmpDir, "note.txt");
-    await fs.writeFile(file, "before\nafter\n", "utf8");
+    // Simulate post-commit file state after replacing `before` -> `after`
+    await fs.writeFile(file, "after\n", "utf8");
 
     const tool = createHostWorkspaceEditTool(tmpDir, { workspaceOnly: false });
     const result = await tool.execute(
@@ -64,5 +65,22 @@ describe("host tool abort-after-commit recovery", () => {
     );
     const text = (result.content?.[0] as { text?: string })?.text ?? "";
     expect(text).toContain("Successfully replaced text");
+  });
+
+  it("keeps edit aborted error when oldText still exists (no committed replacement)", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-abort-fail-"));
+    const file = path.join(tmpDir, "note.txt");
+    // Simulate pre-commit state where replacement did not happen
+    await fs.writeFile(file, "before\nafter\n", "utf8");
+
+    const tool = createHostWorkspaceEditTool(tmpDir, { workspaceOnly: false });
+    await expect(
+      tool.execute(
+        "tc-3",
+        { path: file, oldText: "before", newText: "after" },
+        undefined,
+        undefined,
+      ),
+    ).rejects.toThrow("Operation aborted");
   });
 });
