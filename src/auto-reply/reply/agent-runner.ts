@@ -769,7 +769,7 @@ export async function runReplyAgent(params: {
       const defaultDelayMs = continuationCfg?.defaultDelayMs ?? 15_000;
       const minDelayMs = continuationCfg?.minDelayMs ?? 5_000;
       const maxDelayMs = continuationCfg?.maxDelayMs ?? 300_000;
-      const costCapTokens = continuationCfg?.costCapTokens ?? 0;
+      const costCapTokens = continuationCfg?.costCapTokens ?? 500_000;
 
       if (continuationEnabled) {
         const currentChainCount = activeSessionEntry?.continuationChainCount ?? 0;

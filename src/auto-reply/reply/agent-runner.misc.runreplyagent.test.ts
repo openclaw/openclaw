@@ -1894,6 +1894,46 @@ describe("runReplyAgent continuation signal handling", () => {
     expect(hasContinuationEnqueueCall()).toBe(true);
   });
 
+  it("uses default 500k cost cap when continuation.costCapTokens is omitted", async () => {
+    vi.useFakeTimers();
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Will continue. CONTINUE_WORK:1" }],
+      meta: {
+        agentMeta: {
+          usage: {
+            input: 400_000,
+            output: 150_000,
+            cacheRead: 0,
+            cacheWrite: 0,
+          },
+        },
+      },
+    });
+
+    const sessionKey = "agent:main:telegram:dm:cost-cap-default";
+    const sessionEntry = { sessionId: "session", updatedAt: Date.now() } as SessionEntry;
+
+    await runTurn({
+      commandBody: "hello",
+      followupRun: buildFollowupRun({
+        sessionKey,
+        continuation: {
+          enabled: true,
+          minDelayMs: 0,
+          maxDelayMs: 10_000,
+          // no costCapTokens => should default to 500_000
+        },
+      }),
+      sessionKey,
+      sessionEntry,
+    });
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    // Over-default-cap continuation should NOT schedule a wake
+    expect(hasContinuationEnqueueCall()).toBe(false);
+  });
+
   it("DELEGATE: spawns sub-agent with correct task (multiline bracket body)", async () => {
     const delegateTask = "Build the flux capacitor\nThe capacitor needs 1.21 gigawatts of power.";
 
