@@ -21,6 +21,8 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { activatePluginSessionStoreAdapter } from "../config/sessions/store.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -46,7 +48,7 @@ import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry, getPluginSessionStoreAdapter } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
@@ -476,6 +478,14 @@ export async function startGatewayServer(
         coreGatewayHandlers,
         baseMethods,
       });
+
+  // Plugin session store adapter: activate if a plugin registered one.
+  const pluginStoreAdapter = getPluginSessionStoreAdapter();
+  if (pluginStoreAdapter && cfgAtStart.session?.storeAdapter === "plugin") {
+    const storePath = resolveStorePath(cfgAtStart.session?.store, { agentId: defaultAgentId });
+    await activatePluginSessionStoreAdapter({ adapter: pluginStoreAdapter, storePath });
+  }
+
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;

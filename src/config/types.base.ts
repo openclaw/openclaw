@@ -115,6 +115,7 @@ export type SessionConfig = {
   /** Channel-specific reset overrides (e.g. { discord: { mode: "idle", idleMinutes: 10080 } }). */
   resetByChannel?: Record<string, SessionResetConfig>;
   store?: string;
+  storeAdapter?: "filesystem" | "external" | "plugin";
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
   /**

@@ -31,6 +31,7 @@ describe("diffs plugin registration", () => {
       registerProvider() {},
       registerCommand() {},
       registerContextEngine() {},
+      registerSessionStoreAdapter() {},
       resolvePath(input: string) {
         return input;
       },
@@ -107,6 +108,7 @@ describe("diffs plugin registration", () => {
       registerProvider() {},
       registerCommand() {},
       registerContextEngine() {},
+      registerSessionStoreAdapter() {},
       resolvePath(input: string) {
         return input;
       },
