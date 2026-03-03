@@ -136,6 +136,27 @@ function isSnapshotCompatibleContinuation(params: {
   });
 }
 
+function mergeContinuationWithOverlap(params: {
+  previousBlocks: string[];
+  nextBlocks: string[];
+}): string[] | null {
+  const { previousBlocks, nextBlocks } = params;
+  if (previousBlocks.length === 0 || nextBlocks.length === 0) {
+    return null;
+  }
+  const maxOverlap = Math.min(previousBlocks.length, nextBlocks.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    const previousSlice = previousBlocks.slice(previousBlocks.length - overlap);
+    const nextSlice = nextBlocks.slice(0, overlap);
+    const matches = previousSlice.every((block, index) => block === nextSlice[index]);
+    if (!matches) {
+      continue;
+    }
+    return [...previousBlocks, ...nextBlocks.slice(overlap)];
+  }
+  return null;
+}
+
 export class TuiStreamAssembler {
   private runs = new Map<string, RunStreamState>();
 
@@ -185,9 +206,24 @@ export class TuiStreamAssembler {
         streamedTextBlocks: state.contentBlocks,
         nextContentBlocks,
       });
+      const continuationStart = state.postBoundaryContinuationStart;
+      const overlapMergedContinuation =
+        continuationStart != null &&
+        continuationStart >= 0 &&
+        continuationStart <= state.contentBlocks.length
+          ? mergeContinuationWithOverlap({
+              previousBlocks: state.contentBlocks.slice(continuationStart),
+              nextBlocks: nextContentBlocks,
+            })
+          : null;
 
-      if (shouldAppendContinuation) {
-        const continuationStart = state.postBoundaryContinuationStart;
+      if (overlapMergedContinuation && continuationStart != null) {
+        state.contentBlocks = [
+          ...state.contentBlocks.slice(0, continuationStart),
+          ...overlapMergedContinuation,
+        ];
+        state.contentText = state.contentBlocks.join("\n");
+      } else if (shouldAppendContinuation) {
         const canReplacePriorContinuation =
           continuationStart != null &&
           continuationStart >= 0 &&

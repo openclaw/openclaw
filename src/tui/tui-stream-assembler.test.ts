@@ -176,6 +176,28 @@ describe("TuiStreamAssembler", () => {
     expect(expanded).toBe("Before tool call\nAfter tool call (expanded)");
   });
 
+  it("keeps pre-tool text when continuation snapshots partially overlap", () => {
+    const assembler = new TuiStreamAssembler();
+
+    assembler.ingestDelta(
+      "run-post-tool-overlap",
+      messageWithContent([text("Before tool call")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-overlap",
+      messageWithContent([toolUse(), text("After 1")]),
+      false,
+    );
+
+    const overlap = assembler.ingestDelta(
+      "run-post-tool-overlap",
+      messageWithContent([toolUse(), text("After 1"), text("After 2")]),
+      false,
+    );
+    expect(overlap).toBe("Before tool call\nAfter 1\nAfter 2");
+  });
+
   for (const testCase of FINALIZE_BOUNDARY_CASES) {
     it(testCase.name, () => {
       const assembler = new TuiStreamAssembler();
