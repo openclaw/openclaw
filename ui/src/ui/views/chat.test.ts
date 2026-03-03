@@ -591,7 +591,7 @@ describe("chat view", () => {
     );
 
     expect(container.querySelector(".chat-approval-strip")).not.toBeNull();
-    expect(container.querySelector(".chat-approval-passphrase")).not.toBeNull();
+    expect(container.querySelector(".chat-approval-strip__secret")).not.toBeNull();
   });
 
   it("re-shows strip even when deny and re-prompt share the same timestamp", () => {
@@ -634,7 +634,54 @@ describe("chat view", () => {
     );
 
     expect(container.querySelector(".chat-approval-strip")).not.toBeNull();
-    expect(container.querySelector(".chat-approval-passphrase")).not.toBeNull();
+    expect(container.querySelector(".chat-approval-strip__secret")).not.toBeNull();
+  });
+
+  it("re-shows strip when assistant only repeats approval-off status after a new user action", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: explicit operator approval required (set securitySentinelApproved=true for this tool call).",
+                },
+              ],
+              timestamp: 1000,
+            },
+            {
+              role: "user",
+              content: [{ type: "text", text: "SecuritySentinelApproved=false" }],
+              timestamp: 2000,
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Approval is currently off." }],
+              timestamp: 3000,
+            },
+            {
+              role: "user",
+              content: [{ type: "text", text: "Send test approval flow" }],
+              timestamp: 4000,
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Approval is currently off." }],
+              timestamp: 5000,
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).not.toBeNull();
   });
 
   it("keeps passphrase input visible while any unresolved request still requires passphrase", () => {
@@ -674,7 +721,35 @@ describe("chat view", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-approval-passphrase")).not.toBeNull();
+    expect(container.querySelector(".chat-approval-strip__secret")).not.toBeNull();
+  });
+
+  it("shows passphrase field when assistant asks for passphrase credential wording", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Access denied right now. Use approval UI controls and provide passphrase credential to continue.",
+                },
+              ],
+              timestamp: 1000,
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).not.toBeNull();
+    expect(container.querySelector(".chat-approval-strip__secret")).not.toBeNull();
   });
 
   it("hides security approval strip after later user message without text payload", () => {

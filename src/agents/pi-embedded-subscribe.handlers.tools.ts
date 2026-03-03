@@ -376,7 +376,7 @@ export async function handleToolExecutionEnd(
     startData?.args && typeof startData.args === "object"
       ? (startData.args as Record<string, unknown>)
       : {};
-  const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
+  const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId);
   const afterToolCallArgs =
     adjustedArgs && typeof adjustedArgs === "object"
       ? (adjustedArgs as Record<string, unknown>)

@@ -21,6 +21,7 @@ import {
 } from "./controllers/config.ts";
 import {
   loadCronRuns,
+  loadCronStatus,
   loadMoreCronJobs,
   loadMoreCronRuns,
   reloadCronJobs,
@@ -84,6 +85,7 @@ import { renderInstances } from "./views/instances.ts";
 import { renderLogs } from "./views/logs.ts";
 import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
+import { renderMissionControl } from "./views/mission-control.ts";
 import { renderSessions } from "./views/sessions.ts";
 import { renderSkills } from "./views/skills.ts";
 
@@ -224,6 +226,29 @@ export function renderApp(state: AppViewState) {
     state.cronForm.deliveryMode === "webhook"
       ? rawDeliveryToSuggestions.filter((value) => isHttpUrl(value))
       : rawDeliveryToSuggestions;
+  const missionModeEnabled = state.tab === "overview" && state.settings.overviewMissionMode;
+
+  const refreshMissionControl = async () => {
+    await loadOverview(state);
+    await Promise.all([
+      loadPresence(state),
+      loadSessions(state),
+      loadAgents(state),
+      loadChannels(state, false),
+      loadCronStatus(state),
+    ]);
+  };
+
+  const toggleOverviewMode = async () => {
+    const nextEnabled = !state.settings.overviewMissionMode;
+    state.applySettings({
+      ...state.settings,
+      overviewMissionMode: nextEnabled,
+    });
+    if (nextEnabled) {
+      await refreshMissionControl();
+    }
+  };
 
   return html`
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
@@ -330,6 +355,13 @@ export function renderApp(state: AppViewState) {
             ${state.tab === "usage" ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
           </div>
           <div class="page-meta">
+            ${
+              state.tab === "overview"
+                ? html`<button class="btn btn--sm" @click=${() => void toggleOverviewMode()}>
+                    ${state.settings.overviewMissionMode ? "Switch to Classic" : "Launch Mission Control"}
+                  </button>`
+                : nothing
+            }
             ${state.lastError ? html`<div class="pill danger">${state.lastError}</div>` : nothing}
             ${isChat ? renderChatControls(state) : nothing}
           </div>
@@ -337,34 +369,75 @@ export function renderApp(state: AppViewState) {
 
         ${
           state.tab === "overview"
-            ? renderOverview({
-                connected: state.connected,
-                hello: state.hello,
-                settings: state.settings,
-                password: state.password,
-                lastError: state.lastError,
-                lastErrorCode: state.lastErrorCode,
-                presenceCount,
-                sessionsCount,
-                cronEnabled: state.cronStatus?.enabled ?? null,
-                cronNext,
-                lastChannelsRefresh: state.channelsLastSuccess,
-                onSettingsChange: (next) => state.applySettings(next),
-                onPasswordChange: (next) => (state.password = next),
-                onSessionKeyChange: (next) => {
-                  state.sessionKey = next;
-                  state.chatMessage = "";
-                  state.resetToolStream();
-                  state.applySettings({
-                    ...state.settings,
-                    sessionKey: next,
-                    lastActiveSessionKey: next,
-                  });
-                  void state.loadAssistantIdentity();
-                },
-                onConnect: () => state.connect(),
-                onRefresh: () => state.loadOverview(),
-              })
+            ? html`<div class="callout" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+                <span>
+                  <strong>Dashboard view:</strong>
+                  ${state.settings.overviewMissionMode ? " Mission Control" : " Classic Overview"}
+                </span>
+                <button class="btn btn--sm" @click=${() => void toggleOverviewMode()}>
+                  ${state.settings.overviewMissionMode ? "Switch to Classic" : "Launch Mission Control"}
+                </button>
+              </div>`
+            : nothing
+        }
+
+        ${
+          state.tab === "overview"
+            ? missionModeEnabled
+              ? renderMissionControl({
+                  connected: state.connected,
+                  hello: state.hello,
+                  lastError: state.lastError,
+                  presenceEntries: state.presenceEntries,
+                  sessionsResult: state.sessionsResult,
+                  agentsList: state.agentsList,
+                  channelsSnapshot: state.channelsSnapshot,
+                  cronStatus: state.cronStatus,
+                  chatRunId: state.chatRunId,
+                  chatStream: state.chatStream,
+                  chatDraft: state.chatMessage,
+                  chatSending: state.chatSending,
+                  chatMessages: state.chatMessages,
+                  chatToolMessages: state.chatToolMessages,
+                  eventLog: state.eventLog,
+                  onRefresh: () => void refreshMissionControl(),
+                  onDisableMissionMode: () =>
+                    state.applySettings({
+                      ...state.settings,
+                      overviewMissionMode: false,
+                    }),
+                  onOpenChat: () => state.setTab("chat"),
+                  onChatDraftChange: (next) => (state.chatMessage = next),
+                  onSendChat: () => void state.handleSendChat(),
+                })
+              : renderOverview({
+                  connected: state.connected,
+                  hello: state.hello,
+                  settings: state.settings,
+                  password: state.password,
+                  lastError: state.lastError,
+                  lastErrorCode: state.lastErrorCode,
+                  presenceCount,
+                  sessionsCount,
+                  cronEnabled: state.cronStatus?.enabled ?? null,
+                  cronNext,
+                  lastChannelsRefresh: state.channelsLastSuccess,
+                  onSettingsChange: (next) => state.applySettings(next),
+                  onPasswordChange: (next) => (state.password = next),
+                  onSessionKeyChange: (next) => {
+                    state.sessionKey = next;
+                    state.chatMessage = "";
+                    state.resetToolStream();
+                    state.applySettings({
+                      ...state.settings,
+                      sessionKey: next,
+                      lastActiveSessionKey: next,
+                    });
+                    void state.loadAssistantIdentity();
+                  },
+                  onConnect: () => state.connect(),
+                  onRefresh: () => state.loadOverview(),
+                })
             : nothing
         }
 
@@ -1089,7 +1162,9 @@ export function renderApp(state: AppViewState) {
                 },
                 onSecurityDeny: () => {
                   state.securityApprovalPassphrase = "";
-                  void state.handleSendChat("SecuritySentinelApproved=false");
+                  void state.handleSendChat("SecuritySentinelApproved=false", {
+                    suppressLocalEcho: true,
+                  });
                 },
                 showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                 onScrollToBottom: () => state.scrollToBottom(),

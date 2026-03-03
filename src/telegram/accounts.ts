@@ -93,9 +93,6 @@ function resolveAccountConfig(
 function mergeTelegramAccountConfig(cfg: OpenClawConfig, accountId: string): TelegramAccountConfig {
   const {
     accounts: _ignored,
-    groups: channelGroups,
-    ...base
-  } = (cfg.channels?.telegram ?? {}) as TelegramAccountConfig & { accounts?: unknown };
     defaultAccount: _ignoredDefaultAccount,
     groups: channelGroups,
     ...base

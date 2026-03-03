@@ -919,11 +919,8 @@ export async function runEmbeddedAttempt(
             },
             {
               agentId: sessionAgentId,
-              sessionKey: params.sessionKey,
+              sessionKey: sandboxSessionKey ?? params.sessionKey,
               messageProvider: params.messageChannel ?? params.messageProvider,
-              sessionKey: sandboxSessionKey,
-              sessionId: params.sessionId,
-              runId: params.runId,
               loopDetection: clientToolLoopDetection,
             },
           )

@@ -85,6 +85,7 @@ function createHost() {
       splitRatio: 0.6,
       navCollapsed: false,
       navGroupsCollapsed: {},
+      overviewMissionMode: true,
     },
     password: "",
     clientInstanceId: "instance-test",

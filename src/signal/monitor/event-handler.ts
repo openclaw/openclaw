@@ -455,7 +455,33 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const isOwnMessage =
       (sender.kind === "phone" && normalizedAccount != null && sender.e164 === normalizedAccount) ||
       (sender.kind === "uuid" && deps.accountUuid != null && sender.raw === deps.accountUuid);
-    if (isOwnMessage) {
+
+    // Note-to-Self: when MB shares the account number with the user, inbound
+    // messages from the user's primary device (Signal device 1) arrive as
+    // syncMessage.sentMessage rather than dataMessage.  Detect this case and
+    // promote it to a synthetic dataMessage so the rest of the handler works.
+    // We restrict to sourceDevice===1 (primary phone) so that syncMessage echos
+    // of MB's own replies (device 2+) stay filtered and cannot cause a loop.
+    const noteToSelfText = (() => {
+      if (!isOwnMessage) return null;
+      const sourceDevice = (envelope as Record<string, unknown>).sourceDevice;
+      if (sourceDevice !== 1) return null;
+      const sm = (
+        envelope.syncMessage as {
+          sentMessage?: {
+            message?: string | null;
+            destination?: string | null;
+            destinationNumber?: string | null;
+          };
+        } | null | undefined
+      )?.sentMessage;
+      if (!sm?.message) return null;
+      const dest = sm.destinationNumber ?? sm.destination;
+      if (!dest || normalizeE164(dest) !== normalizedAccount) return null;
+      return sm.message;
+    })();
+
+    if (isOwnMessage && !noteToSelfText) {
       return;
     }
 
@@ -463,8 +489,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     // signal-cli may set syncMessage to null instead of omitting it, so
     // check property existence rather than truthiness to avoid replaying
     // the bot's own sent messages on daemon restart.
-    if ("syncMessage" in envelope) {
+    // Note-to-Self sentMessage syncs (noteToSelfText) are the exception.
+    if ("syncMessage" in envelope && !noteToSelfText) {
       return;
+    }
+
+    // Promote the Note-to-Self sentMessage to a synthetic dataMessage so the
+    // remainder of the handler can process it exactly like a regular inbound.
+    if (noteToSelfText) {
+      envelope = { ...envelope, dataMessage: { message: noteToSelfText }, syncMessage: undefined };
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;

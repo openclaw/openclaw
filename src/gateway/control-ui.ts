@@ -331,6 +331,7 @@ export function handleControlUiHttpRequest(
     if (!pathname.startsWith(`${basePath}/`)) {
       return false;
     }
+  }
   const route = classifyControlUiRequest({
     basePath,
     pathname,

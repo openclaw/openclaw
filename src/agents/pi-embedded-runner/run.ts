@@ -37,6 +37,8 @@ import {
   formatAssistantErrorText,
   isAuthAssistantError,
   isBillingAssistantError,
+  isBillingErrorMessage,
+  parseBillingAffordableMaxTokens,
   isCompactionFailureError,
   isLikelyContextOverflowError,
   isFailoverAssistantError,
@@ -189,6 +191,10 @@ const toNormalizedUsage = (usage: UsageAccumulator) => {
   };
 };
 
+const BILLING_MAX_TOKENS_RETRY_RATIO = 0.95;
+const BILLING_MAX_TOKENS_FALLBACK_RATIO = 0.5;
+const BILLING_MAX_TOKENS_MIN_FLOOR = 256;
+
 function resolveActiveErrorContext(params: {
   lastAssistant: { provider?: string; model?: string } | undefined;
   provider: string;
@@ -198,6 +204,31 @@ function resolveActiveErrorContext(params: {
     provider: params.lastAssistant?.provider ?? params.provider,
     model: params.lastAssistant?.model ?? params.model,
   };
+}
+
+function resolveBillingMaxTokensRetry(rawError: string, currentMaxTokens?: number): number | undefined {
+  const hint = parseBillingAffordableMaxTokens(rawError);
+  if (!hint) {
+    if (!isBillingErrorMessage(rawError)) {
+      return undefined;
+    }
+    if (typeof currentMaxTokens !== "number" || !Number.isFinite(currentMaxTokens)) {
+      return undefined;
+    }
+    const fallbackReduced = Math.max(
+      BILLING_MAX_TOKENS_MIN_FLOOR,
+      Math.floor(currentMaxTokens * BILLING_MAX_TOKENS_FALLBACK_RATIO),
+    );
+    return fallbackReduced < currentMaxTokens ? fallbackReduced : undefined;
+  }
+  const reduced = Math.max(1, Math.floor(hint.affordable * BILLING_MAX_TOKENS_RETRY_RATIO));
+  const nextMaxTokens = Math.min(hint.affordable, reduced);
+  if (typeof currentMaxTokens === "number" && Number.isFinite(currentMaxTokens)) {
+    if (nextMaxTokens >= currentMaxTokens) {
+      return undefined;
+    }
+  }
+  return nextMaxTokens;
 }
 
 export async function runEmbeddedPiAgent(
@@ -655,6 +686,7 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
+      const adaptiveMaxTokensByModel = new Map<string, number>();
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
@@ -713,6 +745,13 @@ export async function runEmbeddedPiAgent(
 
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+          const modelKey = `${provider}/${modelId}`;
+          const adaptiveMaxTokens = adaptiveMaxTokensByModel.get(modelKey);
+          const streamParamsForAttempt =
+            adaptiveMaxTokens !== undefined
+              ? { ...(params.streamParams ?? {}), maxTokens: adaptiveMaxTokens }
+              : params.streamParams;
+          const maxTokensForAttempt = streamParamsForAttempt?.maxTokens ?? model.maxTokens;
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -771,7 +810,7 @@ export async function runEmbeddedPiAgent(
             onAgentEvent: params.onAgentEvent,
             extraSystemPrompt: params.extraSystemPrompt,
             inputProvenance: params.inputProvenance,
-            streamParams: params.streamParams,
+            streamParams: streamParamsForAttempt,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
           });
@@ -1050,6 +1089,14 @@ export async function runEmbeddedPiAgent(
                 },
               };
             }
+            const reducedMaxTokens = resolveBillingMaxTokensRetry(errorText, maxTokensForAttempt);
+            if (reducedMaxTokens !== undefined) {
+              adaptiveMaxTokensByModel.set(modelKey, reducedMaxTokens);
+              log.warn(
+                `billing cap detected for ${provider}/${modelId}; retrying with maxTokens=${reducedMaxTokens}`,
+              );
+              continue;
+            }
             const promptFailoverReason = classifyFailoverReason(errorText);
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
@@ -1106,6 +1153,19 @@ export async function runEmbeddedPiAgent(
           const assistantFailoverReason = classifyFailoverReason(lastAssistant?.errorMessage ?? "");
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
+          if (!aborted && billingFailure) {
+            const reducedMaxTokens = resolveBillingMaxTokensRetry(
+              lastAssistant?.errorMessage ?? formattedAssistantErrorText ?? "",
+              maxTokensForAttempt,
+            );
+            if (reducedMaxTokens !== undefined) {
+              adaptiveMaxTokensByModel.set(modelKey, reducedMaxTokens);
+              log.warn(
+                `assistant billing cap detected for ${provider}/${modelId}; retrying with maxTokens=${reducedMaxTokens}`,
+              );
+              continue;
+            }
+          }
 
           if (
             authFailure &&

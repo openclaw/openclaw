@@ -13,6 +13,7 @@ import {
   isLikelyContextOverflowError,
   isTimeoutErrorMessage,
   isTransientHttpError,
+  parseBillingAffordableMaxTokens,
   parseImageDimensionError,
   parseImageSizeError,
 } from "./pi-embedded-helpers.js";
@@ -154,6 +155,28 @@ describe("isBillingErrorMessage", () => {
     for (const sample of realErrors) {
       expect(isBillingErrorMessage(sample)).toBe(true);
     }
+  });
+});
+
+describe("parseBillingAffordableMaxTokens", () => {
+  it("extracts requested and affordable caps from OpenRouter affordability errors", () => {
+    const parsed = parseBillingAffordableMaxTokens(
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 8192 tokens, but can only afford 5933.",
+    );
+    expect(parsed).toEqual({ requested: 8192, affordable: 5933 });
+  });
+
+  it("supports comma/underscore numeric formats", () => {
+    const parsed = parseBillingAffordableMaxTokens(
+      "requested up to 8,192 tokens, but can only afford 5_933 tokens",
+    );
+    expect(parsed).toEqual({ requested: 8192, affordable: 5933 });
+  });
+
+  it("returns null for unrelated billing errors without an affordability cap", () => {
+    expect(
+      parseBillingAffordableMaxTokens("HTTP 402 Payment Required: top up your account balance."),
+    ).toBeNull();
   });
 });
 

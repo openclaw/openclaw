@@ -169,6 +169,15 @@ export function setTheme(host: SettingsHost, next: ThemeMode, context?: ThemeTra
 export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "overview") {
     await loadOverview(host);
+    if (host.settings.overviewMissionMode) {
+      await Promise.all([
+        loadPresence(host as unknown as OpenClawApp),
+        loadSessions(host as unknown as OpenClawApp),
+        loadAgents(host as unknown as OpenClawApp),
+        loadChannels(host as unknown as OpenClawApp, false),
+        loadCronStatus(host as unknown as OpenClawApp),
+      ]);
+    }
   }
   if (host.tab === "channels") {
     await loadChannelsTab(host);

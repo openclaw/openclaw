@@ -53,6 +53,49 @@ function resolveSlashCommandName(commandBodyNormalized: string): string | null {
   return name ? name : null;
 }
 
+function shouldProbeImplicitSkillInvocation(commandBodyNormalized: string): boolean {
+  const trimmed = commandBodyNormalized.trim();
+  if (!trimmed || trimmed.startsWith("/")) {
+    return false;
+  }
+  const normalized = trimmed.toLowerCase();
+  // ULTRON needs plain-language activation, not only slash command routing.
+  if (/\bultron\b/.test(normalized) || normalized.includes("ultron trader")) {
+    return true;
+  }
+  return false;
+}
+
+function resolveImplicitSkillInvocation(params: {
+  commandBodyNormalized: string;
+  skillCommands: SkillCommandSpec[];
+}): { command: SkillCommandSpec; args?: string } | null {
+  const trimmed = params.commandBodyNormalized.trim();
+  if (!trimmed || trimmed.startsWith("/")) {
+    return null;
+  }
+  const normalized = trimmed.toLowerCase();
+  const ultronCommand = params.skillCommands.find((entry) => {
+    const name = entry.name.trim().toLowerCase();
+    const skillName = entry.skillName.trim().toLowerCase();
+    return (
+      name === "ultron-trader" ||
+      skillName === "ultron-trader" ||
+      (name.includes("ultron") && skillName.includes("ultron"))
+    );
+  });
+  if (!ultronCommand) {
+    return null;
+  }
+  if (/\bultron\b/.test(normalized) || normalized.includes("ultron trader")) {
+    return {
+      command: ultronCommand,
+      args: trimmed,
+    };
+  }
+  return null;
+}
+
 export type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
@@ -159,14 +202,20 @@ export async function handleInlineActions(params: {
   let cleanedBody = initialCleanedBody;
 
   const slashCommandName = resolveSlashCommandName(command.commandBodyNormalized);
-  const shouldLoadSkillCommands =
+  const shouldLoadSkillCommandsForSlash =
     allowTextCommands &&
     slashCommandName !== null &&
     // `/skill …` needs the full skill command list.
     (slashCommandName === "skill" || !builtinSlashCommands.has(slashCommandName));
-  const skillCommands =
-    shouldLoadSkillCommands && params.skillCommands
-      ? params.skillCommands
+  const shouldLoadSkillCommandsForImplicit =
+    allowTextCommands && shouldProbeImplicitSkillInvocation(command.commandBodyNormalized);
+  const shouldLoadSkillCommands =
+    shouldLoadSkillCommandsForSlash || shouldLoadSkillCommandsForImplicit;
+  const providedSkillCommands = params.skillCommands ?? [];
+  const hasProvidedSkillCommands = providedSkillCommands.length > 0;
+  const skillCommands: SkillCommandSpec[] =
+    shouldLoadSkillCommands && hasProvidedSkillCommands
+      ? providedSkillCommands
       : shouldLoadSkillCommands
         ? listSkillCommandsForWorkspace({
             workspaceDir,
@@ -175,13 +224,21 @@ export async function handleInlineActions(params: {
           })
         : [];
 
-  const skillInvocation =
+  const explicitSkillInvocation =
     allowTextCommands && skillCommands.length > 0
       ? resolveSkillCommandInvocation({
           commandBodyNormalized: command.commandBodyNormalized,
           skillCommands,
         })
       : null;
+  const implicitSkillInvocation =
+    allowTextCommands && skillCommands.length > 0
+      ? resolveImplicitSkillInvocation({
+          commandBodyNormalized: command.commandBodyNormalized,
+          skillCommands,
+        })
+      : null;
+  const skillInvocation = explicitSkillInvocation ?? implicitSkillInvocation;
   if (skillInvocation) {
     if (!command.isAuthorizedSender) {
       logVerbose(

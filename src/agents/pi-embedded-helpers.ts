@@ -22,6 +22,7 @@ export {
   parseApiErrorInfo,
   sanitizeUserFacingText,
   isBillingErrorMessage,
+  parseBillingAffordableMaxTokens,
   isCloudflareOrHtmlErrorPage,
   isCloudCodeAssistFormatError,
   isCompactionFailureError,

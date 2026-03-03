@@ -51,4 +51,26 @@ describe("extractInlineSimpleCommand", () => {
     expect(extractInlineSimpleCommand("")).toBeNull();
     expect(extractInlineSimpleCommand(undefined)).toBeNull();
   });
+
+  it("maps plain-language model questions to /status", () => {
+    const result = extractInlineSimpleCommand("what model are u");
+    expect(result?.command).toBe("/status");
+    expect(result?.cleaned).toBe("");
+  });
+
+  it("maps typoed model questions to /status", () => {
+    const result = extractInlineSimpleCommand("so once again, what model are yoy");
+    expect(result?.command).toBe("/status");
+    expect(result?.cleaned).toBe("");
+  });
+
+  it("maps follow-up model question phrasing to /status", () => {
+    const result = extractInlineSimpleCommand("and which model is that?");
+    expect(result?.command).toBe("/status");
+    expect(result?.cleaned).toBe("");
+  });
+
+  it("does not hijack unrelated model questions", () => {
+    expect(extractInlineSimpleCommand("which model of car should i buy?")).toBeNull();
+  });
 });

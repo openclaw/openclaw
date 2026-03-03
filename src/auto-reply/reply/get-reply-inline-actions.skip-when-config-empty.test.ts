@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
@@ -6,12 +7,22 @@ import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
 
 const handleCommandsMock = vi.fn();
+const listSkillCommandsForWorkspaceMock = vi.fn();
 
 vi.mock("./commands.js", () => ({
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
   buildStatusReply: vi.fn(),
   buildCommandContext: vi.fn(),
 }));
+
+vi.mock("../skill-commands.js", async () => {
+  const actual = await vi.importActual("../skill-commands.js");
+  return {
+    ...actual,
+    listSkillCommandsForWorkspace: (...args: unknown[]) =>
+      listSkillCommandsForWorkspaceMock(...args),
+  };
+});
 
 // Import after mocks.
 const { handleInlineActions } = await import("./get-reply-inline-actions.js");
@@ -87,6 +98,7 @@ const createHandleInlineActionsInput = (params: {
 describe("handleInlineActions", () => {
   beforeEach(() => {
     handleCommandsMock.mockReset();
+    listSkillCommandsForWorkspaceMock.mockReset();
   });
 
   it("skips whatsapp replies when config is empty and From !== To", async () => {
@@ -220,5 +232,88 @@ describe("handleInlineActions", () => {
     expect(sessionStore["s:main"]?.abortCutoffMessageSid).toBeUndefined();
     expect(sessionStore["s:main"]?.abortCutoffTimestamp).toBeUndefined();
     expect(handleCommandsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes plain-language ULTRON requests through the ultron-trader skill", async () => {
+    const typing = createTypingController();
+    const ultronSkill: SkillCommandSpec = {
+      name: "ultron-trader",
+      skillName: "ultron-trader",
+      description: "ULTRON trading analyst",
+    };
+    handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "ok" } });
+
+    const rawBody = "use ultron skill to assess nvda today";
+    const ctx = buildTestCtx({
+      Body: rawBody,
+      CommandBody: rawBody,
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: rawBody,
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          abortKey: "sender-1",
+          rawBodyNormalized: rawBody,
+          commandBodyNormalized: rawBody,
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+          skillCommands: [ultronSkill],
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "ok" } });
+    expect(handleCommandsMock).toHaveBeenCalledTimes(1);
+    expect(ctx.Body).toContain('Use the "ultron-trader" skill for this request.');
+    expect(ctx.Body).toContain("User input:\nuse ultron skill to assess nvda today");
+  });
+
+  it("falls back to workspace skill discovery when preloaded skill commands are empty", async () => {
+    const typing = createTypingController();
+    const ultronSkill: SkillCommandSpec = {
+      name: "ultron-trader",
+      skillName: "ultron-trader",
+      description: "ULTRON trading analyst",
+    };
+    listSkillCommandsForWorkspaceMock.mockReturnValue([ultronSkill]);
+    handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "ok" } });
+
+    const rawBody = "use ultron skill to assess nvda today";
+    const ctx = buildTestCtx({
+      Body: rawBody,
+      CommandBody: rawBody,
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: rawBody,
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          abortKey: "sender-1",
+          rawBodyNormalized: rawBody,
+          commandBodyNormalized: rawBody,
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+          skillCommands: [],
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "ok" } });
+    expect(listSkillCommandsForWorkspaceMock).toHaveBeenCalledTimes(1);
+    expect(handleCommandsMock).toHaveBeenCalledTimes(1);
+    expect(ctx.Body).toContain('Use the "ultron-trader" skill for this request.');
   });
 });

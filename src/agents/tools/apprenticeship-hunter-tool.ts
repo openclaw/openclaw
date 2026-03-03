@@ -11,10 +11,10 @@ const DEFAULT_RADIUS_KM = 20;
 const DEFAULT_MAX_RESULTS = 50;
 const DEFAULT_MAX_ENTRY_BARRIER_SCORE = 6; // Include all — rank by barrier, don't filter
 const SEARCH_BATCH_SIZE = 20;
-const MAX_QUERIES_PER_RUN = 24;
-const MAX_CANDIDATES_PER_RUN = 140;
-const MAX_VERIFY_ATTEMPTS_PER_RUN = 60;
-const VERIFY_TIME_BUDGET_MS = 90_000;
+const MAX_QUERIES_PER_RUN = 36;
+const MAX_CANDIDATES_PER_RUN = 220;
+const MAX_VERIFY_ATTEMPTS_PER_RUN = 120;
+const VERIFY_TIME_BUDGET_MS = 180_000;
 const EXPORT_DIR = "/home/node/.openclaw/exports/apprenticeship-hunter";
 const AREA_HINTS = ["warwickshire", "coventry", "nuneaton", "rugby", "leamington", "warwick"];
 const PRIMARY_VACANCY_HOSTS = new Set([
@@ -31,6 +31,12 @@ const SECONDARY_VACANCY_HOSTS = new Set([
   "www.getmyfirstjob.co.uk",
   "ratemyapprenticeship.co.uk",
   "www.ratemyapprenticeship.co.uk",
+  "apprenticeships.gov.uk",
+  "www.apprenticeships.gov.uk",
+  "cv-library.co.uk",
+  "www.cv-library.co.uk",
+  "linkedin.com",
+  "www.linkedin.com",
   "prospects.ac.uk",
   "www.prospects.ac.uk",
   "notgoingtouni.co.uk",
@@ -38,6 +44,55 @@ const SECONDARY_VACANCY_HOSTS = new Set([
   "jobstoday.co.uk",
   "www.jobstoday.co.uk",
 ]);
+const DIRECT_EMPLOYER_VACANCY_HOSTS = new Set([
+  "tesco-careers.com",
+  "www.tesco-careers.com",
+  "sainsburys.jobs",
+  "www.sainsburys.jobs",
+  "boots.jobs",
+  "www.boots.jobs",
+  "asda.jobs",
+  "www.asda.jobs",
+  "lidl.co.uk",
+  "www.lidl.co.uk",
+  "aldirecruitment.co.uk",
+  "www.aldirecruitment.co.uk",
+  "primark.com",
+  "www.primark.com",
+  "jobs.next.co.uk",
+  "jobs.coop.co.uk",
+  "www.jobs.coop.co.uk",
+  "jlpjobs.com",
+  "www.jlpjobs.com",
+  "marksandspencer.com",
+  "www.marksandspencer.com",
+]);
+const COMMUNITY_SOURCE_DOMAINS = [
+  "apprenticeships.gov.uk",
+  "notgoingtouni.co.uk",
+  "ratemyapprenticeship.co.uk",
+  "getmyfirstjob.co.uk",
+];
+const JOB_BOARD_SOURCE_DOMAINS = [
+  "reed.co.uk/jobs",
+  "totaljobs.com/jobs",
+  "uk.indeed.com",
+  "cv-library.co.uk/jobs",
+  "linkedin.com/jobs",
+];
+const EMPLOYER_SOURCE_DOMAINS = [
+  "tesco-careers.com",
+  "sainsburys.jobs",
+  "boots.jobs",
+  "asda.jobs",
+  "lidl.co.uk/jobs",
+  "aldirecruitment.co.uk",
+  "primark.com/en-gb/a/careers",
+  "jobs.next.co.uk",
+  "jobs.coop.co.uk",
+  "jlpjobs.com",
+  "marksandspencer.com/careers",
+];
 const WARWICKSHIRE_POSTCODE_PREFIXES = [
   "CV1",
   "CV2",
@@ -267,76 +322,102 @@ function normalizeExcludedUrls(input: string[]): Set<string> {
 
 function buildQueries(params: { area: string; radiusKm: number; sectors: string[] }) {
   const normalizedArea = params.area.trim();
+  const areaTargets = splitAreaTargets(normalizedArea);
+  const broadUkArea = areaTargets.some((target) => isBroadUkArea(target));
+  const warwickshireArea = areaTargets.some((target) => isWarwickshireArea(target));
+  const areaQuery = broadUkArea ? "UK" : areaTargets[0] ?? normalizedArea;
   const queries = new Set<string>();
   const sectors = expandSectorQueries(params.sectors);
-  const areaTokens = [normalizedArea, ...AREA_HINTS].slice(0, 4);
+  const areaTokens = broadUkArea
+    ? ["UK", "England"]
+    : [
+        ...new Set(
+          areaTargets.flatMap((target) => [target, ...getAreaHints(target)]).filter(Boolean),
+        ),
+      ].slice(0, 6);
   const govSite = "site:findapprenticeship.service.gov.uk/apprenticeship";
   const year = new Date().getFullYear();
 
   // Sector-specific queries first — free-text (no site: operator) for much better coverage.
   // site: operator queries return very few results from Brave for sector+location combos.
   for (const sector of sectors) {
-    queries.add(`"${sector}" apprenticeship "${normalizedArea}" ${year}`);
-    queries.add(`"${sector}" apprentice "${normalizedArea}" apply`);
-    queries.add(`${sector} apprenticeship ${normalizedArea} vacancies apply ${year}`);
-    queries.add(`${sector} apprenticeship ${normalizedArea} getmyfirstjob ratemyapprenticeship`);
+    queries.add(`"${sector}" apprenticeship "${areaQuery}" ${year}`);
+    queries.add(`"${sector}" apprentice "${areaQuery}" apply`);
+    queries.add(`${sector} apprenticeship ${areaQuery} vacancies apply ${year}`);
+    queries.add(`${sector} apprenticeship ${areaQuery} getmyfirstjob ratemyapprenticeship`);
+    queries.add(`${sector} apprenticeship ${areaQuery} no qualifications training provided`);
     if (queries.size >= MAX_QUERIES_PER_RUN) {
       break;
     }
   }
 
   // Gov site: general area queries (reliable for any apprenticeship)
-  queries.add(`${govSite} "${normalizedArea}" apprenticeship`);
-  queries.add(`${govSite} "${normalizedArea}" entry level apprenticeship`);
-  queries.add(`${govSite} "${normalizedArea}" "level 2" apprenticeship`);
-  queries.add(`${govSite} "${normalizedArea}" "level 3" apprenticeship`);
-  queries.add(`${govSite} "${normalizedArea}" apply now apprenticeship`);
-  queries.add(`${govSite}/VAC "${normalizedArea}" apprenticeship`);
-  queries.add(`${govSite}/reference "${normalizedArea}" apprenticeship`);
+  queries.add(`${govSite} "${areaQuery}" apprenticeship`);
+  queries.add(`${govSite} "${areaQuery}" entry level apprenticeship`);
+  queries.add(`${govSite} "${areaQuery}" "level 2" apprenticeship`);
+  queries.add(`${govSite} "${areaQuery}" "level 3" apprenticeship`);
+  queries.add(`${govSite} "${areaQuery}" apply now apprenticeship`);
+  queries.add(`${govSite}/VAC "${areaQuery}" apprenticeship`);
+  queries.add(`${govSite}/reference "${areaQuery}" apprenticeship`);
+  queries.add(`site:apprenticeships.gov.uk "${areaQuery}" apprenticeship apply`);
 
   // Gov site: sector-specific (belt-and-braces, in case Brave indexes them)
   for (const sector of sectors) {
     if (queries.size >= MAX_QUERIES_PER_RUN) {
       break;
     }
-    queries.add(`${govSite} "${normalizedArea}" ${sector} apprenticeship`);
-    queries.add(`${govSite}/VAC "${normalizedArea}" ${sector}`);
+    queries.add(`${govSite} "${areaQuery}" ${sector} apprenticeship`);
+    queries.add(`${govSite}/VAC "${areaQuery}" ${sector}`);
   }
 
-  // Job board site: queries for area tokens
+  // Community + job board site queries for area tokens
   for (const token of areaTokens) {
     if (queries.size >= MAX_QUERIES_PER_RUN) {
       break;
     }
-    queries.add(`site:reed.co.uk/jobs "${token}" apprenticeship`);
-    queries.add(`site:totaljobs.com/jobs "${token}" apprenticeship`);
-    if (queries.size < MAX_QUERIES_PER_RUN) {
-      queries.add(`site:uk.indeed.com "${token}" apprenticeship`);
+    for (const domain of COMMUNITY_SOURCE_DOMAINS) {
+      if (queries.size >= MAX_QUERIES_PER_RUN) {
+        break;
+      }
+      queries.add(`site:${domain} "${token}" apprenticeship`);
     }
-    if (queries.size < MAX_QUERIES_PER_RUN) {
-      queries.add(`site:getmyfirstjob.co.uk "${token}" apprenticeship`);
+    for (const domain of JOB_BOARD_SOURCE_DOMAINS) {
+      if (queries.size >= MAX_QUERIES_PER_RUN) {
+        break;
+      }
+      queries.add(`site:${domain} "${token}" apprenticeship`);
     }
+  }
+
+  // Direct employer portals: many vacancies never show on boards.
+  for (const domain of EMPLOYER_SOURCE_DOMAINS) {
+    if (queries.size >= MAX_QUERIES_PER_RUN) {
+      break;
+    }
+    queries.add(`site:${domain} "${areaQuery}" apprenticeship`);
     if (queries.size < MAX_QUERIES_PER_RUN) {
-      queries.add(`site:ratemyapprenticeship.co.uk "${token}"`);
+      queries.add(`site:${domain} "${areaQuery}" trainee`);
     }
   }
 
   // Postcode-based fallback for Warwickshire
-  for (const prefix of WARWICKSHIRE_POSTCODE_PREFIXES.slice(0, 3)) {
-    if (queries.size >= MAX_QUERIES_PER_RUN) {
-      break;
-    }
-    queries.add(`${govSite} "${prefix}" apprenticeship`);
-    if (queries.size < MAX_QUERIES_PER_RUN) {
-      queries.add(`site:reed.co.uk/jobs "${prefix}" apprenticeship`);
+  if (warwickshireArea) {
+    for (const prefix of WARWICKSHIRE_POSTCODE_PREFIXES.slice(0, 3)) {
+      if (queries.size >= MAX_QUERIES_PER_RUN) {
+        break;
+      }
+      queries.add(`${govSite} "${prefix}" apprenticeship`);
+      if (queries.size < MAX_QUERIES_PER_RUN) {
+        queries.add(`site:reed.co.uk/jobs "${prefix}" apprenticeship`);
+      }
     }
   }
 
   if (queries.size < MAX_QUERIES_PER_RUN) {
-    queries.add(`site:reed.co.uk/jobs "${normalizedArea}" trainee`);
+    queries.add(`site:reed.co.uk/jobs "${areaQuery}" trainee`);
   }
   if (queries.size < MAX_QUERIES_PER_RUN) {
-    queries.add(`site:uk.indeed.com "${normalizedArea}" trainee apprenticeship`);
+    queries.add(`site:uk.indeed.com "${areaQuery}" trainee apprenticeship`);
   }
 
   return [...queries].slice(0, MAX_QUERIES_PER_RUN);
@@ -656,10 +737,13 @@ function isAllowedVacancyUrl(url: string): boolean {
     return false;
   }
   if (host.includes("reed.co.uk")) {
-    return /\/jobs\/.+/.test(parsed.pathname);
+    // Reed vacancy pages are usually /jobs/<slug>/<numeric-id>; plain /jobs/<keywords>
+    // pages are search aggregations.
+    return /\/jobs\/[^/]+\/\d+(?:\/)?$/i.test(parsed.pathname);
   }
   if (host.includes("totaljobs.com")) {
-    return /\/job\/.+/.test(parsed.pathname) || /\/jobs\/.+/.test(parsed.pathname);
+    // totaljobs vacancy pages use /job/... ; /jobs/... are listing shells.
+    return /\/job\/.+/i.test(parsed.pathname);
   }
   if (host.includes("indeed.com")) {
     return parsed.pathname.includes("/viewjob") || parsed.searchParams.has("jk");
@@ -670,6 +754,15 @@ function isAllowedVacancyUrl(url: string): boolean {
   if (host.includes("ratemyapprenticeship.co.uk")) {
     return /\/(vacancies?|apprenticeship)\/.+/.test(parsed.pathname);
   }
+  if (host.includes("apprenticeships.gov.uk")) {
+    return /\/(apprenticeship|vacanc|job|opportunit)/.test(parsed.pathname);
+  }
+  if (host.includes("cv-library.co.uk")) {
+    return /\/job\/.+/.test(parsed.pathname);
+  }
+  if (host.includes("linkedin.com")) {
+    return /\/jobs\/view\/.+/.test(parsed.pathname);
+  }
   if (host.includes("prospects.ac.uk")) {
     return /\/job-profile\/.+/.test(parsed.pathname) || /\/(job|vacancy)\/.+/.test(parsed.pathname);
   }
@@ -679,7 +772,24 @@ function isAllowedVacancyUrl(url: string): boolean {
   if (host.includes("jobstoday.co.uk")) {
     return /\/(job|vacancy)\/.+/.test(parsed.pathname);
   }
+  if (DIRECT_EMPLOYER_VACANCY_HOSTS.has(host)) {
+    return isLikelyDirectEmployerVacancyPath(parsed);
+  }
   return false;
+}
+
+function isLikelyDirectEmployerVacancyPath(parsed: URL): boolean {
+  const pathname = parsed.pathname.toLowerCase();
+  if (!pathname || pathname === "/") {
+    return false;
+  }
+  if (pathname.includes("/search") || pathname.includes("/results")) {
+    return false;
+  }
+  if (/\/(jobs?|careers?)\/?$/.test(pathname)) {
+    return false;
+  }
+  return /(apprent|trainee|vacanc|position|job|early-careers)/.test(pathname);
 }
 
 function shouldKeepCandidateByPreview(
@@ -758,6 +868,19 @@ function isLikelyVacancyPage(url: string, title: string, text: string): boolean 
     }
     return haystack.includes("apprenticeship");
   }
+  if (DIRECT_EMPLOYER_VACANCY_HOSTS.has(host)) {
+    if (!/(apprentice|apprenticeship|trainee)/.test(haystack)) {
+      return false;
+    }
+    if (isSearchOrListingShell(url, haystack)) {
+      return false;
+    }
+    return (
+      /(apply|job description|responsibilities|salary|location|hours|vacancy|job details)/.test(
+        haystack,
+      ) || /(\/jobs?\/|\/careers?\/)/.test(parsed.pathname.toLowerCase())
+    );
+  }
   if (isSearchOrListingShell(url, haystack)) {
     return false;
   }
@@ -775,10 +898,21 @@ function isSearchOrListingShell(url: string, haystack: string): boolean {
   if (/\/jobs\/?$/.test(lowerUrl)) {
     return true;
   }
+  if (/\/jobs\/[^/]+\/in-/.test(lowerUrl)) {
+    return true;
+  }
+  if (/\/jobs\/[^/]+-jobs(?:\/|$)/.test(lowerUrl)) {
+    return true;
+  }
   if (lowerUrl.includes("/search") || lowerUrl.includes("page=") || lowerUrl.includes("results")) {
     return true;
   }
-  if (/results\s+for/.test(haystack) || /jobs\s+found/.test(haystack)) {
+  if (
+    /results\s+for/.test(haystack) ||
+    /jobs\s+found/.test(haystack) ||
+    /updated daily/.test(haystack) ||
+    /browse jobs/.test(haystack)
+  ) {
     return true;
   }
   return false;
@@ -900,18 +1034,24 @@ function cleanupTitle(title: string): string {
 }
 
 function isInArea(row: VacancyRow, area: string): boolean {
+  const areaTargets = splitAreaTargets(area);
+  if (areaTargets.some((target) => isBroadUkArea(target))) {
+    return true;
+  }
+  return areaTargets.some((target) => isInAreaForTarget(row, target));
+}
+
+function isInAreaForTarget(row: VacancyRow, areaTarget: string): boolean {
   const haystack = `${row.location} ${row.title}`.toLowerCase();
-  const target = area.toLowerCase();
+  const target = areaTarget.toLowerCase();
   if (haystack.includes(target)) {
     return true;
   }
-  const warwickshireTarget = /(warwickshire|coventry|nuneaton|rugby|leamington|warwick)/i.test(
-    target,
-  );
+  const warwickshireTarget = isWarwickshireArea(target);
   if (warwickshireTarget && hasWarwickshirePostcodePrefix(row.location)) {
     return true;
   }
-  return getAreaHints(area).some((hint) => haystack.includes(hint));
+  return getAreaHints(areaTarget).some((hint) => haystack.includes(hint));
 }
 
 function hasWarwickshirePostcodePrefix(location: string): boolean {
@@ -920,15 +1060,60 @@ function hasWarwickshirePostcodePrefix(location: string): boolean {
 }
 
 function getAreaHints(area: string): string[] {
-  const normalizedArea = area.trim().toLowerCase();
+  const normalizedArea = normalizeAreaTarget(area).toLowerCase();
+  if (isBroadUkArea(normalizedArea)) {
+    return [];
+  }
   const fromArea = normalizedArea
     .split(/[^a-z0-9]+/)
     .map((token) => token.trim())
     .filter((token) => token.length >= 3);
-  if (normalizedArea.includes("warwick")) {
+  if (isWarwickshireArea(normalizedArea)) {
     return [...new Set([...AREA_HINTS, ...fromArea])];
   }
   return [...new Set(fromArea)];
+}
+
+function isWarwickshireArea(area: string): boolean {
+  const value = normalizeAreaTarget(area).toLowerCase();
+  return /(warwickshire|coventry|nuneaton|rugby|leamington|warwick|kenilworth)/i.test(value);
+}
+
+function isBroadUkArea(area: string): boolean {
+  const value = normalizeAreaTarget(area).toLowerCase();
+  return (
+    value === "uk" ||
+    value === "u.k." ||
+    value.includes("uk-wide") ||
+    value.includes("uk wide") ||
+    value.includes("nationwide") ||
+    value.includes("united kingdom") ||
+    value.includes("great britain") ||
+    value === "england" ||
+    value === "scotland" ||
+    value === "wales"
+  );
+}
+
+function splitAreaTargets(area: string): string[] {
+  const normalizedTargets = area
+    .split(",")
+    .map((part) => normalizeAreaTarget(part))
+    .filter(Boolean);
+  if (normalizedTargets.length > 0) {
+    return [...new Set(normalizedTargets)];
+  }
+  const fallback = normalizeAreaTarget(area);
+  return fallback ? [fallback] : [DEFAULT_AREA];
+}
+
+function normalizeAreaTarget(value: string): string {
+  return value
+    .replace(/\+\s*\d+\s*km\b/gi, "")
+    .replace(/\bwithin\s+\d+\s*km\b/gi, "")
+    .replace(/\b(radius|range)\s*\d+\s*km\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function entryBarrierScore(text: string): number {

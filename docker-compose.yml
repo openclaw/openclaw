@@ -1,4 +1,47 @@
 services:
+  # ── Signal channel ──────────────────────────────────────────────────────────
+  # Uses native signal-cli daemon mode (not the bbernhard REST API wrapper).
+  # JAVA_TOOL_OPTIONS is mandatory — prevents SIGBUS on ARM64 when SQLite
+  # mmaps the WAL files on an exFAT/external SSD overlay filesystem.
+  # To re-link after data loss: bash scripts/signal-relink.sh
+  # To check health:            bash scripts/signal-check.sh
+  signal-cli:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: openclaw-signal
+    environment:
+      # SQLite lib export path — MUST NOT be removed. Prevents SIGBUS on ARM64/external SSD.
+      JAVA_TOOL_OPTIONS: "-Dorg.sqlite.lib.exportPath=/tmp"
+    volumes:
+      - ${SIGNAL_CLI_DATA_DIR}:/home/.local/share/signal-cli
+    ports:
+      - "${SIGNAL_CLI_PORT:-127.0.0.1:18080}:8080"
+    entrypoint: ["signal-cli"]
+    command:
+      - "--config"
+      - "/home/.local/share/signal-cli"
+      - "-a"
+      - "${SIGNAL_CLI_ACCOUNT}"
+      - "daemon"
+      - "--http"
+      - "0.0.0.0:8080"
+      - "--no-receive-stdout"
+      - "--receive-mode"
+      - "on-start"
+    # Healthy = account database exists (device is linked).
+    # If unhealthy: run bash scripts/signal-relink.sh, then restart this service.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "find /home/.local/share/signal-cli/data -name 'account.db' -maxdepth 2 | grep -q .",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+    init: true
+    restart: unless-stopped
+
   voicebox:
     image: ${VOICEBOX_IMAGE:-openclaw-voicebox:local}
     build:
@@ -31,6 +74,8 @@ services:
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY}
       BRAVE_API_KEY: ${BRAVE_API_KEY}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY}
       SIGNAL_APPROVAL_PASSPHRASE_HASH: ${SIGNAL_APPROVAL_PASSPHRASE_HASH}
@@ -92,6 +137,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    depends_on:
+      signal-cli:
+        condition: service_started
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
@@ -107,6 +155,8 @@ services:
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY}
       BRAVE_API_KEY: ${BRAVE_API_KEY}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY}
       SIGNAL_APPROVAL_PASSPHRASE_HASH: ${SIGNAL_APPROVAL_PASSPHRASE_HASH}

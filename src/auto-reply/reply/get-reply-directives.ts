@@ -24,6 +24,107 @@ import type { TypingController } from "./typing.js";
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
+export function shouldAutoEscalateToQwen7b(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const normalized = trimmed.toLowerCase();
+  const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+  const newlineCount = (trimmed.match(/\n/g) ?? []).length;
+
+  if (trimmed.length >= 260 || wordCount >= 45 || newlineCount >= 4) {
+    return true;
+  }
+
+  const complexitySignals = [
+    "analyze",
+    "analysis",
+    "compare",
+    "breakdown",
+    "debug",
+    "refactor",
+    "architecture",
+    "security",
+    "audit",
+    "strategy",
+    "backtest",
+    "step by step",
+    "tradeoff",
+    "pros and cons",
+    "root cause",
+  ];
+  if (complexitySignals.some((signal) => normalized.includes(signal))) {
+    return true;
+  }
+
+  const financeSignals = [
+    "ultron",
+    "ticker",
+    "symbol",
+    "stock",
+    "equity",
+    "pre-market",
+    "premarket",
+    "post-market",
+    "postmarket",
+    "technical analysis",
+    "trade setup",
+    "risk reward",
+    "rr ratio",
+    "position size",
+    "market scan",
+    "swing trade",
+    "day trade",
+  ];
+  if (financeSignals.some((signal) => normalized.includes(signal))) {
+    return true;
+  }
+
+  // Heuristic for short ticker-style prompts, e.g. "assess nvda today".
+  if (/\$[a-z]{1,5}\b/i.test(trimmed)) {
+    return true;
+  }
+  if (/\b(?:ticker|symbol)\s*[:=]?\s*\$?[a-z]{1,5}\b/i.test(normalized)) {
+    return true;
+  }
+  if (/\b(?:analyse|analyze|assess|chart|price|setup|backtest|scan)\s+\$?[a-z]{1,5}\b/i.test(normalized)) {
+    return true;
+  }
+
+  return false;
+}
+
+function hasOllamaModelConfigured(cfg: OpenClawConfig, modelId: string): boolean {
+  const models = cfg.models?.providers?.ollama?.models;
+  if (!Array.isArray(models)) {
+    return false;
+  }
+  return models.some((entry) => entry?.id?.trim() === modelId);
+}
+
+function hasOllamaModelFallback(cfg: OpenClawConfig, modelRef: string): boolean {
+  const modelConfig = cfg.agents?.defaults?.model;
+  if (!modelConfig || typeof modelConfig === "string") {
+    return false;
+  }
+  const fallbacks = modelConfig.fallbacks;
+  if (!Array.isArray(fallbacks)) {
+    return false;
+  }
+  return fallbacks.some((entry) => entry?.trim() === modelRef);
+}
+
+function resolveOllamaAutoEscalationTarget(cfg: OpenClawConfig): string | null {
+  const preferredTargets = ["qwen3:14b", "qwen2.5:7b"] as const;
+  for (const modelId of preferredTargets) {
+    if (hasOllamaModelConfigured(cfg, modelId) || hasOllamaModelFallback(cfg, `ollama/${modelId}`)) {
+      return modelId;
+    }
+  }
+  return null;
+}
+
 export type ReplyDirectiveContinuation = {
   commandSource: string;
   command: ReturnType<typeof buildCommandContext>;
@@ -462,6 +563,20 @@ export async function resolveReplyDirectives(params: {
   contextTokens = applyResult.contextTokens;
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
   const execOverrides = resolveExecOverrides({ directives, sessionEntry });
+
+  const autoEscalationTarget =
+    !directives.hasModelDirective && provider === "ollama" && model === "qwen2.5:3b"
+      ? resolveOllamaAutoEscalationTarget(cfg)
+      : null;
+  const escalationSource = [commandText, cleanedBody].filter(Boolean).join("\n");
+  if (autoEscalationTarget && shouldAutoEscalateToQwen7b(escalationSource)) {
+    provider = "ollama";
+    model = autoEscalationTarget;
+    contextTokens = resolveContextTokens({
+      agentCfg,
+      model,
+    });
+  }
 
   return {
     kind: "continue",

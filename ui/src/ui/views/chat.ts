@@ -561,6 +561,7 @@ function resolvePendingSecurityApproval(
   let latestRequestEpochMs: number | null = null;
   let latestResolutionOrder = -1;
   let latestUserOrder = -1;
+  let latestActionUserOrder = -1;
   let fallbackOrder = fallbackBase;
 
   const noteRequest = (text: string, order: number, epochMs: number | null) => {
@@ -589,23 +590,36 @@ function resolvePendingSecurityApproval(
       latestUserOrder = Math.max(latestUserOrder, order);
     }
     const text = extractSecurityText(msg);
+    if (role === "user") {
+      const isApprovalResolution = text ? isSecurityApprovalResolution(text) : false;
+      if (!isApprovalResolution) {
+        latestActionUserOrder = Math.max(latestActionUserOrder, order);
+      }
+    }
     if (!text) {
       continue;
     }
     if (role === "assistant") {
       const isPrompt = isSecurityApprovalPrompt(text);
       const isSignal = isSecuritySentinelSignal(text);
+      const isDenyAck = isSecurityApprovalDenyAcknowledgement(text);
       if (isPrompt) {
         noteRequest(text, order, epochMs);
       }
       if (isSignal) {
         noteRequest(text, order, epochMs);
       }
-      if (
-        !isPrompt &&
-        !isSignal &&
-        (isSecurityApprovalResolution(text) || isSecurityApprovalDenyAcknowledgement(text))
-      ) {
+      if (!isPrompt && !isSignal && isDenyAck) {
+        const hasFreshOperatorAction =
+          latestActionUserOrder > Math.max(latestResolutionOrder, latestRequestOrder);
+        if (hasFreshOperatorAction) {
+          noteRequest(text, order, epochMs);
+        } else {
+          latestResolutionOrder = Math.max(latestResolutionOrder, order);
+        }
+        continue;
+      }
+      if (!isPrompt && !isSignal && isSecurityApprovalResolution(text)) {
         latestResolutionOrder = Math.max(latestResolutionOrder, order);
       }
       continue;
@@ -776,7 +790,7 @@ function isSecuritySentinelSignal(text: string): boolean {
   return (
     /security sentinel blocked tool call/i.test(text) ||
     /explicit operator approval required/i.test(text) ||
-    /tamper_type=/i.test(text)
+    /tamper[_\s-]?type\s*[:=]/i.test(text)
   );
 }
 
@@ -792,10 +806,18 @@ function isSecurityApprovalPrompt(text: string): boolean {
     /fill (the )?securitysentinelpassphrase/i.test(text) ||
     /provide securitysentinelpassphrase/i.test(text) ||
     /securitysentinelpassphrase/i.test(text) ||
+    /passphrase credential/i.test(text) ||
     /need your explicit approval/i.test(text) ||
     /explicit permission/i.test(text) ||
     /explicit operator approval/i.test(text) ||
     /enable approval in the ui/i.test(text) ||
+    /approval ui controls/i.test(text) ||
+    /use the approval ui/i.test(text) ||
+    /turn approval (back )?on/i.test(text) ||
+    /re-approve/i.test(text) ||
+    /reapprove/i.test(text) ||
+    /can[’']?t run that right now/i.test(text) ||
+    /cannot run that right now/i.test(text) ||
     /do you approve/i.test(text) ||
     /would you like to approve/i.test(text) ||
     /would you like to allow this action/i.test(text)

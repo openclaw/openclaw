@@ -44,6 +44,8 @@ for arg in "$@"; do
       echo "  --dry-run    Preview upstream commits, make no changes"
       echo "  --skip-lint  Skip lint/typecheck after merge"
       echo "  --deploy     Rebuild Docker images and restart containers after merge"
+      echo "Env:"
+      echo "  MB_SYNC_ALLOW_NO_VERIFY=1  Bypass git hooks for the merge commit"
       exit 0 ;;
   esac
 done
@@ -464,9 +466,8 @@ do_commit() {
     || git log --oneline ORIG_HEAD..HEAD 2>/dev/null | wc -l | tr -d ' ' \
     || echo "?")
 
-  # --no-verify: pre-commit hook needs Linux ARM64 native oxlint/oxfmt binaries
-  # which are absent when node_modules was installed on macOS (darwin-arm64).
-  git commit --no-verify --no-edit -m "$(cat <<EOF
+  local commit_message
+  commit_message="$(cat <<EOF
 chore: upstream merge $MERGE_DATE — take OC fixes, preserve MB security layer
 
 MB-protected files (always kept): ${MB_ALWAYS_OURS[*]}
@@ -474,6 +475,13 @@ MB-protected files (always kept): ${MB_ALWAYS_OURS[*]}
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
 )"
+
+  if [[ "${MB_SYNC_ALLOW_NO_VERIFY:-0}" == "1" ]]; then
+    warn "Skipping git hooks because MB_SYNC_ALLOW_NO_VERIFY=1"
+    git commit --no-verify --no-edit -m "$commit_message"
+  else
+    git commit --no-edit -m "$commit_message"
+  fi
   ok "Committed. $count upstream commit(s) integrated. MB security layer intact."
 }
 

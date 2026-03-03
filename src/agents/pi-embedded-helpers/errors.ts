@@ -727,6 +727,9 @@ export function isTimeoutErrorMessage(raw: string): boolean {
  * Longer text is almost certainly assistant content that happens to mention billing keywords.
  */
 const BILLING_ERROR_MAX_LENGTH = 512;
+const BILLING_AFFORDABLE_MAX_TOKENS_RE =
+  /requested\s+up\s+to\s+([\d,_]+)\s+tokens?,?\s+but\s+can\s+only\s+afford\s+([\d,_]+)/i;
+const BILLING_AFFORDABLE_ONLY_RE = /can\s+only\s+afford\s+([\d,_]+)\s+tokens?/i;
 
 export function isBillingErrorMessage(raw: string): boolean {
   const value = raw.toLowerCase();
@@ -753,6 +756,30 @@ export function isBillingErrorMessage(raw: string): boolean {
     value.includes("payment") ||
     value.includes("plan")
   );
+}
+
+export function parseBillingAffordableMaxTokens(
+  raw: string,
+): { requested?: number; affordable: number } | null {
+  if (!raw) {
+    return null;
+  }
+  const normalized = raw.replaceAll(",", "").replaceAll("_", "");
+  const fullMatch = normalized.match(BILLING_AFFORDABLE_MAX_TOKENS_RE);
+  if (fullMatch) {
+    const requested = Number.parseInt(fullMatch[1] ?? "", 10);
+    const affordable = Number.parseInt(fullMatch[2] ?? "", 10);
+    if (Number.isFinite(requested) && requested > 0 && Number.isFinite(affordable) && affordable > 0) {
+      return { requested, affordable };
+    }
+    return null;
+  }
+  const affordOnlyMatch = normalized.match(BILLING_AFFORDABLE_ONLY_RE);
+  if (!affordOnlyMatch) {
+    return null;
+  }
+  const affordable = Number.parseInt(affordOnlyMatch[1] ?? "", 10);
+  return Number.isFinite(affordable) && affordable > 0 ? { affordable } : null;
 }
 
 export function isMissingToolCallInputError(raw: string): boolean {

@@ -349,7 +349,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     { ts: Date.now(), event: evt.event, payload: evt.payload },
     ...host.eventLogBuffer,
   ].slice(0, 250);
-  if (host.tab === "debug") {
+  if (host.tab === "debug" || (host.tab === "overview" && host.settings.overviewMissionMode)) {
     host.eventLog = host.eventLogBuffer;
   }
 
