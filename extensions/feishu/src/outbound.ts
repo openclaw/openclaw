@@ -6,6 +6,44 @@ import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 
+function formatFeishuUserFacingText(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return text;
+
+  // 1) Agent-level failures before reply (e.g. session file lock)
+  const agentLineMatch = trimmed.match(/^⚠️ Agent failed before reply:.*$/m);
+  if (agentLineMatch) {
+    const agentLine = agentLineMatch[0];
+    const isSessionLock = /session file locked/i.test(agentLine);
+    const userLine = isSessionLock
+      ? "(**Session file lock error. Please wait a moment and resend your last message.**)"
+      : "(**Agent failed before replying. Please retry your last message.**)";
+    const technicalLine = `\`\`\`Technical details: ${agentLine}\`\`\``;
+    return `${userLine}\n${technicalLine}`;
+  }
+
+  // 2) Tool/exec failures (🛠️ Exec ...)
+  const execLineMatch = trimmed.match(/^⚠️ 🛠️ Exec(?: failed)?:.*$/m);
+  if (execLineMatch) {
+    const execLine = execLineMatch[0];
+    const userLine =
+      "(**Command execution failed. Please verify this command on the host or ask the operator to review it.**)";
+    const technicalLine = `\`\`\`Technical details: ${execLine}\`\`\``;
+    return `${userLine}\n${technicalLine}`;
+  }
+
+  // 3) Generic warning-style fallback for other ⚠️ messages
+  if (trimmed.includes("⚠️")) {
+    const firstLine = trimmed.split(/\r?\n/, 1)[0];
+    const userLine =
+      "(**An error occurred while handling your request. Please try again or contact the operator if this keeps happening.**)";
+    const technicalLine = `\`\`\`Technical details: ${firstLine}\`\`\``;
+    return `${userLine}\n${technicalLine}`;
+  }
+
+  return text;
+}
+
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
   if (!raw) return null;
@@ -50,14 +88,15 @@ async function sendOutboundText(params: {
   accountId?: string;
 }) {
   const { cfg, to, text, accountId } = params;
+  const formattedText = formatFeishuUserFacingText(text);
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
-  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
-    return sendMarkdownCardFeishu({ cfg, to, text, accountId });
+  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(formattedText))) {
+    return sendMarkdownCardFeishu({ cfg, to, text: formattedText, accountId });
   }
 
-  return sendMessageFeishu({ cfg, to, text, accountId });
+  return sendMessageFeishu({ cfg, to, text: formattedText, accountId });
 }
 
 export const feishuOutbound: ChannelOutboundAdapter = {
@@ -96,10 +135,11 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   sendMedia: async ({ cfg, to, text, mediaUrl, accountId, mediaLocalRoots }) => {
     // Send text first if provided
     if (text?.trim()) {
+      const formattedText = formatFeishuUserFacingText(text);
       await sendOutboundText({
         cfg,
         to,
-        text,
+        text: formattedText,
         accountId: accountId ?? undefined,
       });
     }

@@ -136,6 +136,60 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "card_msg" }));
   });
+
+  it("formats agent-before-reply errors into two-line English summary plus technical details", async () => {
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "⚠️ Agent failed before reply: session file locked (timeout 10000ms): pid=123 /path.lock\nLogs: openclaw logs --follow",
+      accountId: "main",
+    });
+
+    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "(**Session file lock error. Please wait a moment and resend your last message.**)\n```Technical details: ⚠️ Agent failed before reply: session file locked (timeout 10000ms): pid=123 /path.lock```",
+        accountId: "main",
+      }),
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("formats exec failures into two-line English summary plus technical details", async () => {
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "⚠️ 🛠️ Exec: vercel env add VITE_API_URL production --token=secret 2>&1 << 'EOF' failed: Vercel CLI 50.23.2",
+      accountId: "main",
+    });
+
+    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "(**Command execution failed. Please verify this command on the host or ask the operator to review it.**)\n```Technical details: ⚠️ 🛠️ Exec: vercel env add VITE_API_URL production --token=secret 2>&1 << 'EOF' failed: Vercel CLI 50.23.2```",
+        accountId: "main",
+      }),
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("formats other warning messages into generic two-line English summary plus technical details", async () => {
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "⚠️ Model run failed: internal error",
+      accountId: "main",
+    });
+
+    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "(**An error occurred while handling your request. Please try again or contact the operator if this keeps happening.**)\n```Technical details: ⚠️ Model run failed: internal error```",
+        accountId: "main",
+      }),
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("feishuOutbound.sendMedia renderMode", () => {
