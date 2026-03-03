@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
 - LINE/context and routing synthesis: fix group/room peer routing and command-authorization context propagation, and keep processing later events in mixed-success webhook batches. (from #21955, #24475, #27035, #28286) Thanks @lailoo, @mcaxtr, @jervyclaw, @Glucksberg, and @Takhoffman.
 - LINE/status/config/webhook synthesis: fix status false positives from snapshot/config state and accept LINE webhook HEAD probes for compatibility. (from #10487, #25726, #27537, #27908, #31387) Thanks @BlueBirdBack, @stakeswky, @loiie45e, @puritysb, and @mcaxtr.
 - LINE cleanup/test follow-ups: fold cleanup/test learnings into the synthesis review path while keeping runtime changes focused on regression fixes. (from #17630, #17289) Thanks @Clawborn and @davidahmann.
+- Export session HTML/template placeholders: restore literal `{{MARKED_JS}}`, `{{HIGHLIGHT_JS}}`, and `{{JS}}` script placeholders so `/export-session` correctly inlines vendor/runtime scripts instead of emitting broken `ReferenceError` exports. Fixes #22595. Thanks @umiiii.
 
 ## 2026.3.2
 

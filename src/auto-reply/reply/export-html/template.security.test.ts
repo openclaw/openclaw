@@ -80,6 +80,12 @@ function now() {
 }
 
 describe("export html security hardening", () => {
+  it("keeps vendor script placeholders intact for export-time replacement", () => {
+    expect(templateHtml).toContain("<script>{{MARKED_JS}}</script>");
+    expect(templateHtml).toContain("<script>{{HIGHLIGHT_JS}}</script>");
+    expect(templateHtml).toContain("<script>{{JS}}</script>");
+  });
+
   it("escapes raw HTML from markdown blocks", () => {
     const attack = "<img src=x onerror=alert(1)>";
     const session: SessionData = {
