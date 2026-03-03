@@ -232,6 +232,22 @@ describe("extractAssistantText", () => {
     expect(result).toBe("I'll help you with that.\nHere are the results.");
   });
 
+  it("strips leaked legacy tool_call snippets rendered as text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Before<tool_call>exec tool="exec" command="ls -la /tmp" />After',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("BeforeAfter");
+  });
+
   it("handles multiple invoke blocks in one message", () => {
     const msg = makeAssistantMessage({
       role: "assistant",

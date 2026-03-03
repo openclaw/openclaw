@@ -15,12 +15,15 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
  * proper structured tool calls. This removes:
  * - <invoke name="...">...</invoke> blocks
  * - </minimax:tool_call> closing tags
+ * - leaked legacy <tool_call> ... /> snippets rendered as plain text
  */
 export function stripMinimaxToolCallXml(text: string): string {
   if (!text) {
     return text;
   }
-  if (!/minimax:tool_call/i.test(text)) {
+  const hasMinimaxMarkers = /minimax:tool_call/i.test(text);
+  const hasLegacyToolCallSnippet = /<tool_call\b/i.test(text) && /\/>/i.test(text);
+  if (!hasMinimaxMarkers && !hasLegacyToolCallSnippet) {
     return text;
   }
 
@@ -29,6 +32,8 @@ export function stripMinimaxToolCallXml(text: string): string {
 
   // Remove stray minimax tool tags.
   cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
+  // Remove legacy self-closing tool call snippets that can leak into user text.
+  cleaned = cleaned.replace(/<tool_call\b[^>]*>[\s\S]*?\/>/gi, "");
 
   return cleaned;
 }
