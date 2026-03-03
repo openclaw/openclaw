@@ -71,6 +71,7 @@ struct OpenClawConfigFileTests {
                     "remote": [
                         "url": "wss://old-host:111",
                         "token": "tok",
+                        "password": "pw",
                     ],
                 ],
             ])
@@ -79,6 +80,7 @@ struct OpenClawConfigFileTests {
             let remote = ((root["gateway"] as? [String: Any])?["remote"] as? [String: Any]) ?? [:]
             #expect((remote["url"] as? String) == nil)
             #expect((remote["token"] as? String) == "tok")
+            #expect((remote["password"] as? String) == "pw")
         }
     }
 
