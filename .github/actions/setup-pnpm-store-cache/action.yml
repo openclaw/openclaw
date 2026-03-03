@@ -17,6 +17,10 @@ inputs:
     description: Whether to use restore-keys fallback for actions/cache.
     required: false
     default: "true"
+  use-actions-cache:
+    description: Whether to restore/save pnpm store with actions/cache.
+    required: false
+    default: "true"
 runs:
   using: composite
   steps:
@@ -54,14 +58,14 @@ runs:
         path: ${{ steps.pnpm-store.outputs.path }}
 
     - name: Restore pnpm store cache (exact key only)
-      if: inputs.use-sticky-disk != 'true' && inputs.use-restore-keys != 'true'
+      if: inputs.use-actions-cache == 'true' && inputs.use-sticky-disk != 'true' && inputs.use-restore-keys != 'true'
       uses: actions/cache@v4
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
         key: ${{ runner.os }}-pnpm-store-${{ inputs.cache-key-suffix }}-${{ hashFiles('pnpm-lock.yaml') }}
 
     - name: Restore pnpm store cache (with fallback keys)
-      if: inputs.use-sticky-disk != 'true' && inputs.use-restore-keys == 'true'
+      if: inputs.use-actions-cache == 'true' && inputs.use-sticky-disk != 'true' && inputs.use-restore-keys == 'true'
       uses: actions/cache@v4
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
