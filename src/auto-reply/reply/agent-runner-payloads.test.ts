@@ -114,6 +114,24 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("keeps explicit reply-tag payloads even when same-target suppression is active", () => {
+    const { replyPayloads } = buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "[[reply_to_current]]hello world!" }],
+      currentMessageId: "om_current_1",
+      messageProvider: "heartbeat",
+      originatingChannel: "feishu",
+      originatingTo: "ou_abc123",
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [{ tool: "message", provider: "lark", to: "ou_abc123" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("hello world!");
+    expect(replyPayloads[0]?.replyToTag).toBe(true);
+    expect(replyPayloads[0]?.replyToCurrent).toBe(true);
+  });
+
   it("does not suppress same-target replies when accountId differs", () => {
     const { replyPayloads } = buildReplyPayloads({
       ...baseParams,

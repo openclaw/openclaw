@@ -134,7 +134,14 @@ export function buildReplyPayloads(params: {
             (payload) => !params.directlySentBlockKeys!.has(createBlockReplyPayloadKey(payload)),
           )
         : mediaFilteredPayloads;
-  const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
+  // Keep explicit thread-targeted replies (for example [[reply_to_current]])
+  // even when same-target messaging tool suppression is active. These payloads
+  // are intentional reply operations, not duplicate generic finals.
+  const hasExplicitThreadTargeting = filteredPayloads.some(
+    (payload) => payload.replyToTag || payload.replyToCurrent || Boolean(payload.replyToId),
+  );
+  const replyPayloads =
+    suppressMessagingToolReplies && !hasExplicitThreadTargeting ? [] : filteredPayloads;
 
   return {
     replyPayloads,
