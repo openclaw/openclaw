@@ -835,16 +835,16 @@ export function buildFeishuAgentBody(params: {
   if (ctx.hasAnyMention) {
     const botIdHint = botOpenId?.trim();
     messageBody +=
-      `\n\n[System: The content may include mention tags in the form <at user_id="...">name</at>. ` +
+      `\n\n[Feishu hint: The content may include mention tags in the form <at user_id="...">name</at>. ` +
       `Treat these as real mentions of Feishu entities (users or bots).]`;
     if (botIdHint) {
-      messageBody += `\n[System: If user_id is "${botIdHint}", that mention refers to you.]`;
+      messageBody += `\n[Feishu hint: If user_id is "${botIdHint}", that mention refers to you.]`;
     }
   }
 
   if (ctx.mentionTargets && ctx.mentionTargets.length > 0) {
     const targetNames = ctx.mentionTargets.map((t) => t.name).join(", ");
-    messageBody += `\n\n[System: Your reply will automatically @mention: ${targetNames}. Do not write @xxx yourself.]`;
+    messageBody += `\n\n[Feishu hint: Your reply will automatically @mention: ${targetNames}. Do not write @xxx yourself.]`;
   }
 
   // Keep message_id on its own line so shared message-id hint stripping can parse it reliably.
@@ -852,7 +852,7 @@ export function buildFeishuAgentBody(params: {
 
   if (permissionErrorForAgent) {
     const grantUrl = permissionErrorForAgent.grantUrl ?? "";
-    messageBody += `\n\n[System: The bot encountered a Feishu API permission error. Please inform the user about this issue and provide the permission grant URL for the admin to authorize. Permission grant URL: ${grantUrl}]`;
+    messageBody += `\n\n[Feishu hint: The bot encountered a Feishu API permission error. Please inform the user about this issue and provide the permission grant URL for the admin to authorize. Permission grant URL: ${grantUrl}]`;
   }
 
   return messageBody;
