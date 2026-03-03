@@ -8,7 +8,12 @@ describe("parseCliJson", () => {
         text: "Done! Saved the fix.",
         content: [
           { type: "text", text: "Let me investigate the logs...\n" },
-          { type: "tool_use", id: "call-1", name: "bash", input: { command: "tail -n 200 app.log" } },
+          {
+            type: "tool_use",
+            id: "call-1",
+            name: "bash",
+            input: { command: "tail -n 200 app.log" },
+          },
           { type: "text", text: "Found the issue! Here's what happened...\n" },
           { type: "tool_use", id: "call-2", name: "edit", input: { path: "src/app.ts" } },
           { type: "text", text: "Done! Saved the fix." },
