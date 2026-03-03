@@ -6,10 +6,44 @@ import type {
   WindowsSpawnResolution,
 } from "openclaw/plugin-sdk";
 import {
-  applyWindowsSpawnProgramPolicy,
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgramCandidate,
+  applyWindowsSpawnProgramPolicy as _applyPolicy,
+  materializeWindowsSpawnProgram as _materialize,
+  resolveWindowsSpawnProgramCandidate as _resolveCandidate,
 } from "openclaw/plugin-sdk";
+
+// Graceful fallback when the plugin-sdk build does not include windows-spawn
+// exports (see #33514).  The direct-passthrough is safe on all platforms and
+// matches the non-Windows branch of the real implementation.
+function directPassthrough(params: {
+  command: string;
+}): WindowsSpawnProgramCandidate {
+  return { command: params.command, leadingArgv: [], resolution: "direct" };
+}
+
+const resolveWindowsSpawnProgramCandidate: typeof _resolveCandidate =
+  typeof _resolveCandidate === "function" ? _resolveCandidate : directPassthrough;
+
+const applyWindowsSpawnProgramPolicy: typeof _applyPolicy =
+  typeof _applyPolicy === "function"
+    ? _applyPolicy
+    : (p) => ({
+        command: p.candidate.command,
+        leadingArgv: p.candidate.leadingArgv,
+        resolution: p.candidate.resolution as WindowsSpawnResolution,
+        shell: p.candidate.resolution === "unresolved-wrapper" ? true : undefined,
+        windowsHide: p.candidate.windowsHide,
+      });
+
+const materializeWindowsSpawnProgram: typeof _materialize =
+  typeof _materialize === "function"
+    ? _materialize
+    : (program, argv) => ({
+        command: program.command,
+        argv: [...program.leadingArgv, ...argv],
+        resolution: program.resolution,
+        shell: program.shell,
+        windowsHide: program.windowsHide,
+      });
 
 export type SpawnExit = {
   code: number | null;
