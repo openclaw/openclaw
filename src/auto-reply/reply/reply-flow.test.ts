@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -8,7 +8,11 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { parseLineDirectives, hasLineDirectives } from "./line-directives.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  resetRecentQueuedMessageIdDedupe,
+  scheduleFollowupDrain,
+} from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
 
@@ -627,6 +631,10 @@ function createRun(params: {
 }
 
 describe("followup queue deduplication", () => {
+  beforeEach(() => {
+    resetRecentQueuedMessageIdDedupe();
+  });
+
   it("deduplicates messages with same Discord message_id", async () => {
     const key = `test-dedup-message-id-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -688,6 +696,51 @@ describe("followup queue deduplication", () => {
     await done.promise;
     // Should collect both unique messages
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+  });
+
+  it("deduplicates same message_id after queue drain restarts", async () => {
+    const key = `test-dedup-after-drain-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        messageId: "same-id",
+        originatingChannel: "signal",
+        originatingTo: "+10000000000",
+      }),
+      settings,
+    );
+    expect(first).toBe(true);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    const redelivery = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first-redelivery",
+        messageId: "same-id",
+        originatingChannel: "signal",
+        originatingTo: "+10000000000",
+      }),
+      settings,
+    );
+
+    expect(redelivery).toBe(false);
+    expect(calls).toHaveLength(1);
   });
 
   it("deduplicates exact prompt when routing matches and no message id", async () => {
