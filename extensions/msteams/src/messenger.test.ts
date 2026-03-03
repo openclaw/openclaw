@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareOneDrive: vi.fn(),
@@ -38,7 +39,7 @@ const chunkMarkdownText = (text: string, limit: number) => {
   return chunks;
 };
 
-const runtimeStub = {
+const runtimeStub: PluginRuntime = createPluginRuntimeMock({
   channel: {
     text: {
       chunkMarkdownText,
@@ -47,7 +48,7 @@ const runtimeStub = {
       convertMarkdownTables: (text: string) => text,
     },
   },
-} as unknown as PluginRuntime;
+});
 
 const createNoopAdapter = (): MSTeamsAdapter => ({
   continueConversation: async () => {},
