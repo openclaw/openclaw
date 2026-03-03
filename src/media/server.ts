@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import type { Server } from "node:http";
 import express, { type Express } from "express";
 import { danger } from "../globals.js";
-import { SafeOpenError, openFileWithinRoot } from "../infra/fs-safe.js";
+import { SafeOpenError, readFileWithinRoot } from "../infra/fs-safe.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { detectMime } from "./mime.js";
 import { cleanOldMedia, getMediaDir, MEDIA_MAX_BYTES } from "./store.js";
@@ -39,23 +39,20 @@ export function attachMediaRoutes(
       return;
     }
     try {
-      const { handle, realPath, stat } = await openFileWithinRoot({
+      const {
+        buffer: data,
+        realPath,
+        stat,
+      } = await readFileWithinRoot({
         rootDir: mediaDir,
         relativePath: id,
+        maxBytes: MAX_MEDIA_BYTES,
       });
-      if (stat.size > MAX_MEDIA_BYTES) {
-        await handle.close().catch(() => {});
-        res.status(413).send("too large");
-        return;
-      }
       if (Date.now() - stat.mtimeMs > ttlMs) {
-        await handle.close().catch(() => {});
         await fs.rm(realPath).catch(() => {});
         res.status(410).send("expired");
         return;
       }
-      const data = await handle.readFile();
-      await handle.close().catch(() => {});
       const mime = await detectMime({ buffer: data, filePath: realPath });
       if (mime) {
         res.type(mime);
@@ -85,6 +82,10 @@ export function attachMediaRoutes(
         }
         if (err.code === "not-found") {
           res.status(404).send("not found");
+          return;
+        }
+        if (err.code === "too-large") {
+          res.status(413).send("too large");
           return;
         }
       }

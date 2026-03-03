@@ -4,7 +4,7 @@ import {
   type ExecApprovalResolveAudit,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
-import { buildSystemRunApprovalBindingV1 } from "../../infra/system-run-approval-binding.js";
+import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
@@ -49,7 +49,7 @@ export function createExecApprovalHandlers(
         commandArgv?: string[];
         env?: Record<string, string>;
         cwd?: string;
-        systemRunPlanV2?: unknown;
+        systemRunPlan?: unknown;
         nodeId?: string;
         host?: string;
         security?: string;
@@ -74,7 +74,7 @@ export function createExecApprovalHandlers(
         host,
         command: p.command,
         commandArgv: p.commandArgv,
-        systemRunPlanV2: p.systemRunPlanV2,
+        systemRunPlan: p.systemRunPlan,
         cwd: p.cwd,
         agentId: p.agentId,
         sessionKey: p.sessionKey,
@@ -92,6 +92,14 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      if (host === "node" && !approvalContext.plan) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "systemRunPlan is required for host=node"),
+        );
+        return;
+      }
       if (
         host === "node" &&
         (!Array.isArray(effectiveCommandArgv) || effectiveCommandArgv.length === 0)
@@ -103,9 +111,9 @@ export function createExecApprovalHandlers(
         );
         return;
       }
-      const systemRunBindingV1 =
+      const systemRunBinding =
         host === "node"
-          ? buildSystemRunApprovalBindingV1({
+          ? buildSystemRunApprovalBinding({
               argv: effectiveCommandArgv,
               cwd: effectiveCwd,
               agentId: effectiveAgentId,
@@ -124,9 +132,9 @@ export function createExecApprovalHandlers(
       const request = {
         command: effectiveCommandText,
         commandArgv: effectiveCommandArgv,
-        envKeys: systemRunBindingV1?.envKeys?.length ? systemRunBindingV1.envKeys : undefined,
-        systemRunBindingV1: systemRunBindingV1?.binding ?? null,
-        systemRunPlanV2: approvalContext.planV2,
+        envKeys: systemRunBinding?.envKeys?.length ? systemRunBinding.envKeys : undefined,
+        systemRunBinding: systemRunBinding?.binding ?? null,
+        systemRunPlan: approvalContext.plan,
         cwd: effectiveCwd ?? null,
         nodeId: host === "node" ? nodeId : null,
         host: host || null,
@@ -270,7 +278,7 @@ export function createExecApprovalHandlers(
       }
       const snapshot = manager.getSnapshot(p.id);
       if (snapshot?.resolvedAtMs !== undefined && snapshot.decision !== undefined) {
-        respond(true, { ok: true, alreadyResolved: true }, undefined);
+        respond(true, { ok: true, alreadyResolved: true, decision: snapshot.decision }, undefined);
         return;
       }
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
@@ -278,7 +286,11 @@ export function createExecApprovalHandlers(
       if (!ok) {
         const latestSnapshot = manager.getSnapshot(p.id);
         if (latestSnapshot?.resolvedAtMs !== undefined && latestSnapshot.decision !== undefined) {
-          respond(true, { ok: true, alreadyResolved: true }, undefined);
+          respond(
+            true,
+            { ok: true, alreadyResolved: true, decision: latestSnapshot.decision },
+            undefined,
+          );
           return;
         }
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));

@@ -1,11 +1,9 @@
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
-import { type Message, type UserFromGetMe } from "@grammyjs/types";
 import type { ApiClientOptions } from "grammy";
 import { Bot, webhookCallback } from "grammy";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
-import { isAbortRequestText } from "../auto-reply/reply/abort.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
 import {
   isNativeCommandsExplicitlyDisabled,
@@ -34,13 +32,10 @@ import {
   resolveTelegramUpdateId,
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
-import {
-  buildTelegramGroupPeerId,
-  resolveTelegramForumThreadId,
-  resolveTelegramStreamMode,
-} from "./bot/helpers.js";
+import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
+import { getTelegramSequentialKey } from "./sequential-key.js";
 
 export type TelegramBotOptions = {
   token: string;
@@ -63,87 +58,7 @@ export type TelegramBotOptions = {
   };
 };
 
-const APPROVAL_CALLBACK_COMMAND_RE = /^\/approve\s+\S+\s+(allow-once|allow-always|deny)\s*$/i;
-
-function isControlCallbackQueryData(data: string | undefined, botUsername?: string): boolean {
-  const normalized = data?.trim();
-  if (!normalized) {
-    return false;
-  }
-  if (APPROVAL_CALLBACK_COMMAND_RE.test(normalized)) {
-    return true;
-  }
-  return isAbortRequestText(normalized, botUsername ? { botUsername } : undefined);
-}
-
-export function getTelegramSequentialKey(ctx: {
-  chat?: { id?: number };
-  me?: UserFromGetMe;
-  message?: Message;
-  channelPost?: Message;
-  editedChannelPost?: Message;
-  update?: {
-    message?: Message;
-    edited_message?: Message;
-    channel_post?: Message;
-    edited_channel_post?: Message;
-    callback_query?: { data?: string; message?: Message };
-    message_reaction?: { chat?: { id?: number } };
-  };
-}): string {
-  // Handle reaction updates
-  const reaction = ctx.update?.message_reaction;
-  if (reaction?.chat?.id) {
-    return `telegram:${reaction.chat.id}`;
-  }
-  const callbackMsg = ctx.update?.callback_query?.message;
-  if (callbackMsg?.chat?.id) {
-    const callbackData = ctx.update?.callback_query?.data;
-    const isControlCallback = isControlCallbackQueryData(callbackData, ctx.me?.username);
-    const callbackChatId = callbackMsg.chat.id;
-    const callbackIsGroup =
-      callbackMsg.chat.type === "group" || callbackMsg.chat.type === "supergroup";
-    const callbackThreadId = callbackIsGroup
-      ? resolveTelegramForumThreadId({
-          isForum: callbackMsg.chat.is_forum,
-          messageThreadId: callbackMsg.message_thread_id,
-        })
-      : callbackMsg.message_thread_id;
-    if (callbackThreadId != null) {
-      return isControlCallback
-        ? `telegram:${callbackChatId}:topic:${callbackThreadId}:control`
-        : `telegram:${callbackChatId}:topic:${callbackThreadId}`;
-    }
-    return isControlCallback ? `telegram:${callbackChatId}:control` : `telegram:${callbackChatId}`;
-  }
-  const msg =
-    ctx.message ??
-    ctx.channelPost ??
-    ctx.editedChannelPost ??
-    ctx.update?.message ??
-    ctx.update?.edited_message ??
-    ctx.update?.channel_post ??
-    ctx.update?.edited_channel_post;
-  const chatId = msg?.chat?.id ?? ctx.chat?.id;
-  const rawText = msg?.text ?? msg?.caption;
-  const botUsername = ctx.me?.username;
-  if (isAbortRequestText(rawText, botUsername ? { botUsername } : undefined)) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:control`;
-    }
-    return "telegram:control";
-  }
-  const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
-  const messageThreadId = msg?.message_thread_id;
-  const isForum = msg?.chat?.is_forum;
-  const threadId = isGroup
-    ? resolveTelegramForumThreadId({ isForum, messageThreadId })
-    : messageThreadId;
-  if (typeof chatId === "number") {
-    return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
-  }
-  return "telegram:unknown";
-}
+export { getTelegramSequentialKey };
 
 export function createTelegramBot(opts: TelegramBotOptions) {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
@@ -302,12 +217,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
   const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;
   const groupAllowFrom =
-    opts.groupAllowFrom ??
-    telegramCfg.groupAllowFrom ??
-    (telegramCfg.allowFrom && telegramCfg.allowFrom.length > 0
-      ? telegramCfg.allowFrom
-      : undefined) ??
-    (opts.allowFrom && opts.allowFrom.length > 0 ? opts.allowFrom : undefined);
+    opts.groupAllowFrom ?? telegramCfg.groupAllowFrom ?? telegramCfg.allowFrom ?? allowFrom;
   const replyToMode = opts.replyToMode ?? telegramCfg.replyToMode ?? "off";
   const nativeEnabled = resolveNativeCommandsEnabled({
     providerId: "telegram",
@@ -371,11 +281,25 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     });
   const resolveTelegramGroupConfig = (chatId: string | number, messageThreadId?: number) => {
     const groups = telegramCfg.groups;
+    const direct = telegramCfg.direct;
+    const chatIdStr = String(chatId);
+    const isDm = !chatIdStr.startsWith("-");
+
+    if (isDm) {
+      const directConfig = direct?.[chatIdStr] ?? direct?.["*"];
+      if (directConfig) {
+        const topicConfig =
+          messageThreadId != null ? directConfig.topics?.[String(messageThreadId)] : undefined;
+        return { groupConfig: directConfig, topicConfig };
+      }
+      // DMs without direct config: don't fall through to groups lookup
+      return { groupConfig: undefined, topicConfig: undefined };
+    }
+
     if (!groups) {
       return { groupConfig: undefined, topicConfig: undefined };
     }
-    const groupKey = String(chatId);
-    const groupConfig = groups[groupKey] ?? groups["*"];
+    const groupConfig = groups[chatIdStr] ?? groups["*"];
     const topicConfig =
       messageThreadId != null ? groupConfig?.topics?.[String(messageThreadId)] : undefined;
     return { groupConfig, topicConfig };

@@ -103,17 +103,22 @@ describe("validateBindMounts", () => {
   });
 
   it("blocks symlink escapes into blocked directories", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
-    const link = join(dir, "etc-link");
-    symlinkSync("/etc", link);
-    const run = () => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`]);
-
     if (process.platform === "win32") {
-      // Windows source paths (e.g. C:\...) are intentionally rejected as non-POSIX.
+      // Symlinks to non-existent targets like /etc require
+      // SeCreateSymbolicLinkPrivilege on Windows.  The Windows branch of this
+      // test does not need a real symlink — it only asserts that Windows source
+      // paths are rejected as non-POSIX.
+      const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
+      const fakePath = join(dir, "etc-link", "passwd");
+      const run = () => validateBindMounts([`${fakePath}:/mnt/passwd:ro`]);
       expect(run).toThrow(/non-absolute source path/);
       return;
     }
 
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
+    const link = join(dir, "etc-link");
+    symlinkSync("/etc", link);
+    const run = () => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`]);
     expect(run).toThrow(/blocked path/);
   });
 

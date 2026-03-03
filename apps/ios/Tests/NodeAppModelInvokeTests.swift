@@ -4,31 +4,6 @@ import Testing
 import UIKit
 @testable import OpenClaw
 
-private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws -> T) rethrows -> T {
-    let defaults = UserDefaults.standard
-    var snapshot: [String: Any?] = [:]
-    for key in updates.keys {
-        snapshot[key] = defaults.object(forKey: key)
-    }
-    for (key, value) in updates {
-        if let value {
-            defaults.set(value, forKey: key)
-        } else {
-            defaults.removeObject(forKey: key)
-        }
-    }
-    defer {
-        for (key, value) in snapshot {
-            if let value {
-                defaults.set(value, forKey: key)
-            } else {
-                defaults.removeObject(forKey: key)
-            }
-        }
-    }
-    return try body()
-}
-
 private func makeAgentDeepLinkURL(
     message: String,
     deliver: Bool = false,
@@ -439,6 +414,20 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         await appModel.approvePendingAgentDeepLinkPrompt()
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(appModel.openChatRequestID == 1)
+    }
+
+    @Test @MainActor func handleDeepLinkCoalescesPromptWhenRateLimited() async throws {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+
+        await appModel.handleDeepLink(url: makeAgentDeepLinkURL(message: "first prompt"))
+        let firstPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
+
+        await appModel.handleDeepLink(url: makeAgentDeepLinkURL(message: "second prompt"))
+        let coalescedPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
+
+        #expect(coalescedPrompt.id != firstPrompt.id)
+        #expect(coalescedPrompt.messagePreview.contains("second prompt"))
     }
 
     @Test @MainActor func handleDeepLinkStripsDeliveryFieldsWhenUnkeyed() async throws {

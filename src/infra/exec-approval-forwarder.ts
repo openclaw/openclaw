@@ -10,7 +10,7 @@ import type {
 } from "../config/types.approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
-import { compileSafeRegex } from "../security/safe-regex.js";
+import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
 import { editMessageTelegram } from "../telegram/send.js";
 import {
   isDeliverableMessageChannel,
@@ -32,7 +32,6 @@ const FORWARDER_STATE_FILENAME = "exec-approval-forwarder.json";
 const FORWARDER_STATE_VERSION = 1 as const;
 const FINALIZED_STATE_RETENTION_MS = 15 * 60 * 1000;
 const MAX_FINALIZED_STATE_ENTRIES = 1024;
-
 export type { ExecApprovalRequest, ExecApprovalResolved };
 
 type ForwardTarget = ExecApprovalForwardTarget & { source: "session" | "target" };
@@ -100,7 +99,7 @@ function matchSessionFilter(sessionKey: string, patterns: string[]): boolean {
       return true;
     }
     const regex = compileSafeRegex(pattern);
-    return regex ? regex.test(sessionKey) : false;
+    return regex ? testRegexWithBoundedInput(regex, sessionKey) : false;
   });
 }
 

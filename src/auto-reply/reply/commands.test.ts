@@ -2,14 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
+import { abortEmbeddedPiRun, compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { updateSessionStore } from "../../config/sessions.js";
+import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
@@ -293,6 +293,24 @@ describe("/approve command", () => {
     );
   });
 
+  it("reports the persisted decision when approval was already resolved", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow-once", cfg, { SenderId: "123" });
+
+    callGatewayMock.mockResolvedValue({
+      ok: true,
+      alreadyResolved: true,
+      decision: "deny",
+    });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Exec approval deny submitted");
+  });
+
   it("accepts mobile dash variants in decision token", async () => {
     const cfg = {
       commands: { text: true },
@@ -508,6 +526,43 @@ describe("/compact command", () => {
         agentDir,
       }),
     );
+  });
+});
+
+describe("abort trigger command", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("rejects unauthorized natural-language abort triggers", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("stop", cfg);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      abortedLastRun: false,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [params.sessionKey]: sessionEntry,
+    };
+
+    const result = await handleCommands({
+      ...params,
+      sessionEntry,
+      sessionStore,
+      command: {
+        ...params.command,
+        isAuthorizedSender: false,
+        senderId: "unauthorized",
+      },
+    });
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(sessionStore[params.sessionKey]?.abortedLastRun).toBe(false);
+    expect(vi.mocked(abortEmbeddedPiRun)).not.toHaveBeenCalled();
   });
 });
 
@@ -817,6 +872,19 @@ describe("/models command", () => {
     expect(result.reply?.text).toContain("Providers:");
     expect(result.reply?.text).toContain("anthropic");
     expect(result.reply?.text).toContain("Use: /models <provider>");
+  });
+
+  it("rejects unauthorized /models commands", async () => {
+    const params = buildPolicyParams("/models", cfg, { Provider: "discord", Surface: "discord" });
+    const result = await handleCommands({
+      ...params,
+      command: {
+        ...params.command,
+        isAuthorizedSender: false,
+        senderId: "unauthorized",
+      },
+    });
+    expect(result).toEqual({ shouldContinue: false });
   });
 
   it("lists providers on telegram (buttons)", async () => {

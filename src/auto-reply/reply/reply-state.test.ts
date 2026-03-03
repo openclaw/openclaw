@@ -15,7 +15,9 @@ import {
   recordPendingHistoryEntryIfEnabled,
 } from "./history.js";
 import {
+  DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
+  hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
@@ -198,6 +200,7 @@ describe("memory flush settings", () => {
     const settings = resolveMemoryFlushSettings();
     expect(settings).not.toBeNull();
     expect(settings?.enabled).toBe(true);
+    expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(settings?.prompt.length).toBeGreaterThan(0);
     expect(settings?.systemPrompt.length).toBeGreaterThan(0);
   });
@@ -244,7 +247,24 @@ describe("memory flush settings", () => {
     });
 
     expect(settings?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
+    expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(settings?.reserveTokensFloor).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
+  });
+
+  it("parses forceFlushTranscriptBytes from byte-size strings", () => {
+    const settings = resolveMemoryFlushSettings({
+      agents: {
+        defaults: {
+          compaction: {
+            memoryFlush: {
+              forceFlushTranscriptBytes: "3mb",
+            },
+          },
+        },
+      },
+    });
+
+    expect(settings?.forceFlushTranscriptBytes).toBe(3 * 1024 * 1024);
   });
 });
 
@@ -328,6 +348,42 @@ describe("shouldRunMemoryFlush", () => {
         softThresholdTokens: 2_000,
       }),
     ).toBe(false);
+  });
+});
+
+describe("hasAlreadyFlushedForCurrentCompaction", () => {
+  it("returns true when memoryFlushCompactionCount matches compactionCount", () => {
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 3,
+        memoryFlushCompactionCount: 3,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when memoryFlushCompactionCount differs", () => {
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 3,
+        memoryFlushCompactionCount: 2,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when memoryFlushCompactionCount is undefined", () => {
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it("treats missing compactionCount as 0", () => {
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        memoryFlushCompactionCount: 0,
+      }),
+    ).toBe(true);
   });
 });
 
