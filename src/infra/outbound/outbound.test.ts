@@ -179,6 +179,33 @@ describe("delivery-queue", () => {
     ])("returns false for transient error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(false);
     });
+
+    // HTTP 400 errors (permanent client errors)
+    it.each([
+      "message is too long",
+      "Bad Request: message is too long",
+      "character limit exceeded",
+      "Status code: 400",
+      "HTTP 400",
+      "HTTP 404",
+      "HTTP 403",
+    ])("returns true for HTTP 4xx error messages: %s", (msg) => {
+      expect(isPermanentDeliveryError(msg)).toBe(true);
+    });
+
+    // HTTP status code parameter
+    it.each([
+      [400, true],
+      [401, true],
+      [403, true],
+      [404, true],
+      [429, false], // rate limit is transient
+      [500, false],
+      [502, false],
+      [503, false],
+    ])("returns %p for HTTP status %p", (httpStatus, expected) => {
+      expect(isPermanentDeliveryError("some error", httpStatus)).toBe(expected);
+    });
   });
 
   describe("loadPendingDeliveries", () => {

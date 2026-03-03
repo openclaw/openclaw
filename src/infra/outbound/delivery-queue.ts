@@ -387,8 +387,18 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
   /ambiguous discord recipient/i,
+  // HTTP 400 errors (permanent client errors)
+  /message is too long/i,
+  /Bad Request/i,
+  /character limit exceeded/i,
+  /status code:? 4[0-9]{2}/i,
+  /HTTP 4[0-9]{2}/i,
 ];
 
-export function isPermanentDeliveryError(error: string): boolean {
+export function isPermanentDeliveryError(error: string, httpStatus?: number): boolean {
+  // HTTP 4xx = client errors (permanent), except 429 (rate limit - transient)
+  if (httpStatus !== undefined && httpStatus >= 400 && httpStatus < 500 && httpStatus !== 429) {
+    return true;
+  }
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
 }
