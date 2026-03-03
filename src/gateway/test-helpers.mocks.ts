@@ -404,7 +404,7 @@ vi.mock("../config/config.js", async () => {
           ? (fileAgents.defaults as Record<string, unknown>)
           : {};
       const defaults = {
-        model: { primary: "anthropic/claude-opus-4-6" },
+        model: { primary: "hanzo/claude-sonnet-4-6" },
         workspace: path.join(os.tmpdir(), "bot-gateway-test"),
         ...fileDefaults,
         ...testState.agentConfig,

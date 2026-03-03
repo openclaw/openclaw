@@ -1019,7 +1019,7 @@ describe("gateway server auth/connect", () => {
     });
   });
 
-  test("does not bypass pairing for control ui device identity when insecure auth is enabled", async () => {
+  test("auto-approves pairing for control ui device identity with token auth when insecure auth is enabled", async () => {
     testState.gatewayControlUi = { allowInsecureAuth: true };
     testState.gatewayAuth = { mode: "token", token: "secret" };
     const { writeConfigFile } = await import("../config/config.js");
@@ -1074,11 +1074,8 @@ describe("gateway server auth/connect", () => {
             ...CONTROL_UI_CLIENT,
           },
         });
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain("pairing required");
-        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
-          ConnectErrorDetailCodes.PAIRING_REQUIRED,
-        );
+        // Token-authenticated connections auto-approve pairing (20343434f).
+        expect(res.ok).toBe(true);
         ws.close();
       });
     } finally {
@@ -1266,14 +1263,14 @@ describe("gateway server auth/connect", () => {
     }
   });
 
-  test("requires pairing for remote operator device identity with shared token auth", async () => {
+  test("auto-approves pairing for remote operator device identity with shared token auth", async () => {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
     const { buildDeviceAuthPayload } = await import("./device-auth.js");
     const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
       await import("../infra/device-identity.js");
-    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { getPairedDevice } = await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     const identityDir = await mkdtemp(join(tmpdir(), "bot-device-scope-"));
     const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
@@ -1305,6 +1302,7 @@ describe("gateway server auth/connect", () => {
     };
     ws.close();
 
+    // Token-authenticated connections auto-approve pairing (20343434f).
     const wsRemoteRead = await openWs(port, { host: "gateway.example" });
     const initialNonce = await readConnectChallengeNonce(wsRemoteRead);
     const initial = await connectReq(wsRemoteRead, {
@@ -1313,18 +1311,14 @@ describe("gateway server auth/connect", () => {
       client,
       device: buildDevice(["operator.read"], initialNonce),
     });
-    expect(initial.ok).toBe(false);
-    expect(initial.error?.message ?? "").toContain("pairing required");
-    let pairing = await listDevicePairing();
-    const pendingAfterRead = pairing.pending.filter(
-      (entry) => entry.deviceId === identity.deviceId,
-    );
-    expect(pendingAfterRead).toHaveLength(1);
-    expect(pendingAfterRead[0]?.role).toBe("operator");
-    expect(pendingAfterRead[0]?.scopes ?? []).toContain("operator.read");
-    expect(await getPairedDevice(identity.deviceId)).toBeNull();
+    expect(initial.ok).toBe(true);
+    // Device should now be auto-paired.
+    const paired = await getPairedDevice(identity.deviceId);
+    expect(paired).not.toBeNull();
+    expect(paired?.publicKey).toBe(publicKeyRawBase64UrlFromPem(identity.publicKeyPem));
     wsRemoteRead.close();
 
+    // A second connect with a broader scope should also succeed (already paired).
     const ws2 = await openWs(port, { host: "gateway.example" });
     const nonce2 = await readConnectChallengeNonce(ws2);
     const res = await connectReq(ws2, {
@@ -1333,17 +1327,7 @@ describe("gateway server auth/connect", () => {
       client,
       device: buildDevice(["operator.admin"], nonce2),
     });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("pairing required");
-    pairing = await listDevicePairing();
-    const pendingAfterAdmin = pairing.pending.filter(
-      (entry) => entry.deviceId === identity.deviceId,
-    );
-    expect(pendingAfterAdmin).toHaveLength(1);
-    expect(pendingAfterAdmin[0]?.scopes ?? []).toEqual(
-      expect.arrayContaining(["operator.read", "operator.admin"]),
-    );
-    expect(await getPairedDevice(identity.deviceId)).toBeNull();
+    expect(res.ok).toBe(true);
     ws2.close();
     await server.close();
     restoreGatewayToken(prevToken);
@@ -1415,14 +1399,13 @@ describe("gateway server auth/connect", () => {
     restoreGatewayToken(prevToken);
   });
 
-  test("merges remote node/operator pairing requests for the same unpaired device", async () => {
+  test("auto-approves remote node and operator pairing for token-authenticated device", async () => {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
     const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
       await import("../infra/device-identity.js");
-    const { approveDevicePairing, getPairedDevice, listDevicePairing } =
-      await import("../infra/device-pairing.js");
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     ws.close();
     const identityDir = await mkdtemp(join(tmpdir(), "bot-device-scope-"));
@@ -1477,38 +1460,21 @@ describe("gateway server auth/connect", () => {
       return result;
     };
 
+    // Token-authenticated connections auto-approve pairing (20343434f).
     const nodeConnect = await connectWithNonce("node", []);
-    expect(nodeConnect.ok).toBe(false);
-    expect(nodeConnect.error?.message ?? "").toContain("pairing required");
+    expect(nodeConnect.ok).toBe(true);
 
     const operatorConnect = await connectWithNonce("operator", ["operator.read", "operator.write"]);
-    expect(operatorConnect.ok).toBe(false);
-    expect(operatorConnect.error?.message ?? "").toContain("pairing required");
+    expect(operatorConnect.ok).toBe(true);
 
-    const pending = await listDevicePairing();
-    const pendingForTestDevice = pending.pending.filter(
-      (entry) => entry.deviceId === identity.deviceId,
-    );
-    expect(pendingForTestDevice).toHaveLength(1);
-    expect(pendingForTestDevice[0]?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
-    expect(pendingForTestDevice[0]?.scopes ?? []).toEqual(
-      expect.arrayContaining(["operator.read", "operator.write"]),
-    );
-    if (!pendingForTestDevice[0]) {
-      throw new Error("expected pending pairing request");
-    }
-    await approveDevicePairing(pendingForTestDevice[0].requestId);
-
+    // Both connections auto-approved: device should be paired with no pending requests.
     const paired = await getPairedDevice(identity.deviceId);
-    expect(paired?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
+    expect(paired).not.toBeNull();
 
-    const approvedOperatorConnect = await connectWithNonce("operator", ["operator.read"]);
-    expect(approvedOperatorConnect.ok).toBe(true);
-
-    const afterApproval = await listDevicePairing();
-    expect(afterApproval.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual(
-      [],
-    );
+    const afterAutoApproval = await listDevicePairing();
+    expect(
+      afterAutoApproval.pending.filter((entry) => entry.deviceId === identity.deviceId),
+    ).toEqual([]);
 
     await server.close();
     restoreGatewayToken(prevToken);
