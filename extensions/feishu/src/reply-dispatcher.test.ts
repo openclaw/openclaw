@@ -116,6 +116,22 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(addTypingIndicatorMock).not.toHaveBeenCalled();
   });
 
+  it("skips typing indicator when allowTypingIndicator is false", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_parent",
+      allowTypingIndicator: false,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+
+    expect(addTypingIndicatorMock).not.toHaveBeenCalled();
+  });
+
   it("skips typing indicator for stale replayed messages", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,

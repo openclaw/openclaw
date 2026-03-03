@@ -53,6 +53,8 @@ export type CreateFeishuReplyDispatcherParams = {
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
+  /** Override to skip typing indicator for this dispatch (for example group non-mentions). */
+  allowTypingIndicator?: boolean;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -80,6 +82,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     start: async () => {
       // Check if typing indicator is enabled (default: true)
       if (!(account.config.typingIndicator ?? true)) {
+        return;
+      }
+      if (params.allowTypingIndicator === false) {
         return;
       }
       if (!replyToMessageId) {

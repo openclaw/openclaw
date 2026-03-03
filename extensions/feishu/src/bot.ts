@@ -1396,6 +1396,7 @@ export async function handleFeishuMessage(params: {
             mentionTargets: ctx.mentionTargets,
             accountId: account.accountId,
             messageCreateTimeMs,
+            allowTypingIndicator: !isGroup || ctx.mentionedBot,
           });
 
           log(
@@ -1494,6 +1495,7 @@ export async function handleFeishuMessage(params: {
         mentionTargets: ctx.mentionTargets,
         accountId: account.accountId,
         messageCreateTimeMs,
+        allowTypingIndicator: !isGroup || ctx.mentionedBot,
       });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
