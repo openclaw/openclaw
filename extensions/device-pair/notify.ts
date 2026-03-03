@@ -195,6 +195,29 @@ function buildPairingRequestNotificationText(request: PendingPairingRequest): st
   return lines.join("\n");
 }
 
+function requestTimestampMs(request: PendingPairingRequest): number | null {
+  if (typeof request.ts !== "number" || !Number.isFinite(request.ts)) {
+    return null;
+  }
+  const ts = Math.trunc(request.ts);
+  return ts > 0 ? ts : null;
+}
+
+function shouldNotifySubscriberForRequest(
+  subscriber: NotifySubscription,
+  request: PendingPairingRequest,
+): boolean {
+  if (subscriber.mode !== "once") {
+    return true;
+  }
+  const ts = requestTimestampMs(request);
+  // One-shot subscriptions should only notify for new requests created after arming.
+  if (ts == null) {
+    return false;
+  }
+  return ts >= subscriber.addedAtMs;
+}
+
 async function notifySubscriber(params: {
   api: OpenClawPluginApi;
   subscriber: NotifySubscription;
@@ -252,6 +275,9 @@ async function notifyPendingPairingRequests(params: {
       const text = buildPairingRequestNotificationText(request);
       let delivered = false;
       for (const subscriber of state.subscribers) {
+        if (!shouldNotifySubscriberForRequest(subscriber, request)) {
+          continue;
+        }
         const sent = await notifySubscriber({
           api: params.api,
           subscriber,
@@ -306,16 +332,7 @@ export async function armPairNotifyOnce(params: {
   const stateDir = params.api.runtime.state.resolveStateDir();
   const statePath = resolveNotifyStatePath(stateDir);
   const state = await readNotifyState(statePath);
-  const pending = await listDevicePairing();
-  const now = Date.now();
   let changed = false;
-
-  for (const request of pending.pending as PendingPairingRequest[]) {
-    if (!state.notifiedRequestIds[request.requestId]) {
-      state.notifiedRequestIds[request.requestId] = now;
-      changed = true;
-    }
-  }
 
   if (upsertNotifySubscriber(state.subscribers, target, "once")) {
     changed = true;
