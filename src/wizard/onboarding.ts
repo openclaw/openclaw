@@ -1,5 +1,4 @@
 import type {
-  AuthChoice,
   GatewayAuthChoice,
   OnboardMode,
   OnboardOptions,
@@ -15,8 +14,10 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
+import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveOnboardingSecretInputString } from "./onboarding.secret-input.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
 async function requireRiskAcknowledgement(params: {
@@ -280,16 +281,39 @@ export async function runOnboardingWizard(
 
   const localPort = resolveGatewayPort(baseConfig);
   const localUrl = `ws://127.0.0.1:${localPort}`;
+  let localGatewayPassword =
+    process.env.OPENCLAW_GATEWAY_PASSWORD ??
+    normalizeSecretInputString(baseConfig.gateway?.auth?.password);
+  try {
+    const resolvedGatewayPassword = await resolveOnboardingSecretInputString({
+      config: baseConfig,
+      value: baseConfig.gateway?.auth?.password,
+      path: "gateway.auth.password",
+      env: process.env,
+    });
+    if (resolvedGatewayPassword) {
+      localGatewayPassword = resolvedGatewayPassword;
+    }
+  } catch (error) {
+    await prompter.note(
+      [
+        "Could not resolve gateway.auth.password SecretRef for onboarding probe.",
+        error instanceof Error ? error.message : String(error),
+      ].join("\n"),
+      "Gateway auth",
+    );
+  }
+
   const localProbe = await onboardHelpers.probeGatewayReachable({
     url: localUrl,
     token: baseConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
-    password: baseConfig.gateway?.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD,
+    password: localGatewayPassword,
   });
   const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
   const remoteProbe = remoteUrl
     ? await onboardHelpers.probeGatewayReachable({
         url: remoteUrl,
-        token: baseConfig.gateway?.remote?.token,
+        token: normalizeSecretInputString(baseConfig.gateway?.remote?.token),
       })
     : null;
 
@@ -322,7 +346,9 @@ export async function runOnboardingWizard(
   if (mode === "remote") {
     const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
     const { logConfigUpdated } = await import("../config/logging.js");
-    let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter);
+    let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter, {
+      secretInputMode: opts.secretInputMode,
+    });
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
     await writeConfigFile(nextConfig);
     logConfigUpdated(runtime);
@@ -355,8 +381,13 @@ export async function runOnboardingWizard(
     allowKeychainPrompt: false,
   });
   const authChoiceFromPrompt = opts.authChoice === undefined;
-  let authChoice: AuthChoice;
-  let authChoiceOverride: AuthChoice | undefined = opts.authChoice;
+  const authChoice =
+    opts.authChoice ??
+    (await promptAuthChoiceGrouped({
+      prompter,
+      store: authStore,
+      includeSkip: true,
+    }));
 
   if (authChoice === "custom-api-key") {
     const customResult = await promptCustomApiConfig({
@@ -407,6 +438,7 @@ export async function runOnboardingWizard(
     nextConfig,
     localPort,
     quickstartGateway,
+    secretInputMode: opts.secretInputMode,
     prompter,
     runtime,
   });
@@ -430,6 +462,7 @@ export async function runOnboardingWizard(
       skipDmPolicyPrompt: flow === "quickstart",
       skipConfirm: flow === "quickstart",
       quickstartDefaults: flow === "quickstart",
+      secretInputMode: opts.secretInputMode,
     });
   }
 
