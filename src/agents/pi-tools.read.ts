@@ -795,7 +795,8 @@ function wrapHostEditToolWithCurrentContent(
               content = safeRead.buffer.toString("utf-8");
             } else {
               // Allow reading from anywhere on the host (matching createHostEditOperations)
-              const resolved = path.resolve(filePath);
+              // Resolve relative paths against the edit tool root, not process CWD
+              const resolved = path.resolve(root, filePath);
               content = await fs.readFile(resolved, "utf-8");
             }
 
