@@ -11,6 +11,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, migrateLegacyConfig, readConfigFileSnapshot } from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
@@ -1753,13 +1754,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
   const warnings = snapshot.warnings ?? [];
   if (warnings.length > 0) {
-    const lines = warnings.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n");
+    const lines = formatConfigIssueLines(warnings, "-").join("\n");
     note(lines, "Config warnings");
   }
 
   if (snapshot.legacyIssues.length > 0) {
     note(
-      snapshot.legacyIssues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n"),
+      formatConfigIssueLines(snapshot.legacyIssues, "-").join("\n"),
       "Compatibility config keys detected",
     );
     const { config: migrated, changes } = migrateLegacyConfig(snapshot.parsed);

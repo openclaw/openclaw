@@ -229,7 +229,9 @@ describe("resolveDeliveryTarget", () => {
     if (result.ok) {
       throw new Error("expected unresolved delivery target");
     }
-    expect(result.error.message).toContain('No delivery target resolved for channel "telegram"');
+    // resolveOutboundTarget provides the standard missing-target error when
+    // no explicit target, no session lastTo, and no plugin resolveDefaultTo.
+    expect(result.error.message).toContain("requires target");
   });
 
   it("returns an error when channel selection is ambiguous", async () => {

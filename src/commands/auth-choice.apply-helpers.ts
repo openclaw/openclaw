@@ -19,6 +19,25 @@ const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 
 type SecretRefChoice = "env" | "provider";
 
+export type SecretInputModePromptCopy = {
+  modeMessage?: string;
+  plaintextLabel?: string;
+  plaintextHint?: string;
+  refLabel?: string;
+  refHint?: string;
+};
+
+export type SecretRefOnboardingPromptCopy = {
+  sourceMessage?: string;
+  envVarMessage?: string;
+  envVarPlaceholder?: string;
+  envVarFormatError?: string;
+  envVarMissingError?: (envVar: string) => string;
+  noProvidersMessage?: string;
+  envValidatedMessage?: (envVar: string) => string;
+  providerValidatedMessage?: (provider: string, id: string, source: "file" | "exec") => string;
+};
+
 function formatErrorMessage(error: unknown): string {
   if (error instanceof Error && typeof error.message === "string" && error.message.trim()) {
     return error.message;
@@ -69,11 +88,12 @@ function resolveRefFallbackInput(params: {
   };
 }
 
-async function resolveApiKeyRefForOnboarding(params: {
+export async function promptSecretRefForOnboarding(params: {
   provider: string;
   config: OpenClawConfig;
   prompter: WizardPrompter;
   preferredEnvVar?: string;
+  copy?: SecretRefOnboardingPromptCopy;
 }): Promise<{ ref: SecretRef; resolvedValue: string }> {
   const defaultEnvVar =
     params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider) ?? "";
@@ -82,7 +102,7 @@ async function resolveApiKeyRefForOnboarding(params: {
 
   while (true) {
     const sourceRaw: SecretRefChoice = await params.prompter.select<SecretRefChoice>({
-      message: "Where is this API key stored?",
+      message: params.copy?.sourceMessage ?? "Where is this API key stored?",
       initialValue: sourceChoice,
       options: [
         {
@@ -102,16 +122,22 @@ async function resolveApiKeyRefForOnboarding(params: {
 
     if (source === "env") {
       const envVarRaw = await params.prompter.text({
-        message: "Environment variable name",
+        message: params.copy?.envVarMessage ?? "Environment variable name",
         initialValue: defaultEnvVar || undefined,
-        placeholder: "OPENAI_API_KEY",
+        placeholder: params.copy?.envVarPlaceholder ?? "OPENAI_API_KEY",
         validate: (value) => {
           const candidate = value.trim();
           if (!ENV_SECRET_REF_ID_RE.test(candidate)) {
-            return 'Use an env var name like "OPENAI_API_KEY" (uppercase letters, numbers, underscores).';
+            return (
+              params.copy?.envVarFormatError ??
+              'Use an env var name like "OPENAI_API_KEY" (uppercase letters, numbers, underscores).'
+            );
           }
           if (!process.env[candidate]?.trim()) {
-            return `Environment variable "${candidate}" is missing or empty in this session.`;
+            return (
+              params.copy?.envVarMissingError?.(candidate) ??
+              `Environment variable "${candidate}" is missing or empty in this session.`
+            );
           }
           return undefined;
         },
@@ -136,7 +162,8 @@ async function resolveApiKeyRefForOnboarding(params: {
         env: process.env,
       });
       await params.prompter.note(
-        `Validated environment variable ${envVar}. OpenClaw will store a reference, not the key value.`,
+        params.copy?.envValidatedMessage?.(envVar) ??
+          `Validated environment variable ${envVar}. OpenClaw will store a reference, not the key value.`,
         "Reference validated",
       );
       return { ref, resolvedValue };
@@ -147,7 +174,8 @@ async function resolveApiKeyRefForOnboarding(params: {
     );
     if (externalProviders.length === 0) {
       await params.prompter.note(
-        "No file/exec secret providers are configured yet. Add one under secrets.providers, or select Environment variable.",
+        params.copy?.noProvidersMessage ??
+          "No file/exec secret providers are configured yet. Add one under secrets.providers, or select Environment variable.",
         "No providers configured",
       );
       continue;
@@ -222,7 +250,8 @@ async function resolveApiKeyRefForOnboarding(params: {
         env: process.env,
       });
       await params.prompter.note(
-        `Validated ${providerEntry.source} reference ${selectedProvider}:${id}. OpenClaw will store a reference, not the key value.`,
+        params.copy?.providerValidatedMessage?.(selectedProvider, id, providerEntry.source) ??
+          `Validated ${providerEntry.source} reference ${selectedProvider}:${id}. OpenClaw will store a reference, not the key value.`,
         "Reference validated",
       );
       return { ref, resolvedValue };
@@ -346,6 +375,7 @@ export function normalizeSecretInputModeInput(
 export async function resolveSecretInputModeForEnvSelection(params: {
   prompter: WizardPrompter;
   explicitMode?: SecretInputMode;
+  copy?: SecretInputModePromptCopy;
 }): Promise<SecretInputMode> {
   if (params.explicitMode) {
     return params.explicitMode;
@@ -356,18 +386,20 @@ export async function resolveSecretInputModeForEnvSelection(params: {
     return "plaintext";
   }
   const selected = await params.prompter.select<SecretInputMode>({
-    message: "How do you want to provide this API key?",
+    message: params.copy?.modeMessage ?? "How do you want to provide this API key?",
     initialValue: "plaintext",
     options: [
       {
         value: "plaintext",
-        label: "Paste API key now",
-        hint: "Stores the key directly in OpenClaw config",
+        label: params.copy?.plaintextLabel ?? "Paste API key now",
+        hint: params.copy?.plaintextHint ?? "Stores the key directly in OpenClaw config",
       },
       {
         value: "ref",
-        label: "Use secret reference",
-        hint: "Stores a reference to env or configured external secret providers",
+        label: params.copy?.refLabel ?? "Use external secret provider",
+        hint:
+          params.copy?.refHint ??
+          "Stores a reference to env or configured external secret providers",
       },
     ],
   });
@@ -466,7 +498,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
       await params.setCredential(fallback.ref, selectedMode);
       return fallback.resolvedValue;
     }
-    const resolved = await resolveApiKeyRefForOnboarding({
+    const resolved = await promptSecretRefForOnboarding({
       provider: params.provider,
       config: params.config,
       prompter: params.prompter,

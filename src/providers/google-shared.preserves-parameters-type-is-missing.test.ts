@@ -3,6 +3,7 @@ import { convertMessages, convertTools } from "@mariozechner/pi-ai/dist/provider
 import { describe, expect, it } from "vitest";
 import {
   asRecord,
+  expectConvertedRoles,
   getFirstToolParameters,
   makeGoogleAssistantMessage,
   makeModel,
@@ -232,10 +233,7 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    expect(contents).toHaveLength(3);
-    expect(contents[0].role).toBe("user");
-    expect(contents[1].role).toBe("model");
-    expect(contents[2].role).toBe("model");
+    expectConvertedRoles(contents, ["user", "model", "model"]);
     expect(contents[1].parts).toHaveLength(1);
     expect(contents[2].parts).toHaveLength(1);
   });

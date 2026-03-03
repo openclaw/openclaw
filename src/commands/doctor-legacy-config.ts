@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
 import {
+  formatSlackStreamingBooleanMigrationMessage,
+  formatSlackStreamModeMigrationMessage,
   resolveDiscordPreviewStreamMode,
   resolveSlackNativeStreaming,
   resolveSlackStreamingMode,
@@ -175,13 +177,11 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
       const { streamMode: _ignored, ...rest } = updated;
       updated = rest;
       changed = true;
-      changes.push(
-        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolvedStreaming}).`,
-      );
+      changes.push(formatSlackStreamModeMigrationMessage(params.pathPrefix, resolvedStreaming));
     }
     if (typeof legacyStreaming === "boolean") {
       changes.push(
-        `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.nativeStreaming (${resolvedNativeStreaming}).`,
+        formatSlackStreamingBooleanMigrationMessage(params.pathPrefix, resolvedNativeStreaming),
       );
     } else if (typeof legacyStreaming === "string" && legacyStreaming !== resolvedStreaming) {
       changes.push(

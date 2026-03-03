@@ -4,6 +4,13 @@ import type { CronJob, CronJobPatch } from "./types.js";
 import { applyJobPatch, createJob } from "./service/jobs.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 
+function expectCronStaggerMs(job: CronJob, expected: number): void {
+  expect(job.schedule.kind).toBe("cron");
+  if (job.schedule.kind === "cron") {
+    expect(job.schedule.staggerMs).toBe(expected);
+  }
+}
+
 describe("applyJobPatch", () => {
   const createIsolatedAgentTurnJob = (
     id: string,
@@ -481,10 +488,7 @@ describe("cron stagger defaults", () => {
       payload: { kind: "systemEvent", text: "tick" },
     });
 
-    expect(job.schedule.kind).toBe("cron");
-    if (job.schedule.kind === "cron") {
-      expect(job.schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
-    }
+    expectCronStaggerMs(job, DEFAULT_TOP_OF_HOUR_STAGGER_MS);
   });
 
   it("keeps exact schedules when staggerMs is explicitly 0", () => {
@@ -500,10 +504,7 @@ describe("cron stagger defaults", () => {
       payload: { kind: "systemEvent", text: "tick" },
     });
 
-    expect(job.schedule.kind).toBe("cron");
-    if (job.schedule.kind === "cron") {
-      expect(job.schedule.staggerMs).toBe(0);
-    }
+    expectCronStaggerMs(job, 0);
   });
 
   it("preserves existing stagger when editing cron expression without stagger", () => {

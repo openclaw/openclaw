@@ -1,10 +1,11 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { AnyAgentTool } from "./common.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import { resolveCitationRedirectUrl } from "./web-search-citation-redirect.js";
@@ -283,10 +284,14 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
 }
 
 function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
-  const fromConfig =
-    search && "apiKey" in search && typeof search.apiKey === "string"
-      ? normalizeSecretInput(search.apiKey)
-      : "";
+  const fromConfigRaw =
+    search && "apiKey" in search
+      ? normalizeResolvedSecretInputString({
+          value: search.apiKey,
+          path: "tools.web.search.apiKey",
+        })
+      : undefined;
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
   const fromEnv = normalizeSecretInput(process.env.BRAVE_API_KEY);
   return fromConfig || fromEnv || undefined;
 }

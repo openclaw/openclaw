@@ -30,6 +30,34 @@ const archiveFixturePathCache = new Map<string, string>();
 const dynamicArchiveTemplatePathCache = new Map<string, string>();
 let installPluginFromDirTemplateDir = "";
 let manifestInstallTemplateDir = "";
+const DYNAMIC_ARCHIVE_TEMPLATE_PRESETS = [
+  {
+    outName: "traversal.tgz",
+    withDistIndex: true,
+    packageJson: {
+      name: "@evil/..",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+    } as Record<string, unknown>,
+  },
+  {
+    outName: "reserved.tgz",
+    withDistIndex: true,
+    packageJson: {
+      name: "@evil/.",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+    } as Record<string, unknown>,
+  },
+  {
+    outName: "bad.tgz",
+    withDistIndex: false,
+    packageJson: {
+      name: "@openclaw/nope",
+      version: "0.0.1",
+    } as Record<string, unknown>,
+  },
+];
 
 function ensureSuiteTempRoot() {
   if (suiteTempRoot) {
@@ -42,7 +70,7 @@ function ensureSuiteTempRoot() {
 function makeTempDir() {
   const dir = path.join(ensureSuiteTempRoot(), `case-${String(tempDirCounter)}`);
   tempDirCounter += 1;
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir);
   return dir;
 }
 
@@ -77,7 +105,7 @@ async function packToArchive({
   return dest;
 }
 
-async function createVoiceCallArchiveBuffer(version: string): Promise<Buffer> {
+function readVoiceCallArchiveBuffer(version: string): Buffer {
   return fs.readFileSync(path.join(pluginFixturesDir, `voice-call-${version}.tgz`));
 }
 
@@ -96,27 +124,27 @@ function getArchiveFixturePath(params: {
   return archivePath;
 }
 
-async function createZipperArchiveBuffer(): Promise<Buffer> {
+function readZipperArchiveBuffer(): Buffer {
   return fs.readFileSync(path.join(pluginFixturesDir, "zipper-0.0.1.zip"));
 }
 
-const VOICE_CALL_ARCHIVE_V1_BUFFER_PROMISE = createVoiceCallArchiveBuffer("0.0.1");
-const VOICE_CALL_ARCHIVE_V2_BUFFER_PROMISE = createVoiceCallArchiveBuffer("0.0.2");
-const ZIPPER_ARCHIVE_BUFFER_PROMISE = createZipperArchiveBuffer();
+const VOICE_CALL_ARCHIVE_V1_BUFFER = readVoiceCallArchiveBuffer("0.0.1");
+const VOICE_CALL_ARCHIVE_V2_BUFFER = readVoiceCallArchiveBuffer("0.0.2");
+const ZIPPER_ARCHIVE_BUFFER = readZipperArchiveBuffer();
 
-async function getVoiceCallArchiveBuffer(version: string): Promise<Buffer> {
+function getVoiceCallArchiveBuffer(version: string): Buffer {
   if (version === "0.0.1") {
-    return VOICE_CALL_ARCHIVE_V1_BUFFER_PROMISE;
+    return VOICE_CALL_ARCHIVE_V1_BUFFER;
   }
   if (version === "0.0.2") {
-    return VOICE_CALL_ARCHIVE_V2_BUFFER_PROMISE;
+    return VOICE_CALL_ARCHIVE_V2_BUFFER;
   }
-  return createVoiceCallArchiveBuffer(version);
+  return readVoiceCallArchiveBuffer(version);
 }
 
 async function setupVoiceCallArchiveInstall(params: { outName: string; version: string }) {
   const stateDir = makeTempDir();
-  const archiveBuffer = await getVoiceCallArchiveBuffer(params.version);
+  const archiveBuffer = getVoiceCallArchiveBuffer(params.version);
   const archivePath = getArchiveFixturePath({
     cacheKey: `voice-call:${params.version}`,
     outName: params.outName,
@@ -158,8 +186,10 @@ function setupPluginInstallDirs() {
 }
 
 function setupInstallPluginFromDirFixture(params?: { devDependencies?: Record<string, string> }) {
-  const stateDir = makeTempDir();
-  const pluginDir = path.join(makeTempDir(), "plugin");
+  const caseDir = makeTempDir();
+  const stateDir = path.join(caseDir, "state");
+  const pluginDir = path.join(caseDir, "plugin");
+  fs.mkdirSync(stateDir, { recursive: true });
   fs.cpSync(installPluginFromDirTemplateDir, pluginDir, { recursive: true });
   if (params?.devDependencies) {
     const packageJsonPath = path.join(pluginDir, "package.json");
@@ -186,8 +216,10 @@ async function installFromDirWithWarnings(params: { pluginDir: string; extension
 }
 
 function setupManifestInstallFixture(params: { manifestId: string }) {
-  const stateDir = makeTempDir();
-  const pluginDir = path.join(makeTempDir(), "plugin-src");
+  const caseDir = makeTempDir();
+  const stateDir = path.join(caseDir, "state");
+  const pluginDir = path.join(caseDir, "plugin-src");
+  fs.mkdirSync(stateDir, { recursive: true });
   fs.cpSync(manifestInstallTemplateDir, pluginDir, { recursive: true });
   fs.writeFileSync(
     path.join(pluginDir, "openclaw.plugin.json"),
@@ -227,31 +259,11 @@ async function installArchivePackageAndReturnResult(params: {
   withDistIndex?: boolean;
 }) {
   const stateDir = makeTempDir();
-  const templateKey = JSON.stringify({
+  const archivePath = await ensureDynamicArchiveTemplate({
+    outName: params.outName,
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex === true,
   });
-  let archivePath = dynamicArchiveTemplatePathCache.get(templateKey);
-  if (!archivePath) {
-    const templateDir = makeTempDir();
-    const pkgDir = path.join(templateDir, "package");
-    fs.mkdirSync(pkgDir, { recursive: true });
-    if (params.withDistIndex) {
-      fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
-      fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {};", "utf-8");
-    }
-    fs.writeFileSync(
-      path.join(pkgDir, "package.json"),
-      JSON.stringify(params.packageJson),
-      "utf-8",
-    );
-    archivePath = await packToArchive({
-      pkgDir,
-      outDir: ensureSuiteFixtureRoot(),
-      outName: params.outName,
-    });
-    dynamicArchiveTemplatePathCache.set(templateKey, archivePath);
-  }
 
   const extensionsDir = path.join(stateDir, "extensions");
   const result = await installPluginFromArchive({
@@ -259,6 +271,46 @@ async function installArchivePackageAndReturnResult(params: {
     extensionsDir,
   });
   return result;
+}
+
+function buildDynamicArchiveTemplateKey(params: {
+  packageJson: Record<string, unknown>;
+  withDistIndex: boolean;
+}): string {
+  return JSON.stringify({
+    packageJson: params.packageJson,
+    withDistIndex: params.withDistIndex,
+  });
+}
+
+async function ensureDynamicArchiveTemplate(params: {
+  packageJson: Record<string, unknown>;
+  outName: string;
+  withDistIndex: boolean;
+}): Promise<string> {
+  const templateKey = buildDynamicArchiveTemplateKey({
+    packageJson: params.packageJson,
+    withDistIndex: params.withDistIndex,
+  });
+  const cachedPath = dynamicArchiveTemplatePathCache.get(templateKey);
+  if (cachedPath) {
+    return cachedPath;
+  }
+  const templateDir = makeTempDir();
+  const pkgDir = path.join(templateDir, "package");
+  fs.mkdirSync(pkgDir, { recursive: true });
+  if (params.withDistIndex) {
+    fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {};", "utf-8");
+  }
+  fs.writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify(params.packageJson), "utf-8");
+  const archivePath = await packToArchive({
+    pkgDir,
+    outDir: ensureSuiteFixtureRoot(),
+    outName: params.outName,
+  });
+  dynamicArchiveTemplatePathCache.set(templateKey, archivePath);
+  return archivePath;
 }
 
 afterAll(() => {
@@ -328,6 +380,14 @@ beforeAll(async () => {
     }),
     "utf-8",
   );
+
+  for (const preset of DYNAMIC_ARCHIVE_TEMPLATE_PRESETS) {
+    await ensureDynamicArchiveTemplate({
+      packageJson: preset.packageJson,
+      outName: preset.outName,
+      withDistIndex: preset.withDistIndex,
+    });
+  }
 });
 
 beforeEach(() => {
@@ -376,7 +436,7 @@ describe("installPluginFromArchive", () => {
     const archivePath = getArchiveFixturePath({
       cacheKey: "zipper:0.0.1",
       outName: "zipper-0.0.1.zip",
-      buffer: await ZIPPER_ARCHIVE_BUFFER_PROMISE,
+      buffer: ZIPPER_ARCHIVE_BUFFER,
     });
 
     const extensionsDir = path.join(stateDir, "extensions");
@@ -392,12 +452,12 @@ describe("installPluginFromArchive", () => {
     const archiveV1 = getArchiveFixturePath({
       cacheKey: "voice-call:0.0.1",
       outName: "voice-call-0.0.1.tgz",
-      buffer: await VOICE_CALL_ARCHIVE_V1_BUFFER_PROMISE,
+      buffer: VOICE_CALL_ARCHIVE_V1_BUFFER,
     });
     const archiveV2 = getArchiveFixturePath({
       cacheKey: "voice-call:0.0.2",
       outName: "voice-call-0.0.2.tgz",
-      buffer: await VOICE_CALL_ARCHIVE_V2_BUFFER_PROMISE,
+      buffer: VOICE_CALL_ARCHIVE_V2_BUFFER,
     });
 
     const extensionsDir = path.join(stateDir, "extensions");
@@ -556,6 +616,18 @@ describe("installPluginFromArchive", () => {
 });
 
 describe("installPluginFromDir", () => {
+  function expectInstalledAsMemoryCognee(
+    result: Awaited<ReturnType<typeof installPluginFromDir>>,
+    extensionsDir: string,
+  ) {
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.pluginId).toBe("memory-cognee");
+    expect(result.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
+  }
+
   it("uses --ignore-scripts for dependency install", async () => {
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
 
@@ -618,12 +690,7 @@ describe("installPluginFromDir", () => {
       logger: { info: (msg: string) => infoMessages.push(msg), warn: () => {} },
     });
 
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.pluginId).toBe("memory-cognee");
-    expect(res.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
+    expectInstalledAsMemoryCognee(res, extensionsDir);
     expect(
       infoMessages.some((msg) =>
         msg.includes(
@@ -645,12 +712,7 @@ describe("installPluginFromDir", () => {
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.pluginId).toBe("memory-cognee");
-    expect(res.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
+    expectInstalledAsMemoryCognee(res, extensionsDir);
   });
 });
 
@@ -693,7 +755,7 @@ describe("installPluginFromNpmSpec", () => {
     fs.mkdirSync(extensionsDir, { recursive: true });
 
     const run = vi.mocked(runCommandWithTimeout);
-    const voiceCallArchiveBuffer = await VOICE_CALL_ARCHIVE_V1_BUFFER_PROMISE;
+    const voiceCallArchiveBuffer = VOICE_CALL_ARCHIVE_V1_BUFFER;
 
     let packTmpDir = "";
     const packedName = "voice-call-0.0.1.tgz";

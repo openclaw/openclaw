@@ -4,6 +4,8 @@ import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
 } from "../channels/plugins/types.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
@@ -16,7 +18,15 @@ export async function messageCommand(
   deps: CliDeps,
   runtime: RuntimeEnv,
 ) {
-  const cfg = loadConfig();
+  const loadedRaw = loadConfig();
+  const { resolvedConfig: cfg, diagnostics } = await resolveCommandSecretRefsViaGateway({
+    config: loadedRaw,
+    commandName: "message",
+    targetIds: getChannelsCommandSecretTargetIds(),
+  });
+  for (const entry of diagnostics) {
+    runtime.log(`[secrets] ${entry}`);
+  }
   const rawAction = typeof opts.action === "string" ? opts.action.trim() : "";
   const actionInput = rawAction || "send";
   const actionMatch = (CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).find(

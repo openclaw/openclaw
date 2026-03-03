@@ -121,7 +121,7 @@ function validatePluginConfig(params: {
   if (result.ok) {
     return { ok: true, value: params.value as Record<string, unknown> | undefined };
   }
-  return { ok: false, errors: result.errors };
+  return { ok: false, errors: result.errors.map((error) => error.text) };
 }
 
 function resolvePluginModuleExport(moduleExport: unknown): {

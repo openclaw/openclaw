@@ -1,12 +1,11 @@
+import {
+  createChannelInboundDebouncer,
+  shouldDebounceTextInbound,
+} from "../../channels/inbound-debounce-policy.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackMessageEvent } from "../types.js";
-import type { SlackMonitorContext } from "./context.js";
-import { hasControlCommand } from "../../auto-reply/command-detection.js";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../../auto-reply/inbound-debounce.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
+import type { SlackMonitorContext } from "./context.js";
 import { dispatchPreparedSlackMessage } from "./message-handler/dispatch.js";
 import { prepareSlackMessage } from "./message-handler/prepare.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";
@@ -44,14 +43,12 @@ function buildTopLevelSlackConversationKey(
 
 function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonitorContext["cfg"]) {
   const text = message.text ?? "";
-  if (!text.trim()) {
-    return false;
-  }
-  if (message.files && message.files.length > 0) {
-    return false;
-  }
   const textForCommandDetection = stripSlackMentionsForCommandDetection(text);
-  return !hasControlCommand(textForCommandDetection, cfg);
+  return shouldDebounceTextInbound({
+    text: textForCommandDetection,
+    cfg,
+    hasMedia: Boolean(message.files && message.files.length > 0),
+  });
 }
 
 /**
@@ -88,15 +85,12 @@ export function createSlackMessageHandler(params: {
   trackEvent?: () => void;
 }): SlackMessageHandler {
   const { ctx, account, trackEvent } = params;
-  const debounceMs = resolveInboundDebounceMs({ cfg: ctx.cfg, channel: "slack" });
-  const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
-  const pendingTopLevelDebounceKeys = new Map<string, Set<string>>();
-
-  const debouncer = createInboundDebouncer<{
+  const { debounceMs, debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
     opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
   }>({
-    debounceMs,
+    cfg: ctx.cfg,
+    channel: "slack",
     buildKey: (entry) => buildSlackDebounceKey(entry.message, ctx.accountId),
     shouldDebounce: (entry) => shouldDebounceSlackMessage(entry.message, ctx.cfg),
     onFlush: async (entries) => {
@@ -156,6 +150,8 @@ export function createSlackMessageHandler(params: {
       ctx.runtime.error?.(`slack inbound debounce flush failed: ${String(err)}`);
     },
   });
+  const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
+  const pendingTopLevelDebounceKeys = new Map<string, Set<string>>();
 
   return async (message, opts) => {
     if (opts.source === "message" && message.type !== "message") {

@@ -1170,8 +1170,8 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
 
 **`docker.binds`** mounts additional host directories; global and per-agent binds are merged.
 
-**Sandboxed browser** (`sandbox.browser.enabled`): Chromium + CDP in a container. noVNC URL injected into system prompt. Does not require `browser.enabled` in main config.
-noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived token URL that serves a local bootstrap page; noVNC password is passed via URL fragment (instead of URL query).
+**Sandboxed browser** (`sandbox.browser.enabled`): Chromium + CDP in a container. noVNC URL injected into system prompt. Does not require `browser.enabled` in `openclaw.json`.
+noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived token URL (instead of exposing the password in the shared URL).
 
 - `allowHostControl: false` (default) blocks sandboxed sessions from targeting the host browser.
 - `network` defaults to `openclaw-sandbox-browser` (dedicated bridge network). Set to `bridge` only when you explicitly want global bridge connectivity.
@@ -1605,7 +1605,8 @@ Defaults for Talk mode (macOS/iOS/Android).
 ```
 
 - Voice IDs fall back to `ELEVENLABS_VOICE_ID` or `SAG_VOICE_ID`.
-- `apiKey` falls back to `ELEVENLABS_API_KEY`.
+- `apiKey` and `providers.*.apiKey` accept plaintext strings or SecretRef objects.
+- `ELEVENLABS_API_KEY` fallback applies only when no Talk API key is configured.
 - `voiceAliases` lets Talk directives use friendly names.
 
 ---
@@ -1804,7 +1805,7 @@ Configures inbound media understanding (image/audio/video):
 
 - `provider`: API provider id (`openai`, `anthropic`, `google`/`gemini`, `groq`, etc.)
 - `model`: model id override
-- `profile` / `preferredProfile`: auth profile selection
+- `profile` / `preferredProfile`: `auth-profiles.json` profile selection
 
 **CLI entry** (`type: "cli"`):
 
@@ -1817,7 +1818,7 @@ Configures inbound media understanding (image/audio/video):
 - `prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`: per-entry overrides.
 - Failures fall back to the next entry.
 
-Provider auth follows standard order: auth profiles → env vars → `models.providers.*.apiKey`.
+Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
 
 </Accordion>
 
@@ -1961,6 +1962,7 @@ OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `model
 - `models.providers.*.baseUrl`: upstream API base URL.
 - `models.providers.*.headers`: extra static headers for proxy/tenant routing.
 - `models.providers.*.models`: explicit provider model catalog entries.
+- `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
 - `models.bedrockDiscovery`: Bedrock auto-discovery settings root.
 - `models.bedrockDiscovery.enabled`: turn discovery polling on/off.
 - `models.bedrockDiscovery.region`: AWS region for discovery.
@@ -2637,14 +2639,11 @@ Validation:
 - `source: "file"` id: absolute JSON pointer (for example `"/providers/openai/apiKey"`)
 - `source: "exec"` id pattern: `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`
 
-### Supported fields in config
+### Supported credential surface
 
-- `models.providers.<provider>.apiKey`
-- `skills.entries.<skillKey>.apiKey`
-- `channels.googlechat.serviceAccount`
-- `channels.googlechat.serviceAccountRef`
-- `channels.googlechat.accounts.<accountId>.serviceAccount`
-- `channels.googlechat.accounts.<accountId>.serviceAccountRef`
+- Canonical matrix: [SecretRef Credential Surface](/reference/secretref-credential-surface)
+- `secrets apply` targets supported `openclaw.json` credential paths.
+- `auth-profiles.json` refs are included in runtime resolution and audit coverage.
 
 ### Secret providers config
 
@@ -2682,6 +2681,7 @@ Notes:
 - If `trustedDirs` is configured, the trusted-dir check applies to the resolved target path.
 - `exec` child environment is minimal by default; pass required variables explicitly with `passEnv`.
 - Secret refs are resolved at activation time into an in-memory snapshot, then request paths read the snapshot only.
+- Active-surface filtering applies during activation: unresolved refs on enabled surfaces fail startup/reload, while inactive surfaces are skipped with diagnostics.
 
 ---
 
@@ -2701,8 +2701,8 @@ Notes:
 }
 ```
 
-- Per-agent auth profiles stored at `<agentDir>/auth-profiles.json`.
-- Auth profiles support value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`).
+- Per-agent profiles are stored at `<agentDir>/auth-profiles.json`.
+- `auth-profiles.json` supports value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`).
 - Static runtime credentials come from in-memory resolved snapshots; legacy static `auth.json` entries are scrubbed when discovered.
 - Legacy OAuth imports from `~/.openclaw/credentials/oauth.json`.
 - See [OAuth](/concepts/oauth).
@@ -2728,6 +2728,26 @@ Notes:
 - Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`.
 - Set `logging.file` for a stable path.
 - `consoleLevel` bumps to `debug` when `--verbose`.
+
+---
+
+## CLI
+
+```json5
+{
+  cli: {
+    banner: {
+      taglineMode: "off", // random | default | off
+    },
+  },
+}
+```
+
+- `cli.banner.taglineMode` controls banner tagline style:
+  - `"random"` (default): rotating funny/seasonal taglines.
+  - `"default"`: fixed neutral tagline (`All your chats, one OpenClaw.`).
+  - `"off"`: no tagline text (banner title/version still shown).
+- To hide the entire banner (not just taglines), set env `OPENCLAW_HIDE_BANNER=1`.
 
 ---
 
@@ -2879,7 +2899,7 @@ Split config into multiple files:
 - Array of files: deep-merged in order (later overrides earlier).
 - Sibling keys: merged after includes (override included values).
 - Nested includes: up to 10 levels deep.
-- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of the main config file). Absolute/`../` forms are allowed only when they still resolve inside that boundary.
+- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary.
 - Errors: clear messages for missing files, parse errors, and circular includes.
 
 ---
