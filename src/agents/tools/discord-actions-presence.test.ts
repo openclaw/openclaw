@@ -262,6 +262,22 @@ describe("handleDiscordPresenceAction", () => {
     expect(mockUpdatePresence).not.toHaveBeenCalled();
   });
 
+  it("fails before REST mutations when presence fields are requested and gateway is disconnected", async () => {
+    clearGateways();
+
+    await expect(
+      updateSelfProfile({
+        guildId: "guild-1",
+        nickname: "Nick + Presence",
+        status: "online",
+      }),
+    ).rejects.toThrow(/gateway not available|gateway is not connected/i);
+
+    expect(updateSelfNicknameDiscord).not.toHaveBeenCalled();
+    expect(updateCurrentUserAvatarDiscord).not.toHaveBeenCalled();
+    expect(mockUpdatePresence).not.toHaveBeenCalled();
+  });
+
   it("uses accountId for self-profile REST and gateway operations", async () => {
     registerGateway("my-account", createMockGateway());
     await updateSelfProfile(

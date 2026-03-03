@@ -308,6 +308,8 @@ export async function handleDiscordPresenceAction(
       );
     }
 
+    const gateway = presenceData ? requireConnectedGateway(accountId) : null;
+
     const updates: Record<string, unknown> = {};
 
     if (nickname !== undefined) {
@@ -341,8 +343,7 @@ export async function handleDiscordPresenceAction(
       updates.avatar = { updated: true };
     }
 
-    if (presenceData) {
-      const gateway = requireConnectedGateway(accountId);
+    if (presenceData && gateway) {
       gateway.updatePresence(presenceData);
       updates.presence = {
         status: presenceData.status,
