@@ -2,6 +2,7 @@ import type { ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nController } from "../lib/lit-controller.ts";
 import { i18n } from "../lib/translate.ts";
+import type { Locale } from "../lib/types.ts";
 
 describe("I18nController", () => {
   afterEach(() => {
@@ -9,56 +10,57 @@ describe("I18nController", () => {
   });
 
   it("requests an initial update when the host connects", () => {
-    let controller: I18nController | null = null;
+    const addController = vi.fn();
     const requestUpdate = vi.fn();
     const unsubscribe = vi.fn();
     const subscribeSpy = vi.spyOn(i18n, "subscribe").mockReturnValue(unsubscribe);
 
     const host: ReactiveControllerHost = {
-      addController(next) {
-        controller = next as I18nController;
-      },
+      addController,
       removeController() {},
       requestUpdate,
+      updateComplete: Promise.resolve(true),
     };
 
-    new I18nController(host);
-    expect(controller).not.toBeNull();
-    controller?.hostConnected();
+    const controller = new I18nController(host);
+    expect(addController).toHaveBeenCalledWith(controller);
+    controller.hostConnected();
 
     expect(subscribeSpy).toHaveBeenCalledTimes(1);
     expect(requestUpdate).toHaveBeenCalledTimes(1);
   });
 
   it("requests update on locale changes and unsubscribes when disconnected", () => {
-    let controller: I18nController | null = null;
+    const addController = vi.fn();
     const requestUpdate = vi.fn();
     const unsubscribe = vi.fn();
-    let subscriber: ((locale: never) => void) | null = null;
+    let subscriber: ((locale: Locale) => void) | undefined;
     const subscribeSpy = vi.spyOn(i18n, "subscribe").mockImplementation((next) => {
-      subscriber = next as (locale: never) => void;
+      subscriber = next as (locale: Locale) => void;
       return unsubscribe;
     });
 
     const host: ReactiveControllerHost = {
-      addController(next) {
-        controller = next as I18nController;
-      },
+      addController,
       removeController() {},
       requestUpdate,
+      updateComplete: Promise.resolve(true),
     };
 
-    new I18nController(host);
-    expect(controller).not.toBeNull();
-    controller?.hostConnected();
+    const controller = new I18nController(host);
+    expect(addController).toHaveBeenCalledWith(controller);
+    controller.hostConnected();
 
     expect(subscribeSpy).toHaveBeenCalledTimes(1);
     expect(requestUpdate).toHaveBeenCalledTimes(1);
 
-    subscriber?.("zh-CN" as never);
+    if (!subscriber) {
+      throw new Error("expected locale subscriber to be registered");
+    }
+    subscriber("zh-CN");
     expect(requestUpdate).toHaveBeenCalledTimes(2);
 
-    controller?.hostDisconnected();
+    controller.hostDisconnected();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 });
