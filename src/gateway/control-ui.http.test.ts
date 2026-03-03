@@ -303,6 +303,25 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("returns 503 when control-ui root exists but index.html is missing", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-missing-index-"));
+    try {
+      const { res, end, handled } = runControlUiRequest({
+        url: "/",
+        method: "GET",
+        rootPath: tmp,
+      });
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(503);
+      expect(String(end.mock.calls[0]?.[0] ?? "")).toContain(
+        `Control UI assets not found at ${tmp}.`,
+      );
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("rejects symlinked SPA fallback index.html outside control-ui root", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {

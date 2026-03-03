@@ -240,6 +240,17 @@ function isExpectedSafePathError(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
 }
 
+function shouldRespondNotFoundForIndex(indexPath: string): boolean {
+  try {
+    return fs.lstatSync(indexPath).isSymbolicLink();
+  } catch (error) {
+    if (isExpectedSafePathError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 function resolveSafeAvatarFile(filePath: string): { path: string; fd: number } | null {
   const opened = openVerifiedFileSync({
     filePath,
@@ -459,6 +470,10 @@ export function handleControlUiHttpRequest(
     }
   }
 
-  respondControlUiNotFound(res);
+  if (shouldRespondNotFoundForIndex(indexPath)) {
+    respondControlUiNotFound(res);
+    return true;
+  }
+  respondControlUiAssetsUnavailable(res, { configuredRootPath: root });
   return true;
 }
