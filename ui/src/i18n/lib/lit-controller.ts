@@ -14,6 +14,8 @@ export class I18nController implements ReactiveController {
     this.unsubscribe = i18n.subscribe(() => {
       this.host.requestUpdate();
     });
+    // Locale may already be resolved before the host subscribes; force one sync update.
+    this.host.requestUpdate();
   }
 
   hostDisconnected() {
