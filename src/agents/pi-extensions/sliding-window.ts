@@ -11,6 +11,7 @@
 
 import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-registry.js";
+import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 
 export const DEFAULT_MAX_EXCHANGES = 20;
 
@@ -59,6 +60,12 @@ export default function slidingWindowExtension(api: ExtensionAPI): void {
 
     // Keep from the Nth-from-last user message onward.
     const cutIndex = userIndices[userIndices.length - maxExchanges];
-    return { messages: messages.slice(cutIndex) };
+    const sliced = messages.slice(cutIndex);
+
+    // Repair any orphaned tool results caused by the cut removing an assistant
+    // tool_use message while keeping its toolResult.
+    const repaired = sanitizeToolUseResultPairing(sliced as any) as typeof sliced;
+
+    return { messages: repaired };
   });
 }

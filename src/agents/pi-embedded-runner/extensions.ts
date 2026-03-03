@@ -97,8 +97,11 @@ export function buildEmbeddedExtensionFactories(params: {
   }
 
   // Sliding window: cap history to the most recent N user exchanges.
+  // Only activate when explicitly configured (opt-in).
   const slidingWindowCfg = params.cfg?.agents?.defaults?.slidingWindow;
-  const maxExchanges = slidingWindowCfg?.maxExchanges ?? DEFAULT_MAX_EXCHANGES;
+  const maxExchanges = slidingWindowCfg != null
+    ? (slidingWindowCfg.maxExchanges ?? DEFAULT_MAX_EXCHANGES)
+    : 0;
   if (maxExchanges > 0) {
     setSlidingWindowRuntime(params.sessionManager, { maxExchanges });
     factories.push(slidingWindowExtension);
