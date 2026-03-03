@@ -196,9 +196,7 @@ describe("normalizeModelCompat", () => {
     };
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
-    expect(
-      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
-    ).toBe(false);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
   });
 
   it("leaves openai-completions model with empty baseUrl untouched", () => {
