@@ -7,6 +7,22 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Node runtime guard - must run before any fast paths
+// This ensures --version fails on unsupported Node versions
+const MIN_NODE_VERSION = [22, 12, 0];
+function checkNodeVersion() {
+  const parts = process.versions.node.split(".").map(Number);
+  for (let i = 0; i < MIN_NODE_VERSION.length; i++) {
+    if ((parts[i] || 0) < MIN_NODE_VERSION[i]) {
+      return false;
+    }
+    if ((parts[i] || 0) > MIN_NODE_VERSION[i]) {
+      return true;
+    }
+  }
+  return true;
+}
+
 // Fast path for --version/-V: exit before loading heavy modules (~100x faster)
 // Only trigger for root invocations, not subcommands (mirrors src/cli/argv.ts)
 const VERSION_FLAGS = new Set(["-V", "--version"]);
@@ -35,9 +51,12 @@ function isRootVersionInvocation(argv) {
       continue;
     }
     if (ROOT_VALUE_FLAGS.has(arg)) {
-      if (args[i + 1] && !args[i + 1].startsWith("-")) {
-        i++;
+      const next = args[i + 1];
+      // Reject missing value for --profile/--log-level
+      if (!next || next.startsWith("-")) {
+        return false;
       }
+      i++;
       continue;
     }
     return false; // Unknown flag or subcommand
@@ -46,6 +65,11 @@ function isRootVersionInvocation(argv) {
 }
 
 if (isRootVersionInvocation(process.argv)) {
+  // Check Node version before returning version string
+  if (!checkNodeVersion()) {
+    console.error(`openclaw requires Node >= ${MIN_NODE_VERSION.join(".")}`);
+    process.exit(1);
+  }
   try {
     const pkg = JSON.parse(await fs.readFile(path.join(__dirname, "package.json"), "utf-8"));
     console.log(pkg.version);
