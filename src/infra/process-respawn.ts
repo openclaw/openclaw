@@ -33,16 +33,22 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     return { mode: "disabled" };
   }
   if (isLikelySupervisedProcess(process.env)) {
-    // On macOS under launchd, actively kickstart the supervised service to
-    // bypass ThrottleInterval delays for intentional restarts.
-    if (process.platform === "darwin" && process.env.OPENCLAW_LAUNCHD_LABEL?.trim()) {
-      const restart = triggerOpenClawRestart();
-      if (!restart.ok) {
-        return {
-          mode: "failed",
-          detail: restart.detail ?? "launchctl kickstart failed",
-        };
-      }
+    // Actively trigger a supervisor restart rather than relying solely on
+    // Restart= policy to pick up the exit.  This also runs
+    // cleanStaleGatewayProcessesSync() first to remove any upstream process
+    // still holding the port — a key guard against the restart-loop described
+    // in issue #33103.
+    //
+    // On macOS under launchd, kickstart bypasses ThrottleInterval delays.
+    // On Linux under systemd, `systemctl restart` is equivalent and ensures
+    // the unit is restarted even when the service is configured with
+    // Restart=on-failure (which does not restart on a clean exit code 0).
+    const restart = triggerOpenClawRestart();
+    if (!restart.ok) {
+      return {
+        mode: "failed",
+        detail: restart.detail ?? `${restart.method} restart failed`,
+      };
     }
     return { mode: "supervised" };
   }

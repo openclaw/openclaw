@@ -69,8 +69,10 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
   it("returns supervised when launchd/systemd hints are present", () => {
     process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "supervisor" });
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
+    expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -94,16 +96,33 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(result.detail).toContain("spawn failed");
   });
 
-  it("does not schedule kickstart on non-darwin platforms", () => {
+  it("calls triggerOpenClawRestart on linux supervised mode (systemd restart)", () => {
     setPlatform("linux");
     process.env.INVOCATION_ID = "abc123";
-    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "systemd" });
 
     const result = restartGatewayProcessWithFreshPid();
 
     expect(result.mode).toBe("supervised");
-    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns failed when linux systemd restart helper fails", () => {
+    setPlatform("linux");
+    process.env.INVOCATION_ID = "abc123";
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+    triggerOpenClawRestartMock.mockReturnValue({
+      ok: false,
+      method: "systemd",
+      detail: "Unit not found",
+    });
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("failed");
+    expect(result.detail).toContain("Unit not found");
   });
 
   it("spawns detached child with current exec argv", () => {
@@ -134,16 +153,20 @@ describe("restartGatewayProcessWithFreshPid", () => {
   it("returns supervised when OPENCLAW_SYSTEMD_UNIT is set", () => {
     clearSupervisorHints();
     process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "systemd" });
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
+    expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("returns supervised when OPENCLAW_SERVICE_MARKER is set", () => {
     clearSupervisorHints();
     process.env.OPENCLAW_SERVICE_MARKER = "gateway";
+    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "supervisor" });
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
+    expect(triggerOpenClawRestartMock).toHaveBeenCalledOnce();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 

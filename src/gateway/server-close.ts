@@ -114,6 +114,21 @@ export function createGatewayCloseHandler(params: {
     if (params.browserControl) {
       await params.browserControl.stop().catch(() => {});
     }
+    // Force-terminate any WS connections that did not close gracefully (e.g.
+    // connections still in the upgrade handshake, or clients that silently
+    // dropped without sending a close frame back).  Without this, wss.close()
+    // blocks indefinitely because it waits for all clients to disconnect.
+    // A hung wss.close() prevents httpServer.close() from ever being reached,
+    // leaving the TCP listening socket bound — the upstream process holds the
+    // port and every new gateway process fails with EADDRINUSE, creating an
+    // infinite restart loop (see issue #33103).
+    for (const ws of params.wss.clients) {
+      try {
+        ws.terminate();
+      } catch {
+        /* ignore */
+      }
+    }
     await new Promise<void>((resolve) => params.wss.close(() => resolve()));
     const servers =
       params.httpServers && params.httpServers.length > 0
@@ -122,8 +137,14 @@ export function createGatewayCloseHandler(params: {
     for (const server of servers) {
       const httpServer = server as HttpServer & {
         closeIdleConnections?: () => void;
+        closeAllConnections?: () => void;
       };
-      if (typeof httpServer.closeIdleConnections === "function") {
+      // closeAllConnections (Node 18.2+) is more thorough than closeIdleConnections:
+      // it destroys every connection so httpServer.close() resolves immediately
+      // without waiting for keep-alive connections to time out on their own.
+      if (typeof httpServer.closeAllConnections === "function") {
+        httpServer.closeAllConnections();
+      } else if (typeof httpServer.closeIdleConnections === "function") {
         httpServer.closeIdleConnections();
       }
       await new Promise<void>((resolve, reject) =>
