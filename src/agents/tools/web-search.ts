@@ -1310,7 +1310,7 @@ async function runExaSearch(params: {
   };
   if (params.contents) {
     body.text = { maxCharacters: 1200 };
-    body.highlights = true;
+    body.highlights = { maxCharacters: 300 };
   }
 
   return withTrustedWebSearchEndpoint(
@@ -1677,7 +1677,10 @@ export function createWebSearchTool(options?: {
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
       const count =
-        readNumberParam(params, "count", { integer: true }) ?? search?.maxResults ?? undefined;
+        readNumberParam(params, "count", { integer: true }) ??
+        (provider === "exa" ? exaConfig?.numResults : undefined) ??
+        search?.maxResults ??
+        undefined;
       const country = readStringParam(params, "country");
       if (country && provider !== "brave" && provider !== "perplexity") {
         return jsonResult({
