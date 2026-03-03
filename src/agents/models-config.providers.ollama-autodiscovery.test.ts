@@ -32,6 +32,14 @@ describe("Ollama auto-discovery", () => {
     originalFetch = globalThis.fetch;
   }
 
+  function mockOllamaUnreachable() {
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("connect ECONNREFUSED 127.0.0.1:11434"),
+      ) as unknown as typeof fetch;
+  }
+
   it("auto-registers ollama provider when models are discovered locally", async () => {
     setupDiscoveryEnv();
     globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL) => {
@@ -44,7 +52,7 @@ describe("Ollama auto-discovery", () => {
         };
       }
       throw new Error(`Unexpected fetch: ${url}`);
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = await resolveImplicitProviders({ agentDir });
@@ -62,9 +70,7 @@ describe("Ollama auto-discovery", () => {
   it("does not warn when Ollama is unreachable and not explicitly configured", async () => {
     setupDiscoveryEnv();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    globalThis.fetch = vi
-      .fn()
-      .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:11434")) as typeof fetch;
+    mockOllamaUnreachable();
 
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = await resolveImplicitProviders({ agentDir });
@@ -80,9 +86,7 @@ describe("Ollama auto-discovery", () => {
   it("warns when Ollama is unreachable and explicitly configured", async () => {
     setupDiscoveryEnv();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    globalThis.fetch = vi
-      .fn()
-      .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:11434")) as typeof fetch;
+    mockOllamaUnreachable();
 
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     await resolveImplicitProviders({
