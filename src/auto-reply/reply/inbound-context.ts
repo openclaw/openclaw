@@ -1,7 +1,7 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
-import { normalizeInboundTextNewlines } from "./inbound-text.js";
+import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 
 export type FinalizeInboundContextOptions = {
   forceBodyForAgent?: boolean;
@@ -16,7 +16,7 @@ function normalizeTextField(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  return normalizeInboundTextNewlines(value);
+  return sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
 }
 
 function normalizeMediaType(value: unknown): string | undefined {
@@ -40,8 +40,8 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
 ): T & FinalizedMsgContext {
   const normalized = ctx as T & MsgContext;
 
-  normalized.Body = normalizeInboundTextNewlines(
-    typeof normalized.Body === "string" ? normalized.Body : "",
+  normalized.Body = sanitizeInboundSystemTags(
+    normalizeInboundTextNewlines(typeof normalized.Body === "string" ? normalized.Body : ""),
   );
   normalized.RawBody = normalizeTextField(normalized.RawBody);
   normalized.CommandBody = normalizeTextField(normalized.CommandBody);
@@ -50,7 +50,7 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   normalized.ThreadHistoryBody = normalizeTextField(normalized.ThreadHistoryBody);
   if (Array.isArray(normalized.UntrustedContext)) {
     const normalizedUntrusted = normalized.UntrustedContext.map((entry) =>
-      normalizeInboundTextNewlines(entry),
+      sanitizeInboundSystemTags(normalizeInboundTextNewlines(entry)),
     ).filter((entry) => Boolean(entry));
     normalized.UntrustedContext = normalizedUntrusted;
   }
@@ -67,7 +67,9 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
       normalized.CommandBody ??
       normalized.RawBody ??
       normalized.Body);
-  normalized.BodyForAgent = normalizeInboundTextNewlines(bodyForAgentSource);
+  normalized.BodyForAgent = sanitizeInboundSystemTags(
+    normalizeInboundTextNewlines(bodyForAgentSource),
+  );
 
   const bodyForCommandsSource = opts.forceBodyForCommands
     ? (normalized.CommandBody ?? normalized.RawBody ?? normalized.Body)
@@ -75,7 +77,9 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
       normalized.CommandBody ??
       normalized.RawBody ??
       normalized.Body);
-  normalized.BodyForCommands = normalizeInboundTextNewlines(bodyForCommandsSource);
+  normalized.BodyForCommands = sanitizeInboundSystemTags(
+    normalizeInboundTextNewlines(bodyForCommandsSource),
+  );
 
   const explicitLabel = normalized.ConversationLabel?.trim();
   if (opts.forceConversationLabel || !explicitLabel) {
