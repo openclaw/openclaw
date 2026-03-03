@@ -85,3 +85,8 @@ USER.md
 /local/
 package-lock.json
 workspace/
+openclaw-launcher.sh
+openclaw.service
+check-db.mjs
+.memory/
+PHOENIX_MEMORY_SPEC.md
