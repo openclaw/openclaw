@@ -1700,6 +1700,59 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
     });
 
+    it("does not drop updated-message events when reply metadata appears later", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "new-message",
+          data: {
+            text: "same body",
+            handle: { address: "+15551234567" },
+            isGroup: false,
+            isFromMe: false,
+            guid: "reply-meta-msg-1",
+            chatGuid: "iMessage;-;+15551234567",
+            date: Date.now(),
+          },
+        }),
+        createMockResponse(),
+      );
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "updated-message",
+          data: {
+            text: "same body",
+            handle: { address: "+15551234567" },
+            isGroup: false,
+            isFromMe: false,
+            guid: "reply-meta-msg-1",
+            chatGuid: "iMessage;-;+15551234567",
+            replyToMessageGuid: "root-msg-123",
+            replyToSender: "Alice",
+            replyToText: "root body",
+            date: Date.now(),
+          },
+        }),
+        createMockResponse(),
+      );
+
+      await flushAsync();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
+    });
+
     it("processes updated-message text edits without explicit edit metadata when text changes", async () => {
       const account = createMockAccount({ dmPolicy: "open" });
       const config: OpenClawConfig = {};
@@ -1877,6 +1930,63 @@ describe("BlueBubbles webhook monitor", () => {
         chatGuid: "iMessage;-;+15551234567",
       });
       expect(cached?.body).toBe("original outbound body");
+    });
+
+    it("ignores guid-only empty updated-message payloads", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "new-message",
+          data: {
+            text: "original outbound body guid-only",
+            handle: { address: "+15551234567" },
+            isGroup: false,
+            isFromMe: true,
+            guid: "edited-msg-guid-only-1",
+            chatGuid: "iMessage;-;+15551234567",
+            date: Date.now(),
+          },
+        }),
+        createMockResponse(),
+      );
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "updated-message",
+          data: {
+            text: "",
+            handle: { address: "+15551234567" },
+            isGroup: false,
+            isFromMe: true,
+            guid: "edited-msg-guid-only-1",
+            chatGuid: "iMessage;-;+15551234567",
+            associatedMessageGuid: "some-guid-only-signal",
+            date: Date.now(),
+          },
+        }),
+        createMockResponse(),
+      );
+
+      await flushAsync();
+
+      const cached = resolveReplyContextFromCache({
+        accountId: "default",
+        replyToId: "edited-msg-guid-only-1",
+        chatGuid: "iMessage;-;+15551234567",
+      });
+      expect(cached?.body).toBe("original outbound body guid-only");
     });
 
     it("returns 200 for updated-message payloads that cannot be normalized", async () => {

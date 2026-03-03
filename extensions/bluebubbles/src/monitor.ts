@@ -203,10 +203,9 @@ function shouldIgnoreUpdatedNonConversationalEvent(
   }
 
   const hasAssociatedSignal =
-    Boolean(message.associatedMessageGuid?.trim()) ||
-    (typeof message.associatedMessageType === "number" &&
-      Number.isFinite(message.associatedMessageType) &&
-      message.associatedMessageType !== 0);
+    typeof message.associatedMessageType === "number" &&
+    Number.isFinite(message.associatedMessageType) &&
+    message.associatedMessageType !== 0;
 
   // updated-message without text or reaction metadata is delivery/playback state noise.
   if (!hasAssociatedSignal) {
@@ -246,6 +245,9 @@ function buildInboundReplayKey(params: {
     Number.isFinite(message.associatedMessageType)
       ? String(message.associatedMessageType)
       : "";
+  const replyToId = message.replyToId?.trim() ?? "";
+  const replyToSenderFingerprint = computeReplayTextFingerprint(message.replyToSender ?? "");
+  const replyToBodyFingerprint = computeReplayTextFingerprint(message.replyToBody ?? "");
   const textFingerprint = computeReplayTextFingerprint(message.text);
   const attachmentFingerprint = computeAttachmentReplayFingerprint(message.attachments);
   const hasBalloon = message.balloonBundleId?.trim() ? "1" : "0";
@@ -260,6 +262,9 @@ function buildInboundReplayKey(params: {
     dateEdited,
     associatedMessageGuid,
     associatedMessageType,
+    replyToId,
+    replyToSenderFingerprint,
+    replyToBodyFingerprint,
     textFingerprint,
     attachmentFingerprint,
     hasBalloon,
