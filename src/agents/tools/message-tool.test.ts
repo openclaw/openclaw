@@ -211,6 +211,19 @@ describe("message tool schema scoping", () => {
       }
     },
   );
+
+  it("exposes audioAsVoice as an alias field in send schema", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const properties = getToolProperties(tool);
+    expect(properties.asVoice).toBeDefined();
+    expect(properties.audioAsVoice).toBeDefined();
+  });
 });
 
 describe("message tool description", () => {

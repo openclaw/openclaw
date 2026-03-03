@@ -69,6 +69,12 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       const mediaUrl = readStringParam(params, "media", { trim: false });
       const replyTo = readStringParam(params, "replyTo");
       const threadId = readStringParam(params, "threadId");
+      const audioAsVoice =
+        typeof params.audioAsVoice === "boolean"
+          ? params.audioAsVoice
+          : typeof params.asVoice === "boolean"
+            ? params.asVoice
+            : undefined;
       return await handleMatrixAction(
         {
           action: "sendMessage",
@@ -77,6 +83,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           mediaUrl: mediaUrl ?? undefined,
           replyToId: replyTo ?? undefined,
           threadId: threadId ?? undefined,
+          audioAsVoice,
         },
         cfg as CoreConfig,
       );
