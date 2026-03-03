@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
-import { removeAckReactionAfterReply, shouldAckReaction } from "openclaw/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import {
@@ -94,47 +94,15 @@ const mockResolveChunkMode = vi.fn(() => "length");
 const mockFetchBlueBubblesHistory = vi.mocked(fetchBlueBubblesHistory);
 
 function createMockRuntime(): PluginRuntime {
-  return {
-    version: "1.0.0",
-    config: {
-      loadConfig: vi.fn(() => ({})) as unknown as PluginRuntime["config"]["loadConfig"],
-      writeConfigFile: vi.fn() as unknown as PluginRuntime["config"]["writeConfigFile"],
-    },
+  return createPluginRuntimeMock({
     system: {
       enqueueSystemEvent:
         mockEnqueueSystemEvent as unknown as PluginRuntime["system"]["enqueueSystemEvent"],
-      requestHeartbeatNow: vi.fn() as unknown as PluginRuntime["system"]["requestHeartbeatNow"],
-      runCommandWithTimeout: vi.fn() as unknown as PluginRuntime["system"]["runCommandWithTimeout"],
-      formatNativeDependencyHint: vi.fn(
-        () => "",
-      ) as unknown as PluginRuntime["system"]["formatNativeDependencyHint"],
-    },
-    media: {
-      loadWebMedia: vi.fn() as unknown as PluginRuntime["media"]["loadWebMedia"],
-      detectMime: vi.fn() as unknown as PluginRuntime["media"]["detectMime"],
-      mediaKindFromMime: vi.fn() as unknown as PluginRuntime["media"]["mediaKindFromMime"],
-      isVoiceCompatibleAudio:
-        vi.fn() as unknown as PluginRuntime["media"]["isVoiceCompatibleAudio"],
-      getImageMetadata: vi.fn() as unknown as PluginRuntime["media"]["getImageMetadata"],
-      resizeToJpeg: vi.fn() as unknown as PluginRuntime["media"]["resizeToJpeg"],
-    },
-    tts: {
-      textToSpeechTelephony: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeechTelephony"],
-    },
-    stt: {
-      transcribeAudioFile: vi.fn() as unknown as PluginRuntime["stt"]["transcribeAudioFile"],
-    },
-    tools: {
-      createMemoryGetTool: vi.fn() as unknown as PluginRuntime["tools"]["createMemoryGetTool"],
-      createMemorySearchTool:
-        vi.fn() as unknown as PluginRuntime["tools"]["createMemorySearchTool"],
-      registerMemoryCli: vi.fn() as unknown as PluginRuntime["tools"]["registerMemoryCli"],
     },
     channel: {
       text: {
         chunkMarkdownText:
           mockChunkMarkdownText as unknown as PluginRuntime["channel"]["text"]["chunkMarkdownText"],
-        chunkText: vi.fn() as unknown as PluginRuntime["channel"]["text"]["chunkText"],
         chunkByNewline:
           mockChunkByNewline as unknown as PluginRuntime["channel"]["text"]["chunkByNewline"],
         chunkMarkdownTextWithMode:
@@ -143,50 +111,12 @@ function createMockRuntime(): PluginRuntime {
           mockChunkTextWithMode as unknown as PluginRuntime["channel"]["text"]["chunkTextWithMode"],
         resolveChunkMode:
           mockResolveChunkMode as unknown as PluginRuntime["channel"]["text"]["resolveChunkMode"],
-        resolveTextChunkLimit: vi.fn(
-          () => 4000,
-        ) as unknown as PluginRuntime["channel"]["text"]["resolveTextChunkLimit"],
         hasControlCommand:
           mockHasControlCommand as unknown as PluginRuntime["channel"]["text"]["hasControlCommand"],
-        resolveMarkdownTableMode: vi.fn(
-          () => "code",
-        ) as unknown as PluginRuntime["channel"]["text"]["resolveMarkdownTableMode"],
-        convertMarkdownTables: vi.fn(
-          (text: string) => text,
-        ) as unknown as PluginRuntime["channel"]["text"]["convertMarkdownTables"],
       },
       reply: {
         dispatchReplyWithBufferedBlockDispatcher:
           mockDispatchReplyWithBufferedBlockDispatcher as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-        createReplyDispatcherWithTyping:
-          vi.fn() as unknown as PluginRuntime["channel"]["reply"]["createReplyDispatcherWithTyping"],
-        resolveEffectiveMessagesConfig:
-          vi.fn() as unknown as PluginRuntime["channel"]["reply"]["resolveEffectiveMessagesConfig"],
-        resolveHumanDelayConfig:
-          vi.fn() as unknown as PluginRuntime["channel"]["reply"]["resolveHumanDelayConfig"],
-        dispatchReplyFromConfig:
-          vi.fn() as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"],
-        withReplyDispatcher: vi.fn(
-          async ({
-            dispatcher,
-            run,
-            onSettled,
-          }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => {
-            try {
-              return await run();
-            } finally {
-              dispatcher.markComplete();
-              try {
-                await dispatcher.waitForIdle();
-              } finally {
-                await onSettled?.();
-              }
-            }
-          },
-        ) as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
-        finalizeInboundContext: vi.fn(
-          (ctx: Record<string, unknown>) => ctx,
-        ) as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
         formatAgentEnvelope:
           mockFormatAgentEnvelope as unknown as PluginRuntime["channel"]["reply"]["formatAgentEnvelope"],
         formatInboundEnvelope:
@@ -207,8 +137,6 @@ function createMockRuntime(): PluginRuntime {
           mockUpsertPairingRequest as unknown as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
       },
       media: {
-        fetchRemoteMedia:
-          vi.fn() as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
         saveMediaBuffer:
           mockSaveMediaBuffer as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
       },
@@ -217,12 +145,6 @@ function createMockRuntime(): PluginRuntime {
           mockResolveStorePath as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
         readSessionUpdatedAt:
           mockReadSessionUpdatedAt as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
-        recordInboundSession:
-          vi.fn() as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
-        recordSessionMetaFromInbound:
-          vi.fn() as unknown as PluginRuntime["channel"]["session"]["recordSessionMetaFromInbound"],
-        updateLastRoute:
-          vi.fn() as unknown as PluginRuntime["channel"]["session"]["updateLastRoute"],
       },
       mentions: {
         buildMentionRegexes:
@@ -232,72 +154,18 @@ function createMockRuntime(): PluginRuntime {
         matchesMentionWithExplicit:
           mockMatchesMentionWithExplicit as unknown as PluginRuntime["channel"]["mentions"]["matchesMentionWithExplicit"],
       },
-      reactions: {
-        shouldAckReaction,
-        removeAckReactionAfterReply,
-      },
       groups: {
         resolveGroupPolicy:
           mockResolveGroupPolicy as unknown as PluginRuntime["channel"]["groups"]["resolveGroupPolicy"],
         resolveRequireMention:
           mockResolveRequireMention as unknown as PluginRuntime["channel"]["groups"]["resolveRequireMention"],
       },
-      debounce: {
-        // Create a pass-through debouncer that immediately calls onFlush
-        createInboundDebouncer: vi.fn(
-          (params: { onFlush: (items: unknown[]) => Promise<void> }) => ({
-            enqueue: async (item: unknown) => {
-              await params.onFlush([item]);
-            },
-            flushKey: vi.fn(),
-          }),
-        ) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"],
-        resolveInboundDebounceMs: vi.fn(
-          () => 0,
-        ) as unknown as PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"],
-      },
       commands: {
         resolveCommandAuthorizedFromAuthorizers:
           mockResolveCommandAuthorizedFromAuthorizers as unknown as PluginRuntime["channel"]["commands"]["resolveCommandAuthorizedFromAuthorizers"],
-        isControlCommandMessage:
-          vi.fn() as unknown as PluginRuntime["channel"]["commands"]["isControlCommandMessage"],
-        shouldComputeCommandAuthorized:
-          vi.fn() as unknown as PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"],
-        shouldHandleTextCommands:
-          vi.fn() as unknown as PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"],
       },
-      discord: {} as PluginRuntime["channel"]["discord"],
-      activity: {} as PluginRuntime["channel"]["activity"],
-      line: {} as PluginRuntime["channel"]["line"],
-      slack: {} as PluginRuntime["channel"]["slack"],
-      telegram: {} as PluginRuntime["channel"]["telegram"],
-      signal: {} as PluginRuntime["channel"]["signal"],
-      imessage: {} as PluginRuntime["channel"]["imessage"],
-      whatsapp: {} as PluginRuntime["channel"]["whatsapp"],
     },
-    events: {
-      onAgentEvent: vi.fn(() => () => {}) as unknown as PluginRuntime["events"]["onAgentEvent"],
-      onSessionTranscriptUpdate: vi.fn(
-        () => () => {},
-      ) as unknown as PluginRuntime["events"]["onSessionTranscriptUpdate"],
-    },
-    logging: {
-      shouldLogVerbose: vi.fn(
-        () => false,
-      ) as unknown as PluginRuntime["logging"]["shouldLogVerbose"],
-      getChildLogger: vi.fn(() => ({
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      })) as unknown as PluginRuntime["logging"]["getChildLogger"],
-    },
-    state: {
-      resolveStateDir: vi.fn(
-        () => "/tmp/openclaw",
-      ) as unknown as PluginRuntime["state"]["resolveStateDir"],
-    },
-  };
+  });
 }
 
 function createMockAccount(

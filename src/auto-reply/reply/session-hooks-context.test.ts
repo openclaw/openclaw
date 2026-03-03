@@ -67,7 +67,8 @@ describe("session hook context wiring", () => {
     await vi.waitFor(() => expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1));
     const [event, context] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
     expect(event).toMatchObject({ sessionKey });
-    expect(context).toMatchObject({ sessionKey });
+    expect(context).toMatchObject({ sessionKey, agentId: "main" });
+    expect(context).toMatchObject({ sessionId: event?.sessionId });
   });
 
   it("passes sessionKey to session_end hook context on reset", async () => {
@@ -88,8 +89,13 @@ describe("session hook context wiring", () => {
     });
 
     await vi.waitFor(() => expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1));
     const [event, context] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
     expect(event).toMatchObject({ sessionKey });
-    expect(context).toMatchObject({ sessionKey });
+    expect(context).toMatchObject({ sessionKey, agentId: "main" });
+    expect(context).toMatchObject({ sessionId: event?.sessionId });
+
+    const [startEvent] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
+    expect(startEvent).toMatchObject({ resumedFrom: "old-session" });
   });
 });
