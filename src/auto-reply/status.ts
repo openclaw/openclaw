@@ -408,6 +408,24 @@ const formatVoiceModeLine = (
   return `🔊 Voice: ${autoMode} · provider=${provider} · limit=${maxLength} · summary=${summarize}`;
 };
 
+/**
+ * Resolve the configured fallback model labels from the agent model config.
+ * Returns a short label for each configured fallback (e.g. "openai/gpt-4o").
+ */
+function resolveConfiguredFallbackLabels(args: StatusArgs): string[] {
+  const modelConfig = args.agent?.model;
+  if (!modelConfig || typeof modelConfig === "string") {
+    return [];
+  }
+  const fallbacks = (modelConfig as Record<string, unknown>).fallbacks;
+  if (!Array.isArray(fallbacks) || fallbacks.length === 0) {
+    return [];
+  }
+  return fallbacks
+    .filter((f): f is string => typeof f === "string" && f.trim().length > 0)
+    .map((f) => f.trim());
+}
+
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
@@ -650,11 +668,19 @@ export function buildStatusMessage(args: StatusArgs): string {
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
-  const fallbackLine = fallbackState.active
-    ? `↪️ Fallback: ${activeModelLabel}${
+  const fallbackLine = (() => {
+    if (fallbackState.active) {
+      return `↪️ Fallback: ${activeModelLabel}${
         showFallbackAuth ? ` · 🔑 ${activeAuthLabelValue}` : ""
-      } (${fallbackState.reason ?? "selected model unavailable"})`
-    : null;
+      } (${fallbackState.reason ?? "selected model unavailable"})`;
+    }
+    // Show configured fallbacks even when not actively in use (#33278)
+    const configuredFallbacks = resolveConfiguredFallbackLabels(args);
+    if (configuredFallbacks.length > 0) {
+      return `🔄 Fallback: ${configuredFallbacks.join(" → ")} (configured)`;
+    }
+    return null;
+  })();
   const commit = resolveCommitHash();
   const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
   const usagePair = formatUsagePair(inputTokens, outputTokens);

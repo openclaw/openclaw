@@ -357,6 +357,82 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Fallback:");
   });
 
+  it("shows configured fallback models when no active fallback (#33278)", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: {
+          primary: "anthropic/claude-opus-4-6",
+          fallbacks: ["openai-codex/gpt-5.3-codex", "openai/gpt-4.1"],
+        },
+        contextTokens: 200_000,
+      },
+      sessionEntry: {
+        sessionId: "configured-fallbacks",
+        updatedAt: 0,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain(
+      "Fallback: openai-codex/gpt-5.3-codex → openai/gpt-4.1 (configured)",
+    );
+  });
+
+  it("does not show configured fallback line when no fallbacks configured", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: {
+          primary: "anthropic/claude-opus-4-6",
+        },
+        contextTokens: 200_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).not.toContain("Fallback:");
+  });
+
+  it("prefers active fallback line over configured fallbacks", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: {
+          primary: "anthropic/claude-opus-4-6",
+          fallbacks: ["openai/gpt-4.1"],
+        },
+        contextTokens: 200_000,
+      },
+      sessionEntry: {
+        sessionId: "active-fallback",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-4.1",
+        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-6",
+        fallbackNoticeActiveModel: "openai/gpt-4.1",
+        fallbackNoticeReason: "rate limit",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("↪️ Fallback:");
+    expect(normalized).toContain("(rate limit)");
+    expect(normalized).not.toContain("(configured)");
+  });
+
   it("keeps provider prefix from configured model", () => {
     const text = buildStatusMessage({
       agent: {
