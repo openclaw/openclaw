@@ -41,6 +41,7 @@ function createProvider(overrides: Partial<VoiceCallProvider> = {}): VoiceCallPr
     playTts: async () => {},
     startListening: async () => {},
     stopListening: async () => {},
+    getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
     ...overrides,
   };
 }
