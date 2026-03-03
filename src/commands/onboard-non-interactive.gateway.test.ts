@@ -9,7 +9,7 @@ const gatewayClientCalls: Array<{
   url?: string;
   token?: string;
   password?: string;
-  onHelloOk?: () => void;
+  onHelloOk?: (hello?: { features?: { methods?: string[] } }) => void;
   onClose?: (code: number, reason: string) => void;
 }> = [];
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
@@ -20,13 +20,13 @@ vi.mock("../gateway/client.js", () => ({
       url?: string;
       token?: string;
       password?: string;
-      onHelloOk?: () => void;
+      onHelloOk?: (hello?: { features?: { methods?: string[] } }) => void;
     };
     constructor(params: {
       url?: string;
       token?: string;
       password?: string;
-      onHelloOk?: () => void;
+      onHelloOk?: (hello?: { features?: { methods?: string[] } }) => void;
     }) {
       this.params = params;
       gatewayClientCalls.push(params);
@@ -35,7 +35,7 @@ vi.mock("../gateway/client.js", () => ({
       return { ok: true };
     }
     start() {
-      queueMicrotask(() => this.params.onHelloOk?.());
+      queueMicrotask(() => this.params.onHelloOk?.({ features: { methods: ["health"] } }));
     }
     stop() {}
   },
@@ -145,9 +145,36 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       }>(configPath);
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
-      expect(cfg?.tools?.profile).toBe("messaging");
+      expect(cfg?.tools?.profile).toBeUndefined();
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
+    });
+  }, 60_000);
+
+  it("preserves explicit tools.profile from existing config", async () => {
+    await withStateDir("state-tools-profile-", async (stateDir) => {
+      const configPath = resolveStateConfigPath(process.env, stateDir);
+      await fs.writeFile(configPath, JSON.stringify({ tools: { profile: "full" } }));
+      const workspace = path.join(stateDir, "openclaw");
+
+      await runNonInteractiveOnboarding(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayBind: "loopback",
+          gatewayAuth: "token",
+          gatewayToken: "tok_tools_profile_123",
+        },
+        runtime,
+      );
+
+      const cfg = await readJsonFile<{ tools?: { profile?: string } }>(configPath);
+      expect(cfg?.tools?.profile).toBe("full");
     });
   }, 60_000);
 

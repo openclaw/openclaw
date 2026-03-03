@@ -4,7 +4,10 @@ import { resolveGatewayPort, writeConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
-import { applyOnboardingLocalWorkspaceConfig } from "../onboard-config.js";
+import {
+  applyOnboardingLocalWorkspaceConfig,
+  ONBOARDING_DEFAULT_TOOLS_PROFILE,
+} from "../onboard-config.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -34,6 +37,17 @@ export async function runNonInteractiveOnboardingLocal(params: {
   });
 
   let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  if (
+    !baseConfig.tools?.profile &&
+    nextConfig.tools?.profile === ONBOARDING_DEFAULT_TOOLS_PROFILE
+  ) {
+    // Non-interactive onboard should not silently force messaging-only tools.
+    const { profile: _profile, ...restTools } = nextConfig.tools;
+    nextConfig = {
+      ...nextConfig,
+      tools: Object.keys(restTools).length > 0 ? restTools : undefined,
+    };
+  }
 
   const inferredAuthChoice = inferAuthChoiceFromFlags(opts);
   if (!opts.authChoice && inferredAuthChoice.matches.length > 1) {
