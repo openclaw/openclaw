@@ -38,6 +38,7 @@ jobs:
       run_node: ${{ steps.scope.outputs.run_node }}
       run_macos: ${{ steps.scope.outputs.run_macos }}
       run_android: ${{ steps.scope.outputs.run_android }}
+      run_windows: ${{ steps.scope.outputs.run_windows }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,7 +62,7 @@ jobs:
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
-    needs: [docs-scope, changed-scope, check]
+    needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
@@ -74,6 +75,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-sticky-disk: "true"
 
       - name: Build dist
         run: pnpm build
@@ -100,6 +102,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-sticky-disk: "true"
 
       - name: Download dist artifact
         uses: actions/download-artifact@v4
@@ -143,6 +146,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "${{ matrix.runtime == 'bun' }}"
+          use-sticky-disk: "true"
 
       - name: Configure Node test resources
         if: (github.event_name != 'push' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
@@ -172,6 +176,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-sticky-disk: "true"
 
       - name: Check types and lint and oxfmt
         run: pnpm check
@@ -211,6 +216,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-sticky-disk: "true"
 
       - name: Run ${{ matrix.tool }} dead-code scan
         run: ${{ matrix.command }}
@@ -236,6 +242,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-sticky-disk: "true"
 
       - name: Check docs
         run: pnpm check:docs
@@ -278,6 +285,8 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-sticky-disk: "false"
+          install-deps: "false"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -321,15 +330,15 @@ jobs:
         run: pre-commit run --all-files pnpm-audit-prod
 
   checks-windows:
-    needs: [docs-scope, changed-scope, build-artifacts, check]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
-    runs-on: blacksmith-16vcpu-windows-2025
+    needs: [docs-scope, changed-scope, check]
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_windows == 'true')
+    runs-on: blacksmith-32vcpu-windows-2025
     timeout-minutes: 45
     env:
-      NODE_OPTIONS: --max-old-space-size=4096
-      # Keep total concurrency predictable on the 16 vCPU runner:
-      # `scripts/test-parallel.mjs` runs some vitest suites in parallel processes.
-      OPENCLAW_TEST_WORKERS: 4
+      NODE_OPTIONS: --max-old-space-size=6144
+      # Keep total concurrency predictable on the 32 vCPU runner.
+      # Windows shard 2 has shown intermittent instability at 2 workers.
+      OPENCLAW_TEST_WORKERS: 1
     defaults:
       run:
         shell: bash
@@ -338,25 +347,35 @@ jobs:
       matrix:
         include:
           - runtime: node
-            task: lint
-            shard_index: 0
-            shard_count: 1
-            command: pnpm lint
-          - runtime: node
             task: test
             shard_index: 1
-            shard_count: 2
-            command: pnpm canvas:a2ui:bundle && pnpm test
+            shard_count: 6
+            command: pnpm test
           - runtime: node
             task: test
             shard_index: 2
-            shard_count: 2
-            command: pnpm canvas:a2ui:bundle && pnpm test
+            shard_count: 6
+            command: pnpm test
           - runtime: node
-            task: protocol
-            shard_index: 0
-            shard_count: 1
-            command: pnpm protocol:check
+            task: test
+            shard_index: 3
+            shard_count: 6
+            command: pnpm test
+          - runtime: node
+            task: test
+            shard_index: 4
+            shard_count: 6
+            command: pnpm test
+          - runtime: node
+            task: test
+            shard_index: 5
+            shard_count: 6
+            command: pnpm test
+          - runtime: node
+            task: test
+            shard_index: 6
+            shard_count: 6
+            command: pnpm test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -382,31 +401,20 @@ jobs:
             Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
           }
 
-      - name: Download dist artifact (lint lane)
-        if: matrix.task == 'lint'
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Verify dist artifact (lint lane)
-        if: matrix.task == 'lint'
-        run: |
-          set -euo pipefail
-          test -s dist/index.js
-          test -s dist/plugin-sdk/index.js
-
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.x
-          check-latest: true
+          check-latest: false
 
       - name: Setup pnpm + cache store
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           pnpm-version: "10.23.0"
           cache-key-suffix: "node22"
+          use-sticky-disk: "true"
+          use-restore-keys: "false"
+          use-actions-cache: "false"
 
       - name: Runtime versions
         run: |
@@ -425,13 +433,17 @@ jobs:
           which node
           node -v
           pnpm -v
-          pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
+          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
       - name: Configure test shard (Windows)
         if: matrix.task == 'test'
         run: |
           echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
+
+      - name: Build A2UI bundle (Windows)
+        if: matrix.task == 'test'
+        run: pnpm canvas:a2ui:bundle
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
