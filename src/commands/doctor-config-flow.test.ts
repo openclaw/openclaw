@@ -151,7 +151,7 @@ describe("doctor config flow", () => {
     expect(
       doctorWarnings.some(
         (line) =>
-          line.includes('channels.discord.accounts.default.guilds is empty') &&
+          line.includes("channels.discord.accounts.default.guilds is empty") &&
           line.includes('effective groupPolicy is "allowlist"') &&
           line.includes("guilds is empty"),
       ),
@@ -182,7 +182,7 @@ describe("doctor config flow", () => {
     expect(
       doctorWarnings.some(
         (line) =>
-          line.includes('channels.discord.accounts.default.guilds is empty') &&
+          line.includes("channels.discord.accounts.default.guilds is empty") &&
           line.includes('effective groupPolicy is "allowlist"') &&
           line.includes("guilds is empty"),
       ),

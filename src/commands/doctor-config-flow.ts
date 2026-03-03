@@ -1385,7 +1385,8 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     }
 
     const accountGroupPolicy = account.groupPolicy as string | undefined;
-    const groupPolicy = accountGroupPolicy ?? (parent?.groupPolicy as string | undefined) ?? undefined;
+    const groupPolicy =
+      accountGroupPolicy ?? (parent?.groupPolicy as string | undefined) ?? undefined;
 
     if (
       channelName === "discord" &&
