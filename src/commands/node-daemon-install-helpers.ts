@@ -64,7 +64,7 @@ export async function buildNodeInstallPlan(params: {
 
   // Default working directory to the OpenClaw state dir (e.g. ~/.openclaw) so the
   // daemon does not run with `/` as cwd when launched by launchd/systemd.
-  const resolvedWorkingDirectory = workingDirectory || resolveGatewayStateDir(params.env);
+  const resolvedWorkingDirectory = workingDirectory ?? resolveGatewayStateDir(params.env);
 
   return { programArguments, workingDirectory: resolvedWorkingDirectory, environment, description };
 }
