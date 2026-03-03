@@ -255,3 +255,40 @@ describe("filterBootstrapFilesForSession", () => {
     expectSubagentAllowedBootstrapNames(result);
   });
 });
+
+describe("loadWorkspaceBootstrapFiles with autoLoadDailyNote", () => {
+  it("includes most recent daily note when autoLoadDailyNote is true", async () => {
+    const { dir, cleanup } = await makeTempWorkspace();
+    try {
+      const memoryDir = path.join(dir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      await fs.writeFile(path.join(memoryDir, "2026-03-01.md"), "day 1 note");
+      await fs.writeFile(path.join(memoryDir, "2026-03-02.md"), "day 2 note");
+      await fs.writeFile(path.join(memoryDir, "2026-02-28.md"), "feb note");
+
+      const files = await loadWorkspaceBootstrapFiles(dir, { autoLoadDailyNote: true });
+      const dailyNote = files.find((f) => f.name === "2026-03-02.md");
+
+      expect(dailyNote).toBeDefined();
+      expect(dailyNote?.missing).toBe(false);
+      expect(dailyNote?.content).toBe("day 2 note");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("does not include daily note when autoLoadDailyNote is false", async () => {
+    const { dir, cleanup } = await makeTempWorkspace();
+    try {
+      const memoryDir = path.join(dir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      await fs.writeFile(path.join(memoryDir, "2026-03-02.md"), "note");
+
+      const files = await loadWorkspaceBootstrapFiles(dir, { autoLoadDailyNote: false });
+      const dailyNote = files.find((f) => f.name === "2026-03-02.md");
+      expect(dailyNote).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+});

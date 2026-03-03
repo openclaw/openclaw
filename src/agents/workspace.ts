@@ -458,6 +458,32 @@ export async function ensureAgentWorkspace(params?: {
   };
 }
 
+const DAILY_NOTE_RE = /^\d{4}-\d{2}-\d{2}\.md$/;
+
+async function resolveDailyNoteEntry(
+  resolvedDir: string,
+): Promise<{ name: WorkspaceBootstrapFileName; filePath: string } | null> {
+  const memoryDir = path.join(resolvedDir, "memory");
+  let entries: string[];
+  try {
+    entries = await fs.readdir(memoryDir);
+  } catch {
+    return null;
+  }
+  const dailyNotes = entries
+    .filter((name) => DAILY_NOTE_RE.test(name))
+    .sort()
+    .reverse();
+  if (dailyNotes.length === 0) {
+    return null;
+  }
+  const latest = dailyNotes[0]!;
+  return {
+    name: latest as WorkspaceBootstrapFileName,
+    filePath: path.join(memoryDir, latest),
+  };
+}
+
 async function resolveMemoryBootstrapEntries(
   resolvedDir: string,
 ): Promise<Array<{ name: WorkspaceBootstrapFileName; filePath: string }>> {
@@ -495,7 +521,10 @@ async function resolveMemoryBootstrapEntries(
   return deduped;
 }
 
-export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
+export async function loadWorkspaceBootstrapFiles(
+  dir: string,
+  opts?: { autoLoadDailyNote?: boolean },
+): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
   const entries: Array<{
@@ -533,6 +562,13 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   ];
 
   entries.push(...(await resolveMemoryBootstrapEntries(resolvedDir)));
+
+  if (opts?.autoLoadDailyNote) {
+    const dailyNote = await resolveDailyNoteEntry(resolvedDir);
+    if (dailyNote) {
+      entries.push(dailyNote);
+    }
+  }
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
