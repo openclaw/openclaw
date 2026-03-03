@@ -15,6 +15,11 @@ import {
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
 import {
+  createFirecrawlBrowserSession,
+  deleteFirecrawlBrowserSession,
+  isFirecrawlSessionReachable,
+} from "./firecrawl-browser.js";
+import {
   CDP_READY_AFTER_LAUNCH_MAX_TIMEOUT_MS,
   CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS,
   CDP_READY_AFTER_LAUNCH_POLL_MS,
@@ -57,11 +62,19 @@ export function createProfileAvailability({
     });
 
   const isReachable = async (timeoutMs?: number) => {
+    if (profile.driver === "firecrawl") {
+      const session = getProfileState().firecrawlSession;
+      return session ? await isFirecrawlSessionReachable(session.cdpWebSocketUrl, timeoutMs) : false;
+    }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
     return await isChromeCdpReady(profile.cdpUrl, httpTimeoutMs, wsTimeoutMs);
   };
 
   const isHttpReachable = async (timeoutMs?: number) => {
+    if (profile.driver === "firecrawl") {
+      const session = getProfileState().firecrawlSession;
+      return session ? await isFirecrawlSessionReachable(session.cdpWebSocketUrl, timeoutMs) : false;
+    }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
     return await isChromeReachable(profile.cdpUrl, httpTimeoutMs);
   };
@@ -107,6 +120,29 @@ export function createProfileAvailability({
     const attachOnly = profile.attachOnly;
     const isExtension = profile.driver === "extension";
     const profileState = getProfileState();
+
+    // Firecrawl cloud browser: manage session lifecycle
+    if (profile.driver === "firecrawl") {
+      if (profileState.firecrawlSession) {
+        if (await isFirecrawlSessionReachable(profileState.firecrawlSession.cdpWebSocketUrl)) {
+          return; // existing session still alive
+        }
+        profileState.firecrawlSession = null;
+      }
+      const apiKey = opts.firecrawlApiKey;
+      const baseUrl = opts.firecrawlBaseUrl || "https://api.firecrawl.dev";
+      if (!apiKey) {
+        throw new Error(
+          'Firecrawl browser profile requires an API key. Set tools.web.fetch.firecrawl.apiKey or FIRECRAWL_API_KEY.',
+        );
+      }
+      const session = await createFirecrawlBrowserSession({ apiKey, baseUrl });
+      profileState.firecrawlSession = session;
+      // Update the runtime profile with the session's CDP WebSocket URL
+      profileState.profile = { ...profileState.profile, cdpUrl: session.cdpWebSocketUrl };
+      return;
+    }
+
     const httpReachable = await isHttpReachable();
 
     if (isExtension && remoteCdp) {
@@ -198,6 +234,20 @@ export function createProfileAvailability({
   };
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
+    if (profile.driver === "firecrawl") {
+      const profileState = getProfileState();
+      const session = profileState.firecrawlSession;
+      if (session) {
+        const apiKey = opts.firecrawlApiKey;
+        const baseUrl = opts.firecrawlBaseUrl || "https://api.firecrawl.dev";
+        if (apiKey) {
+          await deleteFirecrawlBrowserSession({ apiKey, baseUrl, sessionId: session.sessionId })
+            .catch(() => {}); // best-effort cleanup
+        }
+        profileState.firecrawlSession = null;
+      }
+      return { stopped: Boolean(session) };
+    }
     if (profile.driver === "extension") {
       const stopped = await stopChromeExtensionRelayServer({
         cdpUrl: profile.cdpUrl,
