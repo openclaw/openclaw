@@ -86,17 +86,15 @@ async function resolveCronAnnounceSessionKey(params: {
       // can look up channel metadata (lastChannel, to, sessionId).  Named agents
       // may not have a session entry for this target yet, causing announce
       // delivery to silently fail (#32432).
-      if (route) {
-        await ensureOutboundSessionEntry({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          channel: params.delivery.channel,
-          accountId: params.delivery.accountId,
-          route,
-        }).catch(() => {
-          // Best-effort: don't block delivery on session entry creation.
-        });
-      }
+      await ensureOutboundSessionEntry({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        channel: params.delivery.channel,
+        accountId: params.delivery.accountId,
+        route,
+      }).catch(() => {
+        // Best-effort: don't block delivery on session entry creation.
+      });
       return resolved;
     }
   } catch {
@@ -159,6 +157,12 @@ export async function dispatchCronDelivery(
   // Keep this strict so timer fallback can safely decide whether to wake main.
   let delivered = params.skipMessagingToolDelivery;
   let deliveryAttempted = params.skipMessagingToolDelivery;
+  // Tracks whether `runSubagentAnnounceFlow` was actually called.  Early
+  // returns from `deliverViaAnnounce` (active subagents, interim suppression,
+  // SILENT_REPLY_TOKEN) are intentional suppressions — not delivery failures —
+  // so the direct-delivery fallback must only fire when the announce send was
+  // actually attempted and failed.
+  let announceDeliveryWasAttempted = false;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
       status: "error",
@@ -316,6 +320,7 @@ export async function dispatchCronDelivery(
         });
       }
       deliveryAttempted = true;
+      announceDeliveryWasAttempted = true;
       const didAnnounce = await runSubagentAnnounceFlow({
         childSessionKey: params.agentSessionKey,
         childRunId: `${params.job.id}:${params.runSessionId}:${params.runStartedAt}`,
@@ -446,11 +451,13 @@ export async function dispatchCronDelivery(
     } else {
       const announceResult = await deliverViaAnnounce(params.resolvedDelivery);
       if (announceResult) {
-        // If announce delivery failed (delivered=false), fall back to direct
-        // delivery.  Named agents may not have an active session for the
-        // announce flow to inject into, so sending directly to the channel
-        // is the only reliable alternative (#32432).
-        if (!delivered && !params.isAborted()) {
+        // Fall back to direct delivery only when the announce send was
+        // actually attempted and failed.  Early returns from
+        // deliverViaAnnounce (active subagents, interim suppression,
+        // SILENT_REPLY_TOKEN) are intentional suppressions that must NOT
+        // trigger direct delivery — doing so would bypass the suppression
+        // guard and leak partial/stale content to the channel.  (#32432)
+        if (announceDeliveryWasAttempted && !delivered && !params.isAborted()) {
           const directFallback = await deliverViaDirect(params.resolvedDelivery);
           if (directFallback) {
             return {
