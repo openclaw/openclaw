@@ -772,6 +772,10 @@ async function writeHostFile(absolutePath: string, content: string) {
   await fs.writeFile(resolved, content, "utf-8");
 }
 
+function normalizeAtPrefixedPath(filePath: string): string {
+  return filePath.startsWith("@") ? filePath.slice(1) : filePath;
+}
+
 function expandHomePath(filePath: string): string {
   if (filePath === "~") {
     return os.homedir();
@@ -783,7 +787,8 @@ function expandHomePath(filePath: string): string {
 }
 
 function resolveToolPathForVerification(filePath: string, cwd: string): string {
-  const expanded = expandHomePath(filePath);
+  const normalized = normalizeAtPrefixedPath(filePath);
+  const expanded = expandHomePath(normalized);
   if (path.isAbsolute(expanded)) {
     return expanded;
   }
@@ -828,6 +833,9 @@ function wrapAbortAfterCommitRecovery(
             .then((stat) => ({ size: stat.size, mtimeMs: stat.mtimeMs }))
             .catch(() => undefined)
         : undefined;
+      const beforeContent = resolvedPath
+        ? await fs.readFile(resolvedPath, "utf8").catch(() => undefined)
+        : undefined;
 
       try {
         return await tool.execute(toolCallId, params, signal, onUpdate);
@@ -866,19 +874,31 @@ function wrapAbortAfterCommitRecovery(
 
         const oldText = typeof record?.oldText === "string" ? record.oldText : undefined;
         const newText = typeof record?.newText === "string" ? record.newText : undefined;
+        if (
+          typeof beforeContent !== "string" ||
+          typeof oldText !== "string" ||
+          typeof newText !== "string" ||
+          oldText.length === 0
+        ) {
+          throw error;
+        }
 
-        const hasOldText = oldText !== undefined && oldText.length > 0;
-        const hasNewText = newText !== undefined && newText.length > 0;
+        const firstIdx = beforeContent.indexOf(oldText);
+        if (firstIdx === -1) {
+          throw error;
+        }
+        const secondIdx = beforeContent.indexOf(oldText, firstIdx + oldText.length);
+        if (secondIdx !== -1) {
+          // Upstream edit requires a unique match; do not recover ambiguous pre-state.
+          throw error;
+        }
 
-        const committedReplacement =
-          hasNewText &&
-          current.includes(newText) &&
-          (!hasOldText || newText.includes(oldText) || !current.includes(oldText));
+        const expected =
+          beforeContent.slice(0, firstIdx) +
+          newText +
+          beforeContent.slice(firstIdx + oldText.length);
 
-        // For empty newText (deletion edits), post-state alone is too ambiguous:
-        // if oldText was absent before execution, we can't distinguish no-op abort
-        // from committed deletion. Avoid recovering this case to prevent false success.
-        if (committedReplacement) {
+        if (current === expected) {
           return {
             content: [{ type: "text", text: `Successfully replaced text in ${rawPath}.` }],
             details: undefined,
