@@ -25,6 +25,7 @@ import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
 import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
@@ -354,9 +355,21 @@ export async function getReplyFromConfig(
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("before_agent_reply")) {
+    const hookMessageProvider = resolveOriginMessageProvider({
+      originatingChannel: sessionCtx.OriginatingChannel,
+      provider: sessionCtx.Provider,
+    });
     const hookResult = await hookRunner.runBeforeAgentReply(
       { cleanedBody },
-      { agentId, sessionKey: agentSessionKey, sessionId, workspaceDir },
+      {
+        agentId,
+        sessionKey: agentSessionKey,
+        sessionId,
+        workspaceDir,
+        messageProvider: hookMessageProvider,
+        trigger: opts?.isHeartbeat ? "heartbeat" : "user",
+        channelId: hookMessageProvider,
+      },
     );
     if (hookResult?.reply) {
       return hookResult.reply;
