@@ -119,7 +119,7 @@ rg -l "phrase" ~/.openclaw/agents/<agentId>/sessions/
 - Large sessions can be several MB - use `head`/`tail` for sampling
 - The `sessions.json` index maps chat providers (discord, whatsapp, etc.) to session IDs
 - **Reset sessions**: When you use `/new` or `/reset`, sessions are moved to `.jsonl.reset.<timestamp>` — use `*.jsonl*` to find them
-- **Deleted sessions**: Get `.deleted.<timestamp>` suffix
+- **Deleted sessions**: Get `.jsonl.deleted.<timestamp>` suffix
 
 ## Fast text-only hint (low noise)
 
