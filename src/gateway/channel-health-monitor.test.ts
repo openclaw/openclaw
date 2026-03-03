@@ -65,7 +65,7 @@ async function startAndRunCheck(
   overrides: Partial<Omit<Parameters<typeof startChannelHealthMonitor>[0], "channelManager">> = {},
 ) {
   const monitor = startDefaultMonitor(manager, overrides);
-  const startupGraceMs = overrides.startupGraceMs ?? 0;
+  const startupGraceMs = overrides.timing?.monitorStartupGraceMs ?? overrides.startupGraceMs ?? 0;
   const checkIntervalMs = overrides.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
   await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 1);
   return monitor;
@@ -150,6 +150,14 @@ describe("channel-health-monitor", () => {
     const manager = createMockChannelManager();
     const monitor = await startAndRunCheck(manager, { startupGraceMs: 1_000 });
     expect(manager.getRuntimeSnapshot).toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("accepts timing.monitorStartupGraceMs", async () => {
+    const manager = createMockChannelManager();
+    const monitor = startDefaultMonitor(manager, { timing: { monitorStartupGraceMs: 60_000 } });
+    await vi.advanceTimersByTimeAsync(5_001);
+    expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     monitor.stop();
   });
 

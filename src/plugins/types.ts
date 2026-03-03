@@ -340,6 +340,10 @@ export type PluginHookAgentContext = {
   sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
+  /** What initiated this agent run: "user", "heartbeat", "cron", or "memory". */
+  trigger?: string;
+  /** Channel identifier (e.g. "telegram", "discord", "whatsapp"). */
+  channelId?: string;
 };
 
 // before_model_resolve hook
@@ -486,13 +490,21 @@ export type PluginHookToolContext = {
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
   toolName: string;
+  /** Provider-specific tool call ID when available. */
+  toolCallId?: string;
 };
 
 // before_tool_call hook
 export type PluginHookBeforeToolCallEvent = {
   toolName: string;
   params: Record<string, unknown>;
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
+  /** Provider-specific tool call ID when available. */
+  toolCallId?: string;
 };
 
 export type PluginHookBeforeToolCallResult = {
@@ -505,6 +517,10 @@ export type PluginHookBeforeToolCallResult = {
 export type PluginHookAfterToolCallEvent = {
   toolName: string;
   params: Record<string, unknown>;
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
+  /** Provider-specific tool call ID when available. */
+  toolCallId?: string;
   result?: unknown;
   error?: string;
   durationMs?: number;
