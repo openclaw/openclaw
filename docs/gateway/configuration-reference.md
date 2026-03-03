@@ -320,6 +320,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - OpenClaw additionally attempts voice receive recovery by leaving/rejoining a voice session after repeated decrypt failures.
 - `channels.discord.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
 - `channels.discord.actions.selfProfile` enables the Discord `self-profile` message action (strict bot self-only nickname/avatar/status/activity updates).
+- `channels.discord.autoPresence` enables automatic runtime/quota presence signaling (`online`/`idle`/`dnd`) with throttled updates.
+  - `enabled`: turn on auto-presence.
+  - `intervalMs`: evaluation interval.
+  - `minUpdateIntervalMs`: minimum spacing between actual Discord presence updates (anti-spam throttle).
+  - `healthyText`, `degradedText`, `exhaustedText`: optional status texts (`exhaustedText` supports `{reason}`).
 - `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
 
 **Reaction notification modes:** `off` (none), `own` (bot's messages, default), `all` (all messages), `allowlist` (from `guilds.<id>.users` on all messages).

@@ -836,6 +836,36 @@ Default slash command settings:
     - 4: Custom (uses the activity text as the status state; emoji is optional)
     - 5: Competing
 
+    Automatic runtime/quota signaling (optional):
+
+```json5
+{
+  channels: {
+    discord: {
+      autoPresence: {
+        enabled: true,
+        intervalMs: 30000,
+        minUpdateIntervalMs: 15000,
+        exhaustedText: "token exhausted",
+        degradedText: "runtime degraded",
+      },
+    },
+  },
+}
+```
+
+    Auto-presence state mapping:
+
+    - healthy + usable auth profile available → `online`
+    - degraded/unknown runtime or auth visibility → `idle`
+    - no usable profile with strong unavailable signal (`rate_limit`, `billing`, `auth`) → `dnd`
+
+    Notes:
+
+    - This uses auth profile cooldown/disable state as the strongest available runtime quota signal (not direct token counters).
+    - Updates are throttled (`minUpdateIntervalMs`) and deduped to avoid status spam.
+    - Manual `setPresence` / `self-profile` calls still work; auto-presence may overwrite them on the next auto evaluation when enabled.
+
   </Accordion>
 
   <Accordion title="Exec approvals in Discord">
@@ -1127,7 +1157,7 @@ High-signal Discord fields:
 - streaming: `streaming` (legacy alias: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
 - actions: `actions.*`
-- presence: `activity`, `status`, `activityType`, `activityUrl`
+- presence: `activity`, `status`, `activityType`, `activityUrl`, `autoPresence.*`
 - UI: `ui.components.accentColor`
 - features: `pluralkit`, `execApprovals`, `intents`, `agentComponents`, `heartbeat`, `responsePrefix`
 
