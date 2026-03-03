@@ -116,6 +116,12 @@ async function runCompactionScenario(params: {
   });
   const result = (await compactionHandler(params.event, mockContext)) as {
     cancel?: boolean;
+    compaction?: {
+      summary: string;
+      firstKeptEntryId: string;
+      tokensBefore: number;
+      details?: unknown;
+    };
   };
   return { result, getApiKeyMock };
 }
@@ -439,7 +445,7 @@ describe("compaction-safeguard extension model fallback", () => {
 });
 
 describe("compaction-safeguard double-compaction guard", () => {
-  it("cancels compaction when there are no real messages to summarize", async () => {
+  it("returns a minimal compaction summary when there are no real messages to summarize", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model });
@@ -460,7 +466,16 @@ describe("compaction-safeguard double-compaction guard", () => {
       event: mockEvent,
       apiKey: "sk-test",
     });
-    expect(result).toEqual({ cancel: true });
+    expect(result).toMatchObject({
+      compaction: {
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
+        details: { readFiles: [], modifiedFiles: [] },
+      },
+    });
+    expect(result.compaction?.summary).toContain(
+      "No real conversation messages were available to summarize.",
+    );
     expect(getApiKeyMock).not.toHaveBeenCalled();
   });
 

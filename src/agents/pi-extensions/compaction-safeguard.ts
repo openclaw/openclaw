@@ -207,12 +207,6 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
-    if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
-      log.warn(
-        "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
-      );
-      return { cancel: true };
-    }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([
@@ -220,6 +214,25 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       ...preparation.turnPrefixMessages,
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
+
+    if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
+      log.warn(
+        "Compaction safeguard: no real conversation messages to summarize; using minimal compaction summary.",
+      );
+      const baseSummary = "No real conversation messages were available to summarize.";
+      const previous = preparation.previousSummary?.trim();
+      let summary = previous ? `${previous}\n\n${baseSummary}` : baseSummary;
+      summary += toolFailureSection;
+      summary += fileOpsSummary;
+      return {
+        compaction: {
+          summary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          details: { readFiles, modifiedFiles },
+        },
+      };
+    }
 
     // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
     // Fall back to runtime.model which is explicitly passed when building extension paths.
