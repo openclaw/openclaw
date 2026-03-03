@@ -259,6 +259,75 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("retries bot send on 429 rate limit then succeeds", async () => {
+    const rateLimitErr = Object.assign(new Error("rate limited"), { status: 429 });
+    sendMessageDiscordMock
+      .mockRejectedValueOnce(rateLimitErr)
+      .mockResolvedValueOnce({ messageId: "msg-1", channelId: "channel-1" });
+
+    await deliverDiscordReply({
+      replies: [{ text: "retry me" }],
+      target: "channel:123",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries bot send on 500 server error then succeeds", async () => {
+    const serverErr = Object.assign(new Error("internal"), { status: 500 });
+    sendMessageDiscordMock
+      .mockRejectedValueOnce(serverErr)
+      .mockResolvedValueOnce({ messageId: "msg-1", channelId: "channel-1" });
+
+    await deliverDiscordReply({
+      replies: [{ text: "retry me" }],
+      target: "channel:123",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry on 4xx client errors", async () => {
+    const clientErr = Object.assign(new Error("bad request"), { status: 400 });
+    sendMessageDiscordMock.mockRejectedValueOnce(clientErr);
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "fail" }],
+        target: "channel:123",
+        token: "token",
+        runtime,
+        textLimit: 2000,
+      }),
+    ).rejects.toThrow("bad request");
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws after exhausting retry attempts", async () => {
+    const rateLimitErr = Object.assign(new Error("rate limited"), { status: 429 });
+    sendMessageDiscordMock.mockRejectedValue(rateLimitErr);
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "persistent failure" }],
+        target: "channel:123",
+        token: "token",
+        runtime,
+        textLimit: 2000,
+      }),
+    ).rejects.toThrow("rate limited");
+
+    // 1 initial + 2 retries = 3 attempts
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(3);
+  });
+
   it("does not use thread webhook when outbound target is not a bound thread", async () => {
     const threadBindings = await createBoundThreadBindings();
 

@@ -23,6 +23,41 @@ export type DiscordThreadBindingLookup = {
   touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
 
+const RETRY_ATTEMPTS = 2;
+const RETRY_BASE_DELAY_MS = 1000;
+
+function isRetryableDiscordError(err: unknown): { retryable: boolean; retryAfterMs: number } {
+  const status = (err as { status?: number }).status ?? (err as { statusCode?: number }).statusCode;
+  if (status === 429) {
+    const retryAfterRaw = (err as { headers?: Record<string, string> }).headers?.["retry-after"];
+    const retryAfterMs = retryAfterRaw ? Number(retryAfterRaw) * 1000 : 0;
+    return { retryable: true, retryAfterMs: Number.isFinite(retryAfterMs) ? retryAfterMs : 0 };
+  }
+  if (status !== undefined && status >= 500) {
+    return { retryable: true, retryAfterMs: 0 };
+  }
+  return { retryable: false, retryAfterMs: 0 };
+}
+
+async function sendWithRetry(fn: () => Promise<unknown>): Promise<void> {
+  for (let attempt = 0; attempt <= RETRY_ATTEMPTS; attempt++) {
+    try {
+      await fn();
+      return;
+    } catch (err: unknown) {
+      if (attempt === RETRY_ATTEMPTS) {
+        throw err;
+      }
+      const { retryable, retryAfterMs } = isRetryableDiscordError(err);
+      if (!retryable) {
+        throw err;
+      }
+      const delayMs = Math.max(retryAfterMs, RETRY_BASE_DELAY_MS * (attempt + 1));
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 function resolveTargetChannelId(target: string): string | undefined {
   if (!target.startsWith("channel:")) {
     return undefined;
@@ -105,12 +140,14 @@ async function sendDiscordChunkWithFallback(params: {
       // Fall through to the standard bot sender path.
     }
   }
-  await sendMessageDiscord(params.target, text, {
-    token: params.token,
-    rest: params.rest,
-    accountId: params.accountId,
-    replyTo: params.replyTo,
-  });
+  await sendWithRetry(() =>
+    sendMessageDiscord(params.target, text, {
+      token: params.token,
+      rest: params.rest,
+      accountId: params.accountId,
+      replyTo: params.replyTo,
+    }),
+  );
 }
 
 async function sendAdditionalDiscordMedia(params: {
@@ -123,13 +160,15 @@ async function sendAdditionalDiscordMedia(params: {
 }) {
   for (const mediaUrl of params.mediaUrls) {
     const replyTo = params.resolveReplyTo();
-    await sendMessageDiscord(params.target, "", {
-      token: params.token,
-      rest: params.rest,
-      mediaUrl,
-      accountId: params.accountId,
-      replyTo,
-    });
+    await sendWithRetry(() =>
+      sendMessageDiscord(params.target, "", {
+        token: params.token,
+        rest: params.rest,
+        mediaUrl,
+        accountId: params.accountId,
+        replyTo,
+      }),
+    );
   }
 }
 
