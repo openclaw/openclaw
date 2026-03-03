@@ -123,13 +123,14 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
   }
 }
 
-function restoreTelegramDispatcherForSafeRetry(): boolean {
+function restoreTelegramDispatcherForSafeRetry(desiredAutoSelectFamily: boolean | null): boolean {
   if (!baselineGlobalDispatcherCaptured) {
     return false;
   }
   try {
     setGlobalDispatcher(baselineGlobalDispatcher as Parameters<typeof setGlobalDispatcher>[0]);
-    appliedGlobalDispatcherAutoSelectFamily = null;
+    // Preserve the decision marker so we don't immediately reinstall the same dispatcher.
+    appliedGlobalDispatcherAutoSelectFamily = desiredAutoSelectFamily;
     log.warn("fetch fallback: restoring original undici dispatcher for safe retry");
     return true;
   } catch {
@@ -199,6 +200,9 @@ export function resolveTelegramFetch(
   options?: { network?: TelegramNetworkConfig },
 ): typeof fetch | undefined {
   applyTelegramNetworkWorkarounds(options?.network);
+  const desiredAutoSelectFamily = resolveTelegramAutoSelectFamilyDecision({
+    network: options?.network,
+  }).value;
   const sourceFetch = proxyFetch ? resolveFetch(proxyFetch) : resolveFetch();
   if (!sourceFetch) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
@@ -219,7 +223,7 @@ export function resolveTelegramFetch(
         } catch (ipv4FallbackErr) {
           if (
             shouldRetryWithIpv4Fallback(ipv4FallbackErr) &&
-            restoreTelegramDispatcherForSafeRetry()
+            restoreTelegramDispatcherForSafeRetry(desiredAutoSelectFamily)
           ) {
             return sourceFetch(input, init);
           }
