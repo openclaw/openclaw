@@ -71,6 +71,8 @@ openclaw cron add \
 
 定时任务默认持久化存储在 Gateway网关主机的 `~/.openclaw/cron/jobs.json` 中。Gateway网关将文件加载到内存中，并在更改时写回，因此仅在 Gateway网关停止时手动编辑才是安全的。请优先使用 `openclaw cron add/edit` 或定时任务工具调用 API 进行更改。
 
+**不要把定时任务放进 `openclaw.json`。** 像 `cron.jobs` 这样的键不属于配置 schema，因此应将任务定义保存在 cron 存储中，并通过 CLI 或 cron 工具 API 进行管理。
+
 ## 新手友好概述
 
 将定时任务理解为：**何时**运行 + **做什么**。
