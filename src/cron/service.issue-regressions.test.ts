@@ -1592,4 +1592,41 @@ describe("Cron issue regressions", () => {
     expect(job?.state.lastStatus).toBe("error");
     expect(job?.state.lastError).toContain("timed out");
   });
+
+  it("computes nextRunAtMs after lastRunAtMs for daily cron jobs that run late (#33126)", () => {
+    // Bug: When a daily cron job runs past its scheduled time, nextRunAtMs was
+    // incorrectly set to the same day's scheduled time (which has already passed)
+    // instead of the next day's scheduled time.
+    //
+    // Schedule: 03:00 UTC daily with Asia/Shanghai timezone
+    // Job ran at: 06:01:44 UTC on 2026-03-03 (past the 03:00 UTC schedule)
+    // Expected next: 03:00 UTC on 2026-03-04
+    // Buggy next: 03:00 UTC on 2026-03-03 (same day, already passed)
+    const lastRunAtMs = Date.parse("2026-03-03T06:01:44.233Z");
+    const job: CronJob = {
+      id: "git-sync",
+      name: "Git Sync",
+      enabled: true,
+      createdAtMs: Date.parse("2026-01-01T00:00:00.000Z"),
+      updatedAtMs: lastRunAtMs,
+      schedule: { kind: "cron", expr: "0 3 * * *", tz: "Asia/Shanghai" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "sync" },
+      delivery: { mode: "main" },
+      state: {
+        lastRunAtMs,
+        lastStatus: "ok",
+      },
+    };
+
+    const next = computeJobNextRunAtMs(job, lastRunAtMs);
+
+    // Should be scheduled for the next day, not the same day
+    expect(next).toBeDefined();
+    expect(next).toBeGreaterThan(lastRunAtMs);
+    // Should be around 03:00 UTC on 2026-03-04 (which is 2026-03-03 19:00 UTC in Asia/Shanghai)
+    // or later depending on timezone handling
+    expect(new Date(next ?? 0).getTime()).toBeGreaterThan(lastRunAtMs);
+  });
 });

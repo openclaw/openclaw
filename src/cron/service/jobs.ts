@@ -204,6 +204,18 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     const nextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
     return computeStaggeredCronNextRunAtMs(job, nextSecondMs);
   }
+  // Guard against scheduling next run in the past (before lastRunAtMs).
+  // This can happen when a job runs late and croner returns the same-day
+  // scheduled time which has already passed (#33126).
+  const lastRunAtMs = job.state.lastRunAtMs;
+  if (isFiniteTimestamp(next) && isFiniteTimestamp(lastRunAtMs) && next <= lastRunAtMs) {
+    // Retry calculation starting from lastRunAtMs + 1 second
+    const afterLastRunMs = lastRunAtMs + 1000;
+    const corrected = computeStaggeredCronNextRunAtMs(job, afterLastRunMs);
+    if (isFiniteTimestamp(corrected) && corrected > lastRunAtMs) {
+      return corrected;
+    }
+  }
   return isFiniteTimestamp(next) ? next : undefined;
 }
 
