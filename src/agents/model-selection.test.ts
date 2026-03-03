@@ -450,9 +450,9 @@ describe("model-selection", () => {
           defaultModel: "gemini-pro",
         });
 
-        expect(result).toEqual({ provider: "anthropic", model: "claude-3-5-sonnet" });
+        expect(result).toEqual({ provider: "google", model: "claude-3-5-sonnet" });
         expect(warnSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Falling back to "anthropic/claude-3-5-sonnet"'),
+          expect.stringContaining('Falling back to "google/claude-3-5-sonnet"'),
         );
       } finally {
         setLoggerOverride(null);

@@ -121,7 +121,7 @@ describe("initSessionState thread forking", () => {
     const parsedHeader = JSON.parse(headerLine) as {
       parentSession?: string;
     };
-    expect(parsedHeader.parentSession).toBe(parentSessionFile);
+    expect(parsedHeader.parentSession).toBe(await fs.realpath(parentSessionFile));
     warn.mockRestore();
   });
 

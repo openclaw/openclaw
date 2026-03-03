@@ -18,6 +18,21 @@ const BACKOFF_MS: readonly number[] = [
   600_000, // retry 4: 10m
 ];
 
+/**
+ * Patterns that indicate a permanent delivery failure that will not resolve
+ * on retry. Entries matching these are moved directly to failed/ without
+ * consuming retry budget.
+ */
+const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
+  /no conversation reference found/i,
+  /chat not found/i,
+  /user not found/i,
+  /bot was blocked by the user/i,
+  /bot was kicked from the/i,
+  /chat_id is empty/i,
+  /outbound not configured for channel/i,
+];
+
 type DeliveryMirrorPayload = {
   sessionKey: string;
   agentId?: string;
@@ -44,6 +59,7 @@ export interface QueuedDelivery {
   silent?: boolean;
   mirror?: DeliveryMirrorPayload;
   retryCount: number;
+  lastAttemptAt?: number;
   lastError?: string;
 }
 
@@ -130,6 +146,7 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   const raw = await fs.promises.readFile(filePath, "utf-8");
   const entry: QueuedDelivery = JSON.parse(raw);
   entry.retryCount += 1;
+  entry.lastAttemptAt = Date.now();
   entry.lastError = error;
   const tmp = `${filePath}.${process.pid}.tmp`;
   await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
@@ -137,6 +154,11 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
     mode: 0o600,
   });
   await fs.promises.rename(tmp, filePath);
+}
+
+/** Detect delivery errors that are permanent and should not be retried. */
+export function isPermanentDeliveryError(message: string): boolean {
+  return PERMANENT_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 /** Load all pending delivery entries from the queue directory. */
@@ -167,7 +189,18 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
         continue;
       }
       const raw = await fs.promises.readFile(filePath, "utf-8");
-      entries.push(JSON.parse(raw));
+      const entry: QueuedDelivery = JSON.parse(raw);
+      // Backfill lastAttemptAt for legacy entries that have retries but no timestamp.
+      if (entry.retryCount > 0 && entry.lastAttemptAt == null) {
+        entry.lastAttemptAt = entry.enqueuedAt;
+        const tmp = `${filePath}.${process.pid}.tmp`;
+        await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
+          encoding: "utf-8",
+          mode: 0o600,
+        });
+        await fs.promises.rename(tmp, filePath);
+      }
+      entries.push(entry);
     } catch {
       // Skip malformed or inaccessible entries.
     }
@@ -193,6 +226,28 @@ export function computeBackoffMs(retryCount: number): number {
   return BACKOFF_MS[Math.min(retryCount - 1, BACKOFF_MS.length - 1)] ?? BACKOFF_MS.at(-1) ?? 0;
 }
 
+/**
+ * Check whether a queued entry is eligible for a recovery retry at the given
+ * wall-clock time. First-attempt entries (retryCount=0) are always eligible.
+ * Retry entries must wait until the backoff window has elapsed since their last
+ * attempt.
+ */
+export function isEntryEligibleForRecoveryRetry(
+  entry: QueuedDelivery,
+  now: number,
+): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
+  if (entry.retryCount === 0) {
+    return { eligible: true };
+  }
+  const backoffMs = computeBackoffMs(entry.retryCount);
+  const lastAttempt = entry.lastAttemptAt ?? entry.enqueuedAt;
+  const elapsed = now - lastAttempt;
+  if (elapsed >= backoffMs) {
+    return { eligible: true };
+  }
+  return { eligible: false, remainingBackoffMs: backoffMs - elapsed };
+}
+
 export type DeliverFn = (
   params: {
     cfg: BotConfig;
@@ -210,20 +265,24 @@ export interface RecoveryLogger {
 /**
  * On gateway startup, scan the delivery queue and retry any pending entries.
  * Uses exponential backoff and moves entries that exceed MAX_RETRIES to failed/.
+ * Entries whose backoff window has not yet elapsed are deferred to the next restart.
  */
 export async function recoverPendingDeliveries(opts: {
   deliver: DeliverFn;
   log: RecoveryLogger;
   cfg: BotConfig;
   stateDir?: string;
-  /** Override for testing — resolves instead of using real setTimeout. */
-  delay?: (ms: number) => Promise<void>;
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next restart. Default: 60 000. */
   maxRecoveryMs?: number;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
+}): Promise<{
+  recovered: number;
+  failed: number;
+  skippedMaxRetries: number;
+  deferredBackoff: number;
+}> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
-    return { recovered: 0, failed: 0, skipped: 0 };
+    return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
   }
 
   // Process oldest first.
@@ -231,18 +290,20 @@ export async function recoverPendingDeliveries(opts: {
 
   opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
 
-  const delayFn = opts.delay ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
 
   let recovered = 0;
   let failed = 0;
-  let skipped = 0;
+  let skippedMaxRetries = 0;
+  let deferredBackoff = 0;
 
   for (const entry of pending) {
     const now = Date.now();
     if (now >= deadline) {
-      const deferred = pending.length - recovered - failed - skipped;
-      opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
+      const remaining = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
+      opts.log.warn(
+        `Recovery time budget exceeded — ${remaining} entries deferred to next restart`,
+      );
       break;
     }
     if (entry.retryCount >= MAX_RETRIES) {
@@ -254,21 +315,17 @@ export async function recoverPendingDeliveries(opts: {
       } catch (err) {
         opts.log.error(`Failed to move entry ${entry.id} to failed/: ${String(err)}`);
       }
-      skipped += 1;
+      skippedMaxRetries += 1;
       continue;
     }
 
-    const backoff = computeBackoffMs(entry.retryCount + 1);
-    if (backoff > 0) {
-      if (now + backoff >= deadline) {
-        const deferred = pending.length - recovered - failed - skipped;
-        opts.log.warn(
-          `Recovery time budget exceeded — ${deferred} entries deferred to next restart`,
-        );
-        break;
-      }
-      opts.log.info(`Waiting ${backoff}ms before retrying delivery ${entry.id}`);
-      await delayFn(backoff);
+    const eligibility = isEntryEligibleForRecoveryRetry(entry, now);
+    if (!eligibility.eligible) {
+      opts.log.info(
+        `Delivery ${entry.id} not ready for retry yet (${eligibility.remainingBackoffMs}ms remaining)`,
+      );
+      deferredBackoff += 1;
+      continue;
     }
 
     try {
@@ -290,26 +347,33 @@ export async function recoverPendingDeliveries(opts: {
       recovered += 1;
       opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
-      try {
-        await failDelivery(
-          entry.id,
-          err instanceof Error ? err.message : String(err),
-          opts.stateDir,
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      if (isPermanentDeliveryError(errorMessage)) {
+        opts.log.warn(
+          `Delivery ${entry.id} failed with permanent error — moving to failed/: ${errorMessage}`,
         );
+        try {
+          await moveToFailed(entry.id, opts.stateDir);
+        } catch (moveErr) {
+          opts.log.error(`Failed to move entry ${entry.id} to failed/: ${String(moveErr)}`);
+        }
+        failed += 1;
+        continue;
+      }
+      try {
+        await failDelivery(entry.id, errorMessage, opts.stateDir);
       } catch {
         // Best-effort update.
       }
       failed += 1;
-      opts.log.warn(
-        `Retry failed for delivery ${entry.id}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      opts.log.warn(`Retry failed for delivery ${entry.id}: ${errorMessage}`);
     }
   }
 
   opts.log.info(
-    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skipped} skipped (max retries)`,
+    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skippedMaxRetries} skipped (max retries), ${deferredBackoff} deferred (backoff)`,
   );
-  return { recovered, failed, skipped };
+  return { recovered, failed, skippedMaxRetries, deferredBackoff };
 }
 
 export { MAX_RETRIES };

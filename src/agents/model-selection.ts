@@ -404,7 +404,7 @@ export function buildAllowedModelSet(params: {
   const defaultModel = params.defaultModel?.trim();
   const defaultRef =
     defaultModel && params.defaultProvider
-      ? parseModelRef(defaultModel, params.defaultProvider)
+      ? normalizeModelRef(params.defaultProvider, defaultModel)
       : null;
   const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
   const catalogKeys = new Set(params.catalog.map((entry) => modelKey(entry.provider, entry.id)));

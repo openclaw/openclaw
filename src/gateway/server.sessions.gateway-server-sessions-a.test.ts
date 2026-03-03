@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { __testing as controlPlaneTestHooks } from "./control-plane-rate-limit.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
   connectOk,
@@ -12,6 +13,7 @@ import {
   piSdkMock,
   rpcReq,
   testState,
+  trackConnectChallengeNonce,
   writeSessionStore,
 } from "./test-helpers.js";
 

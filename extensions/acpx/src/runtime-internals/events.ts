@@ -265,7 +265,28 @@ export function parsePromptEventLine(
   }
 
   if (!isAcpJsonRpcMessage(parsed)) {
-    const fallbackError = toAcpxErrorEvent(parsed);
+    // `parsed` is narrowed to `never` because both isRecord and isAcpJsonRpcMessage
+    // guard to Record<string, unknown>. Re-bind to avoid TS errors on bare events.
+    const bare = parsed as Record<string, unknown>;
+    const bareType = asTrimmedString(bare.type);
+    if (bareType === "done") {
+      const stopReason = asTrimmedString(bare.stopReason);
+      return { type: "done", ...(stopReason ? { stopReason } : {}) };
+    }
+    if (bareType === "error") {
+      const message = asTrimmedString(bare.message) || "acpx runtime error";
+      const codeValue = bare.code;
+      return {
+        type: "error",
+        message,
+        code:
+          typeof codeValue === "number" && Number.isFinite(codeValue)
+            ? String(codeValue)
+            : asOptionalString(codeValue),
+        retryable: asOptionalBoolean(bare.retryable),
+      };
+    }
+    const fallbackError = toAcpxErrorEvent(bare);
     if (fallbackError) {
       return {
         type: "error",

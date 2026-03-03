@@ -17,6 +17,7 @@ import { checkAcpxVersion } from "./ensure.js";
 import {
   parseJsonLines,
   parsePromptEventLine,
+  type PromptParseContext,
   toAcpxErrorEvent,
 } from "./runtime-internals/events.js";
 import {
@@ -235,10 +236,11 @@ export class AcpxRuntime implements AcpRuntime {
 
     let sawDone = false;
     let sawError = false;
+    const parseContext: PromptParseContext = { promptRequestIds: new Set() };
     const lines = createInterface({ input: child.stdout });
     try {
       for await (const line of lines) {
-        const parsed = parsePromptEventLine(line);
+        const parsed = parsePromptEventLine(line, parseContext);
         if (!parsed) {
           continue;
         }
