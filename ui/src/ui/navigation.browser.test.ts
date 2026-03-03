@@ -24,6 +24,25 @@ describe("control UI routing", () => {
     expect(window.location.pathname).toBe("/overview");
   });
 
+  it("routes /index.html entrypoint to overview when token is missing", async () => {
+    const app = mountApp("/index.html");
+    await app.updateComplete;
+
+    expect(app.settings.token).toBe("");
+    expect(app.tab).toBe("overview");
+    expect(window.location.pathname).toBe("/overview");
+  });
+
+  it("routes /ui/index.html entrypoint to overview when token is missing", async () => {
+    const app = mountApp("/ui/index.html");
+    await app.updateComplete;
+
+    expect(app.settings.token).toBe("");
+    expect(app.basePath).toBe("/ui");
+    expect(app.tab).toBe("overview");
+    expect(window.location.pathname).toBe("/ui/overview");
+  });
+
   it("hydrates the tab from the location", async () => {
     const app = mountApp("/sessions");
     await app.updateComplete;

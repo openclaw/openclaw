@@ -62,7 +62,10 @@ type SettingsHost = {
 };
 
 function isBaseEntrypointPath(pathname: string, basePath: string): boolean {
-  const normalizedPath = normalizePath(pathname);
+  let normalizedPath = normalizePath(pathname);
+  if (normalizedPath.endsWith("/index.html")) {
+    normalizedPath = normalizePath(normalizedPath.slice(0, -"/index.html".length)) || "/";
+  }
   const base = normalizeBasePath(basePath);
   if (!base) {
     return normalizedPath === "/";
