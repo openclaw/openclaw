@@ -318,6 +318,8 @@ export function syncTabWithLocation(host: SettingsHost, replace: boolean) {
   const hasAuth = Boolean(host.settings.token.trim() || host.password?.trim());
   const atEntrypoint = isBaseEntrypointPath(window.location.pathname, host.basePath);
   const resolvedFromPath = tabFromPath(window.location.pathname, host.basePath);
+  // Entrypoint without auth lands on overview; unknown routes also fall back to
+  // overview when unauthenticated so we avoid defaulting typo URLs to chat.
   const resolved =
     atEntrypoint && !hasAuth ? "overview" : (resolvedFromPath ?? (hasAuth ? "chat" : "overview"));
   setTabFromRoute(host, resolved);
