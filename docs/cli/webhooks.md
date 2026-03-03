@@ -35,14 +35,14 @@ openclaw webhooks imap run
 
 See [IMAP Hooks documentation](/automation/imap) for details.
 
-## Commands
+## Command Reference
 
-### Gmail
+**Gmail commands:**
 
 - `openclaw webhooks gmail setup` - Configure Gmail watch + Pub/Sub + OpenClaw hooks
 - `openclaw webhooks gmail run` - Run gog watch serve + auto-renew loop
 
-### IMAP
+**IMAP commands:**
 
 - `openclaw webhooks imap setup` - Configure IMAP watcher + OpenClaw hooks
 - `openclaw webhooks imap run` - Run IMAP poll watcher loop

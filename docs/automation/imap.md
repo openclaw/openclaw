@@ -245,7 +245,7 @@ curl -X POST http://127.0.0.1:18789/hooks/imap \
 
 ### "himalaya binary not found"
 
-Install himalaya: https://github.com/pimalaya/himalaya
+Install himalaya: <https://github.com/pimalaya/himalaya>
 
 ### "himalaya account check failed"
 
