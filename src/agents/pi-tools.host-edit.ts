@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 /** Resolve path for host edit: expand ~ and resolve relative paths against root. */
@@ -29,7 +29,7 @@ export function wrapHostEditToolWithPostWriteRecovery(
       toolCallId: string,
       params: unknown,
       signal: AbortSignal | undefined,
-      onUpdate?: (update: unknown) => void,
+      onUpdate?: AgentToolUpdateCallback<unknown>,
     ) => {
       try {
         return await base.execute(toolCallId, params, signal, onUpdate);
