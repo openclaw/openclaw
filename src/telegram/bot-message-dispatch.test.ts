@@ -541,6 +541,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect((bot.api.deleteMessage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 
+  it("does not trigger late pre-rotation mid-message after an explicit assistant message start", async () => {
+    const answerDraftStream = createDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // Message A finalizes without streamed partials.
+        await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
+        // Message B starts normally before partials.
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Message B first chunk" });
+        await replyOptions?.onPartialReply?.({ text: "Message B second chunk" });
+        await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    // The explicit message_start boundary must clear finalized state so
+    // same-message partials do not force a new preview mid-stream.
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Message B first chunk");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Message B second chunk");
+  });
+
   it("finalizes multi-message assistant stream to matching preview messages in order", async () => {
     const answerDraftStream = createSequencedDraftStream(1001);
     const reasoningDraftStream = createDraftStream();

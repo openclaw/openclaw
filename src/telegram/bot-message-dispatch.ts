@@ -630,9 +630,15 @@ export const dispatchTelegramMessage = async ({
               reasoningStepState.resetForNextStep();
               if (skipNextAnswerMessageStartRotation) {
                 skipNextAnswerMessageStartRotation = false;
+                finalizedPreviewByLane.answer = false;
                 return;
               }
               rotateAnswerLaneForNewAssistantMessage();
+              // Message-start is an explicit assistant-message boundary.
+              // Even when no forceNewMessage happened (e.g. prior answer had no
+              // streamed partials), the next partial belongs to a fresh lifecycle
+              // and must not trigger late pre-rotation mid-message.
+              finalizedPreviewByLane.answer = false;
             }
           : undefined,
         onReasoningEnd: reasoningLane.stream
