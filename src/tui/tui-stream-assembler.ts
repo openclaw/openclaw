@@ -231,7 +231,11 @@ export class TuiStreamAssembler {
         existingContinuation.length > 0 &&
         nextContentBlocks.some((block) => existingContinuation.includes(block));
 
-      if (overlapMergedContinuation && continuationStart != null) {
+      if (
+        overlapMergedContinuation &&
+        continuationStart != null &&
+        boundaryDropMode === "streamed-or-incoming"
+      ) {
         state.contentBlocks = [
           ...state.contentBlocks.slice(0, continuationStart),
           ...overlapMergedContinuation,

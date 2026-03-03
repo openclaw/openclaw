@@ -274,6 +274,33 @@ describe("TuiStreamAssembler", () => {
     expect(fullSnapshot).toBe("Before tool call\nAfter 1\nAfter 2\nAfter 3");
   });
 
+  it("does not retain stale continuation blocks during finalize snapshots", () => {
+    const assembler = new TuiStreamAssembler();
+
+    assembler.ingestDelta(
+      "run-post-tool-finalize-snapshot",
+      messageWithContent([text("Before tool call")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-finalize-snapshot",
+      messageWithContent([toolUse(), text("After 1")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-finalize-snapshot",
+      messageWithContent([toolUse(), text("After 2")]),
+      false,
+    );
+
+    const finalText = assembler.finalize(
+      "run-post-tool-finalize-snapshot",
+      messageWithContent([toolUse(), text("After 2"), text("After 3")]),
+      false,
+    );
+    expect(finalText).toBe("After 2\nAfter 3");
+  });
+
   for (const testCase of FINALIZE_BOUNDARY_CASES) {
     it(testCase.name, () => {
       const assembler = new TuiStreamAssembler();
