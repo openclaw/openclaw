@@ -1,6 +1,7 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  ensureTlsScheme,
   isLocalishHost,
   isPrivateOrLoopbackAddress,
   isPrivateOrLoopbackHost,
@@ -474,5 +475,33 @@ describe("isSecureWebSocketUrl", () => {
     for (const input of disallowedWhenOptedIn) {
       expect(isSecureWebSocketUrl(input, { allowPrivateWs: true }), input).toBe(false);
     }
+  });
+});
+
+describe("ensureTlsScheme", () => {
+  it("upgrades ws:// to wss:// when tls is true", () => {
+    expect(ensureTlsScheme("ws://remote.example:18789", true)).toBe("wss://remote.example:18789");
+  });
+
+  it("leaves wss:// unchanged when tls is true", () => {
+    expect(ensureTlsScheme("wss://remote.example:18789", true)).toBe("wss://remote.example:18789");
+  });
+
+  it("leaves ws:// unchanged when tls is false", () => {
+    expect(ensureTlsScheme("ws://127.0.0.1:18789", false)).toBe("ws://127.0.0.1:18789");
+  });
+
+  it("preserves path and query in upgraded URL", () => {
+    expect(ensureTlsScheme("ws://gateway.lan:9443/ws?token=abc", true)).toBe(
+      "wss://gateway.lan:9443/ws?token=abc",
+    );
+  });
+
+  it("handles empty string gracefully", () => {
+    expect(ensureTlsScheme("", true)).toBe("");
+  });
+
+  it("handles non-ws protocols without modification", () => {
+    expect(ensureTlsScheme("http://example.com", true)).toBe("http://example.com");
   });
 });

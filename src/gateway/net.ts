@@ -439,3 +439,14 @@ export function isSecureWebSocketUrl(
   }
   return false;
 }
+
+/**
+ * Upgrade a WebSocket URL from ws:// to wss:// when TLS is requested.
+ * Leaves wss:// and non-ws URLs unchanged.
+ */
+export function ensureTlsScheme(url: string, tls: boolean): string {
+  if (tls && url.startsWith("ws://")) {
+    return "wss://" + url.slice(5);
+  }
+  return url;
+}

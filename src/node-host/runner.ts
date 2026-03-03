@@ -2,6 +2,7 @@ import { resolveBrowserConfig } from "../browser/config.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { GatewayClient } from "../gateway/client.js";
+import { ensureTlsScheme, isSecureWebSocketUrl } from "../gateway/net.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
@@ -220,8 +221,19 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
 
   const host = gateway.host ?? "127.0.0.1";
   const port = gateway.port ?? 18789;
-  const scheme = gateway.tls ? "wss" : "ws";
-  const url = `${scheme}://${host}:${port}`;
+  const hasExplicitHost = gateway.host != null;
+  const envUrl = !hasExplicitHost
+    ? (process.env.OPENCLAW_GATEWAY_URL?.trim() || process.env.CLAWDBOT_GATEWAY_URL?.trim())
+    : undefined;
+  const url = envUrl
+    ? ensureTlsScheme(envUrl, gateway.tls)
+    : `${gateway.tls ? "wss" : "ws"}://${host}:${port}`;
+  if (!isSecureWebSocketUrl(url, { allowPrivateWs: true })) {
+    throw new Error(
+      `node host: gateway URL "${url}" uses plaintext ws:// to a non-loopback address. ` +
+        `Use --tls or set a wss:// URL in OPENCLAW_GATEWAY_URL.`,
+    );
+  }
   const pathEnv = ensureNodePathEnv();
   // eslint-disable-next-line no-console
   console.log(`node host PATH: ${pathEnv}`);

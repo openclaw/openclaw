@@ -475,6 +475,64 @@ describe("buildGatewayConnectionDetails", () => {
 
     expect(details.url).toBe("ws://127.0.0.1:18789");
   });
+
+  it("upgrades ws:// to wss:// when tlsOverride is true", () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: { url: "ws://remote.example.com:18789" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    const details = buildGatewayConnectionDetails({ tlsOverride: true });
+
+    expect(details.url).toBe("wss://remote.example.com:18789");
+  });
+
+  it("keeps wss:// unchanged when tlsOverride is true", () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: { url: "wss://remote.example.com:18789" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    const details = buildGatewayConnectionDetails({ tlsOverride: true });
+
+    expect(details.url).toBe("wss://remote.example.com:18789");
+  });
+
+  it("upgrades env OPENCLAW_GATEWAY_URL from ws:// to wss:// when tlsOverride is true", () => {
+    setLocalLoopbackGatewayConfig();
+    const prev = process.env.OPENCLAW_GATEWAY_URL;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "ws://gateway.lan:18789";
+
+      const details = buildGatewayConnectionDetails({ tlsOverride: true });
+
+      expect(details.url).toBe("wss://gateway.lan:18789");
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      } else {
+        process.env.OPENCLAW_GATEWAY_URL = prev;
+      }
+    }
+  });
+
+  it("does not upgrade ws:// when tlsOverride is false", () => {
+    setLocalLoopbackGatewayConfig();
+
+    const details = buildGatewayConnectionDetails({ tlsOverride: false });
+
+    expect(details.url).toBe("ws://127.0.0.1:18789");
+  });
 });
 
 describe("callGateway error details", () => {

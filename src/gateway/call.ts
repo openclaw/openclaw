@@ -24,7 +24,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { isSecureWebSocketUrl } from "./net.js";
+import { ensureTlsScheme, isSecureWebSocketUrl } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 type CallGatewayBaseOptions = {
@@ -132,6 +132,8 @@ export function buildGatewayConnectionDetails(
     url?: string;
     configPath?: string;
     urlSource?: "cli" | "env";
+    /** When true, upgrade any ws:// URL to wss:// before the security check. */
+    tlsOverride?: boolean;
   } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
@@ -159,7 +161,8 @@ export function buildGatewayConnectionDetails(
   const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
   const urlSourceHint =
     options.urlSource ?? (cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined);
-  const url = urlOverride || remoteUrl || localUrl;
+  const rawUrl = urlOverride || remoteUrl || localUrl;
+  const url = ensureTlsScheme(rawUrl, options.tlsOverride ?? false);
   const urlSource = urlOverride
     ? urlSourceHint === "env"
       ? "env OPENCLAW_GATEWAY_URL"
