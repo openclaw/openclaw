@@ -52,7 +52,7 @@ function makeAssistantText(text: string): AgentMessage {
     content: [{ type: "text", text }],
     stopReason: "stop",
     timestamp: Date.now(),
-  };
+  } as unknown as AgentMessage;
 }
 
 /**
