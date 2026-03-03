@@ -21,6 +21,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "huggingfaceApiKey"
   | "opencodeZenApiKey"
   | "xaiApiKey"
+  | "qwenApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
   | "volcengineApiKey"
@@ -183,6 +184,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--qianfan-api-key",
     cliOption: "--qianfan-api-key <key>",
     description: "QIANFAN API key",
+  },
+  {
+    optionKey: "qwenApiKey",
+    authChoice: "qwen-api-key",
+    cliFlag: "--qwen-api-key",
+    cliOption: "--qwen-api-key <key>",
+    description: "Qwen API key",
   },
   {
     optionKey: "volcengineApiKey",

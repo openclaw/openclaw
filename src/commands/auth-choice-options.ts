@@ -104,8 +104,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "qwen",
     label: "Qwen",
-    hint: "OAuth",
-    choices: ["qwen-portal"],
+    hint: "OAuth + API key",
+    choices: ["qwen-portal", "qwen-api-key"],
   },
   {
     value: "zai",
@@ -275,6 +275,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     hint: "Oauth plugin for MiniMax",
   },
   { value: "qwen-portal", label: "Qwen OAuth" },
+  {
+    value: "qwen-api-key",
+    label: "Qwen API Key (DashScope)",
+    hint: "International (Singapore) or China",
+  },
   {
     value: "copilot-proxy",
     label: "Copilot Proxy (local)",

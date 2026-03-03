@@ -4,11 +4,14 @@ import { applyAuthChoicePluginProvider } from "./auth-choice.apply.plugin-provid
 export async function applyAuthChoiceQwenPortal(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
-  return await applyAuthChoicePluginProvider(params, {
-    authChoice: "qwen-portal",
-    pluginId: "qwen-portal-auth",
-    providerId: "qwen-portal",
-    methodId: "device",
-    label: "Qwen",
-  });
+  if (params.authChoice === "qwen-portal") {
+    return await applyAuthChoicePluginProvider(params, {
+      authChoice: "qwen-portal",
+      pluginId: "qwen-portal-auth",
+      providerId: "qwen-portal",
+      methodId: "device",
+      label: "Qwen OAuth",
+    });
+  }
+  return null;
 }

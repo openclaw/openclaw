@@ -12,6 +12,10 @@ import {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
 import {
+  QWEN_DASHSCOPE_MODEL_CATALOG,
+  buildQwenDashscopeModelDefinition,
+} from "../agents/qwen-models.js";
+import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_DEFAULT_MODEL_REF,
@@ -29,13 +33,14 @@ import {
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelApi } from "../config/types.models.js";
+import type { ModelApi, ModelDefinitionConfig } from "../config/types.models.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  QWEN_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
@@ -98,7 +103,7 @@ export function applyZaiProviderConfig(
   const existingProvider = providers.zai;
   const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
 
-  const defaultModels = [
+  const defaultModels: ModelDefinitionConfig[] = [
     buildZaiModelDefinition({ id: "glm-5" }),
     buildZaiModelDefinition({ id: "glm-4.7" }),
     buildZaiModelDefinition({ id: "glm-4.7-flash" }),
@@ -572,4 +577,65 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+}
+
+const QWEN_API_BASE_URL_INTL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+const QWEN_API_BASE_URL_CN = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+const QWEN_DEFAULT_MODEL_ID = "qwen-plus";
+const QWEN_PROVIDER_ID = "qwen-portal";
+
+export function applyQwenProviderConfig(
+  cfg: OpenClawConfig,
+  params?: { region?: "intl" | "cn"; modelId?: string },
+): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[QWEN_DEFAULT_MODEL_REF] = {
+    ...models[QWEN_DEFAULT_MODEL_REF],
+    alias: models[QWEN_DEFAULT_MODEL_REF]?.alias ?? "Qwen",
+  };
+
+  const existingProvider = cfg.models?.providers?.[QWEN_PROVIDER_ID] as
+    | {
+        baseUrl?: unknown;
+        api?: unknown;
+      }
+    | undefined;
+  const existingBaseUrl =
+    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+
+  const baseUrlFromRegion =
+    params?.region === "intl"
+      ? QWEN_API_BASE_URL_INTL
+      : params?.region === "cn"
+        ? QWEN_API_BASE_URL_CN
+        : "";
+
+  const resolvedBaseUrl = baseUrlFromRegion || existingBaseUrl || QWEN_API_BASE_URL_INTL;
+  const resolvedApi =
+    typeof existingProvider?.api === "string"
+      ? (existingProvider.api as ModelApi)
+      : "openai-completions";
+
+  const defaultModels = QWEN_DASHSCOPE_MODEL_CATALOG.map(buildQwenDashscopeModelDefinition);
+
+  const defaultModelId = params?.modelId?.trim() || QWEN_DEFAULT_MODEL_ID;
+
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: QWEN_PROVIDER_ID,
+    api: resolvedApi,
+    baseUrl: resolvedBaseUrl,
+    defaultModels,
+    defaultModelId,
+  });
+}
+
+export function applyQwenConfig(
+  cfg: OpenClawConfig,
+  params?: { region?: "intl" | "cn"; modelId?: string },
+): OpenClawConfig {
+  const modelId = params?.modelId?.trim() || QWEN_DEFAULT_MODEL_ID;
+  const modelRef = `qwen-portal/${modelId}`;
+  const next = applyQwenProviderConfig(cfg, params);
+  return applyAgentDefaultModelPrimary(next, modelRef);
 }

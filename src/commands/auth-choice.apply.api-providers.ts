@@ -36,6 +36,8 @@ import {
   applyMoonshotProviderConfigCn,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
+  applyQwenConfig,
+  applyQwenProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyTogetherConfig,
@@ -55,6 +57,7 @@ import {
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
+  QWEN_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
@@ -69,6 +72,7 @@ import {
   setMistralApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
+  setQwenApiKey,
   setSyntheticApiKey,
   setTogetherApiKey,
   setVeniceApiKey,
@@ -100,6 +104,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   opencode: "opencode-zen",
   kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
+  qwen: "qwen-api-key",
 };
 
 const ZAI_AUTH_CHOICE_ENDPOINT: Partial<
@@ -282,6 +287,23 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
       "API key format: bce-v3/ALTAK-...",
     ].join("\n"),
     noteTitle: "QIANFAN",
+  },
+  "qwen-api-key": {
+    provider: "qwen-portal",
+    profileId: "qwen-portal:default",
+    expectedProviders: ["qwen-portal"],
+    envLabel: "QWEN_API_KEY",
+    promptMessage: "Enter Qwen API key",
+    setCredential: setQwenApiKey,
+    defaultModel: QWEN_DEFAULT_MODEL_REF,
+    applyDefaultConfig: (cfg) => applyQwenConfig(cfg),
+    applyProviderConfig: (cfg) => applyQwenProviderConfig(cfg),
+    noteDefault: QWEN_DEFAULT_MODEL_REF,
+    noteMessage: [
+      "Qwen DashScope API key authentication for qwen-portal provider.",
+      "Supports International (dashscope-intl.aliyuncs.com) and China (dashscope.aliyuncs.com) regions.",
+    ].join("\n"),
+    noteTitle: "Qwen DashScope",
   },
   "kilocode-api-key": {
     provider: "kilocode",

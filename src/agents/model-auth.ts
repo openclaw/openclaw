@@ -276,7 +276,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   }
 
   if (normalized === "qwen-portal") {
-    return pick("QWEN_OAUTH_TOKEN") ?? pick("QWEN_PORTAL_API_KEY");
+    return pick("QWEN_API_KEY") ?? pick("QWEN_OAUTH_TOKEN") ?? pick("QWEN_PORTAL_API_KEY");
   }
 
   if (normalized === "volcengine" || normalized === "volcengine-plan") {

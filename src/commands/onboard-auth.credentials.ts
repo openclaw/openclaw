@@ -335,6 +335,7 @@ export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
+export const QWEN_DEFAULT_MODEL_REF = "qwen-portal/qwen-plus";
 
 export async function setZaiApiKey(
   key: SecretInput,
@@ -371,6 +372,18 @@ export async function setOpenrouterApiKey(
   upsertAuthProfile({
     profileId: "openrouter:default",
     credential: buildApiKeyCredential("openrouter", safeKey, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setQwenApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "qwen-portal:default",
+    credential: buildApiKeyCredential("qwen-portal", key, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }

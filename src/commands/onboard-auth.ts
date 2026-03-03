@@ -35,6 +35,8 @@ export {
   applyVercelAiGatewayProviderConfig,
   applyXaiConfig,
   applyXaiProviderConfig,
+  applyQwenConfig,
+  applyQwenProviderConfig,
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
   applyZaiConfig,
@@ -64,6 +66,7 @@ export {
   setOpenaiApiKey,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
+  setQwenApiKey,
   setByteplusApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
@@ -92,6 +95,7 @@ export {
   TOGETHER_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
+  QWEN_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
   buildKilocodeModelDefinition,

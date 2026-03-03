@@ -44,6 +44,7 @@ export type AuthChoice =
   | "github-copilot"
   | "copilot-proxy"
   | "qwen-portal"
+  | "qwen-api-key"
   | "xai-api-key"
   | "mistral-api-key"
   | "volcengine-api-key"
@@ -132,6 +133,7 @@ export type OnboardOptions = {
   huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;
+  qwenApiKey?: string;
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
