@@ -451,6 +451,11 @@ export async function runOnboardingWizard(
     nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
   }
 
+  if (!opts.skipFirecrawl) {
+    const { setupFirecrawl } = await import("../commands/onboard-firecrawl.js");
+    nextConfig = await setupFirecrawl(nextConfig, runtime, prompter);
+  }
+
   // Setup hooks (session memory on /new)
   const { setupInternalHooks } = await import("../commands/onboard-hooks.js");
   nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
