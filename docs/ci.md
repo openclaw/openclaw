@@ -36,12 +36,14 @@ Jobs are ordered so cheap checks fail before expensive ones run:
 2. `build-artifacts` (blocked on above)
 3. `checks`, `checks-windows`, `macos`, `android` (blocked on build)
 
+Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`.
+
 ## Runners
 
 | Runner                           | Jobs                                       |
 | -------------------------------- | ------------------------------------------ |
 | `blacksmith-16vcpu-ubuntu-2404`  | Most Linux jobs, including scope detection |
-| `blacksmith-16vcpu-windows-2025` | `checks-windows`                           |
+| `blacksmith-32vcpu-windows-2025` | `checks-windows`                           |
 | `macos-latest`                   | `macos`, `ios`                             |
 
 ## Local Equivalents
