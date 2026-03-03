@@ -59,6 +59,7 @@ export type TelegramDraftStream = {
   messageId: () => number | undefined;
   previewMode?: () => "message" | "draft";
   previewRevision?: () => number;
+  lastDeliveredText?: () => string;
   clear: () => Promise<void>;
   stop: () => Promise<void>;
   /** Reset internal state so the next update creates a new message instead of editing. */
@@ -127,6 +128,7 @@ export function createTelegramDraftStream(params: {
   let streamDraftId = usesDraftTransport ? allocateTelegramDraftId() : undefined;
   let previewTransport: "message" | "draft" = usesDraftTransport ? "draft" : "message";
   let lastSentText = "";
+  let lastDeliveredText = "";
   let lastSentParseMode: "HTML" | undefined;
   let previewRevision = 0;
   let generation = 0;
@@ -289,6 +291,7 @@ export function createTelegramDraftStream(params: {
       }
       if (sent) {
         previewRevision += 1;
+        lastDeliveredText = trimmed;
       }
       return sent;
     } catch (err) {
@@ -340,6 +343,7 @@ export function createTelegramDraftStream(params: {
     messageId: () => streamMessageId,
     previewMode: () => previewTransport,
     previewRevision: () => previewRevision,
+    lastDeliveredText: () => lastDeliveredText,
     clear,
     stop,
     forceNewMessage,

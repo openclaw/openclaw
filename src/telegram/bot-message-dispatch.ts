@@ -225,6 +225,7 @@ export const dispatchTelegramMessage = async ({
       stream,
       lastPartialText: "",
       hasStreamedMessage: false,
+      previewRevisionBaseline: stream?.previewRevision?.() ?? 0,
     };
   };
   const lanes: Record<LaneName, DraftLaneState> = {
@@ -259,6 +260,7 @@ export const dispatchTelegramMessage = async ({
   const resetDraftLaneState = (lane: DraftLaneState) => {
     lane.lastPartialText = "";
     lane.hasStreamedMessage = false;
+    lane.previewRevisionBaseline = lane.stream?.previewRevision?.() ?? lane.previewRevisionBaseline;
   };
   const updateDraftFromPartial = (lane: DraftLaneState, text: string | undefined) => {
     const laneStream = lane.stream;
