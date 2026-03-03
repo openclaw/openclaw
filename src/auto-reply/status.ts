@@ -649,6 +649,19 @@ export function buildStatusMessage(args: StatusArgs): string {
   })();
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
+
+  // Show configured fallback models (from agent model config)
+  const configuredFallbacks = (() => {
+    const modelConfig = args.agent?.model;
+    if (typeof modelConfig === "object" && modelConfig && Array.isArray(modelConfig.fallbacks)) {
+      return modelConfig.fallbacks;
+    }
+    return undefined;
+  })();
+  const configuredFallbacksLine = configuredFallbacks?.length
+    ? `🔄 Fallbacks: ${configuredFallbacks.join(", ")}`
+    : null;
+
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
   const fallbackLine = fallbackState.active
     ? `↪️ Fallback: ${activeModelLabel}${
@@ -669,6 +682,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     versionLine,
     args.timeLine,
     modelLine,
+    configuredFallbacksLine,
     fallbackLine,
     usageCostLine,
     cacheLine,
