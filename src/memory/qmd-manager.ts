@@ -187,6 +187,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
   private readonly sources = new Set<MemorySource>();
   private readonly docPathCache = new Map<
@@ -238,6 +239,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.env = {
       ...process.env,
       XDG_CONFIG_HOME: this.xdgConfigHome,
+      // workaround for upstream bug https://github.com/tobi/qmd/issues/132
+      // QMD doesn't respect XDG_CONFIG_HOME:
+      QMD_CONFIG_DIR: this.xdgConfigHome,
       XDG_CACHE_HOME: this.xdgCacheHome,
       NO_COLOR: "1",
     };
@@ -261,6 +265,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         },
       ];
     }
+    this.managedCollectionNames = this.computeManagedCollectionNames();
   }
 
   private async initialize(mode: QmdManagerMode): Promise<void> {
@@ -1913,6 +1918,10 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private listManagedCollectionNames(): string[] {
+    return this.managedCollectionNames;
+  }
+
+  private computeManagedCollectionNames(): string[] {
     const seen = new Set<string>();
     const names: string[] = [];
     for (const collection of this.qmd.collections) {

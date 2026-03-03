@@ -1,11 +1,11 @@
+import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverReason,
   isAuthPermanentErrorMessage,
+  isTimeoutErrorMessage,
   type FailoverReason,
 } from "./pi-embedded-helpers.js";
 
-const TIMEOUT_HINT_RE =
-  /timeout|timed out|deadline exceeded|context deadline exceeded|stop reason:\s*abort|reason:\s*abort|unhandled stop reason:\s*abort/i;
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
 export class FailoverError extends Error {
@@ -82,13 +82,6 @@ function getStatusCode(err: unknown): number | undefined {
   return undefined;
 }
 
-function getErrorName(err: unknown): string {
-  if (!err || typeof err !== "object") {
-    return "";
-  }
-  return "name" in err ? String(err.name) : "";
-}
-
 function getErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -127,11 +120,11 @@ function hasTimeoutHint(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  if (getErrorName(err) === "TimeoutError") {
+  if (readErrorName(err) === "TimeoutError") {
     return true;
   }
   const message = getErrorMessage(err);
-  return Boolean(message && TIMEOUT_HINT_RE.test(message));
+  return Boolean(message && isTimeoutErrorMessage(message));
 }
 
 export function isTimeoutError(err: unknown): boolean {
@@ -141,7 +134,7 @@ export function isTimeoutError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
-  if (getErrorName(err) !== "AbortError") {
+  if (readErrorName(err) !== "AbortError") {
     return false;
   }
   const message = getErrorMessage(err);

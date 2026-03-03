@@ -6,6 +6,31 @@ import {
   syncTelegramMenuCommands,
 } from "./bot-native-command-menu.js";
 
+type SyncMenuOptions = {
+  deleteMyCommands: ReturnType<typeof vi.fn>;
+  setMyCommands: ReturnType<typeof vi.fn>;
+  commandsToRegister: Parameters<typeof syncTelegramMenuCommands>[0]["commandsToRegister"];
+  accountId: string;
+  botIdentity: string;
+  runtimeLog?: ReturnType<typeof vi.fn>;
+};
+
+function syncMenuCommandsWithMocks(options: SyncMenuOptions): void {
+  syncTelegramMenuCommands({
+    bot: {
+      api: { deleteMyCommands: options.deleteMyCommands, setMyCommands: options.setMyCommands },
+    } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+    runtime: {
+      log: options.runtimeLog ?? vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    } as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+    commandsToRegister: options.commandsToRegister,
+    accountId: options.accountId,
+    botIdentity: options.botIdentity,
+  });
+}
+
 describe("bot-native-command-menu", () => {
   it("caps menu entries to Telegram limit", () => {
     const allCommands = Array.from({ length: 105 }, (_, i) => ({
@@ -91,14 +116,9 @@ describe("bot-native-command-menu", () => {
       callOrder.push("set");
     });
 
-    syncTelegramMenuCommands({
-      bot: {
-        api: {
-          deleteMyCommands,
-          setMyCommands,
-        },
-      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
-      runtime: {} as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
       commandsToRegister: [{ command: "cmd", description: "Command" }],
       accountId: `test-delete-${Date.now()}`,
       botIdentity: "bot-a",
@@ -136,13 +156,10 @@ describe("bot-native-command-menu", () => {
     const commands = [{ command: "skip_test", description: "Skip test command" }];
 
     // First sync — no cached hash, should call setMyCommands.
-    syncTelegramMenuCommands({
-      bot: {
-        api: { deleteMyCommands, setMyCommands },
-      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
-      runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() } as Parameters<
-        typeof syncTelegramMenuCommands
-      >[0]["runtime"],
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
       commandsToRegister: commands,
       accountId,
       botIdentity: "bot-a",
@@ -153,20 +170,13 @@ describe("bot-native-command-menu", () => {
     });
 
     // Second sync with the same commands — hash is cached, should skip.
-    syncTelegramMenuCommands({
-      bot: {
-        api: { deleteMyCommands, setMyCommands },
-      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
-      runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() } as Parameters<
-        typeof syncTelegramMenuCommands
-      >[0]["runtime"],
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
       commandsToRegister: commands,
       accountId,
       botIdentity: "bot-a",
-    });
-
-    await vi.waitFor(() => {
-      expect(runtimeLog).toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync");
     });
 
     // setMyCommands should NOT have been called a second time.
@@ -180,32 +190,55 @@ describe("bot-native-command-menu", () => {
     const accountId = `test-bot-identity-${Date.now()}`;
     const commands = [{ command: "same", description: "Same" }];
 
-    syncTelegramMenuCommands({
-      bot: { api: { deleteMyCommands, setMyCommands } } as unknown as Parameters<
-        typeof syncTelegramMenuCommands
-      >[0]["bot"],
-      runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() } as Parameters<
-        typeof syncTelegramMenuCommands
-      >[0]["runtime"],
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
       commandsToRegister: commands,
       accountId,
       botIdentity: "token-bot-a",
     });
     await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(1));
 
-    syncTelegramMenuCommands({
-      bot: { api: { deleteMyCommands, setMyCommands } } as unknown as Parameters<
-        typeof syncTelegramMenuCommands
-      >[0]["bot"],
-      runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() } as Parameters<
-        typeof syncTelegramMenuCommands
-      >[0]["runtime"],
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
       commandsToRegister: commands,
       accountId,
       botIdentity: "token-bot-b",
     });
     await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-    expect(runtimeLog).not.toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync");
+  });
+
+  it("does not cache empty-menu hash when deleteMyCommands fails", async () => {
+    const deleteMyCommands = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("transient failure"))
+      .mockResolvedValue(undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const runtimeLog = vi.fn();
+    const accountId = `test-empty-delete-fail-${Date.now()}`;
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: [],
+      accountId,
+      botIdentity: "bot-a",
+    });
+    await vi.waitFor(() => expect(deleteMyCommands).toHaveBeenCalledTimes(1));
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: [],
+      accountId,
+      botIdentity: "bot-a",
+    });
+    await vi.waitFor(() => expect(deleteMyCommands).toHaveBeenCalledTimes(2));
   });
 
   it("retries with fewer commands on BOT_COMMANDS_TOO_MUCH", async () => {

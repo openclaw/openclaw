@@ -7,6 +7,7 @@ import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
 import {
   createCliDeps,
+  expectDirectTelegramDelivery,
   mockAgentPayloads,
   runTelegramAnnounceTurn,
 } from "./isolated-agent.delivery.test-helpers.js";
@@ -14,18 +15,21 @@ import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import { makeCfg, makeJob, writeSessionStore } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
-let tempRoot = "";
-let tempHomeId = 0;
+type HomeEnvSnapshot = {
+  HOME: string | undefined;
+  USERPROFILE: string | undefined;
+  HOMEDRIVE: string | undefined;
+  HOMEPATH: string | undefined;
+  OPENCLAW_HOME: string | undefined;
+  OPENCLAW_STATE_DIR: string | undefined;
+};
 
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  if (!tempRoot) {
-    throw new Error("temp root not initialized");
-  }
-  const home = path.join(tempRoot, `case-${tempHomeId++}`);
-  await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), {
-    recursive: true,
-  });
-  const snapshot = {
+const TELEGRAM_TARGET = { mode: "announce", channel: "telegram", to: "123" } as const;
+let suiteTempHomeRoot = "";
+let suiteTempHomeCaseId = 0;
+
+function snapshotHomeEnv(): HomeEnvSnapshot {
+  return {
     HOME: process.env.HOME,
     USERPROFILE: process.env.USERPROFILE,
     HOMEDRIVE: process.env.HOMEDRIVE,
@@ -33,36 +37,44 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     OPENCLAW_HOME: process.env.OPENCLAW_HOME,
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
   };
+}
+
+function restoreHomeEnv(snapshot: HomeEnvSnapshot) {
+  const restoreValue = (key: keyof HomeEnvSnapshot) => {
+    const value = snapshot[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  };
+  restoreValue("HOME");
+  restoreValue("USERPROFILE");
+  restoreValue("HOMEDRIVE");
+  restoreValue("HOMEPATH");
+  restoreValue("OPENCLAW_HOME");
+  restoreValue("OPENCLAW_STATE_DIR");
+}
+
+async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+  const home = path.join(suiteTempHomeRoot, `case-${suiteTempHomeCaseId++}`);
+  await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+  const snapshot = snapshotHomeEnv();
   process.env.HOME = home;
   process.env.USERPROFILE = home;
   delete process.env.OPENCLAW_HOME;
   process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-
   if (process.platform === "win32") {
-    const driveMatch = home.match(/^([A-Za-z]:)(.*)$/);
-    if (driveMatch) {
-      process.env.HOMEDRIVE = driveMatch[1];
-      process.env.HOMEPATH = driveMatch[2] || "\\";
+    const parsed = path.parse(home);
+    if (parsed.root) {
+      process.env.HOMEDRIVE = parsed.root.replace(/[\\/]+$/, "");
+      process.env.HOMEPATH = home.slice(process.env.HOMEDRIVE.length) || "\\";
     }
   }
-
   try {
     return await fn(home);
   } finally {
-    const restoreKey = (key: keyof typeof snapshot) => {
-      const value = snapshot[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    };
-    restoreKey("HOME");
-    restoreKey("USERPROFILE");
-    restoreKey("HOMEDRIVE");
-    restoreKey("HOMEPATH");
-    restoreKey("OPENCLAW_HOME");
-    restoreKey("OPENCLAW_STATE_DIR");
+    restoreHomeEnv(snapshot);
   }
 }
 
@@ -73,7 +85,7 @@ async function runExplicitTelegramAnnounceTurn(params: {
 }): Promise<Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>> {
   return runTelegramAnnounceTurn({
     ...params,
-    delivery: { mode: "announce", channel: "telegram", to: "123" },
+    delivery: TELEGRAM_TARGET,
   });
 }
 
@@ -125,9 +137,7 @@ async function expectStructuredTelegramFailure(params: {
         storePath,
         deps,
         delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "123",
+          ...TELEGRAM_TARGET,
           ...(params.bestEffort ? { bestEffort: true } : {}),
         },
       });
@@ -217,14 +227,16 @@ async function assertExplicitTelegramTargetAnnounce(params: {
 
 describe("runCronIsolatedAgentTurn", () => {
   beforeAll(async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-delivery-suite-"));
+    suiteTempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-delivery-suite-"));
   });
 
   afterAll(async () => {
-    if (!tempRoot) {
+    if (!suiteTempHomeRoot) {
       return;
     }
-    await fs.rm(tempRoot, { recursive: true, force: true });
+    await fs.rm(suiteTempHomeRoot, { recursive: true, force: true });
+    suiteTempHomeRoot = "";
+    suiteTempHomeCaseId = 0;
   });
 
   beforeEach(() => {
@@ -322,14 +334,11 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.status).toBe("ok");
       expect(res.delivered).toBe(true);
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
-      expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
-        "123",
-        "Final weather summary",
-        expect.objectContaining({
-          messageThreadId: 42,
-        }),
-      );
+      expectDirectTelegramDelivery(deps, {
+        chatId: "123",
+        text: "Final weather summary",
+        messageThreadId: 42,
+      });
     });
   });
 

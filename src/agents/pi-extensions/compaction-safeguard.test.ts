@@ -5,6 +5,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardRuntime,
@@ -101,6 +102,23 @@ const createCompactionContext = (params: {
       getApiKey: params.getApiKeyMock,
     },
   }) as unknown as Partial<ExtensionContext>;
+
+async function runCompactionScenario(params: {
+  sessionManager: ExtensionContext["sessionManager"];
+  event: unknown;
+  apiKey: string | null;
+}) {
+  const compactionHandler = createCompactionHandler();
+  const getApiKeyMock = vi.fn().mockResolvedValue(params.apiKey);
+  const mockContext = createCompactionContext({
+    sessionManager: params.sessionManager,
+    getApiKeyMock,
+  });
+  const result = (await compactionHandler(params.event, mockContext)) as {
+    cancel?: boolean;
+  };
+  return { result, getApiKeyMock };
+}
 
 describe("compaction-safeguard tool failures", () => {
   it("formats tool failures with meta and summary", () => {
@@ -201,11 +219,11 @@ describe("computeAdaptiveChunkRatio", () => {
     // Small messages: 1000 tokens each, well under 10% of context
     const messages: AgentMessage[] = [
       { role: "user", content: "x".repeat(1000), timestamp: Date.now() },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(1000) }],
         timestamp: Date.now(),
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
@@ -216,11 +234,11 @@ describe("computeAdaptiveChunkRatio", () => {
     // Large messages: ~50K tokens each (25% of context)
     const messages: AgentMessage[] = [
       { role: "user", content: "x".repeat(50_000 * 4), timestamp: Date.now() },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(50_000 * 4) }],
         timestamp: Date.now(),
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
@@ -377,22 +395,15 @@ describe("compaction-safeguard extension model fallback", () => {
     // Set up runtime with model (mimics buildEmbeddedExtensionPaths behavior)
     setCompactionSafeguardRuntime(sessionManager, { model });
 
-    const compactionHandler = createCompactionHandler();
     const mockEvent = createCompactionEvent({
       messageText: "test message",
       tokensBefore: 1000,
     });
-
-    const getApiKeyMock = vi.fn().mockResolvedValue(null);
-    const mockContext = createCompactionContext({
+    const { result, getApiKeyMock } = await runCompactionScenario({
       sessionManager,
-      getApiKeyMock,
+      event: mockEvent,
+      apiKey: null,
     });
-
-    // Call the handler and wait for result
-    const result = (await compactionHandler(mockEvent, mockContext)) as {
-      cancel?: boolean;
-    };
 
     expect(result).toEqual({ cancel: true });
 
@@ -410,21 +421,15 @@ describe("compaction-safeguard extension model fallback", () => {
 
     // Do NOT set runtime.model (both ctx.model and runtime.model will be undefined)
 
-    const compactionHandler = createCompactionHandler();
     const mockEvent = createCompactionEvent({
       messageText: "test",
       tokensBefore: 500,
     });
-
-    const getApiKeyMock = vi.fn().mockResolvedValue(null);
-    const mockContext = createCompactionContext({
+    const { result, getApiKeyMock } = await runCompactionScenario({
       sessionManager,
-      getApiKeyMock,
+      event: mockEvent,
+      apiKey: null,
     });
-
-    const result = (await compactionHandler(mockEvent, mockContext)) as {
-      cancel?: boolean;
-    };
 
     expect(result).toEqual({ cancel: true });
 
@@ -439,7 +444,6 @@ describe("compaction-safeguard double-compaction guard", () => {
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model });
 
-    const compactionHandler = createCompactionHandler();
     const mockEvent = {
       preparation: {
         messagesToSummarize: [] as AgentMessage[],
@@ -451,16 +455,11 @@ describe("compaction-safeguard double-compaction guard", () => {
       customInstructions: "",
       signal: new AbortController().signal,
     };
-
-    const getApiKeyMock = vi.fn().mockResolvedValue("sk-test");
-    const mockContext = createCompactionContext({
+    const { result, getApiKeyMock } = await runCompactionScenario({
       sessionManager,
-      getApiKeyMock,
+      event: mockEvent,
+      apiKey: "sk-test",
     });
-
-    const result = (await compactionHandler(mockEvent, mockContext)) as {
-      cancel?: boolean;
-    };
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).not.toHaveBeenCalled();
   });
@@ -470,59 +469,53 @@ describe("compaction-safeguard double-compaction guard", () => {
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model });
 
-    const compactionHandler = createCompactionHandler();
     const mockEvent = createCompactionEvent({
       messageText: "real message",
       tokensBefore: 1500,
     });
-    const getApiKeyMock = vi.fn().mockResolvedValue(null);
-    const mockContext = createCompactionContext({
+    const { result, getApiKeyMock } = await runCompactionScenario({
       sessionManager,
-      getApiKeyMock,
+      event: mockEvent,
+      apiKey: null,
     });
-
-    const result = (await compactionHandler(mockEvent, mockContext)) as {
-      cancel?: boolean;
-    };
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).toHaveBeenCalled();
   });
 });
 
+async function expectWorkspaceSummaryEmptyForAgentsAlias(
+  createAlias: (outsidePath: string, agentsPath: string) => void,
+) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
+  const prevCwd = process.cwd();
+  try {
+    const outside = path.join(root, "outside-secret.txt");
+    fs.writeFileSync(outside, "secret");
+    createAlias(outside, path.join(root, "AGENTS.md"));
+    process.chdir(root);
+    await expect(readWorkspaceContextForSummary()).resolves.toBe("");
+  } finally {
+    process.chdir(prevCwd);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe("readWorkspaceContextForSummary", () => {
   it.runIf(process.platform !== "win32")(
     "returns empty when AGENTS.md is a symlink escape",
     async () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-      const prevCwd = process.cwd();
-      try {
-        const outside = path.join(root, "outside-secret.txt");
-        fs.writeFileSync(outside, "secret");
-        fs.symlinkSync(outside, path.join(root, "AGENTS.md"));
-        process.chdir(root);
-        await expect(readWorkspaceContextForSummary()).resolves.toBe("");
-      } finally {
-        process.chdir(prevCwd);
-        fs.rmSync(root, { recursive: true, force: true });
-      }
+      await expectWorkspaceSummaryEmptyForAgentsAlias((outside, agentsPath) => {
+        fs.symlinkSync(outside, agentsPath);
+      });
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "returns empty when AGENTS.md is a hardlink alias",
     async () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-      const prevCwd = process.cwd();
-      try {
-        const outside = path.join(root, "outside-secret.txt");
-        fs.writeFileSync(outside, "secret");
-        fs.linkSync(outside, path.join(root, "AGENTS.md"));
-        process.chdir(root);
-        await expect(readWorkspaceContextForSummary()).resolves.toBe("");
-      } finally {
-        process.chdir(prevCwd);
-        fs.rmSync(root, { recursive: true, force: true });
-      }
+      await expectWorkspaceSummaryEmptyForAgentsAlias((outside, agentsPath) => {
+        fs.linkSync(outside, agentsPath);
+      });
     },
   );
 });

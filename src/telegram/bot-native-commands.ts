@@ -14,10 +14,10 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/pr
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+import { recordInboundSessionMetaSafe } from "../channels/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import { recordSessionMetaFromInbound, resolveStorePath } from "../config/sessions.js";
 import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
@@ -324,10 +324,14 @@ export const registerTelegramNativeCommands = ({
     nativeEnabled && nativeSkillsEnabled
       ? resolveAgentRoute({ cfg, channel: "telegram", accountId })
       : null;
-  const boundAgentIds = boundRoute ? [boundRoute.agentId] : null;
+  if (nativeEnabled && nativeSkillsEnabled && !boundRoute) {
+    runtime.log?.(
+      "nativeSkillsEnabled is true but no agent route is bound for this Telegram account; skill commands will not appear in the native menu.",
+    );
+  }
   const skillCommands =
-    nativeEnabled && nativeSkillsEnabled
-      ? listSkillCommandsForAgents(boundAgentIds ? { cfg, agentIds: boundAgentIds } : { cfg })
+    nativeEnabled && nativeSkillsEnabled && boundRoute
+      ? listSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
       : [];
   const nativeCommands = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, {
@@ -441,12 +445,14 @@ export const registerTelegramNativeCommands = ({
   };
   const buildCommandDeliveryBaseOptions = (params: {
     chatId: string | number;
+    accountId: string;
     mediaLocalRoots?: readonly string[];
     threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: ReturnType<typeof resolveChunkMode>;
   }) => ({
     chatId: String(params.chatId),
+    accountId: params.accountId,
     token: opts.token,
     runtime,
     bot,
@@ -509,6 +515,7 @@ export const registerTelegramNativeCommands = ({
             });
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
+            accountId: route.accountId,
             mediaLocalRoots,
             threadSpec,
             tableMode,
@@ -618,18 +625,16 @@ export const registerTelegramNativeCommands = ({
             OriginatingTo: `telegram:${chatId}`,
           });
 
-          const storePath = resolveStorePath(cfg.session?.store, {
+          await recordInboundSessionMetaSafe({
+            cfg,
             agentId: route.agentId,
+            sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+            ctx: ctxPayload,
+            onError: (err) =>
+              runtime.error?.(
+                danger(`telegram slash: failed updating session meta: ${String(err)}`),
+              ),
           });
-          try {
-            await recordSessionMetaFromInbound({
-              storePath,
-              sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-              ctx: ctxPayload,
-            });
-          } catch (err) {
-            runtime.error?.(danger(`telegram slash: failed updating session meta: ${String(err)}`));
-          }
 
           const disableBlockStreaming =
             typeof telegramCfg.blockStreaming === "boolean"
@@ -724,7 +729,7 @@ export const registerTelegramNativeCommands = ({
             return;
           }
           const { senderId, commandAuthorized, isGroup, isForum, resolvedThreadId } = auth;
-          const { threadSpec, mediaLocalRoots, tableMode, chunkMode } =
+          const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } =
             resolveCommandRuntimeContext({
               msg,
               isGroup,
@@ -733,6 +738,7 @@ export const registerTelegramNativeCommands = ({
             });
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
+            accountId: route.accountId,
             mediaLocalRoots,
             threadSpec,
             tableMode,
