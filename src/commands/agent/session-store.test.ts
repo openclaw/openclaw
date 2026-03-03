@@ -63,4 +63,63 @@ describe("updateSessionStoreAfterAgentRun", () => {
     expect(persisted?.acp).toBeDefined();
     expect(staleInMemory[sessionKey]?.acp).toBeDefined();
   });
+
+  it("preserves model overrides written by tools during the same run", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = `agent:main:main`;
+    const sessionId = randomUUID();
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId,
+            updatedAt: Date.now(),
+            providerOverride: "google",
+            modelOverride: "gemini-2.5-pro",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const staleInMemory: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+        providerOverride: undefined,
+        modelOverride: undefined,
+      },
+    };
+
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore: staleInMemory,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.3-codex",
+      result: {
+        payloads: [],
+        meta: {
+          aborted: false,
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-5.3-codex",
+          },
+        },
+      } as never,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.providerOverride).toBe("google");
+    expect(persisted?.modelOverride).toBe("gemini-2.5-pro");
+    expect(staleInMemory[sessionKey]?.providerOverride).toBe("google");
+    expect(staleInMemory[sessionKey]?.modelOverride).toBe("gemini-2.5-pro");
+  });
 });
