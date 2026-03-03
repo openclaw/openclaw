@@ -482,6 +482,9 @@ export async function getHealthSnapshot(params?: {
       if (snapshot.configured === undefined) {
         snapshot.configured = configured;
       }
+      if (probe !== undefined && snapshot.probe === undefined) {
+        snapshot.probe = probe;
+      }
       if (lastProbeAt && snapshot.lastProbeAt === undefined) {
         snapshot.lastProbeAt = lastProbeAt;
       }

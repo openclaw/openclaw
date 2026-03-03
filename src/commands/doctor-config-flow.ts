@@ -1349,9 +1349,11 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     channelName?: string,
   ) => {
     // Skip disabled channel/account scopes because they are intentionally inactive.
-    const accountEnabled = account.enabled !== false;
     const parentEnabled = parent?.enabled !== false;
-    if (!accountEnabled || !parentEnabled) {
+    const accountEnabledOverride =
+      typeof account.enabled === "boolean" ? account.enabled : undefined;
+    const effectiveEnabled = accountEnabledOverride ?? parentEnabled;
+    if (!effectiveEnabled) {
       return;
     }
 

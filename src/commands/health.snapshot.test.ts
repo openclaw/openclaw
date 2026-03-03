@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { HealthSummary } from "./health.js";
 import { getHealthSnapshot } from "./health.js";
 
@@ -270,6 +270,45 @@ describe("getHealthSnapshot", () => {
     expect(telegram.accounts?.default?.running).toBe(true);
     expect(telegram.accounts?.default?.lastInboundAt).toBe(456);
     expect(telegram.accounts?.default?.lastOutboundAt).toBe(789);
+  });
+
+  it("preserves probe payloads for plugins using default account snapshots", async () => {
+    const probePayload = { ok: true, source: "probe-runtime" };
+    const probeAccount = vi.fn(async () => probePayload);
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "slack",
+              config: {
+                listAccountIds: () => ["default"],
+                resolveAccount: () => ({}),
+              },
+            }),
+            status: {
+              probeAccount,
+            },
+          },
+        },
+      ]),
+    );
+
+    testConfig = { channels: { slack: { botToken: "x-slack" } } };
+    testStore = {};
+
+    const snap = await getHealthSnapshot({ timeoutMs: 25 });
+    const slack = snap.channels.slack as {
+      probe?: { ok?: boolean; source?: string };
+      accounts?: Record<string, { probe?: { ok?: boolean; source?: string } }>;
+    };
+
+    expect(probeAccount).toHaveBeenCalledTimes(1);
+    expect(slack.probe).toEqual(probePayload);
+    expect(slack.accounts?.default?.probe).toEqual(probePayload);
   });
 
   it("disables heartbeat for agents without heartbeat blocks", async () => {
