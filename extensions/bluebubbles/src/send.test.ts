@@ -44,6 +44,23 @@ function mockSendResponse(body: unknown) {
   });
 }
 
+function mockNewChatSendResponse(guid: string) {
+  mockFetch
+    .mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ data: [] }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            data: { guid },
+          }),
+        ),
+    });
+}
+
 describe("send", () => {
   describe("resolveChatGuidForTarget", () => {
     const resolveHandleTargetGuid = async (data: Array<Record<string, unknown>>) => {
@@ -453,20 +470,7 @@ describe("send", () => {
     });
 
     it("strips markdown when creating a new chat", async () => {
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ data: [] }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          text: () =>
-            Promise.resolve(
-              JSON.stringify({
-                data: { guid: "new-msg-stripped" },
-              }),
-            ),
-        });
+      mockNewChatSendResponse("new-msg-stripped");
 
       const result = await sendMessageBlueBubbles("+15550009999", "**Welcome** to the _chat_!", {
         serverUrl: "http://localhost:1234",
@@ -483,20 +487,7 @@ describe("send", () => {
     });
 
     it("creates a new chat when handle target is missing", async () => {
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ data: [] }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          text: () =>
-            Promise.resolve(
-              JSON.stringify({
-                data: { guid: "new-msg-guid" },
-              }),
-            ),
-        });
+      mockNewChatSendResponse("new-msg-guid");
 
       const result = await sendMessageBlueBubbles("+15550009999", "Hello new chat", {
         serverUrl: "http://localhost:1234",
@@ -728,6 +719,30 @@ describe("send", () => {
       });
 
       expect(result.messageId).toBe("msg-guid-789");
+    });
+
+    it("extracts top-level message_id from response payload", async () => {
+      mockResolvedHandleTarget();
+      mockSendResponse({ message_id: "bb-msg-321" });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
+
+      expect(result.messageId).toBe("bb-msg-321");
+    });
+
+    it("extracts nested result.message_id from response payload", async () => {
+      mockResolvedHandleTarget();
+      mockSendResponse({ result: { message_id: "bb-msg-654" } });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
+
+      expect(result.messageId).toBe("bb-msg-654");
     });
 
     it("resolves credentials from config", async () => {

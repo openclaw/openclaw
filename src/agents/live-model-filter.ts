@@ -22,7 +22,7 @@ const CODEX_MODELS = [
 ];
 const GOOGLE_PREFIXES = ["gemini-3"];
 const ZAI_PREFIXES = ["glm-5", "glm-4.7", "glm-4.7-flash", "glm-4.7-flashx"];
-const MINIMAX_PREFIXES = ["minimax-m2.1", "minimax-m2.5"];
+const MINIMAX_PREFIXES = ["minimax-m2.5", "minimax-m2.5"];
 const XAI_PREFIXES = ["grok-4"];
 
 function matchesPrefix(id: string, prefixes: string[]): boolean {
@@ -54,10 +54,6 @@ export function isModernModelRef(ref: ModelRef): boolean {
 
   if (provider === "google" || provider === "google-gemini-cli") {
     return matchesPrefix(id, GOOGLE_PREFIXES);
-  }
-
-  if (provider === "google-antigravity") {
-    return matchesPrefix(id, GOOGLE_PREFIXES) || matchesPrefix(id, ANTHROPIC_PREFIXES);
   }
 
   if (provider === "zai") {

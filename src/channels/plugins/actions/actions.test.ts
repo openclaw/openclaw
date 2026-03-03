@@ -61,7 +61,11 @@ type SignalActionInput = Parameters<NonNullable<typeof signalMessageActions.hand
 async function runSignalAction(
   action: SignalActionInput["action"],
   params: SignalActionInput["params"],
-  options?: { cfg?: OpenClawConfig; accountId?: string },
+  options?: {
+    cfg?: OpenClawConfig;
+    accountId?: string;
+    toolContext?: SignalActionInput["toolContext"];
+  },
 ) {
   const cfg =
     options?.cfg ?? ({ channels: { signal: { account: "+15550001111" } } } as OpenClawConfig);
@@ -75,6 +79,7 @@ async function runSignalAction(
     params,
     cfg,
     accountId: options?.accountId,
+    toolContext: options?.toolContext,
   });
   return { cfg };
 }
@@ -451,6 +456,43 @@ describe("handleDiscordMessageAction", () => {
       expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
     );
   });
+
+  it("falls back to toolContext.currentMessageId for reactions when messageId is omitted", async () => {
+    await handleDiscordMessageAction({
+      action: "react",
+      params: {
+        channelId: "123",
+        emoji: "ok",
+      },
+      cfg: {} as OpenClawConfig,
+      toolContext: { currentMessageId: "9001" },
+    });
+
+    const call = handleDiscordAction.mock.calls.at(-1);
+    expect(call?.[0]).toEqual(
+      expect.objectContaining({
+        action: "react",
+        channelId: "123",
+        messageId: "9001",
+        emoji: "ok",
+      }),
+    );
+  });
+
+  it("rejects reactions when neither messageId nor toolContext.currentMessageId is provided", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "react",
+        params: {
+          channelId: "123",
+          emoji: "ok",
+        },
+        cfg: {} as OpenClawConfig,
+      }),
+    ).rejects.toThrow(/messageId required/i);
+
+    expect(handleDiscordAction).not.toHaveBeenCalled();
+  });
 });
 
 describe("telegramMessageActions", () => {
@@ -673,6 +715,83 @@ describe("telegramMessageActions", () => {
     expect(String(callPayload.messageId)).toBe("456");
     expect(callPayload.emoji).toBe("ok");
   });
+
+  it("accepts snake_case message_id for reactions", async () => {
+    const cfg = telegramCfg();
+
+    await telegramMessageActions.handleAction?.({
+      channel: "telegram",
+      action: "react",
+      params: {
+        channelId: 123,
+        message_id: "456",
+        emoji: "ok",
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledTimes(1);
+    const call = handleTelegramAction.mock.calls[0]?.[0];
+    if (!call) {
+      throw new Error("missing telegram action call");
+    }
+    const callPayload = call as Record<string, unknown>;
+    expect(callPayload.action).toBe("react");
+    expect(String(callPayload.chatId)).toBe("123");
+    expect(String(callPayload.messageId)).toBe("456");
+  });
+
+  it("falls back to toolContext.currentMessageId for reactions when messageId is omitted", async () => {
+    const cfg = telegramCfg();
+
+    await telegramMessageActions.handleAction?.({
+      channel: "telegram",
+      action: "react",
+      params: {
+        chatId: "123",
+        emoji: "ok",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: { currentMessageId: "9001" },
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledTimes(1);
+    const call = handleTelegramAction.mock.calls[0]?.[0];
+    if (!call) {
+      throw new Error("missing telegram action call");
+    }
+    const callPayload = call as Record<string, unknown>;
+    expect(callPayload.action).toBe("react");
+    expect(String(callPayload.messageId)).toBe("9001");
+  });
+
+  it("forwards missing reaction messageId to telegram-actions for soft-fail handling", async () => {
+    const cfg = telegramCfg();
+
+    await expect(
+      telegramMessageActions.handleAction?.({
+        channel: "telegram",
+        action: "react",
+        params: {
+          chatId: "123",
+          emoji: "ok",
+        },
+        cfg,
+        accountId: undefined,
+      }),
+    ).resolves.toBeDefined();
+
+    expect(handleTelegramAction).toHaveBeenCalledTimes(1);
+    const call = handleTelegramAction.mock.calls[0]?.[0];
+    if (!call) {
+      throw new Error("missing telegram action call");
+    }
+    const callPayload = call as Record<string, unknown>;
+    expect(callPayload.action).toBe("react");
+    expect(callPayload.messageId).toBeUndefined();
+  });
 });
 
 describe("signalMessageActions", () => {
@@ -773,6 +892,33 @@ describe("signalMessageActions", () => {
       });
       expect(sendReactionSignal, testCase.name).toHaveBeenCalledWith(...testCase.expectedArgs);
     }
+  });
+
+  it("falls back to toolContext.currentMessageId for reactions when messageId is omitted", async () => {
+    sendReactionSignal.mockClear();
+    await runSignalAction(
+      "react",
+      { to: "+15559999999", emoji: "🔥" },
+      { toolContext: { currentMessageId: "1737630212345" } },
+    );
+    expect(sendReactionSignal).toHaveBeenCalledTimes(1);
+    expect(sendReactionSignal).toHaveBeenCalledWith(
+      "+15559999999",
+      1737630212345,
+      "🔥",
+      expect.objectContaining({}),
+    );
+  });
+
+  it("rejects reaction when neither messageId nor toolContext.currentMessageId is provided", async () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+    await expectSignalActionRejected(
+      { to: "+15559999999", emoji: "✅" },
+      /messageId.*required/,
+      cfg,
+    );
   });
 
   it("requires targetAuthor for group reactions", async () => {

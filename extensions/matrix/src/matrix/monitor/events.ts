@@ -1,8 +1,50 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk";
 import type { MatrixAuth } from "../client.js";
+import { sendReadReceiptMatrix } from "../send.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
+
+const matrixMonitorListenerRegistry = (() => {
+  // Prevent duplicate listener registration when both bundled and extension
+  // paths attempt to start monitors against the same shared client.
+  const registeredClients = new WeakSet<object>();
+  return {
+    tryRegister(client: object): boolean {
+      if (registeredClients.has(client)) {
+        return false;
+      }
+      registeredClients.add(client);
+      return true;
+    },
+  };
+})();
+
+function createSelfUserIdResolver(client: Pick<MatrixClient, "getUserId">) {
+  let selfUserId: string | undefined;
+  let selfUserIdLookup: Promise<string | undefined> | undefined;
+
+  return async (): Promise<string | undefined> => {
+    if (selfUserId) {
+      return selfUserId;
+    }
+    if (!selfUserIdLookup) {
+      selfUserIdLookup = client
+        .getUserId()
+        .then((userId) => {
+          selfUserId = userId;
+          return userId;
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (!selfUserId) {
+            selfUserIdLookup = undefined;
+          }
+        });
+    }
+    return await selfUserIdLookup;
+  };
+}
 
 export function registerMatrixMonitorEvents(params: {
   client: MatrixClient;
@@ -14,6 +56,11 @@ export function registerMatrixMonitorEvents(params: {
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
 }): void {
+  if (!matrixMonitorListenerRegistry.tryRegister(params.client)) {
+    params.logVerboseMessage("matrix: skipping duplicate listener registration for client");
+    return;
+  }
+
   const {
     client,
     auth,
@@ -25,7 +72,26 @@ export function registerMatrixMonitorEvents(params: {
     onRoomMessage,
   } = params;
 
-  client.on("room.message", onRoomMessage);
+  const resolveSelfUserId = createSelfUserIdResolver(client);
+  client.on("room.message", (roomId: string, event: MatrixRawEvent) => {
+    const eventId = event?.event_id;
+    const senderId = event?.sender;
+    if (eventId && senderId) {
+      void (async () => {
+        const currentSelfUserId = await resolveSelfUserId();
+        if (!currentSelfUserId || senderId === currentSelfUserId) {
+          return;
+        }
+        await sendReadReceiptMatrix(roomId, eventId, client).catch((err) => {
+          logVerboseMessage(
+            `matrix: early read receipt failed room=${roomId} id=${eventId}: ${String(err)}`,
+          );
+        });
+      })();
+    }
+
+    onRoomMessage(roomId, event);
+  });
 
   client.on("room.encrypted_event", (roomId: string, event: MatrixRawEvent) => {
     const eventId = event?.event_id ?? "unknown";

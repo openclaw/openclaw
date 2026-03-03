@@ -5,7 +5,9 @@ import { resolveMemorySearchConfig } from "./memory-search.js";
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
 
 describe("memory search config", () => {
-  function configWithDefaultProvider(provider: "openai" | "local" | "gemini"): OpenClawConfig {
+  function configWithDefaultProvider(
+    provider: "openai" | "local" | "gemini" | "mistral" | "ollama",
+  ): OpenClawConfig {
     return asConfig({
       agents: {
         defaults: {
@@ -145,6 +147,20 @@ describe("memory search config", () => {
     const cfg = configWithDefaultProvider("gemini");
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expectDefaultRemoteBatch(resolved);
+  });
+
+  it("includes remote defaults and model default for mistral without overrides", () => {
+    const cfg = configWithDefaultProvider("mistral");
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expectDefaultRemoteBatch(resolved);
+    expect(resolved?.model).toBe("mistral-embed");
+  });
+
+  it("includes remote defaults and model default for ollama without overrides", () => {
+    const cfg = configWithDefaultProvider("ollama");
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expectDefaultRemoteBatch(resolved);
+    expect(resolved?.model).toBe("nomic-embed-text");
   });
 
   it("defaults session delta thresholds", () => {

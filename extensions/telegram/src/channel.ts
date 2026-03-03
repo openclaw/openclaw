@@ -1,6 +1,7 @@
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
+  buildTokenChannelStatusSummary,
   collectTelegramStatusIssues,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
@@ -43,7 +44,7 @@ function findTelegramTokenOwnerAccountId(params: {
   const tokenOwners = new Map<string, string>();
   for (const id of listTelegramAccountIds(params.cfg)) {
     const account = resolveTelegramAccount({ cfg: params.cfg, accountId: id });
-    const token = account.token.trim();
+    const token = (account.token ?? "").trim();
     if (!token) {
       continue;
     }
@@ -374,17 +375,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       lastError: null,
     },
     collectStatusIssues: collectTelegramStatusIssues,
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      tokenSource: snapshot.tokenSource ?? "none",
-      running: snapshot.running ?? false,
-      mode: snapshot.mode ?? null,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
       getTelegramRuntime().channel.telegram.probeTelegram(
         account.token,
@@ -474,7 +465,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         ctx.log?.error?.(`[${account.accountId}] ${reason}`);
         throw new Error(reason);
       }
-      const token = account.token.trim();
+      const token = (account.token ?? "").trim();
       let telegramBotLabel = "";
       try {
         const probe = await getTelegramRuntime().channel.telegram.probeTelegram(

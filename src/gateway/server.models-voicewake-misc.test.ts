@@ -191,9 +191,32 @@ describe("gateway server models + voicewake", () => {
     }
   };
 
+  const expectAllowlistedModels = async (options: {
+    primary: string;
+    models: Record<string, object>;
+    expected: ModelCatalogRpcEntry[];
+  }): Promise<void> => {
+    await withModelsConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: options.primary },
+            models: options.models,
+          },
+        },
+      },
+      async () => {
+        seedPiCatalog();
+        const res = await listModels();
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual(options.expected);
+      },
+    );
+  };
+
   test(
     "voicewake.get returns defaults and voicewake.set broadcasts",
-    { timeout: 60_000 },
+    { timeout: 20_000 },
     async () => {
       await withTempHome(async (homeDir) => {
         const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
@@ -294,60 +317,42 @@ describe("gateway server models + voicewake", () => {
   });
 
   test("models.list filters to allowlisted configured models by default", async () => {
-    await withModelsConfig(
-      {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-test-z" },
-            models: {
-              "openai/gpt-test-z": {},
-              "anthropic/claude-test-a": {},
-            },
-          },
+    await expectAllowlistedModels({
+      primary: "openai/gpt-test-z",
+      models: {
+        "openai/gpt-test-z": {},
+        "anthropic/claude-test-a": {},
+      },
+      expected: [
+        {
+          id: "claude-test-a",
+          name: "A-Model",
+          provider: "anthropic",
+          contextWindow: 200_000,
         },
-      },
-      async () => {
-        seedPiCatalog();
-        const res = await listModels();
-
-        expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual([
-          {
-            id: "claude-test-a",
-            name: "A-Model",
-            provider: "anthropic",
-            contextWindow: 200_000,
-          },
-          {
-            id: "gpt-test-z",
-            name: "gpt-test-z",
-            provider: "openai",
-          },
-        ]);
-      },
-    );
+        {
+          id: "gpt-test-z",
+          name: "gpt-test-z",
+          provider: "openai",
+        },
+      ],
+    });
   });
 
-  test("models.list falls back to full catalog when allowlist has no catalog match", async () => {
-    await withModelsConfig(
-      {
-        agents: {
-          defaults: {
-            model: { primary: "openai/not-in-catalog" },
-            models: {
-              "openai/not-in-catalog": {},
-            },
-          },
+  test("models.list includes synthetic entries for allowlist models absent from catalog", async () => {
+    await expectAllowlistedModels({
+      primary: "openai/not-in-catalog",
+      models: {
+        "openai/not-in-catalog": {},
+      },
+      expected: [
+        {
+          id: "not-in-catalog",
+          name: "not-in-catalog",
+          provider: "openai",
         },
-      },
-      async () => {
-        seedPiCatalog();
-        const res = await listModels();
-
-        expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual(expectedSortedCatalog());
-      },
-    );
+      ],
+    });
   });
 
   test("models.list rejects unknown params", async () => {
@@ -379,7 +384,7 @@ describe("gateway server misc", () => {
     });
   });
 
-  test("send dedupes by idempotencyKey", { timeout: 60_000 }, async () => {
+  test("send dedupes by idempotencyKey", { timeout: 15_000 }, async () => {
     const prevRegistry = getActivePluginRegistry() ?? emptyRegistry;
     try {
       setActivePluginRegistry(whatsappRegistry);
@@ -452,8 +457,9 @@ describe("gateway server misc", () => {
 
   test("refuses to start when port already bound", async () => {
     const { server: blocker, port: blockedPort } = await occupyPort();
-    await expect(startGatewayServer(blockedPort)).rejects.toBeInstanceOf(GatewayLockError);
-    await expect(startGatewayServer(blockedPort)).rejects.toThrow(/already listening/i);
+    const startup = startGatewayServer(blockedPort);
+    await expect(startup).rejects.toBeInstanceOf(GatewayLockError);
+    await expect(startup).rejects.toThrow(/already listening/i);
     blocker.close();
   });
 

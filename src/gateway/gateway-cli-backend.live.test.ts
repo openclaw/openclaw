@@ -121,32 +121,39 @@ async function getFreeGatewayPort(): Promise<number> {
 
 async function connectClient(params: { url: string; token: string }) {
   return await new Promise<GatewayClient>((resolve, reject) => {
-    let settled = false;
-    const stop = (err?: Error, client?: GatewayClient) => {
-      if (settled) {
+    let done = false;
+    const finish = (result: { client?: GatewayClient; error?: Error }) => {
+      if (done) {
         return;
       }
-      settled = true;
-      clearTimeout(timer);
-      if (err) {
-        reject(err);
-      } else {
-        resolve(client as GatewayClient);
+      done = true;
+      clearTimeout(connectTimeout);
+      if (result.error) {
+        reject(result.error);
+        return;
       }
+      resolve(result.client as GatewayClient);
     };
+
+    const failWithClose = (code: number, reason: string) =>
+      finish({ error: new Error(`gateway closed during connect (${code}): ${reason}`) });
+
     const client = new GatewayClient({
       url: params.url,
       token: params.token,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
       clientVersion: "dev",
       mode: "test",
-      onHelloOk: () => stop(undefined, client),
-      onConnectError: (err) => stop(err),
-      onClose: (code, reason) =>
-        stop(new Error(`gateway closed during connect (${code}): ${reason}`)),
+      onHelloOk: () => finish({ client }),
+      onConnectError: (error) => finish({ error }),
+      onClose: failWithClose,
     });
-    const timer = setTimeout(() => stop(new Error("gateway connect timeout")), 10_000);
-    timer.unref();
+
+    const connectTimeout = setTimeout(
+      () => finish({ error: new Error("gateway connect timeout") }),
+      10_000,
+    );
+    connectTimeout.unref();
     client.start();
   });
 }

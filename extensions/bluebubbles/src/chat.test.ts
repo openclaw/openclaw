@@ -22,6 +22,44 @@ installBlueBubblesFetchTestHooks({
 });
 
 describe("chat", () => {
+  function mockOkTextResponse() {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(""),
+    });
+  }
+
+  async function expectCalledUrlIncludesPassword(params: {
+    password: string;
+    invoke: () => Promise<void>;
+  }) {
+    mockOkTextResponse();
+    await params.invoke();
+    const calledUrl = mockFetch.mock.calls[0][0] as string;
+    expect(calledUrl).toContain(`password=${params.password}`);
+  }
+
+  async function expectCalledUrlUsesConfigCredentials(params: {
+    serverHost: string;
+    password: string;
+    invoke: (cfg: {
+      channels: { bluebubbles: { serverUrl: string; password: string } };
+    }) => Promise<void>;
+  }) {
+    mockOkTextResponse();
+    await params.invoke({
+      channels: {
+        bluebubbles: {
+          serverUrl: `http://${params.serverHost}`,
+          password: params.password,
+        },
+      },
+    });
+    const calledUrl = mockFetch.mock.calls[0][0] as string;
+    expect(calledUrl).toContain(params.serverHost);
+    expect(calledUrl).toContain(`password=${params.password}`);
+  }
+
   describe("markBlueBubblesChatRead", () => {
     it("does nothing when chatGuid is empty or whitespace", async () => {
       for (const chatGuid of ["", "   "]) {
@@ -73,18 +111,14 @@ describe("chat", () => {
     });
 
     it("includes password in URL query", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(""),
-      });
-
-      await markBlueBubblesChatRead("chat-123", {
-        serverUrl: "http://localhost:1234",
+      await expectCalledUrlIncludesPassword({
         password: "my-secret",
+        invoke: () =>
+          markBlueBubblesChatRead("chat-123", {
+            serverUrl: "http://localhost:1234",
+            password: "my-secret",
+          }),
       });
-
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
-      expect(calledUrl).toContain("password=my-secret");
     });
 
     it("throws on non-ok response", async () => {
@@ -119,25 +153,14 @@ describe("chat", () => {
     });
 
     it("resolves credentials from config", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(""),
+      await expectCalledUrlUsesConfigCredentials({
+        serverHost: "config-server:9999",
+        password: "config-pass",
+        invoke: (cfg) =>
+          markBlueBubblesChatRead("chat-123", {
+            cfg,
+          }),
       });
-
-      await markBlueBubblesChatRead("chat-123", {
-        cfg: {
-          channels: {
-            bluebubbles: {
-              serverUrl: "http://config-server:9999",
-              password: "config-pass",
-            },
-          },
-        },
-      });
-
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
-      expect(calledUrl).toContain("config-server:9999");
-      expect(calledUrl).toContain("password=config-pass");
     });
   });
 
@@ -536,18 +559,14 @@ describe("chat", () => {
     });
 
     it("includes password in URL query", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(""),
-      });
-
-      await setGroupIconBlueBubbles("chat-123", new Uint8Array([1, 2, 3]), "icon.png", {
-        serverUrl: "http://localhost:1234",
+      await expectCalledUrlIncludesPassword({
         password: "my-secret",
+        invoke: () =>
+          setGroupIconBlueBubbles("chat-123", new Uint8Array([1, 2, 3]), "icon.png", {
+            serverUrl: "http://localhost:1234",
+            password: "my-secret",
+          }),
       });
-
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
-      expect(calledUrl).toContain("password=my-secret");
     });
 
     it("throws on non-ok response", async () => {
@@ -582,25 +601,14 @@ describe("chat", () => {
     });
 
     it("resolves credentials from config", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(""),
+      await expectCalledUrlUsesConfigCredentials({
+        serverHost: "config-server:9999",
+        password: "config-pass",
+        invoke: (cfg) =>
+          setGroupIconBlueBubbles("chat-123", new Uint8Array([1]), "icon.png", {
+            cfg,
+          }),
       });
-
-      await setGroupIconBlueBubbles("chat-123", new Uint8Array([1]), "icon.png", {
-        cfg: {
-          channels: {
-            bluebubbles: {
-              serverUrl: "http://config-server:9999",
-              password: "config-pass",
-            },
-          },
-        },
-      });
-
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
-      expect(calledUrl).toContain("config-server:9999");
-      expect(calledUrl).toContain("password=config-pass");
     });
 
     it("includes filename in multipart body", async () => {

@@ -5,6 +5,40 @@ import {
   resolveExecApprovalDecision,
 } from "./exec-policy.js";
 
+type EvaluatePolicyParams = Parameters<typeof evaluateSystemRunPolicy>[0];
+type EvaluatePolicyDecision = ReturnType<typeof evaluateSystemRunPolicy>;
+
+const buildPolicyParams = (overrides: Partial<EvaluatePolicyParams>): EvaluatePolicyParams => {
+  return {
+    security: "allowlist",
+    ask: "off",
+    analysisOk: true,
+    allowlistSatisfied: true,
+    approvalDecision: null,
+    approved: false,
+    isWindows: false,
+    cmdInvocation: false,
+    shellWrapperInvocation: false,
+    ...overrides,
+  };
+};
+
+const expectDeniedDecision = (decision: EvaluatePolicyDecision) => {
+  expect(decision.allowed).toBe(false);
+  if (decision.allowed) {
+    throw new Error("expected denied decision");
+  }
+  return decision;
+};
+
+const expectAllowedDecision = (decision: EvaluatePolicyDecision) => {
+  expect(decision.allowed).toBe(true);
+  if (!decision.allowed) {
+    throw new Error("expected allowed decision");
+  }
+  return decision;
+};
+
 describe("resolveExecApprovalDecision", () => {
   it("accepts known approval decisions", () => {
     expect(resolveExecApprovalDecision("allow-once")).toBe("allow-once");
@@ -42,143 +76,68 @@ describe("formatSystemRunAllowlistMissMessage", () => {
 
 describe("evaluateSystemRunPolicy", () => {
   it("denies when security mode is deny", () => {
-    const decision = evaluateSystemRunPolicy({
-      security: "deny",
-      ask: "off",
-      analysisOk: true,
-      allowlistSatisfied: true,
-      approvalDecision: null,
-      approved: false,
-      isWindows: false,
-      cmdInvocation: false,
-      shellWrapperInvocation: false,
-    });
-    expect(decision.allowed).toBe(false);
-    if (decision.allowed) {
-      throw new Error("expected denied decision");
-    }
-    expect(decision.eventReason).toBe("security=deny");
-    expect(decision.errorMessage).toBe("SYSTEM_RUN_DISABLED: security=deny");
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(buildPolicyParams({ security: "deny" })),
+    );
+    expect(denied.eventReason).toBe("security=deny");
+    expect(denied.errorMessage).toBe("SYSTEM_RUN_DISABLED: security=deny");
   });
 
   it("requires approval when ask policy requires it", () => {
-    const decision = evaluateSystemRunPolicy({
-      security: "allowlist",
-      ask: "always",
-      analysisOk: true,
-      allowlistSatisfied: true,
-      approvalDecision: null,
-      approved: false,
-      isWindows: false,
-      cmdInvocation: false,
-      shellWrapperInvocation: false,
-    });
-    expect(decision.allowed).toBe(false);
-    if (decision.allowed) {
-      throw new Error("expected denied decision");
-    }
-    expect(decision.eventReason).toBe("approval-required");
-    expect(decision.requiresAsk).toBe(true);
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(buildPolicyParams({ ask: "always" })),
+    );
+    expect(denied.eventReason).toBe("approval-required");
+    expect(denied.requiresAsk).toBe(true);
   });
 
   it("allows allowlist miss when explicit approval is provided", () => {
-    const decision = evaluateSystemRunPolicy({
-      security: "allowlist",
-      ask: "on-miss",
-      analysisOk: false,
-      allowlistSatisfied: false,
-      approvalDecision: "allow-once",
-      approved: false,
-      isWindows: false,
-      cmdInvocation: false,
-      shellWrapperInvocation: false,
-    });
-    expect(decision.allowed).toBe(true);
-    if (!decision.allowed) {
-      throw new Error("expected allowed decision");
-    }
-    expect(decision.approvedByAsk).toBe(true);
+    const allowed = expectAllowedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          ask: "on-miss",
+          analysisOk: false,
+          allowlistSatisfied: false,
+          approvalDecision: "allow-once",
+        }),
+      ),
+    );
+    expect(allowed.approvedByAsk).toBe(true);
   });
 
   it("denies allowlist misses without approval", () => {
-    const decision = evaluateSystemRunPolicy({
-      security: "allowlist",
-      ask: "off",
-      analysisOk: false,
-      allowlistSatisfied: false,
-      approvalDecision: null,
-      approved: false,
-      isWindows: false,
-      cmdInvocation: false,
-      shellWrapperInvocation: false,
-    });
-    expect(decision.allowed).toBe(false);
-    if (decision.allowed) {
-      throw new Error("expected denied decision");
-    }
-    expect(decision.eventReason).toBe("allowlist-miss");
-    expect(decision.errorMessage).toBe("SYSTEM_RUN_DENIED: allowlist miss");
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(buildPolicyParams({ analysisOk: false, allowlistSatisfied: false })),
+    );
+    expect(denied.eventReason).toBe("allowlist-miss");
+    expect(denied.errorMessage).toBe("SYSTEM_RUN_DENIED: allowlist miss");
   });
 
   it("treats shell wrappers as allowlist misses", () => {
-    const decision = evaluateSystemRunPolicy({
-      security: "allowlist",
-      ask: "off",
-      analysisOk: true,
-      allowlistSatisfied: true,
-      approvalDecision: null,
-      approved: false,
-      isWindows: false,
-      cmdInvocation: false,
-      shellWrapperInvocation: true,
-    });
-    expect(decision.allowed).toBe(false);
-    if (decision.allowed) {
-      throw new Error("expected denied decision");
-    }
-    expect(decision.shellWrapperBlocked).toBe(true);
-    expect(decision.errorMessage).toContain("shell wrappers like sh/bash/zsh -c");
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(buildPolicyParams({ shellWrapperInvocation: true })),
+    );
+    expect(denied.shellWrapperBlocked).toBe(true);
+    expect(denied.errorMessage).toContain("shell wrappers like sh/bash/zsh -c");
   });
 
   it("keeps Windows-specific guidance for cmd.exe wrappers", () => {
-    const decision = evaluateSystemRunPolicy({
-      security: "allowlist",
-      ask: "off",
-      analysisOk: true,
-      allowlistSatisfied: true,
-      approvalDecision: null,
-      approved: false,
-      isWindows: true,
-      cmdInvocation: true,
-      shellWrapperInvocation: true,
-    });
-    expect(decision.allowed).toBe(false);
-    if (decision.allowed) {
-      throw new Error("expected denied decision");
-    }
-    expect(decision.shellWrapperBlocked).toBe(true);
-    expect(decision.windowsShellWrapperBlocked).toBe(true);
-    expect(decision.errorMessage).toContain("Windows shell wrappers like cmd.exe /c");
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({ isWindows: true, cmdInvocation: true, shellWrapperInvocation: true }),
+      ),
+    );
+    expect(denied.shellWrapperBlocked).toBe(true);
+    expect(denied.windowsShellWrapperBlocked).toBe(true);
+    expect(denied.errorMessage).toContain("Windows shell wrappers like cmd.exe /c");
   });
 
   it("allows execution when policy checks pass", () => {
-    const decision = evaluateSystemRunPolicy({
-      security: "allowlist",
-      ask: "on-miss",
-      analysisOk: true,
-      allowlistSatisfied: true,
-      approvalDecision: null,
-      approved: false,
-      isWindows: false,
-      cmdInvocation: false,
-      shellWrapperInvocation: false,
-    });
-    expect(decision.allowed).toBe(true);
-    if (!decision.allowed) {
-      throw new Error("expected allowed decision");
-    }
-    expect(decision.requiresAsk).toBe(false);
-    expect(decision.analysisOk).toBe(true);
-    expect(decision.allowlistSatisfied).toBe(true);
+    const allowed = expectAllowedDecision(
+      evaluateSystemRunPolicy(buildPolicyParams({ ask: "on-miss" })),
+    );
+    expect(allowed.requiresAsk).toBe(false);
+    expect(allowed.analysisOk).toBe(true);
+    expect(allowed.allowlistSatisfied).toBe(true);
   });
 });

@@ -1,11 +1,31 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import { runPluginCommandWithTimeout, type RuntimeEnv } from "openclaw/plugin-sdk";
 
 const MATRIX_SDK_PACKAGE = "@vector-im/matrix-bot-sdk";
+const MATRIX_CRYPTO_DOWNLOAD_HELPER = "@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js";
+
+function formatCommandError(result: { stderr: string; stdout: string }): string {
+  const stderr = result.stderr.trim();
+  if (stderr) {
+    return stderr;
+  }
+  const stdout = result.stdout.trim();
+  if (stdout) {
+    return stdout;
+  }
+  return "unknown error";
+}
+
+function isMissingMatrixCryptoRuntimeError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  return (
+    message.includes("Cannot find module") &&
+    message.includes("@matrix-org/matrix-sdk-crypto-nodejs-")
+  );
+}
 
 export function isMatrixSdkAvailable(): boolean {
   try {
@@ -22,83 +42,49 @@ function resolvePluginRoot(): string {
   return path.resolve(currentDir, "..", "..");
 }
 
-type CommandResult = {
-  code: number;
-  stdout: string;
-  stderr: string;
-};
+export async function ensureMatrixCryptoRuntime(
+  params: {
+    log?: (message: string) => void;
+    requireFn?: (id: string) => unknown;
+    resolveFn?: (id: string) => string;
+    runCommand?: typeof runPluginCommandWithTimeout;
+    nodeExecutable?: string;
+  } = {},
+): Promise<void> {
+  const req = createRequire(import.meta.url);
+  const requireFn = params.requireFn ?? ((id: string) => req(id));
+  const resolveFn = params.resolveFn ?? ((id: string) => req.resolve(id));
+  const runCommand = params.runCommand ?? runPluginCommandWithTimeout;
+  const nodeExecutable = params.nodeExecutable ?? process.execPath;
 
-async function runFixedCommandWithTimeout(params: {
-  argv: string[];
-  cwd: string;
-  timeoutMs: number;
-  env?: NodeJS.ProcessEnv;
-}): Promise<CommandResult> {
-  return await new Promise((resolve) => {
-    const [command, ...args] = params.argv;
-    if (!command) {
-      resolve({
-        code: 1,
-        stdout: "",
-        stderr: "command is required",
-      });
-      return;
+  try {
+    requireFn(MATRIX_SDK_PACKAGE);
+    return;
+  } catch (err) {
+    if (!isMissingMatrixCryptoRuntimeError(err)) {
+      throw err;
     }
+  }
 
-    const proc = spawn(command, args, {
-      cwd: params.cwd,
-      env: { ...process.env, ...params.env },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timer: NodeJS.Timeout | null = null;
-
-    const finalize = (result: CommandResult) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      resolve(result);
-    };
-
-    proc.stdout?.on("data", (chunk: Buffer | string) => {
-      stdout += chunk.toString();
-    });
-    proc.stderr?.on("data", (chunk: Buffer | string) => {
-      stderr += chunk.toString();
-    });
-
-    timer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      finalize({
-        code: 124,
-        stdout,
-        stderr: stderr || `command timed out after ${params.timeoutMs}ms`,
-      });
-    }, params.timeoutMs);
-
-    proc.on("error", (err) => {
-      finalize({
-        code: 1,
-        stdout,
-        stderr: err.message,
-      });
-    });
-
-    proc.on("close", (code) => {
-      finalize({
-        code: code ?? 1,
-        stdout,
-        stderr,
-      });
-    });
+  const scriptPath = resolveFn(MATRIX_CRYPTO_DOWNLOAD_HELPER);
+  params.log?.("matrix: crypto runtime missing; downloading platform library…");
+  const result = await runCommand({
+    argv: [nodeExecutable, scriptPath],
+    cwd: path.dirname(scriptPath),
+    timeoutMs: 300_000,
+    env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
   });
+  if (result.code !== 0) {
+    throw new Error(`Matrix crypto runtime bootstrap failed: ${formatCommandError(result)}`);
+  }
+
+  try {
+    requireFn(MATRIX_SDK_PACKAGE);
+  } catch (err) {
+    throw new Error(
+      `Matrix crypto runtime remains unavailable after bootstrap: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 export async function ensureMatrixSdkInstalled(params: {
@@ -121,7 +107,7 @@ export async function ensureMatrixSdkInstalled(params: {
     ? ["pnpm", "install"]
     : ["npm", "install", "--omit=dev", "--silent"];
   params.runtime.log?.(`matrix: installing dependencies via ${command[0]} (${root})…`);
-  const result = await runFixedCommandWithTimeout({
+  const result = await runPluginCommandWithTimeout({
     argv: command,
     cwd: root,
     timeoutMs: 300_000,

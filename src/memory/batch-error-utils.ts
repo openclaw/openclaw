@@ -11,6 +11,9 @@ type BatchOutputErrorLike = {
 
 function getResponseErrorMessage(line: BatchOutputErrorLike | undefined): string | undefined {
   const body = line?.response?.body;
+  if (typeof body === "string") {
+    return body || undefined;
+  }
   if (!body || typeof body !== "object") {
     return undefined;
   }

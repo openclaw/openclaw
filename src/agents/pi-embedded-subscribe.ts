@@ -317,35 +317,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     return `\`\`\`txt\n${trimmed}\n\`\`\``;
   };
-  const emitToolSummary = (toolName?: string, meta?: string) => {
+  const emitToolResultMessage = (toolName: string | undefined, message: string) => {
     if (!params.onToolResult) {
       return;
     }
-    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
-      markdown: useMarkdown,
-    });
-    const { text: cleanedText, mediaUrls } = parseReplyDirectives(agg);
-    const filteredMediaUrls = filterToolResultMediaUrls(toolName, mediaUrls ?? []);
-    if (!cleanedText && filteredMediaUrls.length === 0) {
-      return;
-    }
-    try {
-      void params.onToolResult({
-        text: cleanedText,
-        mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
-      });
-    } catch {
-      // ignore tool result delivery failures
-    }
-  };
-  const emitToolOutput = (toolName?: string, meta?: string, output?: string) => {
-    if (!params.onToolResult || !output) {
-      return;
-    }
-    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
-      markdown: useMarkdown,
-    });
-    const message = `${agg}\n${formatToolOutputBlock(output)}`;
     const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
     const filteredMediaUrls = filterToolResultMediaUrls(toolName, mediaUrls ?? []);
     if (!cleanedText && filteredMediaUrls.length === 0) {
@@ -359,6 +334,22 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     } catch {
       // ignore tool result delivery failures
     }
+  };
+  const emitToolSummary = (toolName?: string, meta?: string) => {
+    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
+      markdown: useMarkdown,
+    });
+    emitToolResultMessage(toolName, agg);
+  };
+  const emitToolOutput = (toolName?: string, meta?: string, output?: string) => {
+    if (!output) {
+      return;
+    }
+    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
+      markdown: useMarkdown,
+    });
+    const message = `${agg}\n${formatToolOutputBlock(output)}`;
+    emitToolResultMessage(toolName, message);
   };
 
   const stripBlockTags = (

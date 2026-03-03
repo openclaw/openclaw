@@ -12,12 +12,12 @@ import {
 } from "discord-api-types/v10";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import type { DiscordAccountConfig } from "../../config/types.js";
 import {
-  allowListMatches,
   isDiscordGroupAllowedByPolicy,
-  normalizeDiscordAllowList,
   normalizeDiscordSlug,
+  resolveDiscordOwnerAccess,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
@@ -156,19 +156,18 @@ async function authorizeVoiceCommand(
     guildInfo,
     memberRoleIds,
     sender,
+    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
   });
 
-  const ownerAllowList = normalizeDiscordAllowList(
-    params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [],
-    ["discord:", "user:", "pk:"],
-  );
-  const ownerOk = ownerAllowList
-    ? allowListMatches(ownerAllowList, {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-      })
-    : false;
+  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
+    allowFrom: params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [],
+    sender: {
+      id: sender.id,
+      name: sender.name,
+      tag: sender.tag,
+    },
+    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
+  });
 
   const authorizers = params.useAccessGroups
     ? [

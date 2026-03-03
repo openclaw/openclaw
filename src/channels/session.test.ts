@@ -75,4 +75,60 @@ describe("recordInboundSession", () => {
       }),
     );
   });
+
+  it("normalizes mixed-case session keys before recording and route updates", async () => {
+    const { recordInboundSession } = await import("./session.js");
+
+    await recordInboundSession({
+      storePath: "/tmp/openclaw-session-store.json",
+      sessionKey: "Agent:Main:Telegram:1234:Thread:42",
+      ctx,
+      updateLastRoute: {
+        sessionKey: "agent:main:telegram:1234:thread:42",
+        channel: "telegram",
+        to: "telegram:1234",
+      },
+      onRecordError: vi.fn(),
+    });
+
+    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:1234:thread:42",
+      }),
+    );
+    expect(updateLastRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:1234:thread:42",
+        ctx,
+      }),
+    );
+  });
+
+  it("skips last-route updates when main DM owner pin mismatches sender", async () => {
+    const { recordInboundSession } = await import("./session.js");
+    const onSkip = vi.fn();
+
+    await recordInboundSession({
+      storePath: "/tmp/openclaw-session-store.json",
+      sessionKey: "agent:main:telegram:1234:thread:42",
+      ctx,
+      updateLastRoute: {
+        sessionKey: "agent:main:main",
+        channel: "telegram",
+        to: "telegram:1234",
+        mainDmOwnerPin: {
+          ownerRecipient: "1234",
+          senderRecipient: "9999",
+          onSkip,
+        },
+      },
+      onRecordError: vi.fn(),
+    });
+
+    expect(updateLastRouteMock).not.toHaveBeenCalled();
+    expect(onSkip).toHaveBeenCalledWith({
+      ownerRecipient: "1234",
+      senderRecipient: "9999",
+    });
+  });
 });

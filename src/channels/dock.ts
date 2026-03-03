@@ -3,16 +3,21 @@ import {
   resolveChannelGroupToolsPolicy,
 } from "../config/group-policy.js";
 import { resolveDiscordAccount } from "../discord/accounts.js";
-import { resolveIMessageAccount } from "../imessage/accounts.js";
+import {
+  formatTrimmedAllowFromEntries,
+  formatWhatsAppConfigAllowFromEntries,
+  resolveIMessageConfigAllowFrom,
+  resolveIMessageConfigDefaultTo,
+  resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigDefaultTo,
+} from "../plugin-sdk/channel-config-helpers.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
 import { resolveSlackAccount, resolveSlackReplyToMode } from "../slack/accounts.js";
 import { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
 import { resolveTelegramAccount } from "../telegram/accounts.js";
-import { escapeRegExp, normalizeE164 } from "../utils.js";
-import { resolveWhatsAppAccount } from "../web/accounts.js";
-import { normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
+import { normalizeE164 } from "../utils.js";
 import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
@@ -42,6 +47,10 @@ import type {
   ChannelThreadingAdapter,
   ChannelThreadingToolContext,
 } from "./plugins/types.js";
+import {
+  resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppMentionStripPatterns,
+} from "./plugins/whatsapp-shared.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, getChatChannelMeta } from "./registry.js";
 
 export type ChannelDock = {
@@ -253,8 +262,22 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     threading: {
       resolveReplyToMode: ({ cfg }) => cfg.channels?.telegram?.replyToMode ?? "off",
-      buildToolContext: ({ context, hasRepliedRef }) =>
-        buildThreadToolContextFromMessageThreadOrReply({ context, hasRepliedRef }),
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        // Telegram auto-threading should only use actual thread/topic IDs.
+        // ReplyToId is a message ID and causes invalid message_thread_id in DMs.
+        const threadId = context.MessageThreadId;
+        const rawCurrentMessageId = context.CurrentMessageId;
+        const currentMessageId =
+          typeof rawCurrentMessageId === "number"
+            ? rawCurrentMessageId
+            : rawCurrentMessageId?.trim() || undefined;
+        return {
+          currentChannelId: context.To?.trim() || undefined,
+          currentThreadTs: threadId != null ? String(threadId) : undefined,
+          currentMessageId,
+          hasRepliedRef,
+        };
+      },
     },
   },
   whatsapp: {
@@ -271,36 +294,17 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
     config: {
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        resolveWhatsAppAccount({ cfg, accountId }).allowFrom ?? [],
-      formatAllowFrom: ({ allowFrom }) =>
-        allowFrom
-          .map((entry) => String(entry).trim())
-          .filter((entry): entry is string => Boolean(entry))
-          .map((entry) => (entry === "*" ? entry : normalizeWhatsAppTarget(entry)))
-          .filter((entry): entry is string => Boolean(entry)),
-      resolveDefaultTo: ({ cfg, accountId }) => {
-        const root = cfg.channels?.whatsapp;
-        const normalized = normalizeAccountId(accountId);
-        const account = root?.accounts?.[normalized];
-        return (account?.defaultTo ?? root?.defaultTo)?.trim() || undefined;
-      },
+      resolveAllowFrom: ({ cfg, accountId }) => resolveWhatsAppConfigAllowFrom({ cfg, accountId }),
+      formatAllowFrom: ({ allowFrom }) => formatWhatsAppConfigAllowFromEntries(allowFrom),
+      resolveDefaultTo: ({ cfg, accountId }) => resolveWhatsAppConfigDefaultTo({ cfg, accountId }),
     },
     groups: {
       resolveRequireMention: resolveWhatsAppGroupRequireMention,
       resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-      resolveGroupIntroHint: () =>
-        "WhatsApp IDs: SenderId is the participant JID (group participant id).",
+      resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
     },
     mentions: {
-      stripPatterns: ({ ctx }) => {
-        const selfE164 = (ctx.To ?? "").replace(/^whatsapp:/, "");
-        if (!selfE164) {
-          return [];
-        }
-        const escaped = escapeRegExp(selfE164);
-        return [escaped, `@${escaped}`];
-      },
+      stripPatterns: ({ ctx }) => resolveWhatsAppMentionStripPatterns(ctx),
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) => {
@@ -529,14 +533,9 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
     config: {
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        (resolveIMessageAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-          String(entry),
-        ),
-      formatAllowFrom: ({ allowFrom }) =>
-        allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-      resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveIMessageAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
+      resolveAllowFrom: ({ cfg, accountId }) => resolveIMessageConfigAllowFrom({ cfg, accountId }),
+      formatAllowFrom: ({ allowFrom }) => formatTrimmedAllowFromEntries(allowFrom),
+      resolveDefaultTo: ({ cfg, accountId }) => resolveIMessageConfigDefaultTo({ cfg, accountId }),
     },
     groups: {
       resolveRequireMention: resolveIMessageGroupRequireMention,

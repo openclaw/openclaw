@@ -65,6 +65,20 @@ async function runStateIntegrity(cfg: OpenClawConfig) {
   return confirmSkipInNonInteractive;
 }
 
+function writeSessionStore(
+  cfg: OpenClawConfig,
+  sessions: Record<string, { sessionId: string; updatedAt: number }>,
+) {
+  setupSessionState(cfg, process.env, process.env.HOME ?? "");
+  const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+  fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));
+}
+
+async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
+  await noteStateIntegrity(cfg, { confirmSkipInNonInteractive: vi.fn(async () => false) });
+  return stateIntegrityText();
+}
+
 describe("doctor state integrity oauth dir checks", () => {
   let envSnapshot: EnvSnapshot;
   let tempHome = "";
@@ -123,5 +137,55 @@ describe("doctor state integrity oauth dir checks", () => {
     const confirmSkipInNonInteractive = await runStateIntegrity(cfg);
     expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
     expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
+  });
+
+  it("detects orphan transcripts and offers archival remediation", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+    const confirmSkipInNonInteractive = vi.fn(async (params: { message: string }) =>
+      params.message.includes("orphan transcript file"),
+    );
+    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
+    expect(stateIntegrityText()).toContain("orphan transcript file");
+    expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("orphan transcript file"),
+      }),
+    );
+    const files = fs.readdirSync(sessionsDir);
+    expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
+  });
+
+  it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
+    const cfg: OpenClawConfig = {};
+    writeSessionStore(cfg, {
+      "agent:main:main": {
+        sessionId: "missing-transcript",
+        updatedAt: Date.now(),
+      },
+    });
+    const text = await runStateIntegrityText(cfg);
+    expect(text).toContain("recent sessions are missing transcripts");
+    expect(text).toMatch(/openclaw sessions --store ".*sessions\.json"/);
+    expect(text).toMatch(/openclaw sessions cleanup --store ".*sessions\.json" --dry-run/);
+    expect(text).toMatch(
+      /openclaw sessions cleanup --store ".*sessions\.json" --enforce --fix-missing/,
+    );
+    expect(text).not.toContain("--active");
+    expect(text).not.toContain(" ls ");
+  });
+
+  it("ignores slash-routing sessions for recent missing transcript warnings", async () => {
+    const cfg: OpenClawConfig = {};
+    writeSessionStore(cfg, {
+      "agent:main:telegram:slash:6790081233": {
+        sessionId: "missing-slash-transcript",
+        updatedAt: Date.now(),
+      },
+    });
+    const text = await runStateIntegrityText(cfg);
+    expect(text).not.toContain("recent sessions are missing transcripts");
   });
 });

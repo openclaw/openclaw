@@ -1,10 +1,6 @@
-import type {
-  OpenClawConfig,
-  PluginRuntime,
-  ResolvedLineAccount,
-  RuntimeEnv,
-} from "openclaw/plugin-sdk";
+import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 import { linePlugin } from "./channel.js";
 import { setLineRuntime } from "./runtime.js";
 
@@ -45,16 +41,6 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
   } as unknown as PluginRuntime;
 
   return { runtime, mocks: { writeConfigFile, resolveLineAccount } };
-}
-
-function createRuntimeEnv(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number): never => {
-      throw new Error(`exit ${code}`);
-    }),
-  };
 }
 
 function resolveAccount(

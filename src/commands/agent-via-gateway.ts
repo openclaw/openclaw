@@ -141,6 +141,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
           channel,
           replyChannel: opts.replyChannel,
           replyAccountId: opts.replyAccount,
+          bestEffortDeliver: opts.bestEffortDeliver,
           timeout: timeoutSeconds,
           lane: opts.lane,
           extraSystemPrompt: opts.extraSystemPrompt,

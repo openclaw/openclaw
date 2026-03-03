@@ -16,6 +16,12 @@ describe("extractBatchErrorMessage", () => {
       extractBatchErrorMessage([{ response: { body: { error: { message: "nested-only" } } } }, {}]),
     ).toBe("nested-only");
   });
+
+  it("accepts plain string response bodies", () => {
+    expect(extractBatchErrorMessage([{ response: { body: "provider plain-text error" } }])).toBe(
+      "provider plain-text error",
+    );
+  });
 });
 
 describe("formatUnavailableBatchError", () => {

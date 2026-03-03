@@ -7,11 +7,13 @@ import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
+import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
   isProfileInCooldown,
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
+  resolveProfilesUnavailableReason,
 } from "../auth-profiles.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
@@ -63,6 +65,17 @@ import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
+
+type CopilotTokenState = {
+  githubToken: string;
+  expiresAt: number;
+  refreshTimer?: ReturnType<typeof setTimeout>;
+  refreshInFlight?: Promise<void>;
+};
+
+const COPILOT_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+const COPILOT_REFRESH_RETRY_MS = 60 * 1000;
+const COPILOT_REFRESH_MIN_DELAY_MS = 5 * 1000;
 
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -229,8 +242,11 @@ export async function runEmbeddedPiAgent(
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-      const fallbackConfigured =
-        (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
+      const fallbackConfigured = hasConfiguredModelFallbacks({
+        cfg: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      });
       await ensureOpenClawModelsJson(params.config, agentDir);
 
       // Run before_model_resolve hooks early so plugins can override the
@@ -247,6 +263,8 @@ export async function runEmbeddedPiAgent(
         sessionId: params.sessionId,
         workspaceDir: resolvedWorkspace,
         messageProvider: params.messageProvider ?? undefined,
+        trigger: params.trigger,
+        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
       };
       if (hookRunner?.hasHooks("before_model_resolve")) {
         try {
@@ -360,13 +378,121 @@ export async function runEmbeddedPiAgent(
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;
       let lastProfileId: string | undefined;
+      const copilotTokenState: CopilotTokenState | null =
+        model.provider === "github-copilot" ? { githubToken: "", expiresAt: 0 } : null;
+      let copilotRefreshCancelled = false;
+      const hasCopilotGithubToken = () => Boolean(copilotTokenState?.githubToken.trim());
+
+      const clearCopilotRefreshTimer = () => {
+        if (!copilotTokenState?.refreshTimer) {
+          return;
+        }
+        clearTimeout(copilotTokenState.refreshTimer);
+        copilotTokenState.refreshTimer = undefined;
+      };
+
+      const stopCopilotRefreshTimer = () => {
+        if (!copilotTokenState) {
+          return;
+        }
+        copilotRefreshCancelled = true;
+        clearCopilotRefreshTimer();
+      };
+
+      const refreshCopilotToken = async (reason: string): Promise<void> => {
+        if (!copilotTokenState) {
+          return;
+        }
+        if (copilotTokenState.refreshInFlight) {
+          await copilotTokenState.refreshInFlight;
+          return;
+        }
+        const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
+        copilotTokenState.refreshInFlight = (async () => {
+          const githubToken = copilotTokenState.githubToken.trim();
+          if (!githubToken) {
+            throw new Error("Copilot refresh requires a GitHub token.");
+          }
+          log.debug(`Refreshing GitHub Copilot token (${reason})...`);
+          const copilotToken = await resolveCopilotApiToken({
+            githubToken,
+          });
+          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+          copilotTokenState.expiresAt = copilotToken.expiresAt;
+          const remaining = copilotToken.expiresAt - Date.now();
+          log.debug(
+            `Copilot token refreshed; expires in ${Math.max(0, Math.floor(remaining / 1000))}s.`,
+          );
+        })()
+          .catch((err) => {
+            log.warn(`Copilot token refresh failed: ${describeUnknownError(err)}`);
+            throw err;
+          })
+          .finally(() => {
+            copilotTokenState.refreshInFlight = undefined;
+          });
+        await copilotTokenState.refreshInFlight;
+      };
+
+      const scheduleCopilotRefresh = (): void => {
+        if (!copilotTokenState || copilotRefreshCancelled) {
+          return;
+        }
+        if (!hasCopilotGithubToken()) {
+          log.warn("Skipping Copilot refresh scheduling; GitHub token missing.");
+          return;
+        }
+        clearCopilotRefreshTimer();
+        const now = Date.now();
+        const refreshAt = copilotTokenState.expiresAt - COPILOT_REFRESH_MARGIN_MS;
+        const delayMs = Math.max(COPILOT_REFRESH_MIN_DELAY_MS, refreshAt - now);
+        const timer = setTimeout(() => {
+          if (copilotRefreshCancelled) {
+            return;
+          }
+          refreshCopilotToken("scheduled")
+            .then(() => scheduleCopilotRefresh())
+            .catch(() => {
+              if (copilotRefreshCancelled) {
+                return;
+              }
+              const retryTimer = setTimeout(() => {
+                if (copilotRefreshCancelled) {
+                  return;
+                }
+                refreshCopilotToken("scheduled-retry")
+                  .then(() => scheduleCopilotRefresh())
+                  .catch(() => undefined);
+              }, COPILOT_REFRESH_RETRY_MS);
+              copilotTokenState.refreshTimer = retryTimer;
+              if (copilotRefreshCancelled) {
+                clearTimeout(retryTimer);
+                copilotTokenState.refreshTimer = undefined;
+              }
+            });
+        }, delayMs);
+        copilotTokenState.refreshTimer = timer;
+        if (copilotRefreshCancelled) {
+          clearTimeout(timer);
+          copilotTokenState.refreshTimer = undefined;
+        }
+      };
 
       const resolveAuthProfileFailoverReason = (params: {
         allInCooldown: boolean;
         message: string;
+        profileIds?: Array<string | undefined>;
       }): FailoverReason => {
         if (params.allInCooldown) {
-          return "rate_limit";
+          const profileIds = (params.profileIds ?? profileCandidates).filter(
+            (id): id is string => typeof id === "string" && id.length > 0,
+          );
+          return (
+            resolveProfilesUnavailableReason({
+              store: authStore,
+              profileIds,
+            }) ?? "rate_limit"
+          );
         }
         const classified = classifyFailoverReason(params.message);
         return classified ?? "auth";
@@ -385,6 +511,7 @@ export async function runEmbeddedPiAgent(
         const reason = resolveAuthProfileFailoverReason({
           allInCooldown: params.allInCooldown,
           message,
+          profileIds: profileCandidates,
         });
         if (fallbackConfigured) {
           throw new FailoverError(message, {
@@ -430,6 +557,11 @@ export async function runEmbeddedPiAgent(
             githubToken: apiKeyInfo.apiKey,
           });
           authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+          if (copilotTokenState) {
+            copilotTokenState.githubToken = apiKeyInfo.apiKey;
+            copilotTokenState.expiresAt = copilotToken.expiresAt;
+            scheduleCopilotRefresh();
+          }
         } else {
           authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
         }
@@ -493,6 +625,28 @@ export async function runEmbeddedPiAgent(
         }
       }
 
+      const maybeRefreshCopilotForAuthError = async (
+        errorText: string,
+        retried: boolean,
+      ): Promise<boolean> => {
+        if (!copilotTokenState || retried) {
+          return false;
+        }
+        if (!isFailoverErrorMessage(errorText)) {
+          return false;
+        }
+        if (classifyFailoverReason(errorText) !== "auth") {
+          return false;
+        }
+        try {
+          await refreshCopilotToken("auth-error");
+          scheduleCopilotRefresh();
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
@@ -504,6 +658,8 @@ export async function runEmbeddedPiAgent(
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
+        config?: RunEmbeddedPiAgentParams["config"];
+        agentDir?: RunEmbeddedPiAgentParams["agentDir"];
       }) => {
         const { profileId, reason } = failure;
         if (!profileId || !reason || reason === "timeout") {
@@ -518,6 +674,7 @@ export async function runEmbeddedPiAgent(
         });
       };
       try {
+        let authRetryPending = false;
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
             const message =
@@ -549,6 +706,8 @@ export async function runEmbeddedPiAgent(
             };
           }
           runLoopIterations += 1;
+          const copilotAuthRetry = authRetryPending;
+          authRetryPending = false;
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
@@ -558,6 +717,7 @@ export async function runEmbeddedPiAgent(
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
+            trigger: params.trigger,
             messageChannel: params.messageChannel,
             messageProvider: params.messageProvider,
             agentAccountId: params.agentAccountId,
@@ -570,6 +730,7 @@ export async function runEmbeddedPiAgent(
             senderIsOwner: params.senderIsOwner,
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,
+            currentMessageId: params.currentMessageId,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: params.sessionFile,
@@ -834,6 +995,10 @@ export async function runEmbeddedPiAgent(
 
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
+            if (await maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
+              authRetryPending = true;
+              continue;
+            }
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
               return {
@@ -942,6 +1107,16 @@ export async function runEmbeddedPiAgent(
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
 
+          if (
+            authFailure &&
+            (await maybeRefreshCopilotForAuthError(
+              lastAssistant?.errorMessage ?? "",
+              copilotAuthRetry,
+            ))
+          ) {
+            authRetryPending = true;
+            continue;
+          }
           if (imageDimensionError && lastProfileId) {
             const details = [
               imageDimensionError.messageIndex !== undefined
@@ -1120,7 +1295,11 @@ export async function runEmbeddedPiAgent(
               aborted,
               systemPromptReport: attempt.systemPromptReport,
               // Handle client tool calls (OpenResponses hosted tools)
-              stopReason: attempt.clientToolCall ? "tool_calls" : undefined,
+              // Propagate the LLM stop reason so callers (lifecycle events,
+              // ACP bridge) can distinguish end_turn from max_tokens.
+              stopReason: attempt.clientToolCall
+                ? "tool_calls"
+                : (lastAssistant?.stopReason as string | undefined),
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {
@@ -1139,6 +1318,7 @@ export async function runEmbeddedPiAgent(
           };
         }
       } finally {
+        stopCopilotRefreshTimer();
         process.chdir(prevCwd);
       }
     }),

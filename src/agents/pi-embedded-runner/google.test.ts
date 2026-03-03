@@ -42,26 +42,6 @@ describe("sanitizeToolsForGoogle", () => {
     expectFormatRemoved(sanitized, "additionalProperties");
   });
 
-  it("strips unsupported schema keywords for google-antigravity", () => {
-    const tool = createTool({
-      type: "object",
-      patternProperties: {
-        "^x-": { type: "string" },
-      },
-      properties: {
-        foo: {
-          type: "string",
-          format: "uuid",
-        },
-      },
-    });
-    const [sanitized] = sanitizeToolsForGoogle({
-      tools: [tool],
-      provider: "google-antigravity",
-    });
-    expectFormatRemoved(sanitized, "patternProperties");
-  });
-
   it("returns original tools for non-google providers", () => {
     const tool = createTool({
       type: "object",

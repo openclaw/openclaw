@@ -1,20 +1,124 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it } from "vitest";
+import type { Api, Model } from "@mariozechner/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
+import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
-import { __testing } from "./compaction-safeguard.js";
+import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
 
 const {
   collectToolFailures,
   formatToolFailuresSection,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
+  readWorkspaceContextForSummary,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
 } = __testing;
+
+function stubSessionManager(): ExtensionContext["sessionManager"] {
+  const stub: ExtensionContext["sessionManager"] = {
+    getCwd: () => "/stub",
+    getSessionDir: () => "/stub",
+    getSessionId: () => "stub-id",
+    getSessionFile: () => undefined,
+    getLeafId: () => null,
+    getLeafEntry: () => undefined,
+    getEntry: () => undefined,
+    getLabel: () => undefined,
+    getBranch: () => [],
+    getHeader: () => null,
+    getEntries: () => [],
+    getTree: () => [],
+    getSessionName: () => undefined,
+  };
+  return stub;
+}
+
+function createAnthropicModelFixture(overrides: Partial<Model<Api>> = {}): Model<Api> {
+  return {
+    id: "claude-opus-4-5",
+    name: "Claude Opus 4.5",
+    provider: "anthropic",
+    api: "anthropic" as const,
+    baseUrl: "https://api.anthropic.com",
+    contextWindow: 200000,
+    maxTokens: 4096,
+    reasoning: false,
+    input: ["text"] as const,
+    cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
+    ...overrides,
+  };
+}
+
+type CompactionHandler = (event: unknown, ctx: unknown) => Promise<unknown>;
+const createCompactionHandler = () => {
+  let compactionHandler: CompactionHandler | undefined;
+  const mockApi = {
+    on: vi.fn((event: string, handler: CompactionHandler) => {
+      if (event === "session_before_compact") {
+        compactionHandler = handler;
+      }
+    }),
+  } as unknown as ExtensionAPI;
+  compactionSafeguardExtension(mockApi);
+  expect(compactionHandler).toBeDefined();
+  return compactionHandler as CompactionHandler;
+};
+
+const createCompactionEvent = (params: { messageText: string; tokensBefore: number }) => ({
+  preparation: {
+    messagesToSummarize: [
+      { role: "user", content: params.messageText, timestamp: Date.now() },
+    ] as AgentMessage[],
+    turnPrefixMessages: [] as AgentMessage[],
+    firstKeptEntryId: "entry-1",
+    tokensBefore: params.tokensBefore,
+    fileOps: {
+      read: [],
+      edited: [],
+      written: [],
+    },
+  },
+  customInstructions: "",
+  signal: new AbortController().signal,
+});
+
+const createCompactionContext = (params: {
+  sessionManager: ExtensionContext["sessionManager"];
+  getApiKeyMock: ReturnType<typeof vi.fn>;
+}) =>
+  ({
+    model: undefined,
+    sessionManager: params.sessionManager,
+    modelRegistry: {
+      getApiKey: params.getApiKeyMock,
+    },
+  }) as unknown as Partial<ExtensionContext>;
+
+async function runCompactionScenario(params: {
+  sessionManager: ExtensionContext["sessionManager"];
+  event: unknown;
+  apiKey: string | null;
+}) {
+  const compactionHandler = createCompactionHandler();
+  const getApiKeyMock = vi.fn().mockResolvedValue(params.apiKey);
+  const mockContext = createCompactionContext({
+    sessionManager: params.sessionManager,
+    getApiKeyMock,
+  });
+  const result = (await compactionHandler(params.event, mockContext)) as {
+    cancel?: boolean;
+  };
+  return { result, getApiKeyMock };
+}
 
 describe("compaction-safeguard tool failures", () => {
   it("formats tool failures with meta and summary", () => {
@@ -115,11 +219,11 @@ describe("computeAdaptiveChunkRatio", () => {
     // Small messages: 1000 tokens each, well under 10% of context
     const messages: AgentMessage[] = [
       { role: "user", content: "x".repeat(1000), timestamp: Date.now() },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(1000) }],
         timestamp: Date.now(),
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
@@ -130,11 +234,11 @@ describe("computeAdaptiveChunkRatio", () => {
     // Large messages: ~50K tokens each (25% of context)
     const messages: AgentMessage[] = [
       { role: "user", content: "x".repeat(50_000 * 4), timestamp: Date.now() },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(50_000 * 4) }],
         timestamp: Date.now(),
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
@@ -248,4 +352,170 @@ describe("compaction-safeguard runtime registry", () => {
     expect(getCompactionSafeguardRuntime(sm1)).toEqual({ maxHistoryShare: 0.3 });
     expect(getCompactionSafeguardRuntime(sm2)).toEqual({ maxHistoryShare: 0.8 });
   });
+
+  it("stores and retrieves model from runtime (fallback for compact.ts workflow)", () => {
+    const sm = {};
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sm, { model });
+    const retrieved = getCompactionSafeguardRuntime(sm);
+    expect(retrieved?.model).toEqual(model);
+  });
+
+  it("stores and retrieves contextWindowTokens from runtime", () => {
+    const sm = {};
+    setCompactionSafeguardRuntime(sm, { contextWindowTokens: 200000 });
+    const retrieved = getCompactionSafeguardRuntime(sm);
+    expect(retrieved?.contextWindowTokens).toBe(200000);
+  });
+
+  it("stores and retrieves combined runtime values", () => {
+    const sm = {};
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sm, {
+      maxHistoryShare: 0.6,
+      contextWindowTokens: 200000,
+      model,
+    });
+    const retrieved = getCompactionSafeguardRuntime(sm);
+    expect(retrieved).toEqual({
+      maxHistoryShare: 0.6,
+      contextWindowTokens: 200000,
+      model,
+    });
+  });
+});
+
+describe("compaction-safeguard extension model fallback", () => {
+  it("uses runtime.model when ctx.model is undefined (compact.ts workflow)", async () => {
+    // This test verifies the root-cause fix: when extensionRunner.initialize() is not called
+    // (as happens in compact.ts), ctx.model is undefined but runtime.model is available.
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+
+    // Set up runtime with model (mimics buildEmbeddedExtensionPaths behavior)
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = createCompactionEvent({
+      messageText: "test message",
+      tokensBefore: 1000,
+    });
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+
+    expect(result).toEqual({ cancel: true });
+
+    // KEY ASSERTION: Prove the fallback path was exercised
+    // The handler should have called getApiKey with runtime.model (via ctx.model ?? runtime?.model)
+    expect(getApiKeyMock).toHaveBeenCalledWith(model);
+
+    // Verify runtime.model is still available (for completeness)
+    const retrieved = getCompactionSafeguardRuntime(sessionManager);
+    expect(retrieved?.model).toEqual(model);
+  });
+
+  it("cancels compaction when both ctx.model and runtime.model are undefined", async () => {
+    const sessionManager = stubSessionManager();
+
+    // Do NOT set runtime.model (both ctx.model and runtime.model will be undefined)
+
+    const mockEvent = createCompactionEvent({
+      messageText: "test",
+      tokensBefore: 500,
+    });
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+
+    expect(result).toEqual({ cancel: true });
+
+    // Verify early return: getApiKey should NOT have been called when both models are missing
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("compaction-safeguard double-compaction guard", () => {
+  it("cancels compaction when there are no real messages to summarize", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "sk-test",
+    });
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("continues when messages include real conversation content", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = createCompactionEvent({
+      messageText: "real message",
+      tokensBefore: 1500,
+    });
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyMock).toHaveBeenCalled();
+  });
+});
+
+async function expectWorkspaceSummaryEmptyForAgentsAlias(
+  createAlias: (outsidePath: string, agentsPath: string) => void,
+) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
+  const prevCwd = process.cwd();
+  try {
+    const outside = path.join(root, "outside-secret.txt");
+    fs.writeFileSync(outside, "secret");
+    createAlias(outside, path.join(root, "AGENTS.md"));
+    process.chdir(root);
+    await expect(readWorkspaceContextForSummary()).resolves.toBe("");
+  } finally {
+    process.chdir(prevCwd);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe("readWorkspaceContextForSummary", () => {
+  it.runIf(process.platform !== "win32")(
+    "returns empty when AGENTS.md is a symlink escape",
+    async () => {
+      await expectWorkspaceSummaryEmptyForAgentsAlias((outside, agentsPath) => {
+        fs.symlinkSync(outside, agentsPath);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "returns empty when AGENTS.md is a hardlink alias",
+    async () => {
+      await expectWorkspaceSummaryEmptyForAgentsAlias((outside, agentsPath) => {
+        fs.linkSync(outside, agentsPath);
+      });
+    },
+  );
 });
