@@ -481,7 +481,7 @@ OpenClaw supports Slack native text streaming via the Agents and AI Apps API.
 
 `channels.slack.streaming` controls live preview behavior:
 
-- `off`: disable live preview streaming.
+- `"off"`: disable live preview streaming entirely (use this to stop draft previews).
 - `partial` (default): replace preview text with the latest partial output.
 - `block`: append chunked preview updates.
 - `progress`: show progress status text while generating, then send final text.
@@ -501,6 +501,10 @@ Legacy keys:
 
 - `channels.slack.streamMode` (`replace | status_final | append`) is auto-migrated to `channels.slack.streaming`.
 - boolean `channels.slack.streaming` is auto-migrated to `channels.slack.nativeStreaming`.
+
+Legacy boolean gotcha: `streaming: false` is treated as `streaming: "partial"` with
+`nativeStreaming: false`, so it still sends draft preview updates (and Slack will
+show `(edited)` churn). Set `streaming: "off"` to fully disable previews.
 
 ### Requirements
 
