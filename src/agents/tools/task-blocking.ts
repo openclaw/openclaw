@@ -49,6 +49,8 @@ const TaskBacklogAddSchema = Type.Object({
   assignee: Type.Optional(Type.String()),
   milestone_id: Type.Optional(Type.String()),
   milestone_item_id: Type.Optional(Type.String()),
+  harness_project_slug: Type.Optional(Type.String()),
+  harness_item_id: Type.Optional(Type.String()),
 });
 
 const TaskPickBacklogSchema = Type.Object({
@@ -444,6 +446,8 @@ export function createTaskBacklogAddTool(options: {
         dueDate: dueDateRaw,
         milestoneId: readStringParam(params, "milestone_id"),
         milestoneItemId: readStringParam(params, "milestone_item_id"),
+        harnessProjectSlug: readStringParam(params, "harness_project_slug"),
+        harnessItemId: readStringParam(params, "harness_item_id"),
       };
 
       // Duplicate detection: reject if a similar backlog task already exists

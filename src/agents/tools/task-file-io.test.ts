@@ -168,14 +168,24 @@ describe("task-file-io", () => {
       const md = formatTaskFileMd(task);
       const parsed = parseTaskFileMd(md, "task_abc123.md");
       expect(parsed!.steps).toHaveLength(4);
-      expect(parsed!.steps![0]).toEqual({ id: "s1", content: "Write tests", status: "done", order: 1 });
+      expect(parsed!.steps![0]).toEqual({
+        id: "s1",
+        content: "Write tests",
+        status: "done",
+        order: 1,
+      });
       expect(parsed!.steps![1]).toEqual({
         id: "s2",
         content: "Implement feature",
         status: "in_progress",
         order: 2,
       });
-      expect(parsed!.steps![2]).toEqual({ id: "s3", content: "Deploy", status: "pending", order: 3 });
+      expect(parsed!.steps![2]).toEqual({
+        id: "s3",
+        content: "Deploy",
+        status: "pending",
+        order: 3,
+      });
       expect(parsed!.steps![3]).toEqual({
         id: "s4",
         content: "Skipped item",
@@ -256,6 +266,50 @@ describe("task-file-io", () => {
       expect(parsed!.reassignCount).toBe(1);
     });
 
+    it("roundtrips a backlog task with harness fields", () => {
+      const task = makeTask({
+        status: "backlog",
+        createdBy: "task-hub",
+        assignee: "eden",
+        harnessProjectSlug: "my-project",
+        harnessItemId: "507f1f77bcf86cd799439011",
+      });
+      const md = formatTaskFileMd(task);
+      const parsed = parseTaskFileMd(md, "task_abc123.md");
+      expect(parsed!.harnessProjectSlug).toBe("my-project");
+      expect(parsed!.harnessItemId).toBe("507f1f77bcf86cd799439011");
+    });
+
+    it("roundtrips a backlog task with both milestone and harness fields", () => {
+      const task = makeTask({
+        status: "backlog",
+        createdBy: "task-hub",
+        assignee: "eden",
+        milestoneId: "ms_1",
+        milestoneItemId: "mi_1",
+        harnessProjectSlug: "harness-test",
+        harnessItemId: "item_abc",
+      });
+      const md = formatTaskFileMd(task);
+      const parsed = parseTaskFileMd(md, "task_abc123.md");
+      expect(parsed!.milestoneId).toBe("ms_1");
+      expect(parsed!.milestoneItemId).toBe("mi_1");
+      expect(parsed!.harnessProjectSlug).toBe("harness-test");
+      expect(parsed!.harnessItemId).toBe("item_abc");
+    });
+
+    it("omits harness fields when not set", () => {
+      const task = makeTask({
+        status: "backlog",
+        createdBy: "user1",
+        assignee: "agent1",
+      });
+      const md = formatTaskFileMd(task);
+      const parsed = parseTaskFileMd(md, "task_abc123.md");
+      expect(parsed!.harnessProjectSlug).toBeUndefined();
+      expect(parsed!.harnessItemId).toBeUndefined();
+    });
+
     it("roundtrips a task with outcome", () => {
       const task = makeTask({
         status: "completed",
@@ -273,7 +327,11 @@ describe("task-file-io", () => {
       });
       const md = formatTaskFileMd(task);
       const parsed = parseTaskFileMd(md, "task_abc123.md");
-      expect(parsed!.outcome).toEqual({ kind: "cancelled", reason: "No longer needed", by: "user1" });
+      expect(parsed!.outcome).toEqual({
+        kind: "cancelled",
+        reason: "No longer needed",
+        by: "user1",
+      });
     });
   });
 

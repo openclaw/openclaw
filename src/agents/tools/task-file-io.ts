@@ -82,6 +82,8 @@ export interface TaskFile {
   // Milestone integration fields
   milestoneId?: string; // Linked milestone ID in Task Hub
   milestoneItemId?: string; // Linked milestone item ID in Task Hub
+  harnessProjectSlug?: string; // Harness project slug for spec tracking
+  harnessItemId?: string; // Harness item ID for verification reporting
   reassignCount?: number; // Zombie recovery: number of times task was auto-reassigned
   createdBySessionKey?: string; // Session key that created this task (for enforcement scope)
   steps?: TaskStep[];
@@ -233,6 +235,8 @@ export function formatTaskFileMd(task: TaskFile): string {
       dueDate: task.dueDate,
       milestoneId: task.milestoneId,
       milestoneItemId: task.milestoneItemId,
+      harnessProjectSlug: task.harnessProjectSlug,
+      harnessItemId: task.harnessItemId,
       reassignCount: task.reassignCount,
     };
     lines.push("## Backlog", "```json", JSON.stringify(backlogData), "```", "");
@@ -294,6 +298,8 @@ export function parseTaskFileMd(content: string, filename: string): TaskFile | n
   let dueDate: string | undefined;
   let milestoneId: string | undefined;
   let milestoneItemId: string | undefined;
+  let harnessProjectSlug: string | undefined;
+  let harnessItemId: string | undefined;
   let reassignCount: number | undefined;
   let createdBySessionKey: string | undefined;
   let simple: boolean | undefined;
@@ -424,6 +430,8 @@ export function parseTaskFileMd(content: string, filename: string): TaskFile | n
           dueDate = backlogData.dueDate;
           milestoneId = backlogData.milestoneId;
           milestoneItemId = backlogData.milestoneItemId;
+          harnessProjectSlug = backlogData.harnessProjectSlug;
+          harnessItemId = backlogData.harnessItemId;
           if (typeof backlogData.reassignCount === "number") {
             reassignCount = backlogData.reassignCount;
           }
@@ -496,6 +504,8 @@ export function parseTaskFileMd(content: string, filename: string): TaskFile | n
     dueDate,
     milestoneId,
     milestoneItemId,
+    harnessProjectSlug,
+    harnessItemId,
     reassignCount,
     createdBySessionKey,
     outcome,

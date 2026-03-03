@@ -401,6 +401,25 @@ function formatBacklogPickupPrompt(task: TaskFile): string {
     lines.push(`**Context:** ${task.context}`);
   }
 
+  // Harness protocol injection
+  if (task.harnessProjectSlug) {
+    lines.push(``);
+    lines.push(`## Harness Protocol`);
+    lines.push(`This is a harness-managed task. You MUST follow the harness protocol:`);
+    lines.push(`- **Harness Item ID:** ${task.harnessItemId}`);
+    lines.push(`- **Project Slug:** ${task.harnessProjectSlug}`);
+    lines.push(``);
+    lines.push(`1. Read \`.harness/${task.harnessProjectSlug}/specs/\` for spec files`);
+    lines.push(`2. Follow each spec's steps in order`);
+    lines.push(
+      `3. After completing each step, call \`harness_report_step(item_id="${task.harnessItemId}", step_index=N, status="done")\``,
+    );
+    lines.push(
+      `4. After all steps, verify each checklist item and call \`harness_report_check(item_id="${task.harnessItemId}", check_index=N, passed=true/false)\``,
+    );
+    lines.push(`5. Only mark task complete after ALL checks pass`);
+  }
+
   lines.push(``);
   lines.push(`**IMPORTANT:** This task is already set to in_progress with Task ID ${task.id}.`);
   lines.push(`DO NOT call task_start() — the task already exists.`);

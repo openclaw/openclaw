@@ -10,6 +10,7 @@ import { createCollaborateTool } from "./tools/collaborate-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createHarnessTools } from "./tools/harness-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createMilestoneTools } from "./tools/milestone-tool.js";
@@ -283,6 +284,10 @@ export function createOpenClawTools(options?: {
   // Milestone management tools
   const milestoneTools = createMilestoneTools();
   tools.push(...milestoneTools);
+
+  // Harness verification tools
+  const harnessTools = createHarnessTools();
+  tools.push(...harnessTools);
   const pluginTools = resolvePluginTools({
     context: {
       config: options?.config,
