@@ -145,7 +145,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       }>(configPath);
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
-      expect(cfg?.tools?.profile).toBe("messaging");
+      expect(cfg?.tools?.profile).toBe("full");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
     });
