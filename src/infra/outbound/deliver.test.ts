@@ -826,6 +826,124 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("supports text-only plugin outbound adapters that omit sendMedia", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "line", messageId: "ln-text-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "line",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "line",
+      to: "U123",
+      payloads: [{ text: "hello from text-only plugin" }],
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello from text-only plugin" }),
+    );
+    expect(results).toEqual([{ channel: "line", messageId: "ln-text-1" }]);
+  });
+
+  it("falls back to sendText for media payloads when plugin sendMedia is omitted", async () => {
+    const sendText = vi
+      .fn()
+      .mockResolvedValue({ channel: "line", messageId: "ln-media-fallback-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "line",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "line",
+      to: "U123",
+      payloads: [{ text: "media caption", mediaUrl: "https://example.com/a.png" }],
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "media caption" }));
+    expect(results).toEqual([{ channel: "line", messageId: "ln-media-fallback-1" }]);
+  });
+
+  it("uses mediaUrl as text when caption is empty on sendMedia fallback", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "line", messageId: "ln-media-url-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "line",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "line",
+      to: "U123",
+      payloads: [{ text: "", mediaUrl: "https://example.com/photo.jpg" }],
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "https://example.com/photo.jpg" }),
+    );
+    expect(results).toEqual([{ channel: "line", messageId: "ln-media-url-1" }]);
+  });
+
+  it("logs a warning when media payload degrades to sendText fallback", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "line", messageId: "ln-warn-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "line",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "line",
+      to: "U123",
+      payloads: [{ text: "caption", mediaUrl: "https://example.com/a.png" }],
+    });
+
+    expect(logMocks.warn).toHaveBeenCalledWith(
+      "plugin sendMedia not defined; degrading media payload to sendText",
+      expect.objectContaining({
+        channel: "line",
+        mediaUrl: "https://example.com/a.png",
+      }),
+    );
+  });
+
   it("emits message_sent success for sendPayload deliveries", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });

@@ -143,7 +143,7 @@ function createPluginHandler(
   params: ChannelHandlerParams & { outbound?: ChannelOutboundAdapter },
 ): ChannelHandler | null {
   const outbound = params.outbound;
-  if (!outbound?.sendText || !outbound?.sendMedia) {
+  if (!outbound?.sendText) {
     return null;
   }
   const baseCtx = createChannelOutboundContextBase(params);
@@ -177,12 +177,24 @@ function createPluginHandler(
         ...resolveCtx(overrides),
         text,
       }),
-    sendMedia: async (caption, mediaUrl, overrides) =>
-      sendMedia({
-        ...resolveCtx(overrides),
-        text: caption,
-        mediaUrl,
-      }),
+    sendMedia: sendMedia
+      ? async (caption, mediaUrl, overrides) =>
+          sendMedia({
+            ...resolveCtx(overrides),
+            text: caption,
+            mediaUrl,
+          })
+      : async (caption, mediaUrl, overrides) => {
+          log.warn("plugin sendMedia not defined; degrading media payload to sendText", {
+            channel: params.channel,
+            mediaUrl,
+          });
+          const text = caption || mediaUrl;
+          return sendText({
+            ...resolveCtx(overrides),
+            text,
+          });
+        },
   };
 }
 
