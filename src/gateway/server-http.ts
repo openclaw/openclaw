@@ -174,23 +174,31 @@ function handleGatewayProbeRequest(
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
 
-  if (method === "HEAD") {
-    res.statusCode = 200;
-    res.end();
-    return true;
-  }
-
   if (status === "ready" && getReadiness) {
     let result: ReadinessResult;
     try {
       result = getReadiness();
     } catch {
       res.statusCode = 503;
-      res.end(JSON.stringify({ ready: false, failing: ["internal"] }));
+      if (method !== "HEAD") {
+        res.end(JSON.stringify({ ready: false, failing: ["internal"] }));
+      } else {
+        res.end();
+      }
       return true;
     }
     res.statusCode = result.ready ? 200 : 503;
-    res.end(JSON.stringify(result));
+    if (method !== "HEAD") {
+      res.end(JSON.stringify(result));
+    } else {
+      res.end();
+    }
+    return true;
+  }
+
+  if (method === "HEAD") {
+    res.statusCode = 200;
+    res.end();
     return true;
   }
 

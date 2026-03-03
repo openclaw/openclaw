@@ -13,6 +13,7 @@ function makeChannelManager(
         enabled?: boolean;
         configured?: boolean;
         lastStartAt?: number;
+        lastEventAt?: number;
       }
     >
   >,
@@ -147,5 +148,44 @@ describe("createReadinessChecker", () => {
 
     expect(result.ready).toBe(false);
     expect(result.failing).toContain("discord");
+  });
+
+  it("returns ready=true when no channels are configured", () => {
+    const startedAt = Date.now() - 200_000;
+    const checker = createReadinessChecker({
+      channelManager: makeChannelManager({}) as ChannelManager,
+      startedAt,
+    });
+
+    const result = checker();
+
+    expect(result.ready).toBe(true);
+    expect(result.failing).toEqual([]);
+  });
+
+  it("includes stale-socket channel in failing", () => {
+    const startedAt = Date.now() - 200_000;
+    // Channel started and had its last event 31 minutes ago — past the 30-minute stale threshold
+    const staleAt = Date.now() - 31 * 60_000;
+    const checker = createReadinessChecker({
+      channelManager: makeChannelManager({
+        slack: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            lastStartAt: staleAt,
+            lastEventAt: staleAt,
+          },
+        },
+      }) as ChannelManager,
+      startedAt,
+    });
+
+    const result = checker();
+
+    expect(result.ready).toBe(false);
+    expect(result.failing).toContain("slack");
   });
 });

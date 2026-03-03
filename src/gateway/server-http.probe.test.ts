@@ -127,4 +127,62 @@ describe("gateway probe endpoints — /ready with readiness checker", () => {
       },
     });
   });
+
+  it("returns 503 for /readyz when not ready", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      ready: false,
+      failing: ["telegram"],
+      uptimeMs: 5_000,
+    });
+
+    await withGatewayServer({
+      prefix: "probe-readyz-not-ready",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const req = createRequest({ path: "/readyz" });
+        const { res } = createResponse();
+        await dispatchRequest(server, req, res);
+        expect(res.statusCode).toBe(503);
+      },
+    });
+  });
+
+  it("HEAD /ready returns 200 when ready", async () => {
+    const getReadiness: ReadinessChecker = () => ({ ready: true, failing: [], uptimeMs: 1_000 });
+
+    await withGatewayServer({
+      prefix: "probe-head-ready",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const req = createRequest({ path: "/ready", method: "HEAD" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+        expect(res.statusCode).toBe(200);
+        expect(getBody()).toBe("");
+      },
+    });
+  });
+
+  it("HEAD /ready returns 503 when not ready", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      ready: false,
+      failing: ["discord"],
+      uptimeMs: 200_000,
+    });
+
+    await withGatewayServer({
+      prefix: "probe-head-not-ready",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const req = createRequest({ path: "/ready", method: "HEAD" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+        expect(res.statusCode).toBe(503);
+        expect(getBody()).toBe("");
+      },
+    });
+  });
 });
