@@ -290,7 +290,11 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
     }
     if (coveredAccountIds.size > 0) {
       warnings.push(
-        `- channels.${channelKey}: accounts.default is missing and account bindings only cover a subset of configured accounts. Uncovered accounts: ${uncoveredAccountIds.join(", ")}. Add bindings[].match.accountId for uncovered accounts (or "*"), or add channels.${channelKey}.accounts.default.`,
+        `- channels.${channelKey}: accounts.default is missing and account bindings only cover a subset of configured accounts. Uncovered accounts: ${uncoveredAccountIds.join(", ")}. Add bindings[].match.accountId for uncovered accounts (or "*"), or add channels.${channelKey}.accounts.default.${
+          channelKey === "telegram"
+            ? " For Telegram multi-account setups, channels.telegram.botToken only maps to the default account, so define channels.telegram.accounts.default explicitly to avoid routing surprises."
+            : ""
+        }`,
       );
       continue;
     }

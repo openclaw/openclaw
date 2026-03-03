@@ -55,6 +55,7 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("subset");
     expect(warnings[0]).toContain("Uncovered accounts: work");
+    expect(warnings[0]).toContain("channels.telegram.botToken only maps to the default account");
   });
 
   it("does not warn when wildcard account binding exists", () => {
