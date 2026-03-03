@@ -448,20 +448,25 @@ export async function sendMSTeamsMessages(params: {
     messageIndex: number,
     options?: { replyToId?: string },
   ): Promise<string> => {
-    const activity = await buildActivity(
-      message,
-      params.conversationRef,
-      params.tokenProvider,
-      params.sharePointSiteId,
-      params.mediaMaxBytes,
+    const response = await sendWithRetry(
+      async () => {
+        const activity = await buildActivity(
+          message,
+          params.conversationRef,
+          params.tokenProvider,
+          params.sharePointSiteId,
+          params.mediaMaxBytes,
+        );
+        if (options?.replyToId) {
+          activity.replyToId = options.replyToId;
+        }
+        return await ctx.sendActivity(activity);
+      },
+      {
+        messageIndex,
+        messageCount: messages.length,
+      },
     );
-    if (options?.replyToId) {
-      activity.replyToId = options.replyToId;
-    }
-    const response = await sendWithRetry(async () => await ctx.sendActivity(activity), {
-      messageIndex,
-      messageCount: messages.length,
-    });
     return extractMessageId(response) ?? "unknown";
   };
 
