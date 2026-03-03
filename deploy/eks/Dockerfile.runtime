@@ -1,0 +1,71 @@
+FROM node:22-bookworm-slim
+
+USER root
+
+ARG KUBECTL_VERSION=v1.33.5
+ARG HELM_VERSION=v3.17.1
+ARG OPENCLAW_VERSION=2026.2.24
+ARG OPENCLAW_LOCAL_TARBALL=openclaw-local.tgz
+ARG VAULT_VERSION=v1.21.2
+ARG ARGOCD_VERSION=v3.3.2
+ARG TARGETARCH
+
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    awscli \
+    bash \
+    ca-certificates \
+    curl \
+    gh \
+    git \
+    gzip \
+    jq \
+    tar \
+    unzip \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+COPY ${OPENCLAW_LOCAL_TARBALL} /tmp/openclaw-local.tgz
+RUN if [ -s /tmp/openclaw-local.tgz ]; then \
+      npm install -g /tmp/openclaw-local.tgz; \
+    else \
+      npm install -g "openclaw@${OPENCLAW_VERSION}"; \
+    fi \
+  && rm -f /tmp/openclaw-local.tgz
+
+RUN set -eux; \
+  arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+  case "$arch" in \
+    amd64) kube_arch="amd64"; helm_arch="amd64"; argocd_arch="amd64"; hashicorp_arch="amd64" ;; \
+    arm64) kube_arch="arm64"; helm_arch="arm64"; argocd_arch="arm64"; hashicorp_arch="arm64" ;; \
+    *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
+  esac; \
+  curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${kube_arch}/kubectl"; \
+  chmod +x /usr/local/bin/kubectl; \
+  curl -fsSL -o /tmp/helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-${helm_arch}.tar.gz"; \
+  tar -C /tmp -xzf /tmp/helm.tar.gz; \
+  mv "/tmp/linux-${helm_arch}/helm" /usr/local/bin/helm; \
+  chmod +x /usr/local/bin/helm; \
+  vault_version="${VAULT_VERSION#v}"; \
+  curl -fsSL -o /tmp/vault.zip "https://releases.hashicorp.com/vault/${vault_version}/vault_${vault_version}_linux_${hashicorp_arch}.zip"; \
+  unzip -p /tmp/vault.zip vault >/usr/local/bin/vault; \
+  chmod +x /usr/local/bin/vault; \
+  curl -fsSL -o /usr/local/bin/argocd "https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-${argocd_arch}"; \
+  chmod +x /usr/local/bin/argocd; \
+  kubectl version --client=true --output=yaml >/dev/null; \
+  helm version --short >/dev/null; \
+  vault --version >/dev/null; \
+  gh --version >/dev/null; \
+  argocd version --client >/dev/null; \
+  rm -rf \
+    /tmp/helm.tar.gz \
+    "/tmp/linux-${helm_arch}" \
+    /tmp/vault.zip
+
+RUN mkdir -p /Users/florian/morpho \
+  && chown -R node:node /Users/florian
+
+COPY --chown=node:node morpho-infra /Users/florian/morpho/morpho-infra
+COPY --chown=node:node morpho-infra-helm /Users/florian/morpho/morpho-infra-helm
+
+USER node

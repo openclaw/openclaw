@@ -17,6 +17,7 @@ import {
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
+import { extractReplyToTag } from "../auto-reply/reply/reply-tags.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
@@ -35,6 +36,7 @@ import {
   updateSessionStore,
 } from "../config/sessions.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -62,6 +64,8 @@ import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import {
+  type OutboundTarget,
+  resolveOutboundTarget,
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
@@ -99,6 +103,12 @@ export type HeartbeatSummary = {
 
 const DEFAULT_HEARTBEAT_TARGET = "none";
 export { isCronSystemEvent };
+
+const HEARTBEAT_OUTBOUND_REDACT_PATTERNS = [
+  ...getDefaultRedactPatterns(),
+  String.raw`\bAKIA[0-9A-Z]{16}\b`,
+  String.raw`\bASIA[0-9A-Z]{16}\b`,
+];
 
 type HeartbeatAgentState = {
   agentId: string;
@@ -443,13 +453,114 @@ function stripLeadingHeartbeatResponsePrefix(
   return text.replace(prefixPattern, "");
 }
 
+function extractHeartbeatToTag(text: string): { cleaned: string; targetTo?: string } {
+  const routeRegex = /\[\[\s*heartbeat_to\s*:\s*([^\]]+?)\s*\]\]/giu;
+  let targetTo: string | undefined;
+  const cleaned = text.replace(routeRegex, (_match, rawTarget) => {
+    if (targetTo) {
+      return "";
+    }
+    const candidate = String(rawTarget ?? "").trim();
+    if (candidate) {
+      targetTo = candidate;
+    }
+    return "";
+  });
+  return { cleaned, targetTo };
+}
+
+function resolveHeartbeatDeliveryOverride(params: {
+  cfg: OpenClawConfig;
+  baseDelivery: OutboundTarget;
+  heartbeat?: HeartbeatConfig;
+  targetTo?: string;
+}): OutboundTarget {
+  const { cfg, baseDelivery, heartbeat } = params;
+  const overrideTo = params.targetTo?.trim();
+  if (!overrideTo) {
+    return baseDelivery;
+  }
+
+  const channel = baseDelivery.channel !== "none" ? baseDelivery.channel : baseDelivery.lastChannel;
+  if (!channel) {
+    return baseDelivery;
+  }
+
+  const resolved = resolveOutboundTarget({
+    channel,
+    to: overrideTo,
+    cfg,
+    accountId: baseDelivery.accountId,
+    mode: "heartbeat",
+  });
+  if (!resolved.ok) {
+    log.warn("heartbeat: ignored invalid heartbeat_to override", {
+      channel,
+      targetTo: overrideTo,
+      error: formatErrorMessage(resolved.error),
+    });
+    return baseDelivery;
+  }
+
+  const rawAllowlist = heartbeat?.routeAllowlist ?? [];
+  const allowlist = Array.isArray(rawAllowlist)
+    ? rawAllowlist
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : [];
+  if (allowlist.length > 0) {
+    const allowedTargets = new Set<string>();
+    for (const entry of allowlist) {
+      const allowed = resolveOutboundTarget({
+        channel,
+        to: entry,
+        cfg,
+        accountId: baseDelivery.accountId,
+        mode: "heartbeat",
+      });
+      if (!allowed.ok) {
+        log.warn("heartbeat: ignored invalid routeAllowlist target", {
+          channel,
+          targetTo: entry,
+          error: formatErrorMessage(allowed.error),
+        });
+        continue;
+      }
+      allowedTargets.add(allowed.to.toLowerCase());
+    }
+
+    const normalizedOverride = resolved.to.toLowerCase();
+    if (!allowedTargets.has(normalizedOverride)) {
+      log.warn("heartbeat: ignored heartbeat_to override outside routeAllowlist", {
+        channel,
+        targetTo: overrideTo,
+      });
+      return baseDelivery;
+    }
+  }
+
+  return {
+    ...baseDelivery,
+    channel,
+    to: resolved.to,
+    // Keep override delivery as a fresh target; thread stickiness can be wrong across destinations.
+    threadId: undefined,
+    reason: "model-route-override",
+  };
+}
+
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
   ackMaxChars: number,
 ) {
   const rawText = typeof payload.text === "string" ? payload.text : "";
-  const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
+  const { cleaned: textWithoutRouteTags, targetTo } = extractHeartbeatToTag(rawText);
+  const textWithoutReplyTags = textWithoutRouteTags.includes("[[")
+    ? extractReplyToTag(textWithoutRouteTags).cleaned
+    : textWithoutRouteTags;
+  const textForStrip = stripLeadingHeartbeatResponsePrefix(textWithoutReplyTags, responsePrefix);
   const stripped = stripHeartbeatToken(textForStrip, {
     mode: "heartbeat",
     maxAckChars: ackMaxChars,
@@ -460,13 +571,24 @@ function normalizeHeartbeatReply(
       shouldSkip: true,
       text: "",
       hasMedia,
+      targetTo,
     };
   }
   let finalText = stripped.text;
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
   }
-  return { shouldSkip: false, text: finalText, hasMedia };
+  return { shouldSkip: false, text: finalText, hasMedia, targetTo };
+}
+
+function sanitizeHeartbeatOutboundText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  return redactSensitiveText(text, {
+    mode: "tools",
+    patterns: HEARTBEAT_OUTBOUND_REDACT_PATTERNS,
+  });
 }
 
 type HeartbeatReasonFlags = {
@@ -823,6 +945,33 @@ export async function runHeartbeatOnce(opts: {
     const mediaUrls =
       replyPayload.mediaUrls ?? (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
 
+    const sanitizedReasoningPayloads = reasoningPayloads.map((payload) => {
+      if (typeof payload.text !== "string" || !payload.text.trim()) {
+        return payload;
+      }
+      const sanitizedText = sanitizeHeartbeatOutboundText(payload.text);
+      return sanitizedText === payload.text ? payload : { ...payload, text: sanitizedText };
+    });
+    const sanitizedReasoningEdits = sanitizedReasoningPayloads.reduce(
+      (count, payload, index) =>
+        payload.text !== reasoningPayloads[index]?.text ? count + 1 : count,
+      0,
+    );
+    const originalMainText = normalized.text;
+    const sanitizedMainText = shouldSkipMain
+      ? originalMainText
+      : sanitizeHeartbeatOutboundText(originalMainText);
+    const mainPayloadRedacted = !shouldSkipMain && sanitizedMainText !== originalMainText;
+    if (!shouldSkipMain) {
+      normalized.text = sanitizedMainText;
+    }
+    if (sanitizedReasoningEdits > 0 || mainPayloadRedacted) {
+      log.info("heartbeat: redacted sensitive content in outbound payload", {
+        reasoningPayloadsRedacted: sanitizedReasoningEdits,
+        mainPayloadRedacted,
+      });
+    }
+
     // Suppress duplicate heartbeats (same payload) within a short window.
     // This prevents "nagging" when nothing changed but the model repeats the same items.
     const prevHeartbeatText =
@@ -859,25 +1008,51 @@ export async function runHeartbeatOnce(opts: {
 
     // Reasoning payloads are text-only; any attachments stay on the main reply.
     const previewText = shouldSkipMain
-      ? reasoningPayloads
+      ? sanitizedReasoningPayloads
           .map((payload) => payload.text)
           .filter((text): text is string => Boolean(text?.trim()))
           .join("\n")
       : normalized.text;
 
-    if (delivery.channel === "none" || !delivery.to) {
+    const effectiveDelivery = resolveHeartbeatDeliveryOverride({
+      cfg,
+      baseDelivery: delivery,
+      heartbeat,
+      targetTo: normalized.targetTo,
+    });
+    if (
+      normalized.targetTo &&
+      effectiveDelivery.to !== delivery.to &&
+      effectiveDelivery.channel !== "none"
+    ) {
+      log.info("heartbeat: applying heartbeat_to override", {
+        baseTo: delivery.to,
+        overrideTo: effectiveDelivery.to,
+        channel: effectiveDelivery.channel,
+      });
+    }
+    const effectiveVisibility =
+      effectiveDelivery.channel !== "none"
+        ? resolveHeartbeatVisibility({
+            cfg,
+            channel: effectiveDelivery.channel,
+            accountId: effectiveDelivery.accountId,
+          })
+        : visibility;
+
+    if (effectiveDelivery.channel === "none" || !effectiveDelivery.to) {
       emitHeartbeatEvent({
         status: "skipped",
-        reason: delivery.reason ?? "no-target",
+        reason: effectiveDelivery.reason ?? delivery.reason ?? "no-target",
         preview: previewText?.slice(0, 200),
         durationMs: Date.now() - startedAt,
         hasMedia: mediaUrls.length > 0,
-        accountId: delivery.accountId,
+        accountId: effectiveDelivery.accountId,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    if (!visibility.showAlerts) {
+    if (!effectiveVisibility.showAlerts) {
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -888,16 +1063,16 @@ export async function runHeartbeatOnce(opts: {
         reason: "alerts-disabled",
         preview: previewText?.slice(0, 200),
         durationMs: Date.now() - startedAt,
-        channel: delivery.channel,
+        channel: effectiveDelivery.channel,
         hasMedia: mediaUrls.length > 0,
-        accountId: delivery.accountId,
-        indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+        accountId: effectiveDelivery.accountId,
+        indicatorType: effectiveVisibility.useIndicator ? resolveIndicatorType("sent") : undefined,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    const deliveryAccountId = delivery.accountId;
-    const heartbeatPlugin = getChannelPlugin(delivery.channel);
+    const deliveryAccountId = effectiveDelivery.accountId;
+    const heartbeatPlugin = getChannelPlugin(effectiveDelivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
         cfg,
@@ -911,11 +1086,11 @@ export async function runHeartbeatOnce(opts: {
           preview: previewText?.slice(0, 200),
           durationMs: Date.now() - startedAt,
           hasMedia: mediaUrls.length > 0,
-          channel: delivery.channel,
-          accountId: delivery.accountId,
+          channel: effectiveDelivery.channel,
+          accountId: effectiveDelivery.accountId,
         });
         log.info("heartbeat: channel not ready", {
-          channel: delivery.channel,
+          channel: effectiveDelivery.channel,
           reason: readiness.reason,
         });
         return { status: "skipped", reason: readiness.reason };
@@ -924,13 +1099,13 @@ export async function runHeartbeatOnce(opts: {
 
     await deliverOutboundPayloads({
       cfg,
-      channel: delivery.channel,
-      to: delivery.to,
+      channel: effectiveDelivery.channel,
+      to: effectiveDelivery.to,
       accountId: deliveryAccountId,
       session: outboundSession,
-      threadId: delivery.threadId,
+      threadId: effectiveDelivery.threadId,
       payloads: [
-        ...reasoningPayloads,
+        ...sanitizedReasoningPayloads,
         ...(shouldSkipMain
           ? []
           : [
@@ -959,13 +1134,13 @@ export async function runHeartbeatOnce(opts: {
 
     emitHeartbeatEvent({
       status: "sent",
-      to: delivery.to,
+      to: effectiveDelivery.to,
       preview: previewText?.slice(0, 200),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
-      channel: delivery.channel,
-      accountId: delivery.accountId,
-      indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+      channel: effectiveDelivery.channel,
+      accountId: effectiveDelivery.accountId,
+      indicatorType: effectiveVisibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
