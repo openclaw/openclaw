@@ -82,12 +82,13 @@ async function runCustomProviderMergeTest(seedProvider: {
 function createMoonshotConfig(overrides: {
   contextWindow: number;
   maxTokens: number;
+  baseUrl?: string;
 }): OpenClawConfig {
   return {
     models: {
       providers: {
         moonshot: {
-          baseUrl: "https://api.moonshot.ai/v1",
+          baseUrl: overrides.baseUrl ?? "https://api.moonshot.ai/v1",
           api: "openai-completions",
           models: [
             {
@@ -215,6 +216,40 @@ describe("models-config", () => {
         api: "openai-responses",
         models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
       });
+      expect(parsed.providers.custom?.apiKey).toBe("CONFIG_KEY");
+      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    });
+  });
+
+  it("preserves existing apiKey/baseUrl when config values are empty", async () => {
+    await withTempHome(async () => {
+      await writeAgentModelsJson({
+        providers: {
+          custom: {
+            baseUrl: "https://agent.example/v1",
+            apiKey: "AGENT_KEY",
+            api: "openai-responses",
+            models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
+          },
+        },
+      });
+
+      await ensureOpenClawModelsJson({
+        models: {
+          mode: "merge",
+          providers: {
+            custom: {
+              ...createMergeConfigProvider(),
+              baseUrl: "",
+              apiKey: "",
+            },
+          },
+        },
+      });
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string; baseUrl?: string }>;
+      }>();
       expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
       expect(parsed.providers.custom?.baseUrl).toBe("https://agent.example/v1");
     });
@@ -230,6 +265,46 @@ describe("models-config", () => {
       });
       expect(parsed.providers.custom?.apiKey).toBe("CONFIG_KEY");
       expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    });
+  });
+
+  it("overrides stale moonshot baseUrl in models.json when config explicitly sets CN endpoint", async () => {
+    await withTempHome(async () => {
+      await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
+        await writeAgentModelsJson({
+          providers: {
+            moonshot: {
+              baseUrl: "https://api.moonshot.ai/v1",
+              apiKey: "MOONSHOT_API_KEY",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "kimi-k2.5",
+                  name: "Kimi K2.5",
+                  input: ["text"],
+                  reasoning: false,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 256000,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        });
+
+        const cfg = createMoonshotConfig({
+          contextWindow: 1024,
+          maxTokens: 256,
+          baseUrl: "https://api.moonshot.cn/v1",
+        });
+
+        await ensureOpenClawModelsJson(cfg);
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { baseUrl?: string }>;
+        }>();
+        expect(parsed.providers.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
+      });
     });
   });
 

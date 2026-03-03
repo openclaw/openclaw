@@ -141,8 +141,9 @@ async function resolveProvidersForModelsJson(params: {
 function mergeWithExistingProviderSecrets(params: {
   nextProviders: Record<string, ProviderConfig>;
   existingProviders: Record<string, NonNullable<ModelsConfig["providers"]>[string]>;
+  explicitProviders?: NonNullable<ModelsConfig["providers"]> | null;
 }): Record<string, ProviderConfig> {
-  const { nextProviders, existingProviders } = params;
+  const { nextProviders, existingProviders, explicitProviders } = params;
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(existingProviders)) {
     mergedProviders[key] = entry;
@@ -154,15 +155,23 @@ function mergeWithExistingProviderSecrets(params: {
           baseUrl?: string;
         })
       | undefined;
+    const explicit = explicitProviders?.[key] as
+      | (NonNullable<ModelsConfig["providers"]>[string] & {
+          apiKey?: string;
+          baseUrl?: string;
+        })
+      | undefined;
+    const explicitApiKey = typeof explicit?.apiKey === "string" ? explicit.apiKey.trim() : "";
+    const explicitBaseUrl = typeof explicit?.baseUrl === "string" ? explicit.baseUrl.trim() : "";
     if (!existing) {
       mergedProviders[key] = newEntry;
       continue;
     }
     const preserved: Record<string, unknown> = {};
-    if (typeof existing.apiKey === "string" && existing.apiKey) {
+    if (typeof existing.apiKey === "string" && existing.apiKey && !explicitApiKey) {
       preserved.apiKey = existing.apiKey;
     }
-    if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+    if (typeof existing.baseUrl === "string" && existing.baseUrl && !explicitBaseUrl) {
       preserved.baseUrl = existing.baseUrl;
     }
     mergedProviders[key] = { ...newEntry, ...preserved };
@@ -174,6 +183,7 @@ async function resolveProvidersForMode(params: {
   mode: NonNullable<ModelsConfig["mode"]>;
   targetPath: string;
   providers: Record<string, ProviderConfig>;
+  explicitProviders?: NonNullable<ModelsConfig["providers"]> | null;
 }): Promise<Record<string, ProviderConfig>> {
   if (params.mode !== "merge") {
     return params.providers;
@@ -189,6 +199,7 @@ async function resolveProvidersForMode(params: {
   return mergeWithExistingProviderSecrets({
     nextProviders: params.providers,
     existingProviders,
+    explicitProviders: params.explicitProviders,
   });
 }
 
@@ -225,6 +236,7 @@ export async function ensureOpenClawModelsJson(
     mode,
     targetPath,
     providers,
+    explicitProviders: cfg.models?.providers,
   });
 
   const normalizedProviders = normalizeProviders({

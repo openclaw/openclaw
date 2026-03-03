@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Models/merge-mode provider sync: when `openclaw.json` explicitly sets provider `apiKey` or `baseUrl`, regenerate `agents/*/agent/models.json` with those explicit values instead of pinning stale cached secrets/endpoints from prior runs; agent-local values are still preserved when explicit config fields are empty. Fixes #28996 and #32607.
+
 ## 2026.3.2
 
 ### Changes
