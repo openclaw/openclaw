@@ -91,8 +91,6 @@ function resolveMinimaxCnApiKey(): string | undefined {
     envDirect: [
       process.env.MINIMAX_CN_CODE_PLAN_KEY,
       process.env.MINIMAX_CN_API_KEY,
-      // Fallback to generic MINIMAX_API_KEY for env-only setups
-      process.env.MINIMAX_API_KEY,
     ],
   });
 }
