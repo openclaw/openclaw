@@ -56,11 +56,20 @@ export function isSilentReplyPrefixText(
   if (!text) {
     return false;
   }
-  const normalized = text.trimStart().toUpperCase();
+  const trimmed = text.trimStart();
+  if (!trimmed) {
+    return false;
+  }
+  // Guard against suppressing natural-language "No..." text while still
+  // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
+  if (trimmed !== trimmed.toUpperCase()) {
+    return false;
+  }
+  const normalized = trimmed.toUpperCase();
   if (!normalized) {
     return false;
   }
-  if (!normalized.includes("_")) {
+  if (normalized.length < 2) {
     return false;
   }
   if (/[^A-Z_]/.test(normalized)) {
