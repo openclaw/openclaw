@@ -109,11 +109,14 @@ async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Pr
       "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
       `Docs: ${formatDocsLink("/slack", "slack")}`,
       "",
-      "Manifest (JSON):",
-      manifest,
+      "Manifest JSON is printed raw below for copy/paste.",
     ].join("\n"),
     "Slack socket mode tokens",
   );
+  // Print raw JSON (outside clack note framing) so users can copy valid manifest
+  // directly without removing decorative box characters.
+  process.stdout.write("\nSlack App Manifest (raw JSON):\n");
+  process.stdout.write(`${manifest}\n\n`);
 }
 
 function setSlackChannelAllowlist(
