@@ -221,4 +221,58 @@ describe("stripReasoningTagsFromText", () => {
       }
     });
   });
+
+  describe("bare thought markers (issue #32721)", () => {
+    it("strips bare 'thought' text markers from Gemini 3.0 Flash", () => {
+      const cases = [
+        {
+          input: "Hello world thought This is the answer",
+          expected: "Hello world  This is the answer",
+        },
+        {
+          input: "Start thought middle thought end",
+          expected: "Start  middle  end",
+        },
+        {
+          input: "THOUGHT in uppercase",
+          expected: "in uppercase",
+        },
+        {
+          input: "Thought with capital T",
+          expected: "with capital T",
+        },
+      ] as const;
+      for (const { input, expected } of cases) {
+        expect(stripReasoningTagsFromText(input)).toBe(expected);
+      }
+    });
+
+    it("preserves 'thought' inside code blocks when stripping bare markers", () => {
+      // Code blocks should preserve 'thought', but bare 'thought' outside code blocks should be stripped
+      expect(
+        stripReasoningTagsFromText(
+          "Use the word `thought` in your code:\n```\nconst thought = 'hello'\n```",
+        ),
+      ).toBe("Use the word `thought` in your code:\n```\nconst thought = 'hello'\n```");
+
+      // Bare 'thought' at the end (outside backticks) should be stripped
+      expect(
+        stripReasoningTagsFromText(
+          "The function `getThought()` returns a thought.",
+        ),
+      ).toBe("The function `getThought()` returns a .");
+
+      // 'thought' inside fenced code block should be preserved
+      expect(
+        stripReasoningTagsFromText(
+          "Example:\n```js\nconst thought = 123;\nconsole.log(thought);\n```",
+        ),
+      ).toBe("Example:\n```js\nconst thought = 123;\nconsole.log(thought);\n```");
+    });
+
+    it("handles mixed bare thought markers and XML tags", () => {
+      const input = "<think>hidden</think> visible thought more text";
+      expect(stripReasoningTagsFromText(input)).toBe("visible  more text");
+    });
+  });
 });

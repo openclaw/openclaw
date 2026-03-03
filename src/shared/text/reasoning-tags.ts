@@ -6,6 +6,10 @@ const QUICK_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking|final)\b/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/gi;
 const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 
+// Gemini 3.0 Flash sometimes outputs bare "thought" text markers without XML tags.
+// This regex matches standalone "thought" text (case-insensitive, word boundary).
+const BARE_THOUGHT_RE = /\bthought\b/gi;
+
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
   if (mode === "none") {
     return value;
@@ -26,7 +30,8 @@ export function stripReasoningTagsFromText(
   if (!text) {
     return text;
   }
-  if (!QUICK_TAG_RE.test(text)) {
+  // Quick check: skip processing if no XML reasoning tags OR bare "thought" markers present
+  if (!QUICK_TAG_RE.test(text) && !BARE_THOUGHT_RE.test(text)) {
     return text;
   }
 
@@ -86,6 +91,32 @@ export function stripReasoningTagsFromText(
 
   if (!inThinking || mode === "preserve") {
     result += cleaned.slice(lastIndex);
+  }
+
+  // If no XML tags were processed, use the original cleaned text
+  if (!result) {
+    result = cleaned;
+  }
+
+  // Strip bare "thought" text markers that some models (e.g., Gemini 3.0 Flash) output
+  // without XML tags. Only remove standalone "thought" words, not those inside code blocks.
+  BARE_THOUGHT_RE.lastIndex = 0;
+  if (BARE_THOUGHT_RE.test(result)) {
+    const codeRegionsForBare = findCodeRegions(result);
+    let resultWithoutBareThought = "";
+    let lastIdx = 0;
+
+    BARE_THOUGHT_RE.lastIndex = 0;
+    for (const match of result.matchAll(BARE_THOUGHT_RE)) {
+      const idx = match.index ?? 0;
+      if (isInsideCode(idx, codeRegionsForBare)) {
+        continue;
+      }
+      resultWithoutBareThought += result.slice(lastIdx, idx);
+      lastIdx = idx + match[0].length;
+    }
+    resultWithoutBareThought += result.slice(lastIdx);
+    result = resultWithoutBareThought;
   }
 
   return applyTrim(result, trimMode);
