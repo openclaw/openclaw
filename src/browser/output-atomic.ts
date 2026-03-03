@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
 import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
 function buildSiblingTempPath(targetPath: string): string {
@@ -36,12 +35,10 @@ export async function writeViaSiblingTempPath(params: {
   let renameSucceeded = false;
   try {
     await params.writeTemp(tempPath);
-    await writeFileFromPathWithinRoot({
-      rootDir,
-      relativePath: relativeTargetPath,
-      sourcePath: tempPath,
-      mkdir: false,
-    });
+    // Use fs.rename (atomic directory-entry swap) instead of a copy so that
+    // hardlink aliases at the target path are safely replaced rather than
+    // written through.
+    await fs.rename(tempPath, targetPath);
     renameSucceeded = true;
   } finally {
     if (!renameSucceeded) {

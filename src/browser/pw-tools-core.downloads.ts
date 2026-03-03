@@ -91,6 +91,8 @@ async function saveDownloadPayload(download: DownloadPayload, outPath: string) {
   if (!requestedPath) {
     await download.saveAs?.(resolvedOutPath);
   } else {
+    // Use the target's parent dir as root so explicit paths outside
+    // DEFAULT_DOWNLOAD_DIR don't fail the root-boundary check.
     await writeViaSiblingTempPath({
       rootDir: path.dirname(resolvedOutPath),
       targetPath: resolvedOutPath,
