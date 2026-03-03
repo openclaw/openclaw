@@ -1,7 +1,9 @@
 import { Buffer } from "node:buffer";
+import { lookup } from "node:dns/promises";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
+  isPrivateIpAddress,
   normalizeHostnameSuffixAllowlist,
 } from "openclaw/plugin-sdk";
 import type { SsrFPolicy } from "openclaw/plugin-sdk";
