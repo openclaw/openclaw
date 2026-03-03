@@ -593,6 +593,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
+  "tools.message.fallbackChannel.enabled":
+    "Use current channel from tool context as fallback when channel param is missing (default: true).",
   "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
   "tools.web.search.provider":
     'Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). Auto-detected from available API keys if omitted.',

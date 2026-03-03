@@ -204,6 +204,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.message.crossContext.marker.prefix": "Cross-Context Marker Prefix",
   "tools.message.crossContext.marker.suffix": "Cross-Context Marker Suffix",
   "tools.message.broadcast.enabled": "Enable Message Broadcast",
+  "tools.message.fallbackChannel.enabled": "Message Channel Fallback",
   "tools.web.search.enabled": "Enable Web Search Tool",
   "tools.web.search.provider": "Web Search Provider",
   "tools.web.search.apiKey": "Brave Search API Key",

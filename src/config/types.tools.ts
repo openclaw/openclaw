@@ -546,6 +546,11 @@ export type ToolsConfig = {
       /** Enable broadcast action (default: true). */
       enabled?: boolean;
     };
+    /** When resolving message channel, use tool-context current channel as fallback if channel param is missing (default: true). */
+    fallbackChannel?: {
+      /** Use currentChannelProvider as fallback when channel is not specified (default: true). */
+      enabled?: boolean;
+    };
   };
   agentToAgent?: {
     /** Enable agent-to-agent messaging tools. Default: false. */
