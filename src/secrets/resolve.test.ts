@@ -202,7 +202,7 @@ describe("secret ref resolver", () => {
         "#!/usr/bin/env node",
         "setTimeout(() => {",
         "  process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { delayed: 'ok' } }));",
-        "}, 30);",
+        "}, 2600);",
       ].join("\n"),
       0o700,
     );
@@ -217,7 +217,7 @@ describe("secret ref resolver", () => {
                 source: "exec",
                 command: scriptPath,
                 passEnv: ["PATH"],
-                timeoutMs: 500,
+                timeoutMs: 5000,
               },
             },
           },
