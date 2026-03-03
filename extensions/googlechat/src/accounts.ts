@@ -69,7 +69,11 @@ function mergeGoogleChatAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): GoogleChatAccountConfig {
-  const raw = cfg.channels?.["googlechat"] ?? {};
+  const rawChannel = cfg.channels?.["googlechat"];
+  const raw =
+    rawChannel && typeof rawChannel === "object"
+      ? (rawChannel as Record<string, unknown>)
+      : ({} as Record<string, unknown>);
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account } as GoogleChatAccountConfig;
