@@ -53,6 +53,11 @@ function isRootVersionInvocation(argv) {
       continue;
     }
     if (arg.startsWith("--profile=") || arg.startsWith("--log-level=")) {
+      // Validate that value after = is non-empty
+      const value = arg.split("=", 2)[1];
+      if (!value || value.startsWith("-")) {
+        return false;
+      }
       continue;
     }
     if (ROOT_VALUE_FLAGS.has(arg)) {
