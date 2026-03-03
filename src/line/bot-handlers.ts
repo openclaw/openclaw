@@ -394,6 +394,7 @@ export async function handleLineWebhookEvents(
   events: WebhookEvent[],
   context: LineHandlerContext,
 ): Promise<void> {
+  const failures: unknown[] = [];
   for (const event of events) {
     try {
       switch (event.type) {
@@ -420,6 +421,11 @@ export async function handleLineWebhookEvents(
       }
     } catch (err) {
       context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
+      failures.push(err);
     }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(`line: ${failures.length} webhook event(s) failed`);
   }
 }

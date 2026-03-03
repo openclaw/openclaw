@@ -195,6 +195,30 @@ describe("createLineNodeWebhookHandler", () => {
     );
   });
 
+  it("returns 500 when event processing fails so upstream can retry", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const { secret } = createPostWebhookTestHarness(rawBody);
+    const failingBot = {
+      handleWebhook: vi.fn(async () => {
+        throw new Error("transient failure");
+      }),
+    };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const failingHandler = createLineNodeWebhookHandler({
+      channelSecret: secret,
+      bot: failingBot,
+      runtime,
+      readBody: async () => rawBody,
+    });
+
+    const { res } = createRes();
+    await runSignedPost({ handler: failingHandler, rawBody, secret, res });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toBe(JSON.stringify({ error: "Internal server error" }));
+    expect(failingBot.handleWebhook).toHaveBeenCalledTimes(1);
+  });
+
   it("returns 400 for invalid JSON payload even when signature is valid", async () => {
     const rawBody = "not json";
     const { bot, handler, secret } = createPostWebhookTestHarness(rawBody);

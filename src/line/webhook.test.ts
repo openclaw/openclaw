@@ -111,4 +111,17 @@ describe("createLineWebhookMiddleware", () => {
     });
     expect(onEvents).not.toHaveBeenCalled();
   });
+
+  it("returns 500 when onEvents fails so upstream can retry", async () => {
+    const { res, onEvents } = await invokeWebhook({
+      body: JSON.stringify({ events: [{ type: "message" }] }),
+      onEvents: vi.fn(async () => {
+        throw new Error("transient failure");
+      }),
+    });
+
+    expect(onEvents).toHaveBeenCalledTimes(1);
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ error: "Internal server error" });
+  });
 });

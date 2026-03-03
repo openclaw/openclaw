@@ -299,4 +299,39 @@ describe("handleLineWebhookEvents", () => {
     );
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
+
+  it("throws when an event handler fails", async () => {
+    const event = {
+      type: "message",
+      message: { id: "m-err", type: "text", text: "hi" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "user", userId: "user-err" },
+      mode: "active",
+      webhookEventId: "evt-err",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+    const runtime = createRuntime();
+    const processMessage = vi.fn(async () => {
+      throw new Error("boom");
+    });
+
+    await expect(
+      handleLineWebhookEvents([event], {
+        cfg: { channels: { line: {} } },
+        account: {
+          accountId: "default",
+          enabled: true,
+          channelAccessToken: "token",
+          channelSecret: "secret",
+          tokenSource: "config",
+          config: { dmPolicy: "open" },
+        },
+        runtime,
+        mediaMaxBytes: 1234,
+        processMessage,
+      }),
+    ).rejects.toThrow("line: 1 webhook event(s) failed");
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+  });
 });
