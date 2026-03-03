@@ -593,6 +593,75 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
   });
+  it("sanitizes negative Google thinkingBudget for google-vertex API type", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        config: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingBudget: -1,
+          },
+        },
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "google-vertex",
+      "gemini-3.1-pro-preview",
+      undefined,
+      "high",
+    );
+
+    const model = {
+      api: "google-vertex",
+      provider: "google-vertex",
+      id: "gemini-3.1-pro-preview",
+    } as Model<"google-vertex">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    const thinkingConfig = (
+      payloads[0]?.config as { thinkingConfig?: Record<string, unknown> } | undefined
+    )?.thinkingConfig;
+    expect(thinkingConfig).toEqual({
+      includeThoughts: true,
+      thinkingLevel: "HIGH",
+    });
+  });
+
+  it("skips Google thinking payload wrapper for non-Google API types", () => {
+    const capturedOptions: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedOptions.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6");
+
+    const model = {
+      api: "anthropic",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic">;
+    const context: Context = { messages: [] };
+    const originalOnPayload = () => {};
+    void agent.streamFn?.(model, context, { onPayload: originalOnPayload });
+
+    expect(capturedOptions).toHaveLength(1);
+    // For non-Google API types, the onPayload should be passed through
+    // unchanged (not wrapped), confirming the wrapper is a no-op.
+    expect(capturedOptions[0]?.onPayload).toBe(originalOnPayload);
+  });
+
   it("adds OpenRouter attribution headers to stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
