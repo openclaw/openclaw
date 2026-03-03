@@ -10,6 +10,10 @@ import {
 } from "./embeddings-mistral.js";
 import { createOllamaEmbeddingProvider, type OllamaEmbeddingClient } from "./embeddings-ollama.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
+import {
+  createOpenrouterEmbeddingProvider,
+  type OpenrouterEmbeddingClient,
+} from "./embeddings-openrouter.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
 
@@ -25,6 +29,7 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
+export type { OpenrouterEmbeddingClient } from "./embeddings-openrouter.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 export type { OllamaEmbeddingClient } from "./embeddings-ollama.js";
 
@@ -36,14 +41,27 @@ export type EmbeddingProvider = {
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+export type EmbeddingProviderId =
+  | "openai"
+  | "local"
+  | "gemini"
+  | "voyage"
+  | "mistral"
+  | "ollama"
+  | "openrouter";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
 // Remote providers considered for auto-selection when provider === "auto".
 // Ollama is intentionally excluded here so that "auto" mode does not
 // implicitly assume a local Ollama instance is available.
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
+const REMOTE_EMBEDDING_PROVIDER_IDS = [
+  "openai",
+  "gemini",
+  "voyage",
+  "mistral",
+  "openrouter",
+] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
@@ -56,6 +74,7 @@ export type EmbeddingProviderResult = {
   voyage?: VoyageEmbeddingClient;
   mistral?: MistralEmbeddingClient;
   ollama?: OllamaEmbeddingClient;
+  openrouter?: OpenrouterEmbeddingClient;
 };
 
 export type EmbeddingProviderOptions = {
@@ -173,6 +192,10 @@ export async function createEmbeddingProvider(
     if (id === "mistral") {
       const { provider, client } = await createMistralEmbeddingProvider(options);
       return { provider, mistral: client };
+    }
+    if (id === "openrouter") {
+      const { provider, client } = await createOpenrouterEmbeddingProvider(options);
+      return { provider, openrouter: client };
     }
     const { provider, client } = await createOpenAiEmbeddingProvider(options);
     return { provider, openAi: client };

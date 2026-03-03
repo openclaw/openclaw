@@ -15,6 +15,7 @@ import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "./embeddings-mistral.js";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
 import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
+import { DEFAULT_OPENROUTER_EMBEDDING_MODEL } from "./embeddings-openrouter.js";
 import { DEFAULT_VOYAGE_EMBEDDING_MODEL } from "./embeddings-voyage.js";
 import {
   createEmbeddingProvider,
@@ -23,6 +24,7 @@ import {
   type MistralEmbeddingClient,
   type OllamaEmbeddingClient,
   type OpenAiEmbeddingClient,
+  type OpenrouterEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
 import { isFileMissingError } from "./fs-utils.js";
@@ -93,12 +95,20 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+  protected fallbackFrom?:
+    | "openai"
+    | "local"
+    | "gemini"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "openrouter";
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
   protected mistral?: MistralEmbeddingClient;
   protected ollama?: OllamaEmbeddingClient;
+  protected openrouter?: OpenrouterEmbeddingClient;
   protected abstract batch: {
     enabled: boolean;
     wait: boolean;
@@ -970,7 +980,8 @@ export abstract class MemoryManagerSyncOps {
       | "local"
       | "voyage"
       | "mistral"
-      | "ollama";
+      | "ollama"
+      | "openrouter";
 
     const fallbackModel =
       fallback === "gemini"
@@ -983,7 +994,9 @@ export abstract class MemoryManagerSyncOps {
               ? DEFAULT_MISTRAL_EMBEDDING_MODEL
               : fallback === "ollama"
                 ? DEFAULT_OLLAMA_EMBEDDING_MODEL
-                : this.settings.model;
+                : fallback === "openrouter"
+                  ? DEFAULT_OPENROUTER_EMBEDDING_MODEL
+                  : this.settings.model;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
@@ -1003,6 +1016,7 @@ export abstract class MemoryManagerSyncOps {
     this.voyage = fallbackResult.voyage;
     this.mistral = fallbackResult.mistral;
     this.ollama = fallbackResult.ollama;
+    this.openrouter = fallbackResult.openrouter;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallback})`, { reason });

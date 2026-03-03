@@ -8,6 +8,7 @@ import { minimaxProvider } from "./minimax/index.js";
 import { mistralProvider } from "./mistral/index.js";
 import { moonshotProvider } from "./moonshot/index.js";
 import { openaiProvider } from "./openai/index.js";
+import { openrouterProvider } from "./openrouter/index.js";
 import { zaiProvider } from "./zai/index.js";
 
 const PROVIDERS: MediaUnderstandingProvider[] = [
@@ -20,6 +21,7 @@ const PROVIDERS: MediaUnderstandingProvider[] = [
   mistralProvider,
   zaiProvider,
   deepgramProvider,
+  openrouterProvider,
 ];
 
 export function normalizeMediaProviderId(id: string): string {
