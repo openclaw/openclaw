@@ -219,8 +219,10 @@ ${tail}`;
 
 const FILE_BLOCK_RE = /<file\b([^>]*)>([\s\S]*?)<\/file>/g;
 
-const FILE_NAME_ATTR_RE = /\bname="([^"]*)"/;
-const FILE_MIME_ATTR_RE = /\bmime="([^"]*)"/;
+// Match attribute names at word boundaries (start of string or after whitespace)
+// to avoid matching lookalike attributes such as data-name or data-mime.
+const FILE_NAME_ATTR_RE = /(?:^|\s)name="([^"]*)"/;
+const FILE_MIME_ATTR_RE = /(?:^|\s)mime="([^"]*)"/;
 
 export function softTrimFileBlocksInText(
   text: string,
@@ -253,8 +255,8 @@ export function softTrimFileBlocksInText(
       const head = body.slice(0, h);
       const tail = body.slice(body.length - t);
       trimmedChars += body.length - h - t;
-      const mimeAttr = mime ? ` mime="${mime}"` : "";
-      return `<file name="${name}"${mimeAttr}>${head}\n...\n[File block trimmed: kept first ${h} and last ${t} of ${body.length} chars]\n...${tail}</file>`;
+      // Preserve all original attributes to avoid losing metadata (size, encoding, etc.)
+      return `<file${attrs}>${head}\n...\n[File block trimmed: kept first ${h} and last ${t} of ${body.length} chars]\n...${tail}</file>`;
     },
   );
   return { text: result, trimmedChars };

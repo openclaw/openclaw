@@ -599,10 +599,10 @@ describe("context-pruning", () => {
     const result = softTrimFileBlocksInText(text, settings);
     expect(result.trimmedChars).toBeGreaterThan(0);
     expect(result.text).toContain("[File block trimmed:");
-    expect(result.text).toContain(`<file name="report.pdf" mime="application/pdf">`);
+    expect(result.text).toContain(`<file mime="application/pdf" name="report.pdf">`);
   });
 
-  it("handles file blocks with extra attributes", () => {
+  it("handles file blocks with extra attributes (preserved)", () => {
     const body = "y".repeat(5000);
     const text = `<file name="test.txt" mime="text/plain" size="5000" encoding="utf-8">${body}</file>`;
     const settings = makeAggressiveSettings({
@@ -611,7 +611,8 @@ describe("context-pruning", () => {
     const result = softTrimFileBlocksInText(text, settings);
     expect(result.trimmedChars).toBeGreaterThan(0);
     expect(result.text).toContain("[File block trimmed:");
-    expect(result.text).toContain(`<file name="test.txt" mime="text/plain">`);
+    // All original attributes are preserved
+    expect(result.text).toContain(`<file name="test.txt" mime="text/plain" size="5000" encoding="utf-8">`);
   });
 
   it("handles file blocks with only name attribute (no mime)", () => {
@@ -624,6 +625,5 @@ describe("context-pruning", () => {
     expect(result.trimmedChars).toBeGreaterThan(0);
     expect(result.text).toContain("[File block trimmed:");
     expect(result.text).toContain(`<file name="simple.txt">`);
-    expect(result.text).not.toContain('mime=');
   });
 });
