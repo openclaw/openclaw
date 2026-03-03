@@ -187,6 +187,8 @@ export type TelegramTopicConfig = {
   systemPrompt?: string;
   /** Enable silent message ingestion (runs message_ingest hooks without LLM/tools). */
   ingest?: boolean;
+  /** If true, skip automatic voice-note transcription for mention detection in this topic. */
+  disableAudioPreflight?: boolean;
 };
 
 export type TelegramGroupConfig = {
@@ -208,6 +210,8 @@ export type TelegramGroupConfig = {
   systemPrompt?: string;
   /** Enable silent message ingestion (runs message_ingest hooks without LLM/tools). */
   ingest?: boolean;
+  /** If true, skip automatic voice-note transcription for mention detection in this group. */
+  disableAudioPreflight?: boolean;
 };
 
 export type TelegramDirectConfig = {

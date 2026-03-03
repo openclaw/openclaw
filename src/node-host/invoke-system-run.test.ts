@@ -187,6 +187,48 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     );
   }
 
+  function resolveStatTargetPath(target: string | Buffer | URL | number): string {
+    if (typeof target === "string") {
+      return path.resolve(target);
+    }
+    if (Buffer.isBuffer(target)) {
+      return path.resolve(target.toString());
+    }
+    if (target instanceof URL) {
+      return path.resolve(target.pathname);
+    }
+    return path.resolve(String(target));
+  }
+
+  async function withMockedCwdIdentityDrift<T>(params: {
+    canonicalCwd: string;
+    driftDir: string;
+    stableHitsBeforeDrift?: number;
+    run: () => Promise<T>;
+  }): Promise<T> {
+    const stableHitsBeforeDrift = params.stableHitsBeforeDrift ?? 2;
+    const realStatSync = fs.statSync.bind(fs);
+    const baselineStat = realStatSync(params.canonicalCwd);
+    const driftStat = realStatSync(params.driftDir);
+    let canonicalHits = 0;
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      const resolvedTarget = resolveStatTargetPath(args[0]);
+      if (resolvedTarget === params.canonicalCwd) {
+        canonicalHits += 1;
+        if (canonicalHits > stableHitsBeforeDrift) {
+          return driftStat;
+        }
+        return baselineStat;
+      }
+      return realStatSync(...args);
+    });
+    try {
+      return await params.run();
+    } finally {
+      statSpy.mockRestore();
+    }
+  }
+
   async function runSystemInvoke(params: {
     preferMacAppExecHost: boolean;
     runViaResponse?: ExecHostResponse | null;
@@ -573,6 +615,39 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       expectInvokeOk(sendInvokeResult);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("denies approval-based execution when cwd identity drifts before execution", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-cwd-drift-"));
+    const fallback = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-cwd-drift-alt-"));
+    const script = path.join(tmp, "run.sh");
+    fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(script, 0o755);
+    const canonicalCwd = fs.realpathSync(tmp);
+    try {
+      await withMockedCwdIdentityDrift({
+        canonicalCwd,
+        driftDir: fallback,
+        run: async () => {
+          const { runCommand, sendInvokeResult } = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: ["./run.sh"],
+            cwd: tmp,
+            approved: true,
+            security: "full",
+            ask: "off",
+          });
+          expect(runCommand).not.toHaveBeenCalled();
+          expectInvokeErrorMessage(sendInvokeResult, {
+            message: "SYSTEM_RUN_DENIED: approval cwd changed before execution",
+            exact: true,
+          });
+        },
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(fallback, { recursive: true, force: true });
     }
   });
 

@@ -2,28 +2,36 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserManageCommands } from "./browser-cli-manage.js";
 import { createBrowserProgram } from "./browser-cli-test-helpers.js";
 
-const mocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn(async (_opts: unknown, req: { path?: string }) =>
-    req.path === "/"
-      ? {
-          enabled: true,
-          running: true,
-          pid: 1,
-          cdpPort: 18800,
-          chosenBrowser: "chrome",
-          userDataDir: "/tmp/openclaw",
-          color: "blue",
-          headless: true,
-          attachOnly: false,
-        }
-      : {},
-  ),
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
-}));
+const mocks = vi.hoisted(() => {
+  const runtimeLog = vi.fn();
+  const runtimeError = vi.fn();
+  const runtimeExit = vi.fn();
+  return {
+    callBrowserRequest: vi.fn(async (_opts: unknown, req: { path?: string }) =>
+      req.path === "/"
+        ? {
+            enabled: true,
+            running: true,
+            pid: 1,
+            cdpPort: 18800,
+            chosenBrowser: "chrome",
+            userDataDir: "/tmp/openclaw",
+            color: "blue",
+            headless: true,
+            attachOnly: false,
+          }
+        : {},
+    ),
+    runtimeLog,
+    runtimeError,
+    runtimeExit,
+    runtime: {
+      log: runtimeLog,
+      error: runtimeError,
+      exit: runtimeExit,
+    },
+  };
+});
 
 vi.mock("./browser-cli-shared.js", () => ({
   callBrowserRequest: mocks.callBrowserRequest,
@@ -51,9 +59,9 @@ describe("browser manage start timeout option", () => {
 
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
-    mocks.runtime.log.mockClear();
-    mocks.runtime.error.mockClear();
-    mocks.runtime.exit.mockClear();
+    mocks.runtimeLog.mockClear();
+    mocks.runtimeError.mockClear();
+    mocks.runtimeExit.mockClear();
   });
 
   it("uses parent --timeout for browser start instead of hardcoded 15s", async () => {

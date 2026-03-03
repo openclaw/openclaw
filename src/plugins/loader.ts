@@ -121,7 +121,7 @@ function validatePluginConfig(params: {
   if (result.ok) {
     return { ok: true, value: params.value as Record<string, unknown> | undefined };
   }
-  return { ok: false, errors: result.errors };
+  return { ok: false, errors: result.errors.map((error) => error.text) };
 }
 
 function resolvePluginModuleExport(moduleExport: unknown): {
@@ -538,9 +538,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       absolutePath: candidate.source,
       rootPath: pluginRoot,
       boundaryLabel: "plugin root",
-      // Discovery stores rootDir as realpath but source may still be a lexical alias
-      // (e.g. /var/... vs /private/var/... on macOS). Canonical boundary checks
-      // still enforce containment; skip lexical pre-check to avoid false escapes.
+      rejectHardlinks: candidate.origin !== "bundled",
       skipLexicalRootCheck: true,
     });
     if (!opened.ok) {

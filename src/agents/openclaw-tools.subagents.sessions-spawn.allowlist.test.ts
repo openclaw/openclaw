@@ -107,6 +107,24 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     expect(getChildSessionKey()?.startsWith(`agent:${params.agentId}:subagent:`)).toBe(true);
   }
 
+  async function expectInvalidAgentId(callId: string, agentId: string) {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
+      },
+    });
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+    const result = await tool.execute(callId, { task: "do thing", agentId });
+    const details = result.details as { status?: string; error?: string };
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("Invalid agentId");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  }
+
   beforeEach(() => {
     resetSessionsSpawnConfigOverride();
     resetSubagentRegistryForTests();
@@ -237,45 +255,11 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   });
 
   it("rejects agentId containing path separators (#31311)", async () => {
-    setSessionsSpawnConfigOverride({
-      session: { mainKey: "main", scope: "per-sender" },
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
-      },
-    });
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "whatsapp",
-    });
-    const result = await tool.execute("call-path", {
-      task: "do thing",
-      agentId: "../../../etc/passwd",
-    });
-    const details = result.details as { status?: string; error?: string };
-    expect(details.status).toBe("error");
-    expect(details.error).toContain("Invalid agentId");
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    await expectInvalidAgentId("call-path", "../../../etc/passwd");
   });
 
   it("rejects agentId exceeding 64 characters (#31311)", async () => {
-    setSessionsSpawnConfigOverride({
-      session: { mainKey: "main", scope: "per-sender" },
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
-      },
-    });
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "whatsapp",
-    });
-    const result = await tool.execute("call-long", {
-      task: "do thing",
-      agentId: "a".repeat(65),
-    });
-    const details = result.details as { status?: string; error?: string };
-    expect(details.status).toBe("error");
-    expect(details.error).toContain("Invalid agentId");
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    await expectInvalidAgentId("call-long", "a".repeat(65));
   });
 
   it("accepts well-formed agentId with hyphens and underscores (#31311)", async () => {

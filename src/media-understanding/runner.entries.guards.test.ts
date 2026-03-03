@@ -26,4 +26,26 @@ describe("media-understanding formatDecisionSummary guards", () => {
     expect(run).not.toThrow();
     expect(run()).toBe("video: skipped (0/1)");
   });
+
+  it("ignores non-string provider/model/reason fields", () => {
+    const run = () =>
+      formatDecisionSummary({
+        capability: "audio",
+        outcome: "failed",
+        attachments: [
+          {
+            attachmentIndex: 0,
+            chosen: {
+              outcome: "failed",
+              provider: { bad: true },
+              model: 42,
+            },
+            attempts: [{ reason: { malformed: true } }],
+          },
+        ],
+      } as unknown as MediaUnderstandingDecision);
+
+    expect(run).not.toThrow();
+    expect(run()).toBe("audio: failed (0/1)");
+  });
 });

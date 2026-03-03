@@ -26,4 +26,21 @@ describe("media-understanding selectAttachments guards", () => {
     expect(run).not.toThrow();
     expect(run()).toEqual([]);
   });
+
+  it("ignores malformed attachment entries inside an array", () => {
+    const run = () =>
+      selectAttachments({
+        capability: "audio",
+        attachments: [
+          null,
+          { index: 1, path: 123 },
+          { index: 2, url: true },
+          { index: 3, mime: { nope: true } },
+        ] as unknown as MediaAttachment[],
+        policy: { prefer: "path" },
+      });
+
+    expect(run).not.toThrow();
+    expect(run()).toEqual([]);
+  });
 });

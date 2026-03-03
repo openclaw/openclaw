@@ -1,3 +1,4 @@
+import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { IRC_FIELD_LABELS } from "./schema.irc.js";
 
 export const FIELD_LABELS: Record<string, string> = {
@@ -25,6 +26,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "logging.consoleStyle": "Console Log Style",
   "logging.redactSensitive": "Sensitive Data Redaction Mode",
   "logging.redactPatterns": "Custom Redaction Patterns",
+  cli: "CLI",
+  "cli.banner": "CLI Banner",
+  "cli.banner.taglineMode": "CLI Banner Tagline Mode",
   update: "Updates",
   "update.channel": "Update Channel",
   "update.checkOnStart": "Update Check on Start",
@@ -128,15 +132,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.media.image.scope": "Image Understanding Scope",
   "tools.media.models": "Media Understanding Shared Models",
   "tools.media.concurrency": "Media Understanding Concurrency",
-  "tools.media.audio.enabled": "Enable Audio Understanding",
-  "tools.media.audio.maxBytes": "Audio Understanding Max Bytes",
-  "tools.media.audio.maxChars": "Audio Understanding Max Chars",
-  "tools.media.audio.prompt": "Audio Understanding Prompt",
-  "tools.media.audio.timeoutSeconds": "Audio Understanding Timeout (sec)",
-  "tools.media.audio.language": "Audio Understanding Language",
-  "tools.media.audio.attachments": "Audio Understanding Attachment Policy",
-  "tools.media.audio.models": "Audio Understanding Models",
-  "tools.media.audio.scope": "Audio Understanding Scope",
+  ...MEDIA_AUDIO_FIELD_LABELS,
   "tools.media.video.enabled": "Enable Video Understanding",
   "tools.media.video.maxBytes": "Video Understanding Max Bytes",
   "tools.media.video.maxChars": "Video Understanding Max Chars",
@@ -729,6 +725,13 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.pluralkit.token": "Discord PluralKit Token",
   "channels.discord.activity": "Discord Presence Activity",
   "channels.discord.status": "Discord Presence Status",
+  "channels.discord.autoPresence.enabled": "Discord Auto Presence Enabled",
+  "channels.discord.autoPresence.intervalMs": "Discord Auto Presence Check Interval (ms)",
+  "channels.discord.autoPresence.minUpdateIntervalMs":
+    "Discord Auto Presence Min Update Interval (ms)",
+  "channels.discord.autoPresence.healthyText": "Discord Auto Presence Healthy Text",
+  "channels.discord.autoPresence.degradedText": "Discord Auto Presence Degraded Text",
+  "channels.discord.autoPresence.exhaustedText": "Discord Auto Presence Exhausted Text",
   "channels.discord.activityType": "Discord Presence Activity Type",
   "channels.discord.activityUrl": "Discord Presence Activity URL",
   "channels.slack.dm.policy": "Slack DM Policy",
@@ -737,6 +740,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.slack.commands.native": "Slack Native Commands",
   "channels.slack.commands.nativeSkills": "Slack Native Skill Commands",
   "channels.slack.allowBots": "Slack Allow Bot Messages",
+  "channels.discord.allowBots": "Discord Allow Bot Messages",
   "channels.discord.token": "Discord Bot Token",
   "channels.slack.botToken": "Slack Bot Token",
   "channels.slack.appToken": "Slack App Token",

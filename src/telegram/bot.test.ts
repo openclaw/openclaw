@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
 import {
@@ -36,8 +36,14 @@ function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsFo
 
 const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
-  beforeEach(() => {
+  beforeAll(() => {
     process.env.TZ = "UTC";
+  });
+  afterAll(() => {
+    process.env.TZ = ORIGINAL_TZ;
+  });
+
+  beforeEach(() => {
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
@@ -49,11 +55,8 @@ describe("createTelegramBot", () => {
       },
     });
   });
-  afterEach(() => {
-    process.env.TZ = ORIGINAL_TZ;
-  });
 
-  it("merges custom commands with native commands", () => {
+  it("merges custom commands with native commands", async () => {
     const config = {
       channels: {
         telegram: {
@@ -67,6 +70,10 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue(config);
 
     createTelegramBot({ token: "tok" });
+
+    await vi.waitFor(() => {
+      expect(setMyCommandsSpy).toHaveBeenCalled();
+    });
 
     const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
       command: string;
@@ -84,7 +91,7 @@ describe("createTelegramBot", () => {
     ]);
   });
 
-  it("ignores custom commands that collide with native commands", () => {
+  it("ignores custom commands that collide with native commands", async () => {
     const errorSpy = vi.fn();
     const config = {
       channels: {
@@ -109,6 +116,10 @@ describe("createTelegramBot", () => {
       },
     });
 
+    await vi.waitFor(() => {
+      expect(setMyCommandsSpy).toHaveBeenCalled();
+    });
+
     const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
       command: string;
       description: string;
@@ -126,7 +137,7 @@ describe("createTelegramBot", () => {
     expect(errorSpy).toHaveBeenCalled();
   });
 
-  it("registers custom commands when native commands are disabled", () => {
+  it("registers custom commands when native commands are disabled", async () => {
     const config = {
       commands: { native: false },
       channels: {
@@ -141,6 +152,10 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue(config);
 
     createTelegramBot({ token: "tok" });
+
+    await vi.waitFor(() => {
+      expect(setMyCommandsSpy).toHaveBeenCalled();
+    });
 
     const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
       command: string;
@@ -277,6 +292,38 @@ describe("createTelegramBot", () => {
         reply_markup: expect.any(Object),
       }),
     );
+  });
+
+  it("falls back to default agent for pagination callbacks without agent suffix", async () => {
+    onSpy.mockClear();
+    listSkillCommandsForAgents.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-no-suffix",
+        data: "commands_page_2",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 14,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      agentIds: ["main"],
+    });
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
   });
 
   it("blocks pagination callbacks when allowlist rejects sender", async () => {
