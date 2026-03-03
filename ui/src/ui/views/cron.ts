@@ -1467,6 +1467,7 @@ function renderScheduleFields(props: CronProps) {
       <label class="field">
         <span>${t("cron.form.timezoneOptional")}</span>
         <input
+          id="cron-timezone"
           .value=${form.cronTz}
           list="cron-tz-suggestions"
           @input=${(e: Event) =>
