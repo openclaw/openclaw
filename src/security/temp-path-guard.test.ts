@@ -224,14 +224,21 @@ describe("temp path guard", () => {
 
     for (const file of files) {
       const relativePath = file.relativePath;
-      if (hasDynamicTmpdirJoin(file.source)) {
+      const source = file.source;
+      const mightContainTmpdirJoin =
+        source.includes("tmpdir") &&
+        source.includes("path") &&
+        source.includes("join") &&
+        source.includes("`");
+      const mightContainWeakRandom = source.includes("Date.now") && source.includes("Math.random");
+
+      if (!mightContainTmpdirJoin && !mightContainWeakRandom) {
+        continue;
+      }
+      if (mightContainTmpdirJoin && hasDynamicTmpdirJoin(source)) {
         offenders.push(relativePath);
       }
-      if (
-        file.source.includes("Date.now") &&
-        file.source.includes("Math.random") &&
-        WEAK_RANDOM_SAME_LINE_PATTERN.test(file.source)
-      ) {
+      if (mightContainWeakRandom && WEAK_RANDOM_SAME_LINE_PATTERN.test(source)) {
         weakRandomMatches.push(relativePath);
       }
     }
