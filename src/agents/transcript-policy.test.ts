@@ -103,6 +103,18 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.preserveSignatures).toBe(false);
   });
 
+  it("strips thinking block signatures for non-Claude Bedrock models (e.g. amazon.nova-*)", () => {
+    // amazon.nova-* and other non-Anthropic Bedrock models do not produce thinking blocks.
+    // Preserving signatures for them would leak Claude-specific payload fields into
+    // cross-model replays, so preserveSignatures must be false.
+    const policy = resolveTranscriptPolicy({
+      provider: "amazon-bedrock",
+      modelId: "amazon.nova-pro-v1:0",
+      modelApi: "bedrock-converse-stream",
+    });
+    expect(policy.preserveSignatures).toBe(false);
+  });
+
   it("keeps OpenRouter on its existing turn-validation path", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openrouter",

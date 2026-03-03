@@ -123,7 +123,14 @@ export function resolveTranscriptPolicy(params: {
       (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
     toolCallIdMode,
     repairToolUseResultPairing,
-    preserveSignatures: isAnthropic,
+    // Preserve thought_signature fields only for native Anthropic API or Anthropic Claude
+    // models on Bedrock (e.g. anthropic.claude-*). Other Bedrock models such as
+    // amazon.nova-* do not produce thinking blocks, so stripping is safe and avoids
+    // leaking provider-specific payload fields into cross-model replays.
+    preserveSignatures:
+      params.modelApi === "anthropic-messages" ||
+      provider === "anthropic" ||
+      (isAnthropic && /anthropic[./]claude/i.test(modelId)),
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     sanitizeThinkingSignatures: false,
     dropThinkingBlocks,
