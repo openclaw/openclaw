@@ -50,7 +50,7 @@ export const SessionSchema = z
       .optional(),
     resetByChannel: z.record(z.string(), SessionResetConfigSchema).optional(),
     store: z.string().optional(),
-    typingIntervalSeconds: z.number().int().positive().optional(),
+    typingIntervalSeconds: z.number().int().min(0).optional(),
     typingMode: TypingModeSchema.optional(),
     parentForkMaxTokens: z.number().int().nonnegative().optional(),
     mainKey: z.string().optional(),

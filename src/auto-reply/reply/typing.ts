@@ -158,6 +158,11 @@ export function createTypingController(params: {
     if (!onReplyStart) {
       return;
     }
+    // When interval is 0, send typing once only (no repeated indicator). Avoids "typing forever" if cleanup is delayed.
+    if (typingIntervalMs <= 0) {
+      await ensureStart();
+      return;
+    }
     if (typingLoop.isRunning()) {
       return;
     }
