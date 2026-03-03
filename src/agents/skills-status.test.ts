@@ -38,6 +38,12 @@ describe("buildWorkspaceSkillStatus", () => {
 
     const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
     expect(report.skills).toHaveLength(1);
+    expect(report.agentId).toBeUndefined();
     expect(report.skills[0]?.install).toEqual([]);
+  });
+
+  it("propagates agentId when provided", () => {
+    const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [], agentId: "main" });
+    expect(report.agentId).toBe("main");
   });
 });

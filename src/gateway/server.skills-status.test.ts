@@ -25,6 +25,7 @@ describe("gateway skills.status", () => {
         await withServer(async (ws) => {
           await connectOk(ws, { token: "secret", scopes: ["operator.read"] });
           const res = await rpcReq<{
+            agentId?: string;
             skills?: Array<{
               name?: string;
               configChecks?: Array<
@@ -35,6 +36,7 @@ describe("gateway skills.status", () => {
 
           expect(res.ok).toBe(true);
           expect(JSON.stringify(res.payload)).not.toContain(secret);
+          expect(res.payload?.agentId).toBe("main");
 
           const discord = res.payload?.skills?.find((s) => s.name === "discord");
           expect(discord).toBeTruthy();

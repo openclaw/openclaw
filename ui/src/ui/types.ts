@@ -606,6 +606,7 @@ export type SkillStatusEntry = {
 };
 
 export type SkillStatusReport = {
+  agentId?: string;
   workspaceDir: string;
   managedSkillsDir: string;
   skills: SkillStatusEntry[];

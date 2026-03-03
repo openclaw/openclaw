@@ -49,6 +49,7 @@ export type SkillStatusEntry = {
 };
 
 export type SkillStatusReport = {
+  agentId?: string;
   workspaceDir: string;
   managedSkillsDir: string;
   skills: SkillStatusEntry[];
@@ -227,6 +228,7 @@ function buildSkillStatus(
 export function buildWorkspaceSkillStatus(
   workspaceDir: string,
   opts?: {
+    agentId?: string;
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     entries?: SkillEntry[];
@@ -244,6 +246,7 @@ export function buildWorkspaceSkillStatus(
     });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   return {
+    agentId: opts?.agentId,
     workspaceDir,
     managedSkillsDir,
     skills: skillEntries.map((entry) =>

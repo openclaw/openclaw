@@ -25,6 +25,18 @@ export type SkillsProps = {
   onInstall: (skillKey: string, name: string, installId: string) => void;
 };
 
+export function resolveSkillsGroupLabel(params: {
+  groupId: string;
+  defaultLabel: string;
+  report: SkillStatusReport | null;
+}): string {
+  if (params.groupId !== "workspace") {
+    return params.defaultLabel;
+  }
+  const agentId = params.report?.agentId?.trim();
+  return agentId ? `Workspace Skills (${agentId})` : params.defaultLabel;
+}
+
 export function renderSkills(props: SkillsProps) {
   const skills = props.report?.skills ?? [];
   const filter = props.filter.trim().toLowerCase();
@@ -74,10 +86,15 @@ export function renderSkills(props: SkillsProps) {
             <div class="agent-skills-groups" style="margin-top: 16px;">
               ${groups.map((group) => {
                 const collapsedByDefault = group.id === "workspace" || group.id === "built-in";
+                const label = resolveSkillsGroupLabel({
+                  groupId: group.id,
+                  defaultLabel: group.label,
+                  report: props.report,
+                });
                 return html`
                   <details class="agent-skills-group" ?open=${!collapsedByDefault}>
                     <summary class="agent-skills-header">
-                      <span>${group.label}</span>
+                      <span>${label}</span>
                       <span class="muted">${group.skills.length}</span>
                     </summary>
                     <div class="list skills-grid">
