@@ -181,6 +181,9 @@ export async function runAgentTurnWithFallback(params: {
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
+      // Track whether adaptive routing escalated so subsequent fallback retries skip
+      // re-running the local model (see adaptive-routing.ts for the other side).
+      const adaptiveState = { escalated: false };
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
         run: (provider, model) => {
@@ -429,6 +432,10 @@ export async function runAgentTurnWithFallback(params: {
                   })()
                 : undefined,
               _hasExplicitModelOverride: params.followupRun.run.modelExplicitOverride ?? false,
+              _adaptiveEscalationDone: adaptiveState.escalated,
+              _onAdaptiveEscalation: () => {
+                adaptiveState.escalated = true;
+              },
             },
             runEmbeddedPiAgent,
           );

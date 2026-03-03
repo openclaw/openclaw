@@ -78,6 +78,12 @@ export function resolveAdaptiveRoutingConfig(
     );
     return null;
   }
+  if (!ar.localFirstModel.includes("/") || !ar.cloudEscalationModel.includes("/")) {
+    log.warn(
+      "[adaptive-routing] localFirstModel and cloudEscalationModel must use 'provider/model' format (e.g. ollama/llama3.2) – disabled",
+    );
+    return null;
+  }
   // Enforce v1 maxEscalations cap
   const maxEscalations = Math.min(Math.max(0, ar.maxEscalations ?? 1), MAX_ESCALATIONS_CAP);
   return { ...ar, maxEscalations };
@@ -160,9 +166,10 @@ export function validateHeuristic(
     failReasons.push(`tool_error:${attempt.lastToolError.toolName}`);
   }
 
-  // 5. No final assistant text
+  // 5. No final assistant text — exempt runs where the response was delivered via
+  // a messaging tool (send_message / reply / etc.), which produce no assistant text.
   const lastAssistantText = attempt.assistantTexts.join("").trim();
-  if (!lastAssistantText) {
+  if (!lastAssistantText && !attempt.didSendViaMessagingTool) {
     score -= 0.4;
     failReasons.push("empty_assistant_output");
   }
@@ -210,7 +217,7 @@ export function parseModelRef(ref: string): { provider: string; model: string } 
   if (slash > 0) {
     return { provider: ref.slice(0, slash), model: ref.slice(slash + 1) };
   }
-  // No slash → treat whole string as model under default provider
+  // Callers validate format before reaching here; this is a safety fallback.
   return { provider: ref, model: ref };
 }
 
@@ -363,17 +370,11 @@ export async function runEmbeddedPiAgentWithAdaptiveRouting(
   const { provider: localProvider, model: localModel } = parseModelRef(arCfg.localFirstModel!);
   const { provider: cloudProvider, model: cloudModel } = parseModelRef(arCfg.cloudEscalationModel!);
 
-  // If runWithModelFallback has already advanced to a different candidate
-  // (not the local-first model), we are mid-fallback. Bypass adaptive routing
-  // and let the fallback machinery pick the provider/model normally.
-  const isFallbackCandidate =
-    (params.provider && params.provider !== localProvider) ||
-    (params.model && params.model !== localModel);
-
-  if (isFallbackCandidate) {
-    log.debug(
-      `[adaptive-routing] bypassed: mid-fallback candidate ${params.provider}/${params.model}`,
-    );
+  // If adaptive routing already escalated earlier in this runWithModelFallback chain
+  // (tracked via _adaptiveEscalationDone set by the caller's closure), skip local
+  // re-run and let the fallback machinery use the current candidate directly.
+  if (params._adaptiveEscalationDone) {
+    log.debug(`[adaptive-routing] bypassed: escalation already ran in this fallback chain`);
     return runFn(params);
   }
 
@@ -408,6 +409,18 @@ export async function runEmbeddedPiAgentWithAdaptiveRouting(
       provider: localProvider,
       model: localModel,
       sessionFile: tempSessionFile,
+      // Suppress all user-visible streaming callbacks during the local trial run.
+      // They fire again on the definitive run (cloud escalation or local-pass path).
+      // Without this, partial output from the local attempt leaks to the user before
+      // validation decides which model's response to actually deliver, causing
+      // duplicate sends when escalation occurs.
+      onPartialReply: undefined,
+      onAssistantMessageStart: undefined,
+      onBlockReply: undefined,
+      onBlockReplyFlush: undefined,
+      onReasoningStream: undefined,
+      onReasoningEnd: undefined,
+      onToolResult: undefined,
       // Capture the rich attempt result for validation
       _onAttemptResult: (r) => {
         localAttemptResult = r;
@@ -471,6 +484,11 @@ export async function runEmbeddedPiAgentWithAdaptiveRouting(
 
     // Discard temp session so cloud run sees original history (not local attempt)
     await fs.unlink(tempSessionFile).catch(() => {});
+
+    // Notify the caller's fallback closure that escalation is about to run.
+    // This lets it skip re-running the local model if the cloud run fails and
+    // runWithModelFallback retries with another candidate.
+    params._onAdaptiveEscalation?.();
 
     const cloudResult = await runFn({
       ...params,

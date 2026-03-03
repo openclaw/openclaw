@@ -176,6 +176,9 @@ function runAgentAttempt(params: {
   storePath?: string;
   /** True when the user has an explicit per-session or API model override (not just config default). */
   hasExplicitModelOverride: boolean;
+  /** True when adaptive routing already escalated earlier in this fallback chain. */
+  adaptiveEscalationDone?: boolean;
+  onAdaptiveEscalation?: () => void;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
@@ -327,6 +330,8 @@ function runAgentAttempt(params: {
       // providerOverride/modelOverride are always set (they're the resolved default), so
       // we use the dedicated flag from the caller instead.
       _hasExplicitModelOverride: params.hasExplicitModelOverride,
+      _adaptiveEscalationDone: params.adaptiveEscalationDone,
+      _onAdaptiveEscalation: params.onAdaptiveEscalation,
     },
     runEmbeddedPiAgent,
   );
@@ -834,6 +839,9 @@ async function agentCommandInternal(
       // Track model fallback attempts so retries on an existing session don't
       // re-inject the original prompt as a duplicate user message.
       let fallbackAttemptIndex = 0;
+      // Track whether adaptive routing escalated so subsequent fallback retries skip
+      // re-running the local model (see adaptive-routing.ts for the other side).
+      const adaptiveState = { escalated: false };
       const fallbackResult = await runWithModelFallback({
         cfg,
         provider,
@@ -870,6 +878,10 @@ async function agentCommandInternal(
             storePath,
             // hasStoredOverride = user previously ran /model to set an explicit model
             hasExplicitModelOverride: hasStoredOverride,
+            adaptiveEscalationDone: adaptiveState.escalated,
+            onAdaptiveEscalation: () => {
+              adaptiveState.escalated = true;
+            },
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (

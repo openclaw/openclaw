@@ -122,4 +122,17 @@ export type RunEmbeddedPiAgentParams = {
    * Not for general use.
    */
   _hasExplicitModelOverride?: boolean;
+  /**
+   * Internal flag: true when adaptive routing already escalated to the cloud model
+   * earlier in this runWithModelFallback chain. Prevents re-running the local model
+   * on subsequent fallback retries after cloud escalation fails.
+   * Set by the outer closure via _onAdaptiveEscalation.
+   */
+  _adaptiveEscalationDone?: boolean;
+  /**
+   * Callback invoked by the adaptive routing wrapper immediately before the cloud
+   * escalation run. The outer runWithModelFallback closure uses this to flip
+   * _adaptiveEscalationDone for subsequent retry invocations.
+   */
+  _onAdaptiveEscalation?: () => void;
 };
