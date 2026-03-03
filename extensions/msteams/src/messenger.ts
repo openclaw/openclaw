@@ -506,8 +506,19 @@ export async function sendMSTeamsMessages(params: {
   if (params.replyStyle === "thread") {
     const ctx = params.context;
     const replyToId = params.conversationRef.activityId;
+    const requireReplyTargetForFallback = (): string => {
+      if (!replyToId) {
+        throw new Error(
+          "Missing conversationRef.activityId for replyStyle=thread proactive fallback",
+        );
+      }
+      return replyToId;
+    };
     if (!ctx) {
-      return await sendProactively(messages, 0, { replyToId, keepActivityId: true });
+      return await sendProactively(messages, 0, {
+        replyToId: requireReplyTargetForFallback(),
+        keepActivityId: true,
+      });
     }
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
@@ -521,7 +532,10 @@ export async function sendMSTeamsMessages(params: {
           return {
             ids:
               remaining.length > 0
-                ? await sendProactively(remaining, idx, { replyToId, keepActivityId: true })
+                ? await sendProactively(remaining, idx, {
+                    replyToId: requireReplyTargetForFallback(),
+                    keepActivityId: true,
+                  })
                 : [],
             fellBack: true,
           };

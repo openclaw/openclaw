@@ -171,6 +171,27 @@ describe("msteams messenger", () => {
       expect(ref.activityId).toBe("activity123");
     });
 
+    it("fails fast when thread fallback lacks activityId and context", async () => {
+      const continueConversation = vi.fn(async () => {});
+      const adapter: MSTeamsAdapter = {
+        continueConversation,
+        process: async () => {},
+      };
+
+      await expect(
+        sendMSTeamsMessages({
+          replyStyle: "thread",
+          adapter,
+          appId: "app123",
+          conversationRef: { ...baseRef, activityId: undefined },
+          messages: [{ text: "one" }],
+        }),
+      ).rejects.toThrow(
+        "Missing conversationRef.activityId for replyStyle=thread proactive fallback",
+      );
+      expect(continueConversation).not.toHaveBeenCalled();
+    });
+
     it("sends top-level messages via continueConversation and strips activityId", async () => {
       const seen: { reference?: unknown; texts: string[] } = { texts: [] };
 
