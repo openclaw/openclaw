@@ -101,15 +101,25 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     threadBindings,
     route,
     commandAuthorized,
+    discordRestFetch,
   } = ctx;
 
-  const mediaList = await resolveMediaList(message, mediaMaxBytes);
-  const forwardedMediaList = await resolveForwardedMediaList(message, mediaMaxBytes);
+  const mediaList = await resolveMediaList(message, mediaMaxBytes, discordRestFetch);
+  const forwardedMediaList = await resolveForwardedMediaList(
+    message,
+    mediaMaxBytes,
+    discordRestFetch,
+  );
   mediaList.push(...forwardedMediaList);
   const text = messageText;
   if (!text) {
-    logVerbose(`discord: drop message ${message.id} (empty content)`);
+    logVerbose("discord: drop message " + message.id + " (empty content)");
     return;
+  }
+
+  const boundThreadId = ctx.threadBinding?.conversation?.conversationId?.trim();
+  if (boundThreadId && typeof threadBindings.touchThread === "function") {
+    threadBindings.touchThread({ threadId: boundThreadId });
   }
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "discord",
@@ -147,6 +157,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     enabled: statusReactionsEnabled,
     adapter: discordAdapter,
     initialEmoji: ackReaction,
+    emojis: cfg.messages?.statusReactions?.emojis,
+    timing: cfg.messages?.statusReactions?.timing,
     onError: (err) => {
       logAckFailure({
         log: logVerbose,
@@ -562,11 +574,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+    typingCallbacks,
     deliver: async (payload: ReplyPayload, info) => {
       const isFinal = info.kind === "final";
-      if (info.kind === "block") {
-        // Block payloads carry reasoning/thinking content that should not be
-        // delivered to external channels. Skip them regardless of streamMode.
+      if (payload.isReasoning) {
+        // Reasoning/thinking payloads should not be delivered to Discord.
         return;
       }
       if (draftStream && isFinal) {
@@ -716,12 +728,18 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     dispatchError = true;
     throw err;
   } finally {
-    // Must stop() first to flush debounced content before clear() wipes state
-    await draftStream?.stop();
-    if (!finalizedViaPreviewMessage) {
-      await draftStream?.clear();
+    try {
+      // Must stop() first to flush debounced content before clear() wipes state.
+      await draftStream?.stop();
+      if (!finalizedViaPreviewMessage) {
+        await draftStream?.clear();
+      }
+    } catch (err) {
+      // Draft cleanup should never keep typing alive.
+      logVerbose(`discord: draft cleanup failed: ${String(err)}`);
+    } finally {
+      markDispatchIdle();
     }
-    markDispatchIdle();
     if (statusReactionsEnabled) {
       if (dispatchError) {
         await statusReactions.setError();

@@ -3,6 +3,7 @@ import { resolveSandboxInputPath, resolveSandboxPath } from "../sandbox-paths.js
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
+import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
 import type { SandboxContext } from "./types.js";
 
 export type SandboxFsMount = {
@@ -201,7 +202,7 @@ function dedupeMounts(mounts: SandboxFsMount[]): SandboxFsMount[] {
 
 function findMountByContainerPath(mounts: SandboxFsMount[], target: string): SandboxFsMount | null {
   for (const mount of mounts) {
-    if (isPathInsidePosix(mount.containerRoot, target)) {
+    if (isPathInsideContainerRoot(mount.containerRoot, target)) {
       return mount;
     }
   }
@@ -217,17 +218,15 @@ function findMountByHostPath(mounts: SandboxFsMount[], target: string): SandboxF
   return null;
 }
 
-function isPathInsidePosix(root: string, target: string): boolean {
-  const rel = path.posix.relative(root, target);
-  if (!rel) {
-    return true;
-  }
-  return !(rel.startsWith("..") || path.posix.isAbsolute(rel));
-}
-
 function isPathInsideHost(root: string, target: string): boolean {
   const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(path.resolve(root));
-  const canonicalTarget = resolveSandboxHostPathViaExistingAncestor(path.resolve(target));
+  const resolvedTarget = path.resolve(target);
+  // Preserve the final path segment so pre-existing symlink leaves are validated
+  // by the dedicated symlink guard later in the bridge flow.
+  const canonicalTargetParent = resolveSandboxHostPathViaExistingAncestor(
+    path.dirname(resolvedTarget),
+  );
+  const canonicalTarget = path.resolve(canonicalTargetParent, path.basename(resolvedTarget));
   const rel = path.relative(canonicalRoot, canonicalTarget);
   if (!rel) {
     return true;
@@ -251,11 +250,6 @@ function toDisplayRelative(params: {
     return rel;
   }
   return params.containerPath;
-}
-
-function normalizeContainerPath(value: string): string {
-  const normalized = path.posix.normalize(value);
-  return normalized === "." ? "/" : normalized;
 }
 
 function normalizePosixInput(value: string): string {

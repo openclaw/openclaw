@@ -61,5 +61,6 @@ export async function buildTelegramMessageContextForTest(
         groupConfig: { requireMention: false },
         topicConfig: undefined,
       })),
+    sendChatActionHandler: { sendChatAction: vi.fn() } as never,
   });
 }

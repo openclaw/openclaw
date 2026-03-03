@@ -103,17 +103,22 @@ describe("validateBindMounts", () => {
   });
 
   it("blocks symlink escapes into blocked directories", () => {
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
-    const link = join(dir, "etc-link");
-    symlinkSync("/etc", link);
-    const run = () => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`]);
-
     if (process.platform === "win32") {
-      // Windows source paths (e.g. C:\...) are intentionally rejected as non-POSIX.
+      // Symlinks to non-existent targets like /etc require
+      // SeCreateSymbolicLinkPrivilege on Windows.  The Windows branch of this
+      // test does not need a real symlink — it only asserts that Windows source
+      // paths are rejected as non-POSIX.
+      const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
+      const fakePath = join(dir, "etc-link", "passwd");
+      const run = () => validateBindMounts([`${fakePath}:/mnt/passwd:ro`]);
       expect(run).toThrow(/non-absolute source path/);
       return;
     }
 
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
+    const link = join(dir, "etc-link");
+    symlinkSync("/etc", link);
+    const run = () => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`]);
     expect(run).toThrow(/blocked path/);
   });
 
@@ -221,6 +226,30 @@ describe("validateNetworkMode", () => {
     for (const testCase of cases) {
       expect(() => validateNetworkMode(testCase.mode), testCase.mode).toThrow(testCase.expected);
     }
+  });
+
+  it("blocks container namespace joins by default", () => {
+    const cases = [
+      {
+        mode: "container:abc123",
+        expected: /network mode "container:abc123" is blocked by default/,
+      },
+      {
+        mode: "CONTAINER:ABC123",
+        expected: /network mode "CONTAINER:ABC123" is blocked by default/,
+      },
+    ] as const;
+    for (const testCase of cases) {
+      expect(() => validateNetworkMode(testCase.mode), testCase.mode).toThrow(testCase.expected);
+    }
+  });
+
+  it("allows container namespace joins with explicit dangerous override", () => {
+    expect(() =>
+      validateNetworkMode("container:abc123", {
+        allowContainerNamespaceJoin: true,
+      }),
+    ).not.toThrow();
   });
 });
 
