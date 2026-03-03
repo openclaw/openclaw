@@ -215,11 +215,15 @@ function createPluginSdkAliasFixture() {
   const root = makeTempDir();
   const srcFile = path.join(root, "src", "plugin-sdk", "index.ts");
   const distFile = path.join(root, "dist", "plugin-sdk", "index.js");
+  const srcKeyedQueueFile = path.join(root, "src", "plugin-sdk", "keyed-async-queue.ts");
+  const distKeyedQueueFile = path.join(root, "dist", "plugin-sdk", "keyed-async-queue.js");
   fs.mkdirSync(path.dirname(srcFile), { recursive: true });
   fs.mkdirSync(path.dirname(distFile), { recursive: true });
   fs.writeFileSync(srcFile, "export {};\n", "utf-8");
   fs.writeFileSync(distFile, "export {};\n", "utf-8");
-  return { root, srcFile, distFile };
+  fs.writeFileSync(srcKeyedQueueFile, "export {};\n", "utf-8");
+  fs.writeFileSync(distKeyedQueueFile, "export {};\n", "utf-8");
+  return { root, srcFile, distFile, srcKeyedQueueFile, distKeyedQueueFile };
 }
 
 afterEach(() => {
@@ -996,5 +1000,24 @@ describe("loadOpenClawPlugins", () => {
       }),
     );
     expect(resolved).toBe(srcFile);
+  });
+
+  it("aliases keyed-async-queue to the dedicated dist file when available", () => {
+    const { root, distKeyedQueueFile } = createPluginSdkAliasFixture();
+    const aliases = __testing.resolvePluginSdkImportAliases(
+      path.join(root, "dist", "plugins", "loader.js"),
+    );
+    expect(aliases["openclaw/plugin-sdk/keyed-async-queue"]).toBe(distKeyedQueueFile);
+  });
+
+  it("falls back keyed-async-queue alias to plugin-sdk index when subpath file is missing", () => {
+    const { root, distFile, distKeyedQueueFile, srcKeyedQueueFile } = createPluginSdkAliasFixture();
+    fs.rmSync(distKeyedQueueFile);
+    fs.rmSync(srcKeyedQueueFile);
+    const aliases = __testing.resolvePluginSdkImportAliases(
+      path.join(root, "dist", "plugins", "loader.js"),
+    );
+    expect(aliases["openclaw/plugin-sdk"]).toBe(distFile);
+    expect(aliases["openclaw/plugin-sdk/keyed-async-queue"]).toBe(distFile);
   });
 });
