@@ -100,18 +100,35 @@ function delayMs(durationMs: number): Promise<void> {
   });
 }
 
-async function waitForAgentReady(agentId: string): Promise<{ ok: true } | { ok: false }> {
+async function waitForAgentReady(params: {
+  agentId: string;
+  refreshRuntimeConfigFromDisk?: () => Promise<void>;
+}): Promise<{ ok: true } | { ok: false }> {
   const timeoutMs = resolveAgentCreateReadyTimeoutMs();
   const pollMs = resolveAgentCreateReadyPollMs();
+  const refreshIntervalMs = Math.max(50, pollMs);
   const deadline = Date.now() + timeoutMs;
+  let lastRefreshAtMs = 0;
 
   for (;;) {
+    const now = Date.now();
+    if (
+      now - lastRefreshAtMs >= refreshIntervalMs &&
+      typeof params.refreshRuntimeConfigFromDisk === "function"
+    ) {
+      lastRefreshAtMs = now;
+      try {
+        await params.refreshRuntimeConfigFromDisk();
+      } catch {
+        // Best-effort: transient refresh failures should not prevent retries.
+      }
+    }
     clearConfigCache();
     // Readiness must reflect runtime visibility because follow-up RPCs resolve
     // agent IDs from loadConfig().
     const cfg = loadConfig();
-    const foundInEntries = findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
-    const resolvableForFiles = resolveAgentIdOrError(agentId, cfg) === agentId;
+    const foundInEntries = findAgentEntryIndex(listAgentEntries(cfg), params.agentId) >= 0;
+    const resolvableForFiles = resolveAgentIdOrError(params.agentId, cfg) === params.agentId;
     if (foundInEntries && resolvableForFiles) {
       return { ok: true };
     }
@@ -545,13 +562,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
     ];
     await fs.appendFile(identityPath, lines.join("\n"), "utf-8");
 
-    try {
-      await context.refreshRuntimeConfigFromDisk?.();
-    } catch {
-      // Best-effort: if runtime refresh fails, readiness polling still retries.
-    }
-
-    const ready = await waitForAgentReady(agentId);
+    const ready = await waitForAgentReady({
+      agentId,
+      refreshRuntimeConfigFromDisk: context.refreshRuntimeConfigFromDisk,
+    });
     if (!ready.ok) {
       respond(
         false,

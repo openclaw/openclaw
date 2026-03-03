@@ -413,6 +413,60 @@ describe("agents.create", () => {
     );
   });
 
+  it("retries runtime refresh during readiness polling after transient failures", async () => {
+    const previousTimeout = process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS;
+    const previousPoll = process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS;
+    process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS = "250";
+    process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS = "10";
+    mocks.state.runtimeConfig = null;
+    let refreshAttempts = 0;
+    mocks.refreshRuntimeConfigFromDisk.mockImplementation(async () => {
+      refreshAttempts += 1;
+      if (refreshAttempts === 1) {
+        throw new Error("temporary refresh failure");
+      }
+      mocks.state.runtimeConfig = mocks.state.writtenConfig
+        ? { ...mocks.state.writtenConfig }
+        : null;
+    });
+    try {
+      const { respond, promise } = makeCall("agents.create", {
+        name: "Retry Agent",
+        workspace: "/home/user/agents/retry",
+      });
+      await promise;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          ok: true,
+          agentId: "retry-agent",
+        }),
+        undefined,
+      );
+      expect(refreshAttempts).toBeGreaterThan(1);
+    } finally {
+      mocks.refreshRuntimeConfigFromDisk.mockImplementation(async () => {
+        if (!mocks.state.runtimeSnapshotActive) {
+          return;
+        }
+        mocks.state.runtimeConfig = mocks.state.writtenConfig
+          ? { ...mocks.state.writtenConfig }
+          : mocks.state.runtimeConfig;
+      });
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS = previousTimeout;
+      }
+      if (previousPoll === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS;
+      } else {
+        process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS = previousPoll;
+      }
+    }
+  });
+
   it("ensures workspace is set up before writing config", async () => {
     const callOrder: string[] = [];
     mocks.ensureAgentWorkspace.mockImplementation(async () => {
