@@ -1,0 +1,97 @@
+import { formatCliCommand } from "../../cli/command-format.js";
+import { canonicalizeMainSessionAlias, resolveAgentMainSessionKey } from "../../config/sessions.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
+import { expandToolGroups } from "../tool-policy.js";
+import { resolveSandboxConfigForAgent } from "./config.js";
+import { resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
+function shouldSandboxSession(cfg, sessionKey, mainSessionKey) {
+    if (cfg.mode === "off") {
+        return false;
+    }
+    if (cfg.mode === "all") {
+        return true;
+    }
+    return sessionKey.trim() !== mainSessionKey.trim();
+}
+function resolveMainSessionKeyForSandbox(params) {
+    if (params.cfg?.session?.scope === "global") {
+        return "global";
+    }
+    return resolveAgentMainSessionKey({
+        cfg: params.cfg,
+        agentId: params.agentId,
+    });
+}
+function resolveComparableSessionKeyForSandbox(params) {
+    return canonicalizeMainSessionAlias({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+    });
+}
+export function resolveSandboxRuntimeStatus(params) {
+    const sessionKey = params.sessionKey?.trim() ?? "";
+    const agentId = resolveSessionAgentId({
+        sessionKey,
+        config: params.cfg,
+    });
+    const cfg = params.cfg;
+    const sandboxCfg = resolveSandboxConfigForAgent(cfg, agentId);
+    const mainSessionKey = resolveMainSessionKeyForSandbox({ cfg, agentId });
+    const sandboxed = sessionKey
+        ? shouldSandboxSession(sandboxCfg, resolveComparableSessionKeyForSandbox({ cfg, agentId, sessionKey }), mainSessionKey)
+        : false;
+    return {
+        agentId,
+        sessionKey,
+        mainSessionKey,
+        mode: sandboxCfg.mode,
+        sandboxed,
+        toolPolicy: resolveSandboxToolPolicyForAgent(cfg, agentId),
+    };
+}
+export function formatSandboxToolPolicyBlockedMessage(params) {
+    const tool = params.toolName.trim().toLowerCase();
+    if (!tool) {
+        return undefined;
+    }
+    const runtime = resolveSandboxRuntimeStatus({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+    });
+    if (!runtime.sandboxed) {
+        return undefined;
+    }
+    const deny = new Set(expandToolGroups(runtime.toolPolicy.deny));
+    const allow = expandToolGroups(runtime.toolPolicy.allow);
+    const allowSet = allow.length > 0 ? new Set(allow) : null;
+    const blockedByDeny = deny.has(tool);
+    const blockedByAllow = allowSet ? !allowSet.has(tool) : false;
+    if (!blockedByDeny && !blockedByAllow) {
+        return undefined;
+    }
+    const reasons = [];
+    const fixes = [];
+    if (blockedByDeny) {
+        reasons.push("deny list");
+        fixes.push(`Remove "${tool}" from ${runtime.toolPolicy.sources.deny.key}.`);
+    }
+    if (blockedByAllow) {
+        reasons.push("allow list");
+        fixes.push(`Add "${tool}" to ${runtime.toolPolicy.sources.allow.key} (or set it to [] to allow all).`);
+    }
+    const lines = [];
+    lines.push(`Tool "${tool}" blocked by sandbox tool policy (mode=${runtime.mode}).`);
+    lines.push(`Session: ${runtime.sessionKey || "(unknown)"}`);
+    lines.push(`Reason: ${reasons.join(" + ")}`);
+    lines.push("Fix:");
+    lines.push(`- agents.defaults.sandbox.mode=off (disable sandbox)`);
+    for (const fix of fixes) {
+        lines.push(`- ${fix}`);
+    }
+    if (runtime.mode === "non-main") {
+        lines.push(`- Use main session key (direct): ${runtime.mainSessionKey}`);
+    }
+    lines.push(`- See: ${formatCliCommand(`openclaw sandbox explain --session ${runtime.sessionKey}`)}`);
+    return lines.join("\n");
+}

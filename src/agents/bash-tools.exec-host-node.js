@@ -1,0 +1,282 @@
+import crypto from "node:crypto";
+import { evaluateShellAllowlist, maxAsk, minSecurity, requiresExecApproval, resolveExecApprovals, resolveExecApprovalsFromFile, } from "../infra/exec-approvals.js";
+import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
+import { buildNodeShellCommand } from "../infra/node-shell.js";
+import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
+import { logInfo } from "../logger.js";
+import { buildExecApprovalRequesterContext, resolveRegisteredExecApprovalDecision, buildExecApprovalTurnSourceContext, registerExecApprovalRequestForHostOrThrow, } from "./bash-tools.exec-approval-request.js";
+import { DEFAULT_APPROVAL_TIMEOUT_MS, createApprovalSlug, emitExecSystemEvent, } from "./bash-tools.exec-runtime.js";
+import { callGatewayTool } from "./tools/gateway.js";
+import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
+export async function executeNodeHostCommand(params) {
+    const approvals = resolveExecApprovals(params.agentId, {
+        security: params.security,
+        ask: params.ask,
+    });
+    const hostSecurity = minSecurity(params.security, approvals.agent.security);
+    const hostAsk = maxAsk(params.ask, approvals.agent.ask);
+    const askFallback = approvals.agent.askFallback;
+    if (hostSecurity === "deny") {
+        throw new Error("exec denied: host=node security=deny");
+    }
+    if (params.boundNode && params.requestedNode && params.boundNode !== params.requestedNode) {
+        throw new Error(`exec node not allowed (bound to ${params.boundNode})`);
+    }
+    const nodeQuery = params.boundNode || params.requestedNode;
+    const nodes = await listNodes({});
+    if (nodes.length === 0) {
+        throw new Error("exec host=node requires a paired node (none available). This requires a companion app or node host.");
+    }
+    let nodeId;
+    try {
+        nodeId = resolveNodeIdFromList(nodes, nodeQuery, !nodeQuery);
+    }
+    catch (err) {
+        if (!nodeQuery && String(err).includes("node required")) {
+            throw new Error("exec host=node requires a node id when multiple nodes are available (set tools.exec.node or exec.node).", { cause: err });
+        }
+        throw err;
+    }
+    const nodeInfo = nodes.find((entry) => entry.nodeId === nodeId);
+    const supportsSystemRun = Array.isArray(nodeInfo?.commands)
+        ? nodeInfo?.commands?.includes("system.run")
+        : false;
+    if (!supportsSystemRun) {
+        throw new Error("exec host=node requires a node that supports system.run (companion app or node host).");
+    }
+    const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
+    const prepareRaw = await callGatewayTool("node.invoke", { timeoutMs: 15000 }, {
+        nodeId,
+        command: "system.run.prepare",
+        params: {
+            command: argv,
+            rawCommand: params.command,
+            cwd: params.workdir,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+        },
+        idempotencyKey: crypto.randomUUID(),
+    });
+    const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+    if (!prepared) {
+        throw new Error("invalid system.run.prepare response");
+    }
+    const runArgv = prepared.plan.argv;
+    const runRawCommand = prepared.plan.rawCommand ?? prepared.cmdText;
+    const runCwd = prepared.plan.cwd ?? params.workdir;
+    const runAgentId = prepared.plan.agentId ?? params.agentId;
+    const runSessionKey = prepared.plan.sessionKey ?? params.sessionKey;
+    const nodeEnv = params.requestedEnv ? { ...params.requestedEnv } : undefined;
+    const baseAllowlistEval = evaluateShellAllowlist({
+        command: params.command,
+        allowlist: [],
+        safeBins: new Set(),
+        cwd: params.workdir,
+        env: params.env,
+        platform: nodeInfo?.platform,
+        trustedSafeBinDirs: params.trustedSafeBinDirs,
+    });
+    let analysisOk = baseAllowlistEval.analysisOk;
+    let allowlistSatisfied = false;
+    if (hostAsk === "on-miss" && hostSecurity === "allowlist" && analysisOk) {
+        try {
+            const approvalsSnapshot = await callGatewayTool("exec.approvals.node.get", { timeoutMs: 10000 }, { nodeId });
+            const approvalsFile = approvalsSnapshot && typeof approvalsSnapshot === "object"
+                ? approvalsSnapshot.file
+                : undefined;
+            if (approvalsFile && typeof approvalsFile === "object") {
+                const resolved = resolveExecApprovalsFromFile({
+                    file: approvalsFile,
+                    agentId: params.agentId,
+                    overrides: { security: "allowlist" },
+                });
+                // Allowlist-only precheck; safe bins are node-local and may diverge.
+                const allowlistEval = evaluateShellAllowlist({
+                    command: params.command,
+                    allowlist: resolved.allowlist,
+                    safeBins: new Set(),
+                    cwd: params.workdir,
+                    env: params.env,
+                    platform: nodeInfo?.platform,
+                    trustedSafeBinDirs: params.trustedSafeBinDirs,
+                });
+                allowlistSatisfied = allowlistEval.allowlistSatisfied;
+                analysisOk = allowlistEval.analysisOk;
+            }
+        }
+        catch {
+            // Fall back to requiring approval if node approvals cannot be fetched.
+        }
+    }
+    const obfuscation = detectCommandObfuscation(params.command);
+    if (obfuscation.detected) {
+        logInfo(`exec: obfuscation detected (node=${nodeQuery ?? "default"}): ${obfuscation.reasons.join(", ")}`);
+        params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
+    }
+    const requiresAsk = requiresExecApproval({
+        ask: hostAsk,
+        security: hostSecurity,
+        analysisOk,
+        allowlistSatisfied,
+    }) || obfuscation.detected;
+    const invokeTimeoutMs = Math.max(10000, (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) * 1000 +
+        5000);
+    const buildInvokeParams = (approvedByAsk, approvalDecision, runId) => ({
+        nodeId,
+        command: "system.run",
+        params: {
+            command: runArgv,
+            rawCommand: runRawCommand,
+            cwd: runCwd,
+            env: nodeEnv,
+            timeoutMs: typeof params.timeoutSec === "number" ? params.timeoutSec * 1000 : undefined,
+            agentId: runAgentId,
+            sessionKey: runSessionKey,
+            approved: approvedByAsk,
+            approvalDecision: approvalDecision ?? undefined,
+            runId: runId ?? undefined,
+        },
+        idempotencyKey: crypto.randomUUID(),
+    });
+    if (requiresAsk) {
+        const approvalId = crypto.randomUUID();
+        const approvalSlug = createApprovalSlug(approvalId);
+        const contextKey = `exec:${approvalId}`;
+        const noticeSeconds = Math.max(1, Math.round(params.approvalRunningNoticeMs / 1000));
+        const warningText = params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "";
+        let expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+        let preResolvedDecision;
+        // Register first so the returned approval ID is actionable immediately.
+        const registration = await registerExecApprovalRequestForHostOrThrow({
+            approvalId,
+            command: prepared.cmdText,
+            commandArgv: prepared.plan.argv,
+            systemRunPlan: prepared.plan,
+            env: nodeEnv,
+            workdir: runCwd,
+            host: "node",
+            nodeId,
+            security: hostSecurity,
+            ask: hostAsk,
+            ...buildExecApprovalRequesterContext({
+                agentId: runAgentId,
+                sessionKey: runSessionKey,
+            }),
+            ...buildExecApprovalTurnSourceContext(params),
+        });
+        expiresAtMs = registration.expiresAtMs;
+        preResolvedDecision = registration.finalDecision;
+        void (async () => {
+            let decision = null;
+            try {
+                decision = await resolveRegisteredExecApprovalDecision({
+                    approvalId,
+                    preResolvedDecision,
+                });
+            }
+            catch {
+                emitExecSystemEvent(`Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${params.command}`, { sessionKey: params.notifySessionKey, contextKey });
+                return;
+            }
+            let approvedByAsk = false;
+            let approvalDecision = null;
+            let deniedReason = null;
+            if (decision === "deny") {
+                deniedReason = "user-denied";
+            }
+            else if (!decision) {
+                if (obfuscation.detected) {
+                    deniedReason = "approval-timeout (obfuscation-detected)";
+                }
+                else if (askFallback === "full") {
+                    approvedByAsk = true;
+                    approvalDecision = "allow-once";
+                }
+                else if (askFallback === "allowlist") {
+                    // Defer allowlist enforcement to the node host.
+                }
+                else {
+                    deniedReason = "approval-timeout";
+                }
+            }
+            else if (decision === "allow-once") {
+                approvedByAsk = true;
+                approvalDecision = "allow-once";
+            }
+            else if (decision === "allow-always") {
+                approvedByAsk = true;
+                approvalDecision = "allow-always";
+            }
+            if (deniedReason) {
+                emitExecSystemEvent(`Exec denied (node=${nodeId} id=${approvalId}, ${deniedReason}): ${params.command}`, {
+                    sessionKey: params.notifySessionKey,
+                    contextKey,
+                });
+                return;
+            }
+            let runningTimer = null;
+            if (params.approvalRunningNoticeMs > 0) {
+                runningTimer = setTimeout(() => {
+                    emitExecSystemEvent(`Exec running (node=${nodeId} id=${approvalId}, >${noticeSeconds}s): ${params.command}`, { sessionKey: params.notifySessionKey, contextKey });
+                }, params.approvalRunningNoticeMs);
+            }
+            try {
+                await callGatewayTool("node.invoke", { timeoutMs: invokeTimeoutMs }, buildInvokeParams(approvedByAsk, approvalDecision, approvalId));
+            }
+            catch {
+                emitExecSystemEvent(`Exec denied (node=${nodeId} id=${approvalId}, invoke-failed): ${params.command}`, {
+                    sessionKey: params.notifySessionKey,
+                    contextKey,
+                });
+            }
+            finally {
+                if (runningTimer) {
+                    clearTimeout(runningTimer);
+                }
+            }
+        })();
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `${warningText}Approval required (id ${approvalSlug}). ` +
+                        "Approve to run; updates will arrive after completion.",
+                },
+            ],
+            details: {
+                status: "approval-pending",
+                approvalId,
+                approvalSlug,
+                expiresAtMs,
+                host: "node",
+                command: params.command,
+                cwd: params.workdir,
+                nodeId,
+            },
+        };
+    }
+    const startedAt = Date.now();
+    const raw = await callGatewayTool("node.invoke", { timeoutMs: invokeTimeoutMs }, buildInvokeParams(false, null));
+    const payload = raw && typeof raw === "object" ? raw.payload : undefined;
+    const payloadObj = payload && typeof payload === "object" ? payload : {};
+    const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
+    const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
+    const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
+    const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
+    const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
+    return {
+        content: [
+            {
+                type: "text",
+                text: stdout || stderr || errorText || "",
+            },
+        ],
+        details: {
+            status: success ? "completed" : "failed",
+            exitCode,
+            durationMs: Date.now() - startedAt,
+            aggregated: [stdout, stderr, errorText].filter(Boolean).join("\n"),
+            cwd: params.workdir,
+        },
+    };
+}

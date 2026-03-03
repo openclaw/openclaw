@@ -1,0 +1,385 @@
+import path from "node:path";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState, resolveMemorySlotDecision, } from "../plugins/config-state.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import { hasAvatarUriScheme, isAvatarDataUrl, isAvatarHttpUrl, isPathWithinRoot, isWindowsAbsolutePath, } from "../shared/avatar-policy.js";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
+import { isRecord } from "../utils.js";
+import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
+import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
+import { findLegacyConfigIssues } from "./legacy.js";
+import { OpenClawSchema } from "./zod-schema.js";
+const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth"]);
+function isWorkspaceAvatarPath(value, workspaceDir) {
+    const workspaceRoot = path.resolve(workspaceDir);
+    const resolved = path.resolve(workspaceRoot, value);
+    return isPathWithinRoot(workspaceRoot, resolved);
+}
+function validateIdentityAvatar(config) {
+    const agents = config.agents?.list;
+    if (!Array.isArray(agents) || agents.length === 0) {
+        return [];
+    }
+    const issues = [];
+    for (const [index, entry] of agents.entries()) {
+        if (!entry || typeof entry !== "object") {
+            continue;
+        }
+        const avatarRaw = entry.identity?.avatar;
+        if (typeof avatarRaw !== "string") {
+            continue;
+        }
+        const avatar = avatarRaw.trim();
+        if (!avatar) {
+            continue;
+        }
+        if (isAvatarDataUrl(avatar) || isAvatarHttpUrl(avatar)) {
+            continue;
+        }
+        if (avatar.startsWith("~")) {
+            issues.push({
+                path: `agents.list.${index}.identity.avatar`,
+                message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+            });
+            continue;
+        }
+        const hasScheme = hasAvatarUriScheme(avatar);
+        if (hasScheme && !isWindowsAbsolutePath(avatar)) {
+            issues.push({
+                path: `agents.list.${index}.identity.avatar`,
+                message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+            });
+            continue;
+        }
+        const workspaceDir = resolveAgentWorkspaceDir(config, entry.id ?? resolveDefaultAgentId(config));
+        if (!isWorkspaceAvatarPath(avatar, workspaceDir)) {
+            issues.push({
+                path: `agents.list.${index}.identity.avatar`,
+                message: "identity.avatar must stay within the agent workspace.",
+            });
+        }
+    }
+    return issues;
+}
+function validateGatewayTailscaleBind(config) {
+    const tailscaleMode = config.gateway?.tailscale?.mode ?? "off";
+    if (tailscaleMode !== "serve" && tailscaleMode !== "funnel") {
+        return [];
+    }
+    const bindMode = config.gateway?.bind ?? "loopback";
+    if (bindMode === "loopback") {
+        return [];
+    }
+    const customBindHost = config.gateway?.customBindHost;
+    if (bindMode === "custom" &&
+        isCanonicalDottedDecimalIPv4(customBindHost) &&
+        isLoopbackIpAddress(customBindHost)) {
+        return [];
+    }
+    return [
+        {
+            path: "gateway.bind",
+            message: `gateway.bind must resolve to loopback when gateway.tailscale.mode=${tailscaleMode} ` +
+                '(use gateway.bind="loopback" or gateway.bind="custom" with gateway.customBindHost="127.0.0.1")',
+        },
+    ];
+}
+/**
+ * Validates config without applying runtime defaults.
+ * Use this when you need the raw validated config (e.g., for writing back to file).
+ */
+export function validateConfigObjectRaw(raw) {
+    const legacyIssues = findLegacyConfigIssues(raw);
+    if (legacyIssues.length > 0) {
+        return {
+            ok: false,
+            issues: legacyIssues.map((iss) => ({
+                path: iss.path,
+                message: iss.message,
+            })),
+        };
+    }
+    const validated = OpenClawSchema.safeParse(raw);
+    if (!validated.success) {
+        return {
+            ok: false,
+            issues: validated.error.issues.map((iss) => ({
+                path: iss.path.join("."),
+                message: iss.message,
+            })),
+        };
+    }
+    const duplicates = findDuplicateAgentDirs(validated.data);
+    if (duplicates.length > 0) {
+        return {
+            ok: false,
+            issues: [
+                {
+                    path: "agents.list",
+                    message: formatDuplicateAgentDirError(duplicates),
+                },
+            ],
+        };
+    }
+    const avatarIssues = validateIdentityAvatar(validated.data);
+    if (avatarIssues.length > 0) {
+        return { ok: false, issues: avatarIssues };
+    }
+    const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validated.data);
+    if (gatewayTailscaleBindIssues.length > 0) {
+        return { ok: false, issues: gatewayTailscaleBindIssues };
+    }
+    return {
+        ok: true,
+        config: validated.data,
+    };
+}
+export function validateConfigObject(raw) {
+    const result = validateConfigObjectRaw(raw);
+    if (!result.ok) {
+        return result;
+    }
+    return {
+        ok: true,
+        config: applyModelDefaults(applyAgentDefaults(applySessionDefaults(result.config))),
+    };
+}
+export function validateConfigObjectWithPlugins(raw) {
+    return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true });
+}
+export function validateConfigObjectRawWithPlugins(raw) {
+    return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false });
+}
+function validateConfigObjectWithPluginsBase(raw, opts) {
+    const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
+    if (!base.ok) {
+        return { ok: false, issues: base.issues, warnings: [] };
+    }
+    const config = base.config;
+    const issues = [];
+    const warnings = [];
+    const hasExplicitPluginsConfig = isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
+    let registryInfo = null;
+    const ensureRegistry = () => {
+        if (registryInfo) {
+            return registryInfo;
+        }
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+        const registry = loadPluginManifestRegistry({
+            config,
+            workspaceDir: workspaceDir ?? undefined,
+        });
+        const knownIds = new Set(registry.plugins.map((record) => record.id));
+        const normalizedPlugins = normalizePluginsConfig(config.plugins);
+        for (const diag of registry.diagnostics) {
+            let path = diag.pluginId ? `plugins.entries.${diag.pluginId}` : "plugins";
+            if (!diag.pluginId && diag.message.includes("plugin path not found")) {
+                path = "plugins.load.paths";
+            }
+            const pluginLabel = diag.pluginId ? `plugin ${diag.pluginId}` : "plugin";
+            const message = `${pluginLabel}: ${diag.message}`;
+            if (diag.level === "error") {
+                issues.push({ path, message });
+            }
+            else {
+                warnings.push({ path, message });
+            }
+        }
+        registryInfo = { registry, knownIds, normalizedPlugins };
+        return registryInfo;
+    };
+    const allowedChannels = new Set(["defaults", "modelByChannel", ...CHANNEL_IDS]);
+    if (config.channels && isRecord(config.channels)) {
+        for (const key of Object.keys(config.channels)) {
+            const trimmed = key.trim();
+            if (!trimmed) {
+                continue;
+            }
+            if (!allowedChannels.has(trimmed)) {
+                const { registry } = ensureRegistry();
+                for (const record of registry.plugins) {
+                    for (const channelId of record.channels) {
+                        allowedChannels.add(channelId);
+                    }
+                }
+            }
+            if (!allowedChannels.has(trimmed)) {
+                issues.push({
+                    path: `channels.${trimmed}`,
+                    message: `unknown channel id: ${trimmed}`,
+                });
+            }
+        }
+    }
+    const heartbeatChannelIds = new Set();
+    for (const channelId of CHANNEL_IDS) {
+        heartbeatChannelIds.add(channelId.toLowerCase());
+    }
+    const validateHeartbeatTarget = (target, path) => {
+        if (typeof target !== "string") {
+            return;
+        }
+        const trimmed = target.trim();
+        if (!trimmed) {
+            issues.push({ path, message: "heartbeat target must not be empty" });
+            return;
+        }
+        const normalized = trimmed.toLowerCase();
+        if (normalized === "last" || normalized === "none") {
+            return;
+        }
+        if (normalizeChatChannelId(trimmed)) {
+            return;
+        }
+        if (!heartbeatChannelIds.has(normalized)) {
+            const { registry } = ensureRegistry();
+            for (const record of registry.plugins) {
+                for (const channelId of record.channels) {
+                    const pluginChannel = channelId.trim();
+                    if (pluginChannel) {
+                        heartbeatChannelIds.add(pluginChannel.toLowerCase());
+                    }
+                }
+            }
+        }
+        if (heartbeatChannelIds.has(normalized)) {
+            return;
+        }
+        issues.push({ path, message: `unknown heartbeat target: ${target}` });
+    };
+    validateHeartbeatTarget(config.agents?.defaults?.heartbeat?.target, "agents.defaults.heartbeat.target");
+    if (Array.isArray(config.agents?.list)) {
+        for (const [index, entry] of config.agents.list.entries()) {
+            validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
+        }
+    }
+    if (!hasExplicitPluginsConfig) {
+        if (issues.length > 0) {
+            return { ok: false, issues, warnings };
+        }
+        return { ok: true, config, warnings };
+    }
+    const { registry, knownIds, normalizedPlugins } = ensureRegistry();
+    const pushMissingPluginIssue = (path, pluginId, opts) => {
+        if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
+            warnings.push({
+                path,
+                message: `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
+            });
+            return;
+        }
+        if (opts?.warnOnly) {
+            warnings.push({
+                path,
+                message: `plugin not found: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
+            });
+            return;
+        }
+        issues.push({
+            path,
+            message: `plugin not found: ${pluginId}`,
+        });
+    };
+    const pluginsConfig = config.plugins;
+    const entries = pluginsConfig?.entries;
+    if (entries && isRecord(entries)) {
+        for (const pluginId of Object.keys(entries)) {
+            if (!knownIds.has(pluginId)) {
+                // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
+                pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
+            }
+        }
+    }
+    const allow = pluginsConfig?.allow ?? [];
+    for (const pluginId of allow) {
+        if (typeof pluginId !== "string" || !pluginId.trim()) {
+            continue;
+        }
+        if (!knownIds.has(pluginId)) {
+            pushMissingPluginIssue("plugins.allow", pluginId);
+        }
+    }
+    const deny = pluginsConfig?.deny ?? [];
+    for (const pluginId of deny) {
+        if (typeof pluginId !== "string" || !pluginId.trim()) {
+            continue;
+        }
+        if (!knownIds.has(pluginId)) {
+            pushMissingPluginIssue("plugins.deny", pluginId);
+        }
+    }
+    const memorySlot = normalizedPlugins.slots.memory;
+    if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
+        pushMissingPluginIssue("plugins.slots.memory", memorySlot);
+    }
+    let selectedMemoryPluginId = null;
+    const seenPlugins = new Set();
+    for (const record of registry.plugins) {
+        const pluginId = record.id;
+        if (seenPlugins.has(pluginId)) {
+            continue;
+        }
+        seenPlugins.add(pluginId);
+        const entry = normalizedPlugins.entries[pluginId];
+        const entryHasConfig = Boolean(entry?.config);
+        const enableState = resolveEffectiveEnableState({
+            id: pluginId,
+            origin: record.origin,
+            config: normalizedPlugins,
+            rootConfig: config,
+        });
+        let enabled = enableState.enabled;
+        let reason = enableState.reason;
+        if (enabled) {
+            const memoryDecision = resolveMemorySlotDecision({
+                id: pluginId,
+                kind: record.kind,
+                slot: memorySlot,
+                selectedId: selectedMemoryPluginId,
+            });
+            if (!memoryDecision.enabled) {
+                enabled = false;
+                reason = memoryDecision.reason;
+            }
+            if (memoryDecision.selected && record.kind === "memory") {
+                selectedMemoryPluginId = pluginId;
+            }
+        }
+        const shouldValidate = enabled || entryHasConfig;
+        if (shouldValidate) {
+            if (record.configSchema) {
+                const res = validateJsonSchemaValue({
+                    schema: record.configSchema,
+                    cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
+                    value: entry?.config ?? {},
+                });
+                if (!res.ok) {
+                    for (const error of res.errors) {
+                        issues.push({
+                            path: `plugins.entries.${pluginId}.config`,
+                            message: `invalid config: ${error}`,
+                        });
+                    }
+                }
+            }
+            else {
+                issues.push({
+                    path: `plugins.entries.${pluginId}`,
+                    message: `plugin schema missing for ${pluginId}`,
+                });
+            }
+        }
+        if (!enabled && entryHasConfig) {
+            warnings.push({
+                path: `plugins.entries.${pluginId}`,
+                message: `plugin disabled (${reason ?? "disabled"}) but config is present`,
+            });
+        }
+    }
+    if (issues.length > 0) {
+        return { ok: false, issues, warnings };
+    }
+    return { ok: true, config, warnings };
+}

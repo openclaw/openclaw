@@ -1,0 +1,205 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { SafeOpenError, openFileWithinRoot } from "../infra/fs-safe.js";
+import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+export const DEFAULT_BROWSER_TMP_DIR = resolvePreferredOpenClawTmpDir();
+export const DEFAULT_TRACE_DIR = DEFAULT_BROWSER_TMP_DIR;
+export const DEFAULT_DOWNLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "downloads");
+export const DEFAULT_UPLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "uploads");
+function invalidPath(scopeLabel) {
+    return {
+        ok: false,
+        error: `Invalid path: must stay within ${scopeLabel}`,
+    };
+}
+async function resolveRealPathIfExists(targetPath) {
+    try {
+        return await fs.realpath(targetPath);
+    }
+    catch {
+        return undefined;
+    }
+}
+async function resolveTrustedRootRealPath(rootDir) {
+    try {
+        const rootLstat = await fs.lstat(rootDir);
+        if (!rootLstat.isDirectory() || rootLstat.isSymbolicLink()) {
+            return undefined;
+        }
+        return await fs.realpath(rootDir);
+    }
+    catch {
+        return undefined;
+    }
+}
+async function validateCanonicalPathWithinRoot(params) {
+    try {
+        const candidateLstat = await fs.lstat(params.candidatePath);
+        if (candidateLstat.isSymbolicLink()) {
+            return "invalid";
+        }
+        if (params.expect === "directory" && !candidateLstat.isDirectory()) {
+            return "invalid";
+        }
+        if (params.expect === "file" && !candidateLstat.isFile()) {
+            return "invalid";
+        }
+        if (params.expect === "file" && candidateLstat.nlink > 1) {
+            return "invalid";
+        }
+        const candidateRealPath = await fs.realpath(params.candidatePath);
+        return isPathInside(params.rootRealPath, candidateRealPath) ? "ok" : "invalid";
+    }
+    catch (err) {
+        return isNotFoundPathError(err) ? "not-found" : "invalid";
+    }
+}
+export function resolvePathWithinRoot(params) {
+    const root = path.resolve(params.rootDir);
+    const raw = params.requestedPath.trim();
+    if (!raw) {
+        if (!params.defaultFileName) {
+            return { ok: false, error: "path is required" };
+        }
+        return { ok: true, path: path.join(root, params.defaultFileName) };
+    }
+    const resolved = path.resolve(root, raw);
+    const rel = path.relative(root, resolved);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+        return { ok: false, error: `Invalid path: must stay within ${params.scopeLabel}` };
+    }
+    return { ok: true, path: resolved };
+}
+export async function resolveWritablePathWithinRoot(params) {
+    const lexical = resolvePathWithinRoot(params);
+    if (!lexical.ok) {
+        return lexical;
+    }
+    const rootDir = path.resolve(params.rootDir);
+    const rootRealPath = await resolveTrustedRootRealPath(rootDir);
+    if (!rootRealPath) {
+        return invalidPath(params.scopeLabel);
+    }
+    const requestedPath = lexical.path;
+    const parentDir = path.dirname(requestedPath);
+    const parentStatus = await validateCanonicalPathWithinRoot({
+        rootRealPath,
+        candidatePath: parentDir,
+        expect: "directory",
+    });
+    if (parentStatus !== "ok") {
+        return invalidPath(params.scopeLabel);
+    }
+    const targetStatus = await validateCanonicalPathWithinRoot({
+        rootRealPath,
+        candidatePath: requestedPath,
+        expect: "file",
+    });
+    if (targetStatus === "invalid") {
+        return invalidPath(params.scopeLabel);
+    }
+    return lexical;
+}
+export function resolvePathsWithinRoot(params) {
+    const resolvedPaths = [];
+    for (const raw of params.requestedPaths) {
+        const pathResult = resolvePathWithinRoot({
+            rootDir: params.rootDir,
+            requestedPath: raw,
+            scopeLabel: params.scopeLabel,
+        });
+        if (!pathResult.ok) {
+            return { ok: false, error: pathResult.error };
+        }
+        resolvedPaths.push(pathResult.path);
+    }
+    return { ok: true, paths: resolvedPaths };
+}
+export async function resolveExistingPathsWithinRoot(params) {
+    return await resolveCheckedPathsWithinRoot({
+        ...params,
+        allowMissingFallback: true,
+    });
+}
+export async function resolveStrictExistingPathsWithinRoot(params) {
+    return await resolveCheckedPathsWithinRoot({
+        ...params,
+        allowMissingFallback: false,
+    });
+}
+async function resolveCheckedPathsWithinRoot(params) {
+    const rootDir = path.resolve(params.rootDir);
+    // Keep historical behavior for missing roots and rely on openFileWithinRoot for final checks.
+    const rootRealPath = await resolveRealPathIfExists(rootDir);
+    const isInRoot = (relativePath) => Boolean(relativePath) && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
+    const resolveExistingRelativePath = async (requestedPath) => {
+        const raw = requestedPath.trim();
+        const lexicalPathResult = resolvePathWithinRoot({
+            rootDir,
+            requestedPath,
+            scopeLabel: params.scopeLabel,
+        });
+        if (lexicalPathResult.ok) {
+            return {
+                ok: true,
+                relativePath: path.relative(rootDir, lexicalPathResult.path),
+                fallbackPath: lexicalPathResult.path,
+            };
+        }
+        if (!rootRealPath || !raw || !path.isAbsolute(raw)) {
+            return lexicalPathResult;
+        }
+        try {
+            const resolvedExistingPath = await fs.realpath(raw);
+            const relativePath = path.relative(rootRealPath, resolvedExistingPath);
+            if (!isInRoot(relativePath)) {
+                return lexicalPathResult;
+            }
+            return {
+                ok: true,
+                relativePath,
+                fallbackPath: resolvedExistingPath,
+            };
+        }
+        catch {
+            return lexicalPathResult;
+        }
+    };
+    const resolvedPaths = [];
+    for (const raw of params.requestedPaths) {
+        const pathResult = await resolveExistingRelativePath(raw);
+        if (!pathResult.ok) {
+            return { ok: false, error: pathResult.error };
+        }
+        let opened;
+        try {
+            opened = await openFileWithinRoot({
+                rootDir,
+                relativePath: pathResult.relativePath,
+            });
+            resolvedPaths.push(opened.realPath);
+        }
+        catch (err) {
+            if (params.allowMissingFallback && err instanceof SafeOpenError && err.code === "not-found") {
+                // Preserve historical behavior for paths that do not exist yet.
+                resolvedPaths.push(pathResult.fallbackPath);
+                continue;
+            }
+            if (err instanceof SafeOpenError && err.code === "outside-workspace") {
+                return {
+                    ok: false,
+                    error: `File is outside ${params.scopeLabel}`,
+                };
+            }
+            return {
+                ok: false,
+                error: `Invalid path: must stay within ${params.scopeLabel} and be a regular non-symlink file`,
+            };
+        }
+        finally {
+            await opened?.handle.close().catch(() => { });
+        }
+    }
+    return { ok: true, paths: resolvedPaths };
+}

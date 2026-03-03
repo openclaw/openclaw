@@ -1,0 +1,54 @@
+const CLEARED_EXEC_FIELDS = {
+    hasExecDirective: false,
+    execHost: undefined,
+    execSecurity: undefined,
+    execAsk: undefined,
+    execNode: undefined,
+    rawExecHost: undefined,
+    rawExecSecurity: undefined,
+    rawExecAsk: undefined,
+    rawExecNode: undefined,
+    hasExecOptions: false,
+    invalidExecHost: false,
+    invalidExecSecurity: false,
+    invalidExecAsk: false,
+    invalidExecNode: false,
+};
+export function clearInlineDirectives(cleaned) {
+    return {
+        cleaned,
+        hasThinkDirective: false,
+        thinkLevel: undefined,
+        rawThinkLevel: undefined,
+        hasVerboseDirective: false,
+        verboseLevel: undefined,
+        rawVerboseLevel: undefined,
+        hasReasoningDirective: false,
+        reasoningLevel: undefined,
+        rawReasoningLevel: undefined,
+        hasElevatedDirective: false,
+        elevatedLevel: undefined,
+        rawElevatedLevel: undefined,
+        ...CLEARED_EXEC_FIELDS,
+        hasStatusDirective: false,
+        hasModelDirective: false,
+        rawModelDirective: undefined,
+        hasQueueDirective: false,
+        queueMode: undefined,
+        queueReset: false,
+        rawQueueMode: undefined,
+        debounceMs: undefined,
+        cap: undefined,
+        dropPolicy: undefined,
+        rawDebounce: undefined,
+        rawCap: undefined,
+        rawDrop: undefined,
+        hasQueueOptions: false,
+    };
+}
+export function clearExecInlineDirectives(directives) {
+    return {
+        ...directives,
+        ...CLEARED_EXEC_FIELDS,
+    };
+}

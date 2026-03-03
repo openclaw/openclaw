@@ -1,0 +1,46 @@
+import { loadSubagentRegistryFromDisk, saveSubagentRegistryToDisk, } from "./subagent-registry.store.js";
+export function persistSubagentRunsToDisk(runs) {
+    try {
+        saveSubagentRegistryToDisk(runs);
+    }
+    catch {
+        // ignore persistence failures
+    }
+}
+export function restoreSubagentRunsFromDisk(params) {
+    const restored = loadSubagentRegistryFromDisk();
+    if (restored.size === 0) {
+        return 0;
+    }
+    let added = 0;
+    for (const [runId, entry] of restored.entries()) {
+        if (!runId || !entry) {
+            continue;
+        }
+        if (params.mergeOnly && params.runs.has(runId)) {
+            continue;
+        }
+        params.runs.set(runId, entry);
+        added += 1;
+    }
+    return added;
+}
+export function getSubagentRunsSnapshotForRead(inMemoryRuns) {
+    const merged = new Map();
+    const shouldReadDisk = !(process.env.VITEST || process.env.NODE_ENV === "test");
+    if (shouldReadDisk) {
+        try {
+            // Persisted state lets other worker processes observe active runs.
+            for (const [runId, entry] of loadSubagentRegistryFromDisk().entries()) {
+                merged.set(runId, entry);
+            }
+        }
+        catch {
+            // Ignore disk read failures and fall back to local memory.
+        }
+    }
+    for (const [runId, entry] of inMemoryRuns.entries()) {
+        merged.set(runId, entry);
+    }
+    return merged;
+}

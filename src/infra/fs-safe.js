@@ -1,0 +1,410 @@
+import { constants as fsConstants } from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { sameFileIdentity } from "./file-identity.js";
+import { expandHomePrefix } from "./home-dir.js";
+import { assertNoPathAliasEscape } from "./path-alias-guards.js";
+import { hasNodeErrorCode, isNotFoundPathError, isPathInside, isSymlinkOpenError, } from "./path-guards.js";
+export class SafeOpenError extends Error {
+    code;
+    constructor(code, message, options) {
+        super(message, options);
+        this.code = code;
+        this.name = "SafeOpenError";
+    }
+}
+const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
+const OPEN_READ_FLAGS = fsConstants.O_RDONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
+const OPEN_WRITE_EXISTING_FLAGS = fsConstants.O_WRONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
+const OPEN_WRITE_CREATE_FLAGS = fsConstants.O_WRONLY |
+    fsConstants.O_CREAT |
+    fsConstants.O_EXCL |
+    (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
+const ensureTrailingSep = (value) => (value.endsWith(path.sep) ? value : value + path.sep);
+async function expandRelativePathWithHome(relativePath) {
+    let home = process.env.HOME || process.env.USERPROFILE || os.homedir();
+    try {
+        home = await fs.realpath(home);
+    }
+    catch {
+        // If the home dir cannot be canonicalized, keep lexical expansion behavior.
+    }
+    return expandHomePrefix(relativePath, { home });
+}
+async function openVerifiedLocalFile(filePath, options) {
+    // Reject directories before opening so we never surface EISDIR to callers (e.g. tool
+    // results that get sent to messaging channels). See openclaw/openclaw#31186.
+    try {
+        const preStat = await fs.lstat(filePath);
+        if (preStat.isDirectory()) {
+            throw new SafeOpenError("not-file", "not a file");
+        }
+    }
+    catch (err) {
+        if (err instanceof SafeOpenError) {
+            throw err;
+        }
+        // ENOENT and other lstat errors: fall through and let fs.open handle.
+    }
+    let handle;
+    try {
+        handle = await fs.open(filePath, OPEN_READ_FLAGS);
+    }
+    catch (err) {
+        if (isNotFoundPathError(err)) {
+            throw new SafeOpenError("not-found", "file not found");
+        }
+        if (isSymlinkOpenError(err)) {
+            throw new SafeOpenError("symlink", "symlink open blocked", { cause: err });
+        }
+        // Defensive: if open still throws EISDIR (e.g. race), sanitize so it never leaks.
+        if (hasNodeErrorCode(err, "EISDIR")) {
+            throw new SafeOpenError("not-file", "not a file");
+        }
+        throw err;
+    }
+    try {
+        const [stat, lstat] = await Promise.all([handle.stat(), fs.lstat(filePath)]);
+        if (lstat.isSymbolicLink()) {
+            throw new SafeOpenError("symlink", "symlink not allowed");
+        }
+        if (!stat.isFile()) {
+            throw new SafeOpenError("not-file", "not a file");
+        }
+        if (options?.rejectHardlinks && stat.nlink > 1) {
+            throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
+        }
+        if (!sameFileIdentity(stat, lstat)) {
+            throw new SafeOpenError("path-mismatch", "path changed during read");
+        }
+        const realPath = await fs.realpath(filePath);
+        const realStat = await fs.stat(realPath);
+        if (options?.rejectHardlinks && realStat.nlink > 1) {
+            throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
+        }
+        if (!sameFileIdentity(stat, realStat)) {
+            throw new SafeOpenError("path-mismatch", "path mismatch");
+        }
+        return { handle, realPath, stat };
+    }
+    catch (err) {
+        await handle.close().catch(() => { });
+        if (err instanceof SafeOpenError) {
+            throw err;
+        }
+        if (isNotFoundPathError(err)) {
+            throw new SafeOpenError("not-found", "file not found");
+        }
+        throw err;
+    }
+}
+async function resolvePathWithinRoot(params) {
+    let rootReal;
+    try {
+        rootReal = await fs.realpath(params.rootDir);
+    }
+    catch (err) {
+        if (isNotFoundPathError(err)) {
+            throw new SafeOpenError("not-found", "root dir not found");
+        }
+        throw err;
+    }
+    const rootWithSep = ensureTrailingSep(rootReal);
+    const expanded = await expandRelativePathWithHome(params.relativePath);
+    const resolved = path.resolve(rootWithSep, expanded);
+    if (!isPathInside(rootWithSep, resolved)) {
+        throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+    }
+    return { rootReal, rootWithSep, resolved };
+}
+export async function openFileWithinRoot(params) {
+    const { rootWithSep, resolved } = await resolvePathWithinRoot(params);
+    let opened;
+    try {
+        opened = await openVerifiedLocalFile(resolved);
+    }
+    catch (err) {
+        if (err instanceof SafeOpenError) {
+            if (err.code === "not-found") {
+                throw err;
+            }
+            throw new SafeOpenError("invalid-path", "path is not a regular file under root", {
+                cause: err,
+            });
+        }
+        throw err;
+    }
+    if (params.rejectHardlinks !== false && opened.stat.nlink > 1) {
+        await opened.handle.close().catch(() => { });
+        throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
+    }
+    if (!isPathInside(rootWithSep, opened.realPath)) {
+        await opened.handle.close().catch(() => { });
+        throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+    }
+    return opened;
+}
+export async function readFileWithinRoot(params) {
+    const opened = await openFileWithinRoot({
+        rootDir: params.rootDir,
+        relativePath: params.relativePath,
+        rejectHardlinks: params.rejectHardlinks,
+    });
+    try {
+        return await readOpenedFileSafely({ opened, maxBytes: params.maxBytes });
+    }
+    finally {
+        await opened.handle.close().catch(() => { });
+    }
+}
+export async function readPathWithinRoot(params) {
+    const rootDir = path.resolve(params.rootDir);
+    const candidatePath = path.isAbsolute(params.filePath)
+        ? path.resolve(params.filePath)
+        : path.resolve(rootDir, params.filePath);
+    const relativePath = path.relative(rootDir, candidatePath);
+    return await readFileWithinRoot({
+        rootDir,
+        relativePath,
+        rejectHardlinks: params.rejectHardlinks,
+        maxBytes: params.maxBytes,
+    });
+}
+export function createRootScopedReadFile(params) {
+    const rootDir = path.resolve(params.rootDir);
+    return async (filePath) => {
+        const safeRead = await readPathWithinRoot({
+            rootDir,
+            filePath,
+            rejectHardlinks: params.rejectHardlinks,
+            maxBytes: params.maxBytes,
+        });
+        return safeRead.buffer;
+    };
+}
+export async function readLocalFileSafely(params) {
+    const opened = await openVerifiedLocalFile(params.filePath);
+    try {
+        return await readOpenedFileSafely({ opened, maxBytes: params.maxBytes });
+    }
+    finally {
+        await opened.handle.close().catch(() => { });
+    }
+}
+async function readOpenedFileSafely(params) {
+    if (params.maxBytes !== undefined && params.opened.stat.size > params.maxBytes) {
+        throw new SafeOpenError("too-large", `file exceeds limit of ${params.maxBytes} bytes (got ${params.opened.stat.size})`);
+    }
+    const buffer = await params.opened.handle.readFile();
+    return {
+        buffer,
+        realPath: params.opened.realPath,
+        stat: params.opened.stat,
+    };
+}
+export async function resolveOpenedFileRealPathForHandle(handle, ioPath) {
+    try {
+        return await fs.realpath(ioPath);
+    }
+    catch (err) {
+        if (!isNotFoundPathError(err)) {
+            throw err;
+        }
+    }
+    const fdCandidates = process.platform === "linux"
+        ? [`/proc/self/fd/${handle.fd}`, `/dev/fd/${handle.fd}`]
+        : process.platform === "win32"
+            ? []
+            : [`/dev/fd/${handle.fd}`];
+    for (const fdPath of fdCandidates) {
+        try {
+            return await fs.realpath(fdPath);
+        }
+        catch {
+            // try next fd path
+        }
+    }
+    throw new SafeOpenError("path-mismatch", "unable to resolve opened file path");
+}
+export async function openWritableFileWithinRoot(params) {
+    const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
+    try {
+        await assertNoPathAliasEscape({
+            absolutePath: resolved,
+            rootPath: rootReal,
+            boundaryLabel: "root",
+        });
+    }
+    catch (err) {
+        throw new SafeOpenError("invalid-path", "path alias escape blocked", { cause: err });
+    }
+    if (params.mkdir !== false) {
+        await fs.mkdir(path.dirname(resolved), { recursive: true });
+    }
+    let ioPath = resolved;
+    try {
+        const resolvedRealPath = await fs.realpath(resolved);
+        if (!isPathInside(rootWithSep, resolvedRealPath)) {
+            throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+        }
+        ioPath = resolvedRealPath;
+    }
+    catch (err) {
+        if (err instanceof SafeOpenError) {
+            throw err;
+        }
+        if (!isNotFoundPathError(err)) {
+            throw err;
+        }
+    }
+    const fileMode = params.mode ?? 0o600;
+    let handle;
+    let createdForWrite = false;
+    try {
+        try {
+            handle = await fs.open(ioPath, OPEN_WRITE_EXISTING_FLAGS, fileMode);
+        }
+        catch (err) {
+            if (!isNotFoundPathError(err)) {
+                throw err;
+            }
+            handle = await fs.open(ioPath, OPEN_WRITE_CREATE_FLAGS, fileMode);
+            createdForWrite = true;
+        }
+    }
+    catch (err) {
+        if (isNotFoundPathError(err)) {
+            throw new SafeOpenError("not-found", "file not found");
+        }
+        if (isSymlinkOpenError(err)) {
+            throw new SafeOpenError("invalid-path", "symlink open blocked", { cause: err });
+        }
+        throw err;
+    }
+    let openedRealPath = null;
+    try {
+        const stat = await handle.stat();
+        if (!stat.isFile()) {
+            throw new SafeOpenError("invalid-path", "path is not a regular file under root");
+        }
+        if (stat.nlink > 1) {
+            throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
+        }
+        try {
+            const lstat = await fs.lstat(ioPath);
+            if (lstat.isSymbolicLink() || !lstat.isFile()) {
+                throw new SafeOpenError("invalid-path", "path is not a regular file under root");
+            }
+            if (!sameFileIdentity(stat, lstat)) {
+                throw new SafeOpenError("path-mismatch", "path changed during write");
+            }
+        }
+        catch (err) {
+            if (!isNotFoundPathError(err)) {
+                throw err;
+            }
+        }
+        const realPath = await resolveOpenedFileRealPathForHandle(handle, ioPath);
+        openedRealPath = realPath;
+        const realStat = await fs.stat(realPath);
+        if (!sameFileIdentity(stat, realStat)) {
+            throw new SafeOpenError("path-mismatch", "path mismatch");
+        }
+        if (realStat.nlink > 1) {
+            throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
+        }
+        if (!isPathInside(rootWithSep, realPath)) {
+            throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+        }
+        // Truncate only after boundary and identity checks complete. This avoids
+        // irreversible side effects if a symlink target changes before validation.
+        if (!createdForWrite) {
+            await handle.truncate(0);
+        }
+        return {
+            handle,
+            createdForWrite,
+            openedRealPath: realPath,
+        };
+    }
+    catch (err) {
+        const cleanupCreatedPath = createdForWrite && err instanceof SafeOpenError;
+        const cleanupPath = openedRealPath ?? ioPath;
+        await handle.close().catch(() => { });
+        if (cleanupCreatedPath) {
+            await fs.rm(cleanupPath, { force: true }).catch(() => { });
+        }
+        throw err;
+    }
+}
+export async function writeFileWithinRoot(params) {
+    const target = await openWritableFileWithinRoot({
+        rootDir: params.rootDir,
+        relativePath: params.relativePath,
+        mkdir: params.mkdir,
+    });
+    try {
+        if (typeof params.data === "string") {
+            await target.handle.writeFile(params.data, params.encoding ?? "utf8");
+        }
+        else {
+            await target.handle.writeFile(params.data);
+        }
+    }
+    finally {
+        await target.handle.close().catch(() => { });
+    }
+}
+export async function copyFileWithinRoot(params) {
+    const source = await openVerifiedLocalFile(params.sourcePath, {
+        rejectHardlinks: params.rejectSourceHardlinks,
+    });
+    if (params.maxBytes !== undefined && source.stat.size > params.maxBytes) {
+        await source.handle.close().catch(() => { });
+        throw new SafeOpenError("too-large", `file exceeds limit of ${params.maxBytes} bytes (got ${source.stat.size})`);
+    }
+    let target = null;
+    let sourceClosedByStream = false;
+    let targetClosedByStream = false;
+    try {
+        target = await openWritableFileWithinRoot({
+            rootDir: params.rootDir,
+            relativePath: params.relativePath,
+            mkdir: params.mkdir,
+        });
+        const sourceStream = source.handle.createReadStream();
+        const targetStream = target.handle.createWriteStream();
+        sourceStream.once("close", () => {
+            sourceClosedByStream = true;
+        });
+        targetStream.once("close", () => {
+            targetClosedByStream = true;
+        });
+        await pipeline(sourceStream, targetStream);
+    }
+    catch (err) {
+        if (target?.createdForWrite) {
+            await fs.rm(target.openedRealPath, { force: true }).catch(() => { });
+        }
+        throw err;
+    }
+    finally {
+        if (!sourceClosedByStream) {
+            await source.handle.close().catch(() => { });
+        }
+        if (target && !targetClosedByStream) {
+            await target.handle.close().catch(() => { });
+        }
+    }
+}
+export async function writeFileFromPathWithinRoot(params) {
+    await copyFileWithinRoot({
+        sourcePath: params.sourcePath,
+        rootDir: params.rootDir,
+        relativePath: params.relativePath,
+        mkdir: params.mkdir,
+        rejectSourceHardlinks: true,
+    });
+}

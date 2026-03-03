@@ -1,6 +1,0 @@
-tree 0c0f3268c665bf206e44b4ea22276835b27ce3b2
-parent afc09744b41ee320b49b8b96634054d2ff251134
-author Peter Steinberger <steipete@gmail.com> 1766442156 +0100
-committer Peter Steinberger <steipete@gmail.com> 1766442156 +0100
-
-style(mac): pad session rows + thicken bars
