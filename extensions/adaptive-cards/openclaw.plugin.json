@@ -1,0 +1,10 @@
+{
+  "id": "adaptive-cards",
+  "name": "Adaptive Cards",
+  "description": "Enables AI to respond with native Adaptive Cards on iOS, Android, and Teams. Cards render natively via SwiftUI/Jetpack Compose on mobile and as Bot Framework attachments on Teams.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
