@@ -28,11 +28,13 @@ export function createRequest(params: {
   path: string;
   authorization?: string;
   method?: string;
+  headers?: Record<string, string>;
 }): IncomingMessage {
   return createGatewayRequest({
     path: params.path,
     authorization: params.authorization,
     method: params.method,
+    headers: params.headers,
   });
 }
 
@@ -127,6 +129,7 @@ export async function sendRequest(
     path: string;
     authorization?: string;
     method?: string;
+    headers?: Record<string, string>;
   },
 ): Promise<ReturnType<typeof createResponse>> {
   const response = createResponse();

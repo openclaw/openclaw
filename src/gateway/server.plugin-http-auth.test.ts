@@ -453,6 +453,48 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("passes JSON POST webhook routes with query params through root-mounted control ui to plugins", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      const contentType = req.headers["content-type"];
+      if (
+        req.method !== "POST" ||
+        pathname !== "/bluebubbles-webhook" ||
+        contentType !== "application/json"
+      ) {
+        return false;
+      }
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("plugin-webhook-json");
+      return true;
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-control-ui-webhook-post-json-test-",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        controlUiRoot: { kind: "missing" },
+        handlePluginRequest,
+      },
+      run: async (server) => {
+        const response = await sendRequest(server, {
+          path: "/bluebubbles-webhook?password=test-password",
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+        });
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe("plugin-webhook-json");
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
   test("plugin routes take priority over control ui catch-all", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
