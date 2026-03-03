@@ -115,10 +115,11 @@ export function resolveGatewayService(opts?: {
       return launchAgentService;
     }
 
-    // auto: prefer daemon if it appears to be running/listed; otherwise use agent
-    // (This prevents misleading "not installed" errors in headless daemon deployments.)
+    // auto: prefer daemon when present; otherwise fall back to agent.
+    // (This prevents misleading "LaunchAgent not installed" errors in headless daemon deployments.)
     return {
-      ...launchAgentService,
+      ...launchDaemonService,
+      label: "launchd (auto)",
       isLoaded: async (args) => {
         const daemonLoaded = await launchDaemonService
           .isLoaded({ env: args.env ?? env })
