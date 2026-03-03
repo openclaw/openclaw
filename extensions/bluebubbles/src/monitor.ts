@@ -161,7 +161,10 @@ function shouldDropMentionOnlyDirectPayload(message: NormalizedWebhookMessage): 
     Boolean(message.chatIdentifier?.trim()) ||
     (typeof message.chatId === "number" && Number.isFinite(message.chatId));
   const hasAmbiguousGroupHintWithoutChatContext =
-    message.hasConversationLabel && message.hasExplicitGroupChatFlag && !hasResolvedChatHandle;
+    message.hasConversationLabel &&
+    message.hasExplicitGroupChatFlag &&
+    message.explicitGroupChatHint === true &&
+    !hasResolvedChatHandle;
   if (hasAmbiguousGroupHintWithoutChatContext) {
     return true;
   }

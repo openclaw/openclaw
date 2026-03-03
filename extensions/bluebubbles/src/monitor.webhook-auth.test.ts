@@ -437,6 +437,45 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
     });
 
+    it("keeps direct payloads with explicit non-group flag when chat identity is omitted", async () => {
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hi there",
+          handle: { address: "+15551234567" },
+          isFromMe: false,
+          is_group_chat: false,
+          conversation_label: "Alice id:+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      const handled = await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe("ok");
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+    });
+
     it("routes metadata-only group-hint payloads to group sessions", async () => {
       const account = createMockAccount();
       const config: OpenClawConfig = {};

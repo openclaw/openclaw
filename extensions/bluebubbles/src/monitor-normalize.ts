@@ -300,6 +300,7 @@ function extractChatContext(message: Record<string, unknown>): {
   chatName?: string;
   isGroup: boolean;
   explicitIsGroupHint?: boolean;
+  explicitGroupChatHint?: boolean;
   participants: unknown[];
 } {
   const chat = asRecord(message.chat) ?? asRecord(message.conversation) ?? null;
@@ -391,6 +392,7 @@ function extractChatContext(message: Record<string, unknown>): {
     chatName,
     isGroup,
     explicitIsGroupHint: explicitIsGroup,
+    explicitGroupChatHint: explicitGroupChatHint?.value,
     participants,
   };
 }
@@ -587,6 +589,7 @@ export type NormalizedWebhookMessage = {
   itemType?: number;
   dateEdited?: number;
   explicitIsGroupHint?: boolean;
+  explicitGroupChatHint?: boolean;
   explicitWasMentioned?: boolean;
   hasConversationLabel?: boolean;
   hasExplicitGroupChatFlag?: boolean;
@@ -804,8 +807,16 @@ export function normalizeWebhookMessage(
     "";
 
   const { senderId, senderName } = extractSenderInfo(message);
-  const { chatGuid, chatIdentifier, chatId, chatName, isGroup, explicitIsGroupHint, participants } =
-    extractChatContext(message);
+  const {
+    chatGuid,
+    chatIdentifier,
+    chatId,
+    chatName,
+    isGroup,
+    explicitIsGroupHint,
+    explicitGroupChatHint,
+    participants,
+  } = extractChatContext(message);
   const normalizedParticipants = normalizeParticipantList(participants);
 
   const fromMe = readBoolean(message, "isFromMe") ?? readBoolean(message, "is_from_me");
@@ -896,6 +907,7 @@ export function normalizeWebhookMessage(
     itemType,
     dateEdited,
     explicitIsGroupHint,
+    explicitGroupChatHint,
     explicitWasMentioned,
     hasConversationLabel,
     hasExplicitGroupChatFlag,
