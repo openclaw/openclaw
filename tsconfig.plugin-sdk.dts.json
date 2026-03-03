@@ -11,6 +11,7 @@
     "tsBuildInfoFile": "dist/plugin-sdk/.tsbuildinfo"
   },
   "include": [
+    "src/auto-reply/reply/provider-dispatcher.ts",
     "src/plugin-sdk/index.ts",
     "src/plugin-sdk/account-id.ts",
     "src/plugin-sdk/keyed-async-queue.ts",

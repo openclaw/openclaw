@@ -15,6 +15,7 @@ const requiredPathGroups = [
   "dist/plugin-sdk/index.js",
   "dist/plugin-sdk/index.d.ts",
   "dist/auto-reply/reply/provider-dispatcher.js",
+  "dist/plugin-sdk/auto-reply/reply/provider-dispatcher.d.ts",
   "dist/build-info.json",
 ];
 const forbiddenPrefixes = ["dist/OpenClaw.app/"];
