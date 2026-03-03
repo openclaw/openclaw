@@ -250,4 +250,38 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.model).toBe("claude-opus-4-6");
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
+
+  it("persists payload.model as modelOverride/providerOverride for subagent callback turns (#17451)", async () => {
+    // When payload.model is set, modelOverride and providerOverride must also be
+    // persisted on the session entry. The inbound auto-reply path (getReplyFromConfig)
+    // uses these fields — not modelProvider/model — when resolving the model for
+    // subsequent agent turns (e.g. subagent completion callbacks). Without this,
+    // callbacks fall back to the agent's default model instead of the cron payload model.
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    // Runtime tracking fields
+    expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
+    // Session-level override fields — required for subsequent turns including callbacks
+    expect(cronSession.sessionEntry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(cronSession.sessionEntry.providerOverride).toBe("anthropic");
+  });
+
+  it("does NOT set modelOverride/providerOverride when payload.model is absent (#17451)", async () => {
+    // Without payload.model, the session should not get a model override — the
+    // existing session.modelOverride (set by /model command) or agent defaults
+    // should remain authoritative for subsequent turns.
+    const jobWithoutModel = makeJob({
+      payload: { kind: "agentTurn", message: "run daily digest" },
+    });
+
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    expect(cronSession.sessionEntry.modelOverride).toBeUndefined();
+    expect(cronSession.sessionEntry.providerOverride).toBeUndefined();
+  });
 });

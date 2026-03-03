@@ -408,6 +408,16 @@ export async function runCronIsolatedAgentTurn(params: {
   cronSession.sessionEntry.modelProvider = provider;
   cronSession.sessionEntry.model = model;
   cronSession.sessionEntry.systemSent = true;
+  // When payload.model is explicitly set, also persist it as the session-level
+  // model override (modelOverride/providerOverride). The inbound auto-reply path
+  // (getReplyFromConfig) uses these fields — NOT modelProvider/model — when
+  // resolving the model for new turns. Without this, subagent completion
+  // callbacks that arrive as new agent turns fall back to the agent's default
+  // model instead of honouring the cron payload model (#17451).
+  if (modelOverride !== undefined && modelOverride.length > 0) {
+    cronSession.sessionEntry.modelOverride = model;
+    cronSession.sessionEntry.providerOverride = provider;
+  }
   try {
     await persistSessionEntry();
   } catch (err) {
