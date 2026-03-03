@@ -2,7 +2,7 @@
   "id": "diffs",
   "name": "Diffs",
   "description": "Read-only diff viewer and file renderer for agents.",
-  "skills": ["skills"],
+  "skills": ["./skills"],
   "uiHints": {
     "defaults.fontFamily": {
       "label": "Default Font",
