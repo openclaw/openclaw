@@ -316,7 +316,8 @@ async function deliverReplies(params: {
         }
       }
       if (deliveredChunks.length > 0) {
-        lastDeliveredContent = deliveredChunks.join("");
+        // Preserve message boundaries when long replies are chunked into multiple sends.
+        lastDeliveredContent = deliveredChunks.join("\n");
       }
     } else {
       let first = true;
