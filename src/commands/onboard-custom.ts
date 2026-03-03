@@ -20,6 +20,7 @@ const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 const DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_HARD_MIN_TOKENS;
 const DEFAULT_MAX_TOKENS = 4096;
 const VERIFY_TIMEOUT_MS = 30_000;
+const VERIFY_TIMEOUT_LOCAL_MS = 120_000;
 
 function normalizeContextWindowForCustomModel(value: unknown): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
@@ -243,9 +244,28 @@ function buildAnthropicHeaders(apiKey: string) {
   return headers;
 }
 
+function isVerificationTimeout(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function resolveVerifyTimeoutMs(baseUrl: string): number {
+  try {
+    const hostname = new URL(baseUrl).hostname;
+    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") {
+      return VERIFY_TIMEOUT_LOCAL_MS;
+    }
+  } catch {
+    // fall through
+  }
+  return VERIFY_TIMEOUT_MS;
+}
+
 function formatVerificationError(error: unknown): string {
   if (!error) {
     return "unknown error";
+  }
+  if (isVerificationTimeout(error)) {
+    return "request timed out (local models may need time to load into memory)";
   }
   if (error instanceof Error) {
     return error.message;
@@ -295,6 +315,7 @@ async function requestVerification(params: {
   endpoint: string;
   headers: Record<string, string>;
   body: Record<string, unknown>;
+  timeoutMs?: number;
 }): Promise<VerificationResult> {
   try {
     const res = await fetchWithTimeout(
@@ -307,7 +328,7 @@ async function requestVerification(params: {
         },
         body: JSON.stringify(params.body),
       },
-      VERIFY_TIMEOUT_MS,
+      params.timeoutMs ?? VERIFY_TIMEOUT_MS,
     );
     return { ok: res.ok, status: res.status };
   } catch (error) {
@@ -329,10 +350,12 @@ async function requestOpenAiVerification(params: {
   const headers = isBaseUrlAzureUrl
     ? buildAzureOpenAiHeaders(params.apiKey)
     : buildOpenAiHeaders(params.apiKey);
+  const timeoutMs = resolveVerifyTimeoutMs(params.baseUrl);
   if (isBaseUrlAzureUrl) {
     return await requestVerification({
       endpoint,
       headers,
+      timeoutMs,
       body: {
         messages: [{ role: "user", content: "Hi" }],
         max_completion_tokens: 5,
@@ -343,6 +366,7 @@ async function requestOpenAiVerification(params: {
     return await requestVerification({
       endpoint,
       headers,
+      timeoutMs,
       body: {
         model: params.modelId,
         messages: [{ role: "user", content: "Hi" }],
@@ -372,6 +396,7 @@ async function requestAnthropicVerification(params: {
   return await requestVerification({
     endpoint,
     headers: buildAnthropicHeaders(params.apiKey),
+    timeoutMs: resolveVerifyTimeoutMs(params.baseUrl),
     body: {
       model: params.modelId,
       max_tokens: 1,
@@ -747,15 +772,34 @@ export async function promptCustomApiConfig(params: {
     }
 
     const verifySpinner = prompter.progress("Verifying...");
-    const result =
+    let result =
       compatibility === "anthropic"
         ? await requestAnthropicVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
         : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
-    if (result.ok) {
+    // Auto-retry once on timeout — local model servers (e.g. Ollama) may need
+    // extra time to load the model into memory on the first request.
+    if (!result.ok && isVerificationTimeout(result.error)) {
+      verifySpinner.stop(
+        "Verification timed out — local models may need time to load. Retrying...",
+      );
+      const retrySpinner = prompter.progress("Retrying verification...");
+      result =
+        compatibility === "anthropic"
+          ? await requestAnthropicVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
+          : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
+      if (result.ok) {
+        retrySpinner.stop("Verification successful.");
+        break;
+      }
+      if (result.status !== undefined) {
+        retrySpinner.stop(`Verification failed: status ${result.status}`);
+      } else {
+        retrySpinner.stop(`Verification failed: ${formatVerificationError(result.error)}`);
+      }
+    } else if (result.ok) {
       verifySpinner.stop("Verification successful.");
       break;
-    }
-    if (result.status !== undefined) {
+    } else if (result.status !== undefined) {
       verifySpinner.stop(`Verification failed: status ${result.status}`);
     } else {
       verifySpinner.stop(`Verification failed: ${formatVerificationError(result.error)}`);
