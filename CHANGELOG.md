@@ -4,6 +4,8 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.3.3
 
+- Cron: add `maxRunsPerDay` field for daily run deduplication. When set, the scheduler skips execution if the job has already completed that many times on the current calendar day (respects job timezone). Useful for daily tasks that may be triggered by both cron schedules and heartbeats. Set via CLI: `openclaw cron add --max-runs-per-day 1`.
+
 ### Changes
 
 - Docs/Web search: remove outdated Brave free-tier wording and replace prescriptive AI ToS guidance with neutral compliance language in Brave setup docs. (#26860) Thanks @HenryLoenwind.
