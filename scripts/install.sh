@@ -1313,6 +1313,43 @@ ensure_macos_node22_active() {
     return 1
 }
 
+ensure_node22_active_shell() {
+    local major
+    major="$(node_major_version || true)"
+    if [[ -n "$major" && "$major" -ge 22 ]]; then
+        return 0
+    fi
+
+    local active_path active_version
+    active_path="$(command -v node 2>/dev/null || echo "not found")"
+    active_version="$(node -v 2>/dev/null || echo "missing")"
+
+    ui_error "Active Node.js must be v22+ but this shell is using ${active_version} (${active_path})"
+    print_active_node_paths || true
+
+    local nvm_detected=0
+    if [[ -n "${NVM_DIR:-}" || "$active_path" == *"/.nvm/"* ]]; then
+        nvm_detected=1
+    fi
+    if command -v nvm >/dev/null 2>&1; then
+        nvm_detected=1
+    fi
+
+    if [[ "$nvm_detected" -eq 1 ]]; then
+        echo "nvm appears to be managing Node for this shell."
+        echo "Run:"
+        echo "  nvm install 22"
+        echo "  nvm use 22"
+        echo "  nvm alias default 22"
+        echo "Then open a new shell and rerun:"
+        echo "  curl -fsSL https://openclaw.ai/install.sh | bash"
+    else
+        echo "Install/select Node.js 22+ and ensure it is first on PATH, then rerun installer."
+    fi
+
+    return 1
+}
+
 check_node() {
     if command -v node &> /dev/null; then
         NODE_VERSION="$(node_major_version || true)"
@@ -2156,6 +2193,9 @@ main() {
     # Step 2: Node.js
     if ! check_node; then
         install_node
+    fi
+    if ! ensure_node22_active_shell; then
+        exit 1
     fi
 
     ui_stage "Installing OpenClaw"
