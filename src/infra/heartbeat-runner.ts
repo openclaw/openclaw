@@ -127,12 +127,14 @@ const HEARTBEAT_DELIVERY_CIRCUIT_MAX_KEYS = 2000;
 const heartbeatDeliveryCircuit = new Map<string, HeartbeatDeliveryCircuitState>();
 
 function resolveHeartbeatDeliveryCircuitKey(
+  agentId: string,
   delivery: ReturnType<typeof resolveHeartbeatDeliveryTarget>,
 ): string | undefined {
   if (delivery.channel === "none" || !delivery.to) {
     return undefined;
   }
   return [
+    agentId,
     delivery.channel,
     delivery.accountId ?? "",
     delivery.to,
@@ -744,7 +746,7 @@ export async function runHeartbeatOnce(opts: {
           accountId: delivery.accountId,
         })
       : { showOk: false, showAlerts: true, useIndicator: true };
-  const deliveryCircuitKey = resolveHeartbeatDeliveryCircuitKey(delivery);
+  const deliveryCircuitKey = resolveHeartbeatDeliveryCircuitKey(agentId, delivery);
   if (deliveryCircuitKey) {
     const circuitState = getHeartbeatDeliveryCircuitState(deliveryCircuitKey, startedAt);
     if (circuitState.isOpen) {

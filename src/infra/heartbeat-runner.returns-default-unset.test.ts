@@ -775,6 +775,85 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("isolates delivery circuits per agent when targets are shared", async () => {
+    const tmpDir = await createCaseDir("hb-delivery-circuit-agent-scope");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { workspace: tmpDir },
+          list: [
+            { id: "main", default: true, heartbeat: { every: "5m", target: "whatsapp" } },
+            { id: "ops", heartbeat: { every: "5m", target: "whatsapp" } },
+          ],
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: "main" });
+      const opsSessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [mainSessionKey]: {
+            sessionId: "sid-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+          [opsSessionKey]: {
+            sessionId: "sid-ops",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "Final alert" }]);
+      const failingSend = vi
+        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .mockRejectedValue(new Error("Network request for 'sendMessage' failed!"));
+      for (let i = 0; i < 3; i += 1) {
+        const result = await runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          deps: createHeartbeatDeps(failingSend, 1_000 + i),
+        });
+        expect(result.status).toBe("failed");
+      }
+
+      const blockedMain = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        deps: createHeartbeatDeps(
+          vi.fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>().mockResolvedValue({
+            messageId: "main-ok",
+            toJid: "jid",
+          }),
+          5_000,
+        ),
+      });
+      expect(blockedMain).toEqual({ status: "skipped", reason: "delivery-circuit-open" });
+
+      const opsSend = vi
+        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .mockResolvedValue({ messageId: "ops-ok", toJid: "jid" });
+      const opsResult = await runHeartbeatOnce({
+        cfg,
+        agentId: "ops",
+        deps: createHeartbeatDeps(opsSend, 5_000),
+      });
+
+      expect(opsResult.status).toBe("ran");
+      expect(opsSend).toHaveBeenCalledTimes(1);
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
   it("uses the last non-empty payload for delivery", async () => {
     const tmpDir = await createCaseDir("hb-last-payload");
     const storePath = path.join(tmpDir, "sessions.json");
