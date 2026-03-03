@@ -21,6 +21,7 @@ import {
   deleteTask,
   listTasks,
   findActiveTask,
+  findSimilarTask,
   appendToHistory,
   formatTaskHistoryEntry,
   updateCurrentTaskPointer,
@@ -116,6 +117,20 @@ export function createTaskStartTool(options: {
       const stepsInput = Array.isArray(rawSteps)
         ? (rawSteps as Array<{ content: string; status?: string }>)
         : undefined;
+
+      // Duplicate detection: reject if a similar task already exists
+      const activeTasks = await listTasks(workspaceDir, "in_progress");
+      const pendingTasks = await listTasks(workspaceDir, "pending_approval");
+      const duplicate = findSimilarTask([...activeTasks, ...pendingTasks], description);
+      if (duplicate) {
+        return jsonResult({
+          success: false,
+          error: "duplicate_task",
+          existingTaskId: duplicate.id,
+          existingDescription: duplicate.description,
+          message: `Similar task already exists: ${duplicate.id}`,
+        });
+      }
 
       const now = new Date().toISOString();
       const taskId = generateTaskId();

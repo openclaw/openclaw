@@ -1,11 +1,11 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { AnyAgentTool } from "./common.js";
 import { emit } from "../../infra/events/bus.js";
 import { EVENT_TYPES } from "../../infra/events/schemas.js";
 import { acquireTaskLock } from "../../infra/task-lock.js";
 import { disableAgentManagedMode, enableAgentManagedMode } from "../../infra/task-tracker.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId, listAgentIds } from "../agent-scope.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   type TaskFile,
@@ -18,6 +18,7 @@ import {
   findActiveTask,
   findBlockedTasks,
   findAllBacklogTasks,
+  findSimilarTask,
   findPickableBacklogTask,
   checkDependenciesMet,
   updateCurrentTaskPointer,
@@ -444,6 +445,19 @@ export function createTaskBacklogAddTool(options: {
         milestoneId: readStringParam(params, "milestone_id"),
         milestoneItemId: readStringParam(params, "milestone_item_id"),
       };
+
+      // Duplicate detection: reject if a similar backlog task already exists
+      const existingBacklog = await findAllBacklogTasks(workspaceDir);
+      const duplicate = findSimilarTask(existingBacklog, description);
+      if (duplicate) {
+        return jsonResult({
+          success: false,
+          error: "duplicate_task",
+          existingTaskId: duplicate.id,
+          existingDescription: duplicate.description,
+          message: `Similar backlog task already exists: ${duplicate.id}`,
+        });
+      }
 
       await writeTask(workspaceDir, newTask);
       emit({

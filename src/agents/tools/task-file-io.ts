@@ -506,6 +506,47 @@ export function parseTaskFileMd(content: string, filename: string): TaskFile | n
   };
 }
 
+/**
+ * Word-based Jaccard similarity for duplicate task detection.
+ * Returns the most similar existing task above the threshold, or null.
+ */
+export function findSimilarTask(
+  existingTasks: TaskFile[],
+  newDescription: string,
+  threshold = 0.5,
+): TaskFile | null {
+  const newWords = new Set(newDescription.toLowerCase().split(/\s+/).filter(Boolean));
+  if (newWords.size === 0) {
+    return null;
+  }
+
+  let bestTask: TaskFile | null = null;
+  let bestScore = 0;
+
+  for (const task of existingTasks) {
+    const existingWords = new Set(task.description.toLowerCase().split(/\s+/).filter(Boolean));
+    if (existingWords.size === 0) {
+      continue;
+    }
+
+    let intersection = 0;
+    for (const w of newWords) {
+      if (existingWords.has(w)) {
+        intersection++;
+      }
+    }
+    const union = new Set([...newWords, ...existingWords]).size;
+    const score = union > 0 ? intersection / union : 0;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestTask = task;
+    }
+  }
+
+  return bestScore >= threshold ? bestTask : null;
+}
+
 export async function getTasksDir(workspaceDir: string): Promise<string> {
   const tasksDir = path.join(workspaceDir, TASKS_DIR);
   await fs.mkdir(tasksDir, { recursive: true });
