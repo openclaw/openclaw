@@ -441,36 +441,42 @@ export async function sendMSTeamsMessages(params: {
     }
   };
 
-  const sendMessagesInContext = async (ctx: SendContext): Promise<string[]> => {
+  // Always send via continueConversation() instead of relying on webhook TurnContext.
+  // The inbound TurnContext can be revoked once the webhook handler returns, which
+  // breaks delayed second-step replies for slower runs.
+  const baseRef = buildConversationReference(params.conversationRef);
+
+  const sendMessagesInContext = async (ctx: SendContext, replyToId?: string): Promise<string[]> => {
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
-      const response = await sendWithRetry(
-        async () =>
-          await ctx.sendActivity(
-            await buildActivity(
-              message,
-              params.conversationRef,
-              params.tokenProvider,
-              params.sharePointSiteId,
-              params.mediaMaxBytes,
-            ),
-          ),
-        { messageIndex: idx, messageCount: messages.length },
+      const activity = await buildActivity(
+        message,
+        params.conversationRef,
+        params.tokenProvider,
+        params.sharePointSiteId,
+        params.mediaMaxBytes,
       );
+      if (replyToId) {
+        activity.replyToId = replyToId;
+      }
+      const response = await sendWithRetry(async () => await ctx.sendActivity(activity), {
+        messageIndex: idx,
+        messageCount: messages.length,
+      });
       messageIds.push(extractMessageId(response) ?? "unknown");
     }
     return messageIds;
   };
 
   if (params.replyStyle === "thread") {
-    const ctx = params.context;
-    if (!ctx) {
-      throw new Error("Missing context for replyStyle=thread");
-    }
-    return await sendMessagesInContext(ctx);
+    const replyToId = params.conversationRef.activityId;
+    const messageIds: string[] = [];
+    await params.adapter.continueConversation(params.appId, baseRef, async (ctx) => {
+      messageIds.push(...(await sendMessagesInContext(ctx, replyToId)));
+    });
+    return messageIds;
   }
 
-  const baseRef = buildConversationReference(params.conversationRef);
   const proactiveRef: MSTeamsConversationReference = {
     ...baseRef,
     activityId: undefined,
