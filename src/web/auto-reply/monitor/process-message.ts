@@ -293,9 +293,23 @@ export async function processMessage(params: {
         )
       : undefined;
 
+  const bodyForAgent =
+    params.msg.chatType === "group"
+      ? params.msg.body
+      : (() => {
+          const speakerLabel = params.msg.fromMe
+            ? "self"
+            : params.msg.senderName?.trim() ||
+              params.msg.senderE164?.trim() ||
+              params.msg.senderJid?.trim() ||
+              params.msg.from?.trim() ||
+              "Unknown";
+          return `[${speakerLabel}]: ${params.msg.body}`;
+        })();
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
-    BodyForAgent: params.msg.body,
+    BodyForAgent: bodyForAgent,
     InboundHistory: inboundHistory,
     RawBody: params.msg.body,
     CommandBody: params.msg.body,

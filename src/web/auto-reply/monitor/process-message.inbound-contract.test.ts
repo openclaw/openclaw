@@ -183,6 +183,55 @@ describe("web processMessage inbound contract", () => {
     expect(ctx.OriginatingTo).not.toBe(ctx.To);
   });
 
+  it("prefixes direct BodyForAgent with sender label", async () => {
+    capturedCtx = undefined;
+
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+1000",
+        groupHistoryKey: "+1000",
+        msg: {
+          id: "msg2",
+          from: "+1000",
+          to: "+2000",
+          chatType: "direct",
+          body: "hello there",
+          senderName: "Alice",
+          senderE164: "+1000",
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const ctx = capturedCtx as any;
+    expect(ctx.BodyForAgent).toBe("[Alice]: hello there");
+  });
+
+  it("prefixes direct BodyForAgent with self label for fromMe messages", async () => {
+    capturedCtx = undefined;
+
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+1000",
+        groupHistoryKey: "+1000",
+        msg: {
+          id: "msg3",
+          from: "+1000",
+          to: "+2000",
+          chatType: "direct",
+          body: "noted",
+          fromMe: true,
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const ctx = capturedCtx as any;
+    expect(ctx.BodyForAgent).toBe("[self]: noted");
+  });
+
   it("defaults responsePrefix to identity name in self-chats when unset", async () => {
     capturedDispatchParams = undefined;
 

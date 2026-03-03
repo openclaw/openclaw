@@ -345,6 +345,23 @@ describe("buildInboundLine", () => {
     expect(line).toContain("+15550001111");
     expect(line).not.toContain("whatsapp:+15550001111");
   });
+
+  it("marks direct self-sent messages in the envelope", () => {
+    const line = buildInboundLine({
+      cfg: makeInboundCfg(""),
+      agentId: "main",
+      msg: {
+        from: "+15550001111",
+        to: "+2666",
+        body: "ping",
+        chatType: "direct",
+        fromMe: true,
+      } as never,
+      envelope: { includeTimestamp: false },
+    });
+
+    expect(line).toContain("(self): ping");
+  });
 });
 
 describe("formatReplyContext", () => {
