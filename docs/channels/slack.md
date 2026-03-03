@@ -231,6 +231,69 @@ Slash sessions use isolated keys:
 
 and still route command execution against the target conversation session (`CommandTargetSessionKey`).
 
+<AccordionGroup>
+  <Accordion title="Native slash command manifest snippet (copy/paste)">
+
+```json
+{
+  "features": {
+    "slash_commands": [
+      { "command": "/help", "description": "OpenClaw /help", "should_escape": false },
+      { "command": "/commands", "description": "OpenClaw /commands", "should_escape": false },
+      { "command": "/skill", "description": "OpenClaw /skill", "should_escape": false },
+      { "command": "/agentstatus", "description": "OpenClaw /agentstatus", "should_escape": false },
+      { "command": "/approve", "description": "OpenClaw /approve", "should_escape": false },
+      { "command": "/context", "description": "OpenClaw /context", "should_escape": false },
+      {
+        "command": "/export-session",
+        "description": "OpenClaw /export-session",
+        "should_escape": false
+      },
+      { "command": "/tts", "description": "OpenClaw /tts", "should_escape": false },
+      { "command": "/whoami", "description": "OpenClaw /whoami", "should_escape": false },
+      { "command": "/session", "description": "OpenClaw /session", "should_escape": false },
+      { "command": "/subagents", "description": "OpenClaw /subagents", "should_escape": false },
+      { "command": "/acp", "description": "OpenClaw /acp", "should_escape": false },
+      { "command": "/focus", "description": "OpenClaw /focus", "should_escape": false },
+      { "command": "/unfocus", "description": "OpenClaw /unfocus", "should_escape": false },
+      { "command": "/agents", "description": "OpenClaw /agents", "should_escape": false },
+      { "command": "/kill", "description": "OpenClaw /kill", "should_escape": false },
+      { "command": "/steer", "description": "OpenClaw /steer", "should_escape": false },
+      { "command": "/usage", "description": "OpenClaw /usage", "should_escape": false },
+      { "command": "/stop", "description": "OpenClaw /stop", "should_escape": false },
+      { "command": "/restart", "description": "OpenClaw /restart", "should_escape": false },
+      { "command": "/activation", "description": "OpenClaw /activation", "should_escape": false },
+      { "command": "/send", "description": "OpenClaw /send", "should_escape": false },
+      { "command": "/reset", "description": "OpenClaw /reset", "should_escape": false },
+      { "command": "/new", "description": "OpenClaw /new", "should_escape": false },
+      { "command": "/compact", "description": "OpenClaw /compact", "should_escape": false },
+      { "command": "/think", "description": "OpenClaw /think", "should_escape": false },
+      { "command": "/verbose", "description": "OpenClaw /verbose", "should_escape": false },
+      { "command": "/reasoning", "description": "OpenClaw /reasoning", "should_escape": false },
+      { "command": "/elevated", "description": "OpenClaw /elevated", "should_escape": false },
+      { "command": "/exec", "description": "OpenClaw /exec", "should_escape": false },
+      { "command": "/model", "description": "OpenClaw /model", "should_escape": false },
+      { "command": "/models", "description": "OpenClaw /models", "should_escape": false },
+      { "command": "/queue", "description": "OpenClaw /queue", "should_escape": false },
+      {
+        "command": "/dock_telegram",
+        "description": "OpenClaw /dock_telegram",
+        "should_escape": false
+      },
+      {
+        "command": "/dock_discord",
+        "description": "OpenClaw /dock_discord",
+        "should_escape": false
+      },
+      { "command": "/dock_slack", "description": "OpenClaw /dock_slack", "should_escape": false }
+    ]
+  }
+}
+```
+
+  </Accordion>
+</AccordionGroup>
+
 ## Threading, sessions, and reply tags
 
 - DMs route as `direct`; channels as `channel`; MPIMs as `group`.
