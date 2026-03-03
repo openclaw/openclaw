@@ -180,6 +180,24 @@ describe("system run command helpers", () => {
     expect(res.ok).toBe(true);
   });
 
+  test("validateSystemRunCommandConsistency accepts rawCommand with basename for Windows paths", () => {
+    const res = validateSystemRunCommandConsistency({
+      argv: ["C:\\Windows\\System32\\curl.exe", "-s", "http://example.com"],
+      rawCommand: "curl.exe -s http://example.com",
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  test("validateSystemRunCommandConsistency does not apply basename fallback for shell wrappers", () => {
+    // Shell-wrapper argv: /bin/sh -lc "echo hi" → inferred is "echo hi" (inner command).
+    // Basename fallback should NOT match 'sh -lc "echo hi"' as rawCommand — that would
+    // cause unexpected double-wrapping if downstream code spawns in another shell context.
+    expectRawCommandMismatch({
+      argv: ["/bin/sh", "-lc", "echo hi"],
+      rawCommand: 'sh -lc "echo hi"',
+    });
+  });
+
   test("validateSystemRunCommandConsistency rejects genuinely different commands even with path prefix", () => {
     // Basename fallback should not weaken security — different command names still fail.
     expectRawCommandMismatch({

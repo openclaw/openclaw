@@ -121,9 +121,16 @@ export function validateSystemRunCommandConsistency(params: {
   // LLMs commonly send argv with absolute paths (e.g. ["/bin/echo", "hello"]) but rawCommand
   // with the short name ("echo hello"). Compare using basename of argv[0] as a fallback to
   // avoid rejecting semantically identical commands that differ only in path prefix.
+  //
+  // Only apply basename fallback for direct commands (not shell wrappers). When argv is a
+  // recognised shell wrapper, `inferred` is the extracted inner command, and comparing
+  // against a basename-formatted full argv would cause unintended acceptance of shell-wrapper
+  // strings as rawCommand.
+  const argv0 = params.argv[0] ?? "";
+  const hasPathSeparator = argv0.includes("/") || argv0.includes("\\");
   const inferredBasename =
-    params.argv.length > 0 && params.argv[0]?.includes("/")
-      ? formatExecCommand([params.argv[0].split("/").pop()!, ...params.argv.slice(1)])
+    shellCommand === null && params.argv.length > 0 && hasPathSeparator
+      ? formatExecCommand([argv0.split(/[/\\]/).pop()!, ...params.argv.slice(1)])
       : null;
 
   if (raw && raw !== inferred && raw !== inferredBasename) {
