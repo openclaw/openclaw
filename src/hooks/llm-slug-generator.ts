@@ -12,12 +12,39 @@ import {
   resolveAgentEffectiveModelPrimary,
 } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from "../agents/defaults.js";
-import { parseModelRef } from "../agents/model-selection.js";
+import { buildModelAliasIndex, resolveModelRefFromString } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("llm-slug-generator");
+const DEFAULT_LLM_SLUG_TIMEOUT_MS = 45_000;
+const MIN_LLM_SLUG_TIMEOUT_MS = 5_000;
+const MAX_LLM_SLUG_TIMEOUT_MS = 300_000;
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function resolveSlugTimeoutMs(cfg: OpenClawConfig): number {
+  const hookEntry = cfg.hooks?.internal?.entries?.["session-memory"];
+  const raw =
+    hookEntry && typeof hookEntry === "object"
+      ? (hookEntry as Record<string, unknown>).llmSlugTimeoutMs
+      : undefined;
+  const parsed =
+    typeof raw === "number"
+      ? Number.isFinite(raw)
+        ? Math.floor(raw)
+        : undefined
+      : typeof raw === "string"
+        ? Number.parseInt(raw, 10)
+        : undefined;
+  if (typeof parsed !== "number" || Number.isNaN(parsed) || parsed <= 0) {
+    return DEFAULT_LLM_SLUG_TIMEOUT_MS;
+  }
+  return clampNumber(parsed, MIN_LLM_SLUG_TIMEOUT_MS, MAX_LLM_SLUG_TIMEOUT_MS);
+}
 
 /**
  * Generate a short 1-2 word filename slug from session content using LLM
@@ -46,9 +73,13 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
 
     // Resolve model from agent config instead of using hardcoded defaults
     const modelRef = resolveAgentEffectiveModelPrimary(params.cfg, agentId);
-    const parsed = modelRef ? parseModelRef(modelRef, DEFAULT_PROVIDER) : null;
-    const provider = parsed?.provider ?? DEFAULT_PROVIDER;
-    const model = parsed?.model ?? DEFAULT_MODEL;
+    const aliasIndex = buildModelAliasIndex({ cfg: params.cfg, defaultProvider: DEFAULT_PROVIDER });
+    const resolved = modelRef
+      ? resolveModelRefFromString({ raw: modelRef, defaultProvider: DEFAULT_PROVIDER, aliasIndex })
+      : null;
+    const provider = resolved?.ref.provider ?? DEFAULT_PROVIDER;
+    const model = resolved?.ref.model ?? DEFAULT_MODEL;
+    const timeoutMs = resolveSlugTimeoutMs(params.cfg);
 
     const result = await runEmbeddedPiAgent({
       sessionId: `slug-generator-${Date.now()}`,
@@ -61,7 +92,10 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       prompt,
       provider,
       model,
-      timeoutMs: 15_000, // 15 second timeout
+      trigger: "memory",
+      thinkLevel: "minimal",
+      disableTools: true,
+      timeoutMs,
       runId: `slug-gen-${Date.now()}`,
     });
 
