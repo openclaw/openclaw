@@ -459,20 +459,35 @@ describe("deliverReplies", () => {
           text: "chunk-one\n\nchunk-two",
           replyToId: "77",
           audioAsVoice: true,
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Ack", callback_data: "ack" }]],
+            },
+          },
         },
       ],
       runtime,
       bot,
       replyToMode: "first",
+      replyQuoteText: "quoted context",
       textLimit: 12,
     });
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(sendMessage.mock.calls[0][2]).toEqual(
+      expect.objectContaining({
+        reply_to_message_id: 77,
+        reply_markup: {
+          inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
+        },
+      }),
+    );
+    expect(sendMessage.mock.calls[1][2]).not.toEqual(
       expect.objectContaining({ reply_to_message_id: 77 }),
     );
-    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_parameters");
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_markup");
   });
 
   it("rethrows non-VOICE_MESSAGES_FORBIDDEN errors from sendVoice", async () => {

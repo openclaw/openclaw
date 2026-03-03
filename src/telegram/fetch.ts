@@ -3,6 +3,7 @@ import * as net from "node:net";
 import { EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
+import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -13,37 +14,39 @@ let appliedAutoSelectFamily: boolean | null = null;
 let appliedDnsResultOrder: string | null = null;
 let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
 const log = createSubsystemLogger("telegram/network");
-const PROXY_ENV_KEYS = [
-  "HTTPS_PROXY",
-  "HTTP_PROXY",
-  "ALL_PROXY",
-  "https_proxy",
-  "http_proxy",
-  "all_proxy",
-] as const;
-
-function hasProxyEnvConfigured(): boolean {
-  for (const key of PROXY_ENV_KEYS) {
-    const value = process.env[key];
-    if (typeof value === "string" && value.trim().length > 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function isProxyLikeDispatcher(dispatcher: unknown): boolean {
   const ctorName = (dispatcher as { constructor?: { name?: string } })?.constructor?.name;
   return typeof ctorName === "string" && ctorName.includes("ProxyAgent");
 }
 
-const FALLBACK_RETRY_ERROR_CODES = new Set([
+const FALLBACK_RETRY_ERROR_CODES = [
   "ETIMEDOUT",
   "ENETUNREACH",
   "EHOSTUNREACH",
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_SOCKET",
-]);
+] as const;
+
+type Ipv4FallbackContext = {
+  message: string;
+  codes: Set<string>;
+};
+
+type Ipv4FallbackRule = {
+  name: string;
+  matches: (ctx: Ipv4FallbackContext) => boolean;
+};
+
+const IPV4_FALLBACK_RULES: readonly Ipv4FallbackRule[] = [
+  {
+    name: "fetch-failed-envelope",
+    matches: ({ message }) => message.includes("fetch failed"),
+  },
+  {
+    name: "known-network-code",
+    matches: ({ codes }) => FALLBACK_RETRY_ERROR_CODES.some((code) => codes.has(code)),
+  },
+];
 
 // Node 22 workaround: enable autoSelectFamily to allow IPv4 fallback on broken IPv6 networks.
 // Many networks have IPv6 configured but not routed, causing "Network is unreachable" errors.
@@ -149,21 +152,17 @@ function collectErrorCodes(err: unknown): Set<string> {
 }
 
 function shouldRetryWithIpv4Fallback(err: unknown): boolean {
-  const message =
-    err && typeof err === "object" && "message" in err ? String(err.message).toLowerCase() : "";
-  if (!message.includes("fetch failed")) {
-    return false;
-  }
-  const codes = collectErrorCodes(err);
-  if (codes.size === 0) {
-    return false;
-  }
-  for (const code of codes) {
-    if (FALLBACK_RETRY_ERROR_CODES.has(code)) {
-      return true;
+  const ctx: Ipv4FallbackContext = {
+    message:
+      err && typeof err === "object" && "message" in err ? String(err.message).toLowerCase() : "",
+    codes: collectErrorCodes(err),
+  };
+  for (const rule of IPV4_FALLBACK_RULES) {
+    if (!rule.matches(ctx)) {
+      return false;
     }
   }
-  return false;
+  return true;
 }
 
 function applyTelegramIpv4Fallback(): void {

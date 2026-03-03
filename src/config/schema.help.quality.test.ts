@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MEDIA_AUDIO_FIELD_KEYS } from "./media-audio-field-metadata.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 
@@ -8,6 +9,7 @@ const ROOT_SECTIONS = [
   "wizard",
   "diagnostics",
   "logging",
+  "cli",
   "update",
   "browser",
   "ui",
@@ -265,6 +267,7 @@ const TARGET_KEYS = [
   "browser.noSandbox",
   "browser.profiles",
   "browser.profiles.*.driver",
+  "browser.profiles.*.attachOnly",
   "tools",
   "tools.allow",
   "tools.deny",
@@ -419,6 +422,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   ],
   "logging.consoleStyle": ['"pretty"', '"compact"', '"json"'],
   "logging.redactSensitive": ['"off"', '"tools"'],
+  "cli.banner.taglineMode": ['"random"', '"default"', '"off"'],
   "update.channel": ['"stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
   "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
@@ -456,15 +460,7 @@ const TOOLS_HOOKS_TARGET_KEYS = [
   "tools.links.models",
   "tools.links.scope",
   "tools.links.timeoutSeconds",
-  "tools.media.audio.attachments",
-  "tools.media.audio.enabled",
-  "tools.media.audio.language",
-  "tools.media.audio.maxBytes",
-  "tools.media.audio.maxChars",
-  "tools.media.audio.models",
-  "tools.media.audio.prompt",
-  "tools.media.audio.scope",
-  "tools.media.audio.timeoutSeconds",
+  ...MEDIA_AUDIO_FIELD_KEYS,
   "tools.media.concurrency",
   "tools.media.image.attachments",
   "tools.media.image.enabled",

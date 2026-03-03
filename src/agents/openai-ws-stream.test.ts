@@ -396,7 +396,7 @@ describe("convertMessagesToInputItems", () => {
       ["Let me run that."],
       [{ id: "call_1", name: "exec", args: { cmd: "ls" } }],
     );
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     // Should produce a text message and a function_call item
@@ -421,6 +421,41 @@ describe("convertMessagesToInputItems", () => {
       type: "function_call_output",
       call_id: "call_1",
       output: "file.txt",
+    });
+  });
+
+  it("drops tool result messages with empty tool call id", () => {
+    const msg = {
+      role: "toolResult" as const,
+      toolCallId: "   ",
+      toolName: "test_tool",
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toEqual([]);
+  });
+
+  it("falls back to toolUseId when toolCallId is missing", () => {
+    const msg = {
+      role: "toolResult" as const,
+      toolUseId: "call_from_tool_use",
+      toolName: "test_tool",
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_from_tool_use",
+      output: "ok",
     });
   });
 
@@ -452,6 +487,14 @@ describe("convertMessagesToInputItems", () => {
     >[0]);
     expect(items).toHaveLength(1);
     expect(items[0]?.type).toBe("function_call");
+  });
+
+  it("drops assistant tool calls with empty ids", () => {
+    const msg = assistantMsg([], [{ id: "   ", name: "read", args: { path: "/tmp/a" } }]);
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toEqual([]);
   });
 
   it("skips thinking blocks in assistant messages", () => {

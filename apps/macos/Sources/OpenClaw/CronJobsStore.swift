@@ -38,7 +38,9 @@ final class CronJobsStore {
     func start() {
         guard !self.isPreview else { return }
         guard self.eventTask == nil else { return }
-        self.startGatewaySubscription()
+        GatewayPushSubscription.restartTask(task: &self.eventTask) { [weak self] push in
+            self?.handle(push: push)
+        }
         self.pollTask = Task.detached { [weak self] in
             guard let self else { return }
             await self.refreshJobs()
@@ -141,20 +143,6 @@ final class CronJobsStore {
     }
 
     // MARK: - Gateway events
-
-    private func startGatewaySubscription() {
-        self.eventTask?.cancel()
-        self.eventTask = Task { [weak self] in
-            guard let self else { return }
-            let stream = await GatewayConnection.shared.subscribe()
-            for await push in stream {
-                if Task.isCancelled { return }
-                await MainActor.run { [weak self] in
-                    self?.handle(push: push)
-                }
-            }
-        }
-    }
 
     private func handle(push: GatewayPush) {
         switch push {

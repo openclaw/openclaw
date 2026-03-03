@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
@@ -41,13 +41,24 @@ import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
 
 describe("delivery-queue", () => {
   let tmpDir: string;
+  let fixtureRoot = "";
+  let fixtureCount = 0;
 
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dq-test-"));
+  beforeAll(() => {
+    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dq-suite-"));
   });
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+  beforeEach(() => {
+    tmpDir = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+  });
+
+  afterAll(() => {
+    if (!fixtureRoot) {
+      return;
+    }
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    fixtureRoot = "";
   });
 
   describe("enqueue + ack lifecycle", () => {
@@ -926,6 +937,19 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Telegram DM with topic",
+        cfg: perChannelPeerCfg,
+        channel: "telegram",
+        target: "123456789:topic:99",
+        expected: {
+          sessionKey: "agent:main:telegram:direct:123456789:thread:99",
+          from: "telegram:123456789:topic:99",
+          to: "telegram:123456789",
+          threadId: 99,
+          chatType: "direct",
+        },
+      },
+      {
         name: "Telegram unresolved username DM",
         cfg: perChannelPeerCfg,
         channel: "telegram",
@@ -942,8 +966,8 @@ describe("resolveOutboundSessionRoute", () => {
         target: "12345",
         threadId: "12345:99",
         expected: {
-          sessionKey: "agent:main:telegram:direct:12345",
-          from: "telegram:12345",
+          sessionKey: "agent:main:telegram:direct:12345:thread:99",
+          from: "telegram:12345:topic:99",
           to: "telegram:12345",
           threadId: 99,
           chatType: "direct",
