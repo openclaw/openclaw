@@ -277,10 +277,8 @@ async function resolveTelegramCommandAuth(params: {
     senderId,
     senderUsername,
   });
-  // channel_post updates do not carry a normal "from" user in many cases.
-  // Require explicit allowlist configuration for command execution in channels.
   const commandAuthorized = isChannelPost
-    ? true
+    ? dmAllow.hasEntries && senderAllowed
     : resolveCommandAuthorizedFromAuthorizers({
         useAccessGroups,
         authorizers: [{ configured: dmAllow.hasEntries, allowed: senderAllowed }],

@@ -195,7 +195,7 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
       runtime: {} as unknown as RuntimeEnv,
       accountId: "default",
       telegramCfg: {} as TelegramAccountConfig,
-      allowFrom: [],
+      allowFrom: ["-100123"],
       groupAllowFrom: [],
       replyToMode: "off",
       textLimit: 4000,
@@ -260,7 +260,7 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
       runtime: {} as unknown as RuntimeEnv,
       accountId: "default",
       telegramCfg: {} as TelegramAccountConfig,
-      allowFrom: [],
+      allowFrom: ["-100123"],
       groupAllowFrom: [],
       replyToMode: "off",
       textLimit: 4000,
@@ -365,7 +365,7 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
 
     expect(executePluginCommand).toHaveBeenCalledWith(
       expect.objectContaining({
-        isAuthorizedSender: true,
+        isAuthorizedSender: false,
       }),
     );
     expect(bot.api.sendMessage).not.toHaveBeenCalledWith(-100123, "This channel is disabled.");
@@ -400,7 +400,7 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
       runtime: {} as unknown as RuntimeEnv,
       accountId: "default",
       telegramCfg: {} as TelegramAccountConfig,
-      allowFrom: [],
+      allowFrom: ["-100123"],
       groupAllowFrom: [],
       replyToMode: "off",
       textLimit: 4000,
