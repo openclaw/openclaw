@@ -246,6 +246,27 @@ describe("sessions tools", () => {
     expect(withToolsDetails.messages).toHaveLength(2);
   });
 
+  it("sessions_history surfaces historyStatus from chat.history for observability", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return { messages: [], historyStatus: "empty" as const };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call4a", { sessionKey: "main" });
+    const details = result.details as { messages?: unknown[]; historyStatus?: string };
+    expect(details.messages).toEqual([]);
+    expect(details.historyStatus).toBe("empty");
+  });
+
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {
     const oversized = Array.from({ length: 80 }, (_, idx) => ({
       role: "assistant",
@@ -504,7 +525,7 @@ describe("sessions tools", () => {
 
     const result = await tool.execute("call6", { sessionKey: sessionId });
     const details = result.details as { status?: string; error?: string };
-    expect(details.status).toBe("error");
+    expect(details.status).toBe("not_found");
     expect(details.error).toMatch(/Session not found|No session found/);
   });
 

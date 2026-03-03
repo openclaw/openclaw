@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  isSubagentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   listSpawnedSessionKeys,
   resolveInternalSessionKey,
@@ -71,7 +75,9 @@ export function resolveSandboxedSessionToolContext(params: {
           mainKey,
         })
       : undefined;
-  const effectiveRequesterKey = requesterInternalKey ?? alias;
+  // Use canonical main key when no agent session key: store uses it for spawnedBy, so tree visibility matches.
+  const effectiveRequesterKey =
+    requesterInternalKey ?? buildAgentMainSessionKey({ agentId: mainKey, mainKey });
   const restrictToSpawned =
     params.sandboxed === true &&
     visibility === "spawned" &&

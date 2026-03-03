@@ -239,10 +239,15 @@ export function createSessionsHistoryTool(opts?: {
           ? Math.max(1, Math.floor(params.limit))
           : undefined;
       const includeTools = Boolean(params.includeTools);
-      const result = await callGateway<{ messages: Array<unknown> }>({
+      type ChatHistoryResult = {
+        messages?: Array<unknown>;
+        historyStatus?: "ok" | "not_found" | "not_persisted" | "empty";
+      };
+      const result = await callGateway<ChatHistoryResult>({
         method: "chat.history",
         params: { sessionKey: resolvedKey, limit },
       });
+      const historyStatus = result?.historyStatus ?? "ok";
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
@@ -261,6 +266,7 @@ export function createSessionsHistoryTool(opts?: {
       return jsonResult({
         sessionKey: displayKey,
         messages: hardened.items,
+        historyStatus,
         truncated: droppedMessages || contentTruncated || hardened.hardCapped,
         droppedMessages: droppedMessages || hardened.hardCapped,
         contentTruncated,

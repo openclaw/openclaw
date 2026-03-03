@@ -157,7 +157,7 @@ export type SessionReferenceResolution =
       displayKey: string;
       resolvedViaSessionId: boolean;
     }
-  | { ok: false; status: "error" | "forbidden"; error: string };
+  | { ok: false; status: "error" | "not_found" | "forbidden"; error: string };
 
 async function resolveSessionKeyFromSessionId(params: {
   sessionId: string;
@@ -202,12 +202,15 @@ async function resolveSessionKeyFromSessionId(params: {
       };
     }
     const message = err instanceof Error ? err.message : String(err);
+    const notFoundMessage =
+      `Session not found: ${params.sessionId} (use the full sessionKey from sessions_list)`;
+    const isNotFound =
+      message.toLowerCase().includes("not found") ||
+      message.toLowerCase().includes("no session found");
     return {
       ok: false,
-      status: "error",
-      error:
-        message ||
-        `Session not found: ${params.sessionId} (use the full sessionKey from sessions_list)`,
+      status: isNotFound ? "not_found" : "error",
+      error: message || notFoundMessage,
     };
   }
 }
