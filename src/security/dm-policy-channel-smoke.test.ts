@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isAllowedBlueBubblesSender } from "../../extensions/bluebubbles/src/targets.js";
 import { isMattermostSenderAllowed } from "../../extensions/mattermost/src/mattermost/monitor-auth.js";
 import { isSignalSenderAllowed, type SignalSender } from "../signal/identity.js";
-import { resolveDmGroupAccessWithLists } from "./dm-policy-shared.js";
+import { DM_GROUP_ACCESS_REASON, resolveDmGroupAccessWithLists } from "./dm-policy-shared.js";
 
 type ChannelSmokeCase = {
   name: string;
@@ -58,6 +58,7 @@ describe("security/dm-policy-shared channel smoke", () => {
           isSenderAllowed: testCase.isSenderAllowed,
         });
         expect(access.decision).toBe("block");
+        expect(access.reasonCode).toBe(DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED);
         expect(access.reason).toBe("groupPolicy=allowlist (not allowlisted)");
       });
     }

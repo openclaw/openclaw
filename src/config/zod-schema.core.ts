@@ -2,6 +2,7 @@ import path from "node:path";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { isValidFileSecretRefId } from "../secrets/ref-contract.js";
+import { MODEL_APIS } from "./types.models.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -179,15 +180,7 @@ export const SecretsConfigSchema = z
   .strict()
   .optional();
 
-export const ModelApiSchema = z.union([
-  z.literal("openai-completions"),
-  z.literal("openai-responses"),
-  z.literal("anthropic-messages"),
-  z.literal("google-generative-ai"),
-  z.literal("github-copilot"),
-  z.literal("bedrock-converse-stream"),
-  z.literal("ollama"),
-]);
+export const ModelApiSchema = z.enum(MODEL_APIS);
 
 export const ModelCompatSchema = z
   .object({
@@ -239,6 +232,7 @@ export const ModelProviderSchema = z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
     api: ModelApiSchema.optional(),
+    injectNumCtxForOpenAICompat: z.boolean().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),
@@ -384,7 +378,7 @@ export const TtsConfigSchema = z
       .optional(),
     elevenlabs: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         voiceId: z.string().optional(),
         modelId: z.string().optional(),
@@ -406,7 +400,7 @@ export const TtsConfigSchema = z
       .optional(),
     openai: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         model: z.string().optional(),
         voice: z.string().optional(),
       })
@@ -509,6 +503,32 @@ export const requireOpenAllowFrom = (params: {
   }
   const allow = normalizeAllowFrom(params.allowFrom);
   if (allow.includes("*")) {
+    return;
+  }
+  params.ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: params.path,
+    message: params.message,
+  });
+};
+
+/**
+ * Validate that dmPolicy="allowlist" has a non-empty allowFrom array.
+ * Without this, all DMs are silently dropped because the allowlist is empty
+ * and no senders can match.
+ */
+export const requireAllowlistAllowFrom = (params: {
+  policy?: string;
+  allowFrom?: Array<string | number>;
+  ctx: z.RefinementCtx;
+  path: Array<string | number>;
+  message: string;
+}) => {
+  if (params.policy !== "allowlist") {
+    return;
+  }
+  const allow = normalizeAllowFrom(params.allowFrom);
+  if (allow.length > 0) {
     return;
   }
   params.ctx.addIssue({
@@ -660,6 +680,8 @@ export const ToolsMediaUnderstandingSchema = z
     ...MediaUnderstandingRuntimeFields,
     attachments: MediaUnderstandingAttachmentsSchema,
     models: z.array(MediaUnderstandingModelSchema).optional(),
+    echoTranscript: z.boolean().optional(),
+    echoFormat: z.string().optional(),
   })
   .strict()
   .optional();

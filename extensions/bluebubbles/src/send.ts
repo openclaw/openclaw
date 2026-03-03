@@ -7,6 +7,7 @@ import {
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
 import { warnBlueBubbles } from "./runtime.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import {
@@ -372,8 +373,12 @@ export async function sendMessageBlueBubbles(
     cfg: opts.cfg ?? {},
     accountId: opts.accountId,
   });
-  const baseUrl = opts.serverUrl?.trim() || account.config.serverUrl?.trim();
-  const password = opts.password?.trim() || account.config.password?.trim();
+  const baseUrl =
+    normalizeSecretInputString(opts.serverUrl) ||
+    normalizeSecretInputString(account.config.serverUrl);
+  const password =
+    normalizeSecretInputString(opts.password) ||
+    normalizeSecretInputString(account.config.password);
   if (!baseUrl) {
     throw new Error("BlueBubbles serverUrl is required");
   }

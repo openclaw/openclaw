@@ -33,6 +33,7 @@ It does not install or modify anything on the remote host.
   <Step title="Existing config detection">
     - If `~/.openclaw/openclaw.json` exists, choose Keep, Modify, or Reset.
     - Re-running the wizard does not wipe anything unless you explicitly choose Reset (or pass `--reset`).
+    - CLI `--reset` defaults to `config+creds+sessions`; use `--reset-scope full` to also remove workspace.
     - If config is invalid or contains legacy keys, the wizard stops and asks you to run `openclaw doctor` before continuing.
     - Reset uses `trash` and offers scopes:
       - Config only
@@ -115,7 +116,7 @@ What you set:
 ## Auth and model options
 
 <AccordionGroup>
-  <Accordion title="Anthropic API key (recommended)">
+  <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
   </Accordion>
   <Accordion title="Anthropic OAuth (Claude Code CLI)">
@@ -162,7 +163,7 @@ What you set:
     Prompts for account ID, gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
   </Accordion>
-  <Accordion title="MiniMax M2.1">
+  <Accordion title="MiniMax M2.5">
     Config is auto-written.
     More detail: [MiniMax](/providers/minimax).
   </Accordion>
@@ -235,6 +236,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 
 - `agents.defaults.workspace`
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
+- `tools.profile` (local onboarding defaults to `"messaging"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
 - `session.dmScope` (local onboarding defaults this to `per-channel-peer` when unset; existing explicit values are preserved)
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.signal.*`, `channels.imessage.*`

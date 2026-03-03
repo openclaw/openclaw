@@ -182,6 +182,44 @@ describe("agent components", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓" });
     expect(enqueueSystemEventMock).toHaveBeenCalled();
   });
+
+  it("accepts cid payloads for agent button interactions", async () => {
+    const button = createAgentComponentButton({
+      cfg: createCfg(),
+      accountId: "default",
+      dmPolicy: "allowlist",
+      allowFrom: ["123456789"],
+    });
+    const { interaction, defer, reply } = createDmButtonInteraction();
+
+    await button.run(interaction, { cid: "hello_cid" } as ComponentData);
+
+    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
+    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("hello_cid"),
+      expect.any(Object),
+    );
+  });
+
+  it("keeps malformed percent cid values without throwing", async () => {
+    const button = createAgentComponentButton({
+      cfg: createCfg(),
+      accountId: "default",
+      dmPolicy: "allowlist",
+      allowFrom: ["123456789"],
+    });
+    const { interaction, defer, reply } = createDmButtonInteraction();
+
+    await button.run(interaction, { cid: "hello%2G" } as ComponentData);
+
+    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
+    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("hello%2G"),
+      expect.any(Object),
+    );
+  });
 });
 
 describe("discord component interactions", () => {

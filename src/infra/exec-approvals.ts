@@ -11,8 +11,7 @@ export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 
-export type SystemRunApprovalBindingV1 = {
-  version: 1;
+export type SystemRunApprovalBinding = {
   argv: string[];
   cwd: string | null;
   agentId: string | null;
@@ -20,14 +19,21 @@ export type SystemRunApprovalBindingV1 = {
   envHash: string | null;
 };
 
+export type SystemRunApprovalPlan = {
+  argv: string[];
+  cwd: string | null;
+  rawCommand: string | null;
+  agentId: string | null;
+  sessionKey: string | null;
+};
+
 export type ExecApprovalRequestPayload = {
   command: string;
   commandArgv?: string[];
-  // Legacy env binding field (used for backward compatibility with old approvals).
-  envHash?: string | null;
   // Optional UI-safe env key preview for approval prompts.
   envKeys?: string[];
-  systemRunBindingV1?: SystemRunApprovalBindingV1 | null;
+  systemRunBinding?: SystemRunApprovalBinding | null;
+  systemRunPlan?: SystemRunApprovalPlan | null;
   cwd?: string | null;
   nodeId?: string | null;
   host?: string | null;

@@ -3,6 +3,8 @@ import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
+import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
+import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   ErrorCodes,
@@ -11,7 +13,6 @@ import {
   validateExecApprovalRequestParams,
   validateExecApprovalResolveParams,
 } from "../protocol/index.js";
-import { buildSystemRunApprovalBindingV1 } from "../system-run-approval-binding.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export function createExecApprovalHandlers(
@@ -47,6 +48,7 @@ export function createExecApprovalHandlers(
         commandArgv?: string[];
         env?: Record<string, string>;
         cwd?: string;
+        systemRunPlan?: unknown;
         nodeId?: string;
         host?: string;
         security?: string;
@@ -67,19 +69,20 @@ export function createExecApprovalHandlers(
       const explicitId = typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
       const host = typeof p.host === "string" ? p.host.trim() : "";
       const nodeId = typeof p.nodeId === "string" ? p.nodeId.trim() : "";
-      const commandArgv = Array.isArray(p.commandArgv)
-        ? p.commandArgv.map((entry) => String(entry))
-        : undefined;
-      const systemRunBindingV1 =
-        host === "node" && Array.isArray(commandArgv) && commandArgv.length > 0
-          ? buildSystemRunApprovalBindingV1({
-              argv: commandArgv,
-              cwd: p.cwd,
-              agentId: p.agentId,
-              sessionKey: p.sessionKey,
-              env: p.env,
-            })
-          : null;
+      const approvalContext = resolveSystemRunApprovalRequestContext({
+        host,
+        command: p.command,
+        commandArgv: p.commandArgv,
+        systemRunPlan: p.systemRunPlan,
+        cwd: p.cwd,
+        agentId: p.agentId,
+        sessionKey: p.sessionKey,
+      });
+      const effectiveCommandArgv = approvalContext.commandArgv;
+      const effectiveCwd = approvalContext.cwd;
+      const effectiveAgentId = approvalContext.agentId;
+      const effectiveSessionKey = approvalContext.sessionKey;
+      const effectiveCommandText = approvalContext.commandText;
       if (host === "node" && !nodeId) {
         respond(
           false,
@@ -88,6 +91,35 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      if (host === "node" && !approvalContext.plan) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "systemRunPlan is required for host=node"),
+        );
+        return;
+      }
+      if (
+        host === "node" &&
+        (!Array.isArray(effectiveCommandArgv) || effectiveCommandArgv.length === 0)
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "commandArgv is required for host=node"),
+        );
+        return;
+      }
+      const systemRunBinding =
+        host === "node"
+          ? buildSystemRunApprovalBinding({
+              argv: effectiveCommandArgv,
+              cwd: effectiveCwd,
+              agentId: effectiveAgentId,
+              sessionKey: effectiveSessionKey,
+              env: p.env,
+            })
+          : null;
       if (explicitId && manager.getSnapshot(explicitId)) {
         respond(
           false,
@@ -97,18 +129,19 @@ export function createExecApprovalHandlers(
         return;
       }
       const request = {
-        command: p.command,
-        commandArgv,
-        envKeys: systemRunBindingV1?.envKeys?.length ? systemRunBindingV1.envKeys : undefined,
-        systemRunBindingV1: systemRunBindingV1?.binding ?? null,
-        cwd: p.cwd ?? null,
+        command: effectiveCommandText,
+        commandArgv: effectiveCommandArgv,
+        envKeys: systemRunBinding?.envKeys?.length ? systemRunBinding.envKeys : undefined,
+        systemRunBinding: systemRunBinding?.binding ?? null,
+        systemRunPlan: approvalContext.plan,
+        cwd: effectiveCwd ?? null,
         nodeId: host === "node" ? nodeId : null,
         host: host || null,
         security: p.security ?? null,
         ask: p.ask ?? null,
-        agentId: p.agentId ?? null,
+        agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,
-        sessionKey: p.sessionKey ?? null,
+        sessionKey: effectiveSessionKey ?? null,
         turnSourceChannel:
           typeof p.turnSourceChannel === "string" ? p.turnSourceChannel.trim() || null : null,
         turnSourceTo: typeof p.turnSourceTo === "string" ? p.turnSourceTo.trim() || null : null,

@@ -1,67 +1,38 @@
 #!/usr/bin/env node
 
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { createPairingGuardContext } from "./lib/pairing-guard-context.mjs";
+import {
+  collectFileViolations,
+  getPropertyNameText,
+  runAsScript,
+  toLine,
+} from "./lib/ts-guard-utils.mjs";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const sourceRoots = [path.join(repoRoot, "src"), path.join(repoRoot, "extensions")];
+const { repoRoot, sourceRoots, resolveFromRepo } = createPairingGuardContext(import.meta.url);
 
 const allowedFiles = new Set([
-  path.join(repoRoot, "src", "security", "dm-policy-shared.ts"),
-  path.join(repoRoot, "src", "channels", "allow-from.ts"),
+  resolveFromRepo("src/security/dm-policy-shared.ts"),
+  resolveFromRepo("src/channels/allow-from.ts"),
   // Config migration/audit logic may intentionally reference store + group fields.
-  path.join(repoRoot, "src", "security", "fix.ts"),
-  path.join(repoRoot, "src", "security", "audit-channel.ts"),
+  resolveFromRepo("src/security/fix.ts"),
+  resolveFromRepo("src/security/audit-channel.ts"),
 ]);
 
 const storeIdentifierRe = /^(?:storeAllowFrom|storedAllowFrom|storeAllowList)$/i;
 const groupNameRe =
   /(?:groupAllowFrom|effectiveGroupAllowFrom|groupAllowed|groupAllow|groupAuth|groupSender)/i;
+const storeSourceCallNames = new Set([
+  "readChannelAllowFromStore",
+  "readChannelAllowFromStoreSync",
+  "readStoreAllowFromForDmPolicy",
+]);
 const allowedResolverCallNames = new Set([
   "resolveEffectiveAllowFromLists",
   "resolveDmGroupAccessWithLists",
   "resolveMattermostEffectiveAllowFromLists",
   "resolveIrcEffectiveAllowlists",
 ]);
-
-function isTestLikeFile(filePath) {
-  return (
-    filePath.endsWith(".test.ts") ||
-    filePath.endsWith(".test-utils.ts") ||
-    filePath.endsWith(".test-harness.ts") ||
-    filePath.endsWith(".e2e-harness.ts")
-  );
-}
-
-async function collectTypeScriptFiles(dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  const out = [];
-  for (const entry of entries) {
-    const entryPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      out.push(...(await collectTypeScriptFiles(entryPath)));
-      continue;
-    }
-    if (!entry.isFile() || !entryPath.endsWith(".ts") || isTestLikeFile(entryPath)) {
-      continue;
-    }
-    out.push(entryPath);
-  }
-  return out;
-}
-
-function toLine(sourceFile, node) {
-  return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
-}
-
-function getPropertyNameText(name) {
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return null;
-}
 
 function getDeclarationNameText(name) {
   if (ts.isIdentifier(name)) {
@@ -73,7 +44,7 @@ function getDeclarationNameText(name) {
   return null;
 }
 
-function containsStoreIdentifier(node) {
+function containsPairingStoreSource(node) {
   let found = false;
   const visit = (current) => {
     if (found) {
@@ -82,6 +53,13 @@ function containsStoreIdentifier(node) {
     if (ts.isIdentifier(current) && storeIdentifierRe.test(current.text)) {
       found = true;
       return;
+    }
+    if (ts.isCallExpression(current)) {
+      const callName = getCallName(current);
+      if (callName && storeSourceCallNames.has(callName)) {
+        found = true;
+        return;
+      }
     }
     ts.forEachChild(current, visit);
   };
@@ -123,7 +101,7 @@ function isSuspiciousNormalizeWithStoreCall(node) {
     if (!name) {
       continue;
     }
-    if (name === "storeAllowFrom" && containsStoreIdentifier(property.initializer)) {
+    if (name === "storeAllowFrom" && containsPairingStoreSource(property.initializer)) {
       hasStoreProp = true;
     }
     if (name === "allowFrom" && groupNameRe.test(property.initializer.getText())) {
@@ -140,7 +118,7 @@ function findViolations(content, filePath) {
   const visit = (node) => {
     if (ts.isVariableDeclaration(node) && node.initializer) {
       const name = getDeclarationNameText(node.name);
-      if (name && groupNameRe.test(name) && containsStoreIdentifier(node.initializer)) {
+      if (name && groupNameRe.test(name) && containsPairingStoreSource(node.initializer)) {
         const callName = getCallName(node.initializer);
         if (callName && allowedResolverCallNames.has(callName)) {
           ts.forEachChild(node, visit);
@@ -155,7 +133,7 @@ function findViolations(content, filePath) {
 
     if (ts.isPropertyAssignment(node)) {
       const propName = getPropertyNameText(node.name);
-      if (propName && groupNameRe.test(propName) && containsStoreIdentifier(node.initializer)) {
+      if (propName && groupNameRe.test(propName) && containsPairingStoreSource(node.initializer)) {
         violations.push({
           line: toLine(sourceFile, node),
           reason: `group-scoped property "${propName}" references pairing-store identifiers`,
@@ -178,24 +156,12 @@ function findViolations(content, filePath) {
 }
 
 async function main() {
-  const files = (
-    await Promise.all(sourceRoots.map(async (root) => await collectTypeScriptFiles(root)))
-  ).flat();
-
-  const violations = [];
-  for (const filePath of files) {
-    if (allowedFiles.has(filePath)) {
-      continue;
-    }
-    const content = await fs.readFile(filePath, "utf8");
-    const fileViolations = findViolations(content, filePath);
-    for (const violation of fileViolations) {
-      violations.push({
-        path: path.relative(repoRoot, filePath),
-        ...violation,
-      });
-    }
-  }
+  const violations = await collectFileViolations({
+    sourceRoots,
+    repoRoot,
+    findViolations,
+    skipFile: (filePath) => allowedFiles.has(filePath),
+  });
 
   if (violations.length === 0) {
     return;
@@ -211,17 +177,4 @@ async function main() {
   process.exit(1);
 }
 
-const isDirectExecution = (() => {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  return path.resolve(entry) === fileURLToPath(import.meta.url);
-})();
-
-if (isDirectExecution) {
-  main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
-}
+runAsScript(import.meta.url, main);
