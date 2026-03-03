@@ -1,11 +1,13 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { extractResponseOptions } from "../chat/extractResponseOptions.ts";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
+import { extractTextCached } from "../chat/message-extract.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
@@ -14,6 +16,8 @@ import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
+
+let _responseChipsLoaded = false;
 
 export type CompactionIndicatorStatus = {
   active: boolean;
@@ -80,6 +84,7 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  enableResponseChips?: boolean;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -258,6 +263,18 @@ export function renderChat(props: ChatProps) {
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const handleInsertResponseToken = (token: string) => {
+    const current = props.draft;
+    const next = current && current.length > 0 ? `${current} ${token}` : token;
+    props.onDraftChange(next);
+  };
+  const handleResponseSelected = (e: CustomEvent) => {
+    e.stopPropagation();
+    const token = e.detail;
+    if (typeof token === "string") {
+      handleInsertResponseToken(token);
+    }
+  };
   const thread = html`
     <div
       class="chat-thread"
@@ -300,12 +317,37 @@ export function renderChat(props: ChatProps) {
           }
 
           if (item.kind === "group") {
-            return renderMessageGroup(item, {
+            const groupResult = renderMessageGroup(item, {
               onOpenSidebar: props.onOpenSidebar,
               showReasoning,
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,
             });
+
+            // Render response chips only for assistant groups in the chat view
+            if (
+              props.enableResponseChips &&
+              item.role === "assistant" &&
+              item.messages.length > 0
+            ) {
+              if (!_responseChipsLoaded) {
+                _responseChipsLoaded = true;
+                void import("../components/response-chips.ts");
+              }
+              const lastMsg = item.messages[item.messages.length - 1].message;
+              const lastText = extractTextCached(lastMsg);
+              if (lastText) {
+                const chipOptions = extractResponseOptions(lastText);
+                if (chipOptions.length > 0) {
+                  return html`${groupResult}<response-chips
+                    .options=${chipOptions}
+                    @response-selected=${handleResponseSelected}
+                  ></response-chips>`;
+                }
+              }
+            }
+
+            return groupResult;
           }
 
           return nothing;
