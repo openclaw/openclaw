@@ -8,6 +8,11 @@ describe("feishu tools config", () => {
     expect(resolved.chat).toBe(true);
   });
 
+  it("enables task tool by default", () => {
+    const resolved = resolveToolsConfig(undefined);
+    expect(resolved.task).toBe(true);
+  });
+
   it("accepts tools.chat in config schema", () => {
     const parsed = FeishuConfigSchema.parse({
       enabled: true,
@@ -17,5 +22,16 @@ describe("feishu tools config", () => {
     });
 
     expect(parsed.tools?.chat).toBe(false);
+  });
+
+  it("accepts tools.task in config schema", () => {
+    const parsed = FeishuConfigSchema.parse({
+      enabled: true,
+      tools: {
+        task: false,
+      },
+    });
+
+    expect(parsed.tools?.task).toBe(false);
   });
 });

@@ -2,7 +2,7 @@ import type { FeishuToolsConfig } from "./types.js";
 
 /**
  * Default tool configuration.
- * - doc, chat, wiki, drive, scopes: enabled by default
+ * - doc, chat, wiki, drive, task, scopes: enabled by default
  * - perm: disabled by default (sensitive operation)
  */
 export const DEFAULT_TOOLS_CONFIG: Required<FeishuToolsConfig> = {
@@ -10,6 +10,7 @@ export const DEFAULT_TOOLS_CONFIG: Required<FeishuToolsConfig> = {
   chat: true,
   wiki: true,
   drive: true,
+  task: true,
   perm: false,
   scopes: true,
 };

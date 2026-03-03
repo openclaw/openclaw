@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { registerFeishuBitableTools } from "./bitable.js";
 import { registerFeishuDriveTools } from "./drive.js";
 import { registerFeishuPermTools } from "./perm.js";
+import { registerFeishuTaskTools } from "./task.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 import { registerFeishuWikiTools } from "./wiki.js";
 
@@ -19,11 +20,13 @@ function createConfig(params: {
     wiki?: boolean;
     drive?: boolean;
     perm?: boolean;
+    task?: boolean;
   };
   toolsB?: {
     wiki?: boolean;
     drive?: boolean;
     perm?: boolean;
+    task?: boolean;
   };
   defaultAccount?: string;
 }): OpenClawPluginApi["config"] {
@@ -125,5 +128,20 @@ describe("feishu tool account routing", () => {
 
     expect(createFeishuClientMock.mock.calls[0]?.[0]?.appId).toBe("app-b");
     expect(createFeishuClientMock.mock.calls[1]?.[0]?.appId).toBe("app-a");
+  });
+
+  test("task tools register when enabled on one account and route to agentAccountId", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        toolsA: { task: false },
+        toolsB: { task: true },
+      }),
+    );
+    registerFeishuTaskTools(api);
+
+    const tool = resolveTool("feishu_task_get", { agentAccountId: "b" });
+    await tool.execute("call", { task_guid: "task-guid-1" });
+
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 });

@@ -54,6 +54,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
     chat: false,
     wiki: false,
     drive: false,
+    task: false,
     perm: false,
     scopes: false,
   };
@@ -63,6 +64,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
     merged.chat = merged.chat || cfg.chat;
     merged.wiki = merged.wiki || cfg.wiki;
     merged.drive = merged.drive || cfg.drive;
+    merged.task = merged.task || cfg.task;
     merged.perm = merged.perm || cfg.perm;
     merged.scopes = merged.scopes || cfg.scopes;
   }
