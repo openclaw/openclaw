@@ -776,7 +776,6 @@ describe("strict model resolution", () => {
       ref: { provider: "anthropic", model: "claude-opus-4-6" },
     });
   });
-
   it("keeps resolution isolated across multiple agents", () => {
     const cfg = {
       models: {
