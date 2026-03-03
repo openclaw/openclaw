@@ -21,6 +21,11 @@ export type AuthConfig = {
     /** Billing backoff cap (hours). Default: 24. */
     billingMaxHours?: number;
     /**
+     * Venice USD balance floor before proactively skipping Venice and
+     * rotating to model fallbacks. Default: 0.05.
+     */
+    veniceMinUsdBalance?: number;
+    /**
      * Failure window for backoff counters (hours). If no failures occur within
      * this window, counters reset. Default: 24.
      */

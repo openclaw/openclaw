@@ -283,6 +283,7 @@ export const OpenClawSchema = z
             billingBackoffHours: z.number().positive().optional(),
             billingBackoffHoursByProvider: z.record(z.string(), z.number().positive()).optional(),
             billingMaxHours: z.number().positive().optional(),
+            veniceMinUsdBalance: z.number().nonnegative().optional(),
             failureWindowHours: z.number().positive().optional(),
           })
           .strict()

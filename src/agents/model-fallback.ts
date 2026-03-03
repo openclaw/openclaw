@@ -17,11 +17,13 @@ import {
   buildModelAliasIndex,
   modelKey,
   normalizeModelRef,
+  normalizeProviderId,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+import { shouldSkipVeniceForLowBalance } from "./venice-balance.js";
 
 type ModelCandidate = {
   provider: string;
@@ -308,6 +310,25 @@ export async function runWithModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    if (normalizeProviderId(candidate.provider) === "venice") {
+      const veniceGuard = await shouldSkipVeniceForLowBalance({
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+      });
+      if (veniceGuard.skip) {
+        const usd = veniceGuard.snapshot?.usdBalance;
+        attempts.push({
+          provider: candidate.provider,
+          model: candidate.model,
+          error:
+            usd === undefined
+              ? `Venice balance unavailable while threshold is $${veniceGuard.thresholdUsd.toFixed(2)}`
+              : `Venice USD balance $${usd.toFixed(4)} is below threshold $${veniceGuard.thresholdUsd.toFixed(2)}`,
+          reason: "billing",
+        });
+        continue;
+      }
+    }
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,

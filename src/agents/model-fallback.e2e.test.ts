@@ -451,6 +451,134 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("skips Venice and falls back when USD balance is below threshold", async () => {
+    const previousVeniceKey = process.env.VENICE_API_KEY;
+    process.env.VENICE_API_KEY = "test-venice-key-low";
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              balances: {
+                USD: 0.01,
+                DIEM: 0.12,
+              },
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const cfg = makeCfg({
+        auth: {
+          cooldowns: {
+            veniceMinUsdBalance: 0.05,
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "venice/llama-3.3-70b",
+              fallbacks: ["openai/gpt-4.1-mini"],
+            },
+          },
+        },
+      });
+      const run = vi.fn(async (provider: string) => {
+        if (provider === "openai") {
+          return "fallback-ok";
+        }
+        throw new Error(`unexpected call: ${provider}`);
+      });
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "venice",
+        model: "llama-3.3-70b",
+        run,
+      });
+
+      expect(result.result).toBe("fallback-ok");
+      expect(result.provider).toBe("openai");
+      expect(result.attempts[0]?.reason).toBe("billing");
+      expect(run.mock.calls).toEqual([["openai", "gpt-4.1-mini"]]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previousVeniceKey === undefined) {
+        delete process.env.VENICE_API_KEY;
+      } else {
+        process.env.VENICE_API_KEY = previousVeniceKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps Venice primary when balance is above threshold", async () => {
+    const previousVeniceKey = process.env.VENICE_API_KEY;
+    process.env.VENICE_API_KEY = "test-venice-key-high";
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              balances: {
+                USD: 1.0,
+                DIEM: 0.15,
+              },
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const cfg = makeCfg({
+        auth: {
+          cooldowns: {
+            veniceMinUsdBalance: 0.05,
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "venice/llama-3.3-70b",
+              fallbacks: ["openai/gpt-4.1-mini"],
+            },
+          },
+        },
+      });
+      const run = vi.fn(async (provider: string) => {
+        if (provider === "venice") {
+          return "venice-ok";
+        }
+        throw new Error(`unexpected call: ${provider}`);
+      });
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "venice",
+        model: "llama-3.3-70b",
+        run,
+      });
+
+      expect(result.result).toBe("venice-ok");
+      expect(result.provider).toBe("venice");
+      expect(result.attempts).toEqual([]);
+      expect(run.mock.calls).toEqual([["venice", "llama-3.3-70b"]]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previousVeniceKey === undefined) {
+        delete process.env.VENICE_API_KEY;
+      } else {
+        process.env.VENICE_API_KEY = previousVeniceKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("appends the configured primary as a last fallback", async () => {
     const cfg = makeCfg({
       agents: {
