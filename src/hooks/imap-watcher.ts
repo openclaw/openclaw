@@ -154,51 +154,91 @@ async function runPollCycle(cfg: ImapHookRuntimeConfig, expectedGeneration: numb
   }
 
   try {
-    log.debug(
-      `listing envelopes: account=${cfg.account}, folder=${cfg.folder}, query=${cfg.query}, pageSize=${ENVELOPE_PAGE_SIZE}`,
-    );
-    const envelopes = await listEnvelopes({
-      account: cfg.account,
-      folder: cfg.folder,
-      query: cfg.query,
-      pageSize: ENVELOPE_PAGE_SIZE,
-      config: cfg.himalayaConfig,
-    });
+    // Paginate through all envelope pages to ensure we don't miss messages
+    // when markSeen is disabled (messages stay unread, so they remain on page 1)
+    let page = 1;
+    let hasMorePages = true;
+    let totalProcessed = 0;
 
-    log.debug(`retrieved ${envelopes.length} envelopes from himalaya`);
-    if (envelopes.length > 0) {
-      log.debug(
-        `first envelope: id=${envelopes[0].id}, subject="${envelopes[0].subject}", from="${envelopes[0].from}"`,
-      );
-    }
-
-    const newEnvelopes = envelopes.filter((e) => e.id && !seenIds.has(e.id));
-    log.debug(`found ${newEnvelopes.length} new envelopes (not in seenIds set)`);
-
-    for (const envelope of newEnvelopes) {
-      // Check generation before processing each envelope
+    while (hasMorePages) {
+      // Check generation before fetching each page
       if (expectedGeneration !== generation) {
-        log.debug(`stale poll cycle detected during envelope processing, aborting`);
+        log.debug(`stale poll cycle detected during pagination, aborting`);
         break;
       }
 
       if (shuttingDown) {
-        log.debug("shutting down, breaking out of envelope processing loop");
+        log.debug("shutting down, breaking out of pagination loop");
         break;
       }
 
       log.debug(
-        `processing envelope ${envelope.id}: "${envelope.subject}" from "${envelope.from}"`,
+        `listing envelopes page ${page}: account=${cfg.account}, folder=${cfg.folder}, query=${cfg.query}, pageSize=${ENVELOPE_PAGE_SIZE}`,
       );
-      try {
-        await processEnvelope(cfg, envelope);
-        seenIds.add(envelope.id);
-        log.debug(`envelope ${envelope.id} processed and added to seenIds`);
-      } catch (err) {
-        log.error(`failed to process envelope ${envelope.id}: ${String(err)}`);
+      const envelopes = await listEnvelopes({
+        account: cfg.account,
+        folder: cfg.folder,
+        query: cfg.query,
+        pageSize: ENVELOPE_PAGE_SIZE,
+        page,
+        config: cfg.himalayaConfig,
+      });
+
+      log.debug(`retrieved ${envelopes.length} envelopes from himalaya page ${page}`);
+
+      // Stop if no more envelopes on this page
+      if (envelopes.length === 0) {
+        log.debug(`no envelopes on page ${page}, stopping pagination`);
+        hasMorePages = false;
+        break;
       }
+
+      if (page === 1 && envelopes.length > 0) {
+        log.debug(
+          `first envelope: id=${envelopes[0].id}, subject="${envelopes[0].subject}", from="${envelopes[0].from}"`,
+        );
+      }
+
+      const newEnvelopes = envelopes.filter((e) => e.id && !seenIds.has(e.id));
+      log.debug(`found ${newEnvelopes.length} new envelopes on page ${page} (not in seenIds set)`);
+
+      // If all envelopes on this page are already seen, stop pagination
+      // This prevents infinite loops when markSeen is disabled
+      if (newEnvelopes.length === 0) {
+        log.debug(`all envelopes on page ${page} already processed, stopping pagination`);
+        hasMorePages = false;
+        break;
+      }
+
+      for (const envelope of newEnvelopes) {
+        // Check generation before processing each envelope
+        if (expectedGeneration !== generation) {
+          log.debug(`stale poll cycle detected during envelope processing, aborting`);
+          break;
+        }
+
+        if (shuttingDown) {
+          log.debug("shutting down, breaking out of envelope processing loop");
+          break;
+        }
+
+        log.debug(
+          `processing envelope ${envelope.id}: "${envelope.subject}" from "${envelope.from}"`,
+        );
+        try {
+          await processEnvelope(cfg, envelope);
+          seenIds.add(envelope.id);
+          totalProcessed++;
+          log.debug(`envelope ${envelope.id} processed and added to seenIds`);
+        } catch (err) {
+          log.error(`failed to process envelope ${envelope.id}: ${String(err)}`);
+        }
+      }
+
+      page++;
     }
 
+    log.debug(`pagination complete, processed ${totalProcessed} envelopes total`);
     pruneSeenIds();
   } catch (err) {
     log.error(`poll cycle failed: ${String(err)}`);

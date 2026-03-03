@@ -46,6 +46,7 @@ export async function listEnvelopes(params: {
   folder: string;
   query: string;
   pageSize: number;
+  page?: number;
   config?: string;
 }): Promise<HimalayaEnvelope[]> {
   const args = [
@@ -59,6 +60,11 @@ export async function listEnvelopes(params: {
     "-s",
     String(params.pageSize),
   ];
+
+  // Add page parameter if specified (defaults to 1 in himalaya)
+  if (params.page && params.page > 1) {
+    args.push("-p", String(params.page));
+  }
 
   // Append query tokens (e.g. "flag unseen" → ["flag", "unseen"])
   const queryTokens = params.query.trim().split(/\s+/).filter(Boolean);
