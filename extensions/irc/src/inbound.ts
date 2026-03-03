@@ -43,17 +43,20 @@ function resolveIrcEffectiveAllowlists(params: {
 }): {
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
+  /** Group allowlist without pairing store (for command authorization). */
+  configuredGroupAllowFrom: string[];
 } {
-  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveEffectiveAllowFromLists({
-    allowFrom: params.configAllowFrom,
-    groupAllowFrom: params.configGroupAllowFrom,
-    storeAllowFrom: params.storeAllowList,
-    dmPolicy: params.dmPolicy,
-    // IRC intentionally requires explicit groupAllowFrom; do not fallback to allowFrom.
-    groupAllowFromFallbackToAllowFrom: false,
-    groupAuthIncludesPairingStore: params.groupAuthIncludesPairingStore,
-  });
-  return { effectiveAllowFrom, effectiveGroupAllowFrom };
+  const { effectiveAllowFrom, effectiveGroupAllowFrom, configuredGroupAllowFrom } =
+    resolveEffectiveAllowFromLists({
+      allowFrom: params.configAllowFrom,
+      groupAllowFrom: params.configGroupAllowFrom,
+      storeAllowFrom: params.storeAllowList,
+      dmPolicy: params.dmPolicy,
+      // IRC intentionally requires explicit groupAllowFrom; do not fallback to allowFrom.
+      groupAllowFromFallbackToAllowFrom: false,
+      groupAuthIncludesPairingStore: params.groupAuthIncludesPairingStore,
+    });
+  return { effectiveAllowFrom, effectiveGroupAllowFrom, configuredGroupAllowFrom };
 }
 
 async function deliverIrcReply(params: {
@@ -155,21 +158,23 @@ export async function handleIrcInbound(params: {
   const groupAllowFrom =
     directGroupAllowFrom.length > 0 ? directGroupAllowFrom : wildcardGroupAllowFrom;
 
-  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveIrcEffectiveAllowlists({
-    configAllowFrom,
-    configGroupAllowFrom,
-    storeAllowList,
-    dmPolicy,
-    groupAuthIncludesPairingStore: account.config.groupAuthIncludesPairingStore,
-  });
+  const { effectiveAllowFrom, effectiveGroupAllowFrom, configuredGroupAllowFrom } =
+    resolveIrcEffectiveAllowlists({
+      configAllowFrom,
+      configGroupAllowFrom,
+      storeAllowList,
+      dmPolicy,
+      groupAuthIncludesPairingStore: account.config.groupAuthIncludesPairingStore,
+    });
 
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
     cfg: config as OpenClawConfig,
     surface: CHANNEL_ID,
   });
   const useAccessGroups = config.commands?.useAccessGroups !== false;
+  // Use configuredGroupAllowFrom (without pairing store) for command authorization
   const senderAllowedForCommands = resolveIrcAllowlistMatch({
-    allowFrom: message.isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,
+    allowFrom: message.isGroup ? configuredGroupAllowFrom : effectiveAllowFrom,
     message,
     allowNameMatching,
   }).allowed;
@@ -178,7 +183,7 @@ export async function handleIrcInbound(params: {
     useAccessGroups,
     authorizers: [
       {
-        configured: (message.isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom).length > 0,
+        configured: (message.isGroup ? configuredGroupAllowFrom : effectiveAllowFrom).length > 0,
         allowed: senderAllowedForCommands,
       },
     ],
