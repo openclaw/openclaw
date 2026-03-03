@@ -60,6 +60,8 @@ export type AgentCommandOpts = {
   accountId?: string;
   /** Context for embedded run routing (channel/account/thread). */
   runContext?: AgentRunContext;
+  /** Whether this caller is authorized for owner-only tools (defaults true for local CLI calls). */
+  senderIsOwner?: boolean;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label for channel-level tool policy resolution. */
@@ -78,4 +80,9 @@ export type AgentCommandOpts = {
   inputProvenance?: InputProvenance;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
+};
+
+export type AgentCommandIngressOpts = Omit<AgentCommandOpts, "senderIsOwner"> & {
+  /** Ingress callsites must always pass explicit owner authorization state. */
+  senderIsOwner: boolean;
 };

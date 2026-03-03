@@ -20,6 +20,7 @@ import { normalizeAllowListLower } from "../../slack/monitor/allow-list.js";
 import { parseSlackTarget } from "../../slack/targets.js";
 import { buildTelegramGroupPeerId } from "../../telegram/bot/helpers.js";
 import { resolveTelegramTargetChatType } from "../../telegram/inline-buttons.js";
+import { parseTelegramThreadId } from "../../telegram/outbound-params.js";
 import { parseTelegramTarget } from "../../telegram/targets.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
@@ -283,8 +284,7 @@ function resolveTelegramSession(
   }
   const parsedThreadId = parsed.messageThreadId;
   const fallbackThreadId = normalizeThreadId(params.threadId);
-  const resolvedThreadId =
-    parsedThreadId ?? (fallbackThreadId ? Number.parseInt(fallbackThreadId, 10) : undefined);
+  const resolvedThreadId = parsedThreadId ?? parseTelegramThreadId(fallbackThreadId);
   // Telegram topics are encoded in the peer id (chatId:topic:<id>).
   const chatType = resolveTelegramTargetChatType(params.target);
   // If the target is a username and we lack a resolvedTarget, default to DM to avoid group keys.
@@ -293,7 +293,9 @@ function resolveTelegramSession(
     (chatType === "unknown" &&
       params.resolvedTarget?.kind &&
       params.resolvedTarget.kind !== "user");
-  const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : chatId;
+  // For groups: include thread ID in peerId. For DMs: use simple chatId (thread handled via suffix).
+  const peerId =
+    isGroup && resolvedThreadId ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : chatId;
   const peer: RoutePeer = {
     kind: isGroup ? "group" : "direct",
     id: peerId,
@@ -305,12 +307,21 @@ function resolveTelegramSession(
     accountId: params.accountId,
     peer,
   });
+  // Use thread suffix for DM topics to match inbound session key format
+  const threadKeys =
+    resolvedThreadId && !isGroup
+      ? { sessionKey: `${baseSessionKey}:thread:${resolvedThreadId}` }
+      : null;
   return {
-    sessionKey: baseSessionKey,
+    sessionKey: threadKeys?.sessionKey ?? baseSessionKey,
     baseSessionKey,
     peer,
     chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `telegram:group:${peerId}` : `telegram:${chatId}`,
+    from: isGroup
+      ? `telegram:group:${peerId}`
+      : resolvedThreadId
+        ? `telegram:${chatId}:topic:${resolvedThreadId}`
+        : `telegram:${chatId}`,
     to: `telegram:${chatId}`,
     threadId: resolvedThreadId,
   };
@@ -882,6 +893,29 @@ function resolveFallbackSession(
   };
 }
 
+type OutboundSessionResolver = (
+  params: ResolveOutboundSessionRouteParams,
+) => OutboundSessionRoute | null | Promise<OutboundSessionRoute | null>;
+
+const OUTBOUND_SESSION_RESOLVERS: Partial<Record<ChannelId, OutboundSessionResolver>> = {
+  slack: resolveSlackSession,
+  discord: resolveDiscordSession,
+  telegram: resolveTelegramSession,
+  whatsapp: resolveWhatsAppSession,
+  signal: resolveSignalSession,
+  imessage: resolveIMessageSession,
+  matrix: resolveMatrixSession,
+  msteams: resolveMSTeamsSession,
+  mattermost: resolveMattermostSession,
+  bluebubbles: resolveBlueBubblesSession,
+  "nextcloud-talk": resolveNextcloudTalkSession,
+  zalo: resolveZaloSession,
+  zalouser: resolveZalouserSession,
+  nostr: resolveNostrSession,
+  tlon: resolveTlonSession,
+  feishu: resolveFeishuSession,
+};
+
 export async function resolveOutboundSessionRoute(
   params: ResolveOutboundSessionRouteParams,
 ): Promise<OutboundSessionRoute | null> {
@@ -889,42 +923,12 @@ export async function resolveOutboundSessionRoute(
   if (!target) {
     return null;
   }
-  switch (params.channel) {
-    case "slack":
-      return await resolveSlackSession({ ...params, target });
-    case "discord":
-      return resolveDiscordSession({ ...params, target });
-    case "telegram":
-      return resolveTelegramSession({ ...params, target });
-    case "whatsapp":
-      return resolveWhatsAppSession({ ...params, target });
-    case "signal":
-      return resolveSignalSession({ ...params, target });
-    case "imessage":
-      return resolveIMessageSession({ ...params, target });
-    case "matrix":
-      return resolveMatrixSession({ ...params, target });
-    case "msteams":
-      return resolveMSTeamsSession({ ...params, target });
-    case "mattermost":
-      return resolveMattermostSession({ ...params, target });
-    case "bluebubbles":
-      return resolveBlueBubblesSession({ ...params, target });
-    case "nextcloud-talk":
-      return resolveNextcloudTalkSession({ ...params, target });
-    case "zalo":
-      return resolveZaloSession({ ...params, target });
-    case "zalouser":
-      return resolveZalouserSession({ ...params, target });
-    case "nostr":
-      return resolveNostrSession({ ...params, target });
-    case "tlon":
-      return resolveTlonSession({ ...params, target });
-    case "feishu":
-      return resolveFeishuSession({ ...params, target });
-    default:
-      return resolveFallbackSession({ ...params, target });
+  const nextParams = { ...params, target };
+  const resolver = OUTBOUND_SESSION_RESOLVERS[params.channel];
+  if (!resolver) {
+    return resolveFallbackSession(nextParams);
   }
+  return await resolver(nextParams);
 }
 
 export async function ensureOutboundSessionEntry(params: {
