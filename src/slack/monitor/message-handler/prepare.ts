@@ -115,6 +115,7 @@ async function resolveSlackConversationContext(params: {
   message: SlackMessageEvent;
 }): Promise<SlackConversationContext> {
   const { ctx, account, message } = params;
+  const cfg = ctx.cfg;
 
   let channelInfo: {
     name?: string;
