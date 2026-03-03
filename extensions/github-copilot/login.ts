@@ -4,6 +4,8 @@ import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
 import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-runtime";
 import { applyAuthProfileConfig } from "openclaw/plugin-sdk/provider-auth";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { getCopilotSdkAuthStatus, isCopilotSdkAvailable } from "./github-copilot-sdk.js";
+import { SDK_MANAGED_TOKEN } from "./github-copilot-token.js";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
@@ -134,6 +136,44 @@ export async function githubCopilotLoginCommand(
       stylePromptTitle("Existing credentials"),
     );
   }
+
+  // ── Try SDK-based auth first ──────────────────────────────────────────
+  // If Copilot CLI is installed and the user is already authenticated (via
+  // `gh` CLI, env vars, etc.), we can skip the device-flow entirely.
+  const sdkAvailable = await isCopilotSdkAvailable();
+  if (sdkAvailable) {
+    const status = await getCopilotSdkAuthStatus();
+    if (status.authenticated) {
+      // Store an SDK-managed marker profile — the embedded runner will use
+      // the SDK for token resolution instead of raw device-flow tokens.
+      upsertAuthProfile({
+        profileId,
+        credential: {
+          type: "token",
+          provider: "github-copilot",
+          token: SDK_MANAGED_TOKEN,
+        },
+      });
+
+      await updateConfig((cfg) =>
+        applyAuthProfileConfig(cfg, {
+          provider: "github-copilot",
+          profileId,
+          mode: "token",
+        }),
+      );
+
+      logConfigUpdated(runtime);
+      const loginInfo = status.login ? ` (${status.login})` : "";
+      runtime.log(`Authenticated via Copilot SDK${loginInfo}`);
+      runtime.log(`Auth profile: ${profileId} (github-copilot/sdk)`);
+
+      outro("Done — authenticated via Copilot SDK");
+      return;
+    }
+  }
+
+  // ── Fall back to device-flow OAuth ────────────────────────────────────
 
   const spin = spinner();
   spin.start("Requesting device code from GitHub...");

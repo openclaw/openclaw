@@ -2,6 +2,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  isCopilotSdkAvailable,
+  getCopilotSdkAuthStatus,
+} from "../providers/github-copilot-sdk.js";
+import {
   buildAnthropicVertexProvider,
   buildKimiCodingProvider,
   buildKilocodeProvider,
@@ -20,6 +24,11 @@ import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js
 import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
+import {
+  DEFAULT_COPILOT_API_BASE_URL,
+  resolveCopilotApiToken,
+  SDK_MANAGED_TOKEN,
+} from "./github-copilot-token.js";
 import {
   normalizeGoogleGenerativeAiBaseUrl,
   shouldNormalizeGoogleGenerativeAiProviderConfig,
@@ -911,6 +920,24 @@ export async function resolveImplicitProviders(
       : implicitAnthropicVertex;
   }
 
+  const implicitCopilot = await resolveImplicitCopilotProvider({
+    agentDir: params.agentDir,
+    env,
+  });
+  if (implicitCopilot) {
+    const existing = providers["github-copilot"];
+    providers["github-copilot"] = existing
+      ? {
+          ...implicitCopilot,
+          ...existing,
+          models:
+            Array.isArray(existing.models) && existing.models.length > 0
+              ? existing.models
+              : implicitCopilot.models,
+        }
+      : implicitCopilot;
+  }
+
   return providers;
 }
 
@@ -954,5 +981,79 @@ export async function resolveImplicitBedrockProvider(params: {
     api: "bedrock-converse-stream",
     auth: "aws-sdk",
     models,
+  } satisfies ProviderConfig;
+}
+
+export async function resolveImplicitCopilotProvider(params: {
+  agentDir: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ProviderConfig | null> {
+  const env = params.env ?? process.env;
+  const authStore = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const hasProfile = listProfilesForProvider(authStore, "github-copilot").length > 0;
+  const envToken = env.COPILOT_GITHUB_TOKEN ?? env.GH_TOKEN ?? env.GITHUB_TOKEN;
+  const githubToken = (envToken ?? "").trim();
+
+  // SDK-based auth detection: if no explicit profile/env token, check if the
+  // Copilot SDK can authenticate (e.g. via `gh` CLI auth).
+  if (!hasProfile && !githubToken) {
+    const sdkAvailable = await isCopilotSdkAvailable();
+    if (sdkAvailable) {
+      const status = await getCopilotSdkAuthStatus();
+      if (status.authenticated) {
+        return {
+          baseUrl: DEFAULT_COPILOT_API_BASE_URL,
+          models: [],
+        } satisfies ProviderConfig;
+      }
+    }
+    return null;
+  }
+
+  // Check if profile is SDK-managed
+  let selectedGithubToken = githubToken;
+  if (!selectedGithubToken && hasProfile) {
+    const profileId = listProfilesForProvider(authStore, "github-copilot")[0];
+    const profile = profileId ? authStore.profiles[profileId] : undefined;
+    if (profile && profile.type === "token") {
+      selectedGithubToken = profile.token?.trim() ?? "";
+      if (!selectedGithubToken) {
+        const tokenRef = coerceSecretRef(profile.tokenRef);
+        if (tokenRef?.source === "env" && tokenRef.id.trim()) {
+          selectedGithubToken = (env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim();
+        }
+      }
+    }
+  }
+
+  // SDK-managed tokens don't need token exchange for provider detection
+  if (selectedGithubToken === SDK_MANAGED_TOKEN) {
+    return {
+      baseUrl: DEFAULT_COPILOT_API_BASE_URL,
+      models: [],
+    } satisfies ProviderConfig;
+  }
+
+  let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+  if (selectedGithubToken) {
+    try {
+      const token = await resolveCopilotApiToken({
+        githubToken: selectedGithubToken,
+        env,
+      });
+      baseUrl = token.baseUrl;
+    } catch {
+      baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+    }
+  }
+
+  // We intentionally do NOT define custom models for Copilot in models.json.
+  // pi-coding-agent treats providers with models as replacements requiring apiKey.
+  // We only override baseUrl; the model list comes from pi-ai built-ins.
+  return {
+    baseUrl,
+    models: [],
   } satisfies ProviderConfig;
 }
