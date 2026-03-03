@@ -4,10 +4,12 @@ import type { ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { loadConfig } from "../../config/config.js";
 import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
+import { createDiscordRetryRunner, type RetryRunner } from "../../infra/retry-policy.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
+import { sendDiscordText } from "../send.shared.js";
 
 export type DiscordThreadBindingLookupRecord = {
   accountId: string;
@@ -83,6 +85,10 @@ async function sendDiscordChunkWithFallback(params: {
   binding?: DiscordThreadBindingLookupRecord;
   username?: string;
   avatarUrl?: string;
+  /** Pre-resolved channel ID to bypass redundant resolution per chunk. */
+  channelId?: string;
+  /** Pre-created retry runner to avoid creating one per chunk. */
+  request?: RetryRunner;
 }) {
   if (!params.text.trim()) {
     return;
@@ -104,6 +110,19 @@ async function sendDiscordChunkWithFallback(params: {
     } catch {
       // Fall through to the standard bot sender path.
     }
+  }
+  // When channelId and request are pre-resolved, send directly via sendDiscordText
+  // to avoid per-chunk overhead (channel-type GET, re-chunking, client creation)
+  // that can cause ordering issues under queue contention or rate limiting.
+  if (params.channelId && params.request && params.rest) {
+    await sendDiscordText(
+      params.rest,
+      params.channelId,
+      text,
+      params.replyTo,
+      params.request,
+    );
+    return;
   }
   await sendMessageDiscord(params.target, text, {
     token: params.token,
@@ -174,6 +193,13 @@ export async function deliverDiscordReply(params: {
     target: params.target,
   });
   const persona = resolveBindingPersona(binding);
+  // Pre-resolve channel ID and retry runner once to avoid per-chunk overhead.
+  // This eliminates redundant channel-type GET requests and client creation that
+  // can cause ordering issues when multiple chunks share the RequestClient queue.
+  const channelId = resolveTargetChannelId(params.target);
+  const request: RetryRunner | undefined = channelId
+    ? createDiscordRetryRunner({})
+    : undefined;
   let deliveredAny = false;
   for (const payload of params.replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
@@ -208,6 +234,8 @@ export async function deliverDiscordReply(params: {
           binding,
           username: persona.username,
           avatarUrl: persona.avatarUrl,
+          channelId,
+          request,
         });
         deliveredAny = true;
       }
@@ -240,6 +268,8 @@ export async function deliverDiscordReply(params: {
         binding,
         username: persona.username,
         avatarUrl: persona.avatarUrl,
+        channelId,
+        request,
       });
       // Additional media items are sent as regular attachments (voice is single-file only).
       await sendAdditionalDiscordMedia({

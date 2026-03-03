@@ -9,11 +9,16 @@ import {
 const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendWebhookMessageDiscordMock = vi.hoisted(() => vi.fn());
+const sendDiscordTextMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../send.js", () => ({
   sendMessageDiscord: (...args: unknown[]) => sendMessageDiscordMock(...args),
   sendVoiceMessageDiscord: (...args: unknown[]) => sendVoiceMessageDiscordMock(...args),
   sendWebhookMessageDiscord: (...args: unknown[]) => sendWebhookMessageDiscordMock(...args),
+}));
+
+vi.mock("../send.shared.js", () => ({
+  sendDiscordText: (...args: unknown[]) => sendDiscordTextMock(...args),
 }));
 
 describe("deliverDiscordReply", () => {
@@ -61,6 +66,10 @@ describe("deliverDiscordReply", () => {
     sendWebhookMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "webhook-1",
       channelId: "thread-1",
+    });
+    sendDiscordTextMock.mockClear().mockResolvedValue({
+      id: "msg-direct-1",
+      channel_id: "channel-1",
     });
     threadBindingTesting.resetThreadBindingsForTests();
   });
@@ -280,5 +289,49 @@ describe("deliverDiscordReply", () => {
       "Parent channel delivery",
       expect.objectContaining({ token: "token", accountId: "default" }),
     );
+  });
+
+  it("sends text chunks in order via sendDiscordText when rest is provided", async () => {
+    const fakeRest = {} as import("@buape/carbon").RequestClient;
+    // Track call order to verify sequential chunk delivery.
+    const callOrder: string[] = [];
+    sendDiscordTextMock.mockImplementation(
+      async (_rest: unknown, _channelId: unknown, text: string) => {
+        callOrder.push(text);
+        return { id: `msg-${callOrder.length}`, channel_id: "789" };
+      },
+    );
+
+    await deliverDiscordReply({
+      replies: [{ text: "1234567890" }],
+      target: "channel:789",
+      token: "token",
+      rest: fakeRest,
+      runtime,
+      textLimit: 5,
+    });
+
+    // With rest provided, chunks bypass sendMessageDiscord and go through sendDiscordText directly.
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(sendDiscordTextMock).toHaveBeenCalledTimes(2);
+    // Verify chunks were sent in the correct forward order.
+    expect(callOrder).toEqual(["12345", "67890"]);
+    // Verify the resolved channelId is passed (not the full "channel:789" target).
+    expect(sendDiscordTextMock.mock.calls[0]?.[1]).toBe("789");
+    expect(sendDiscordTextMock.mock.calls[1]?.[1]).toBe("789");
+  });
+
+  it("falls back to sendMessageDiscord when rest is not provided", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "single chunk" }],
+      target: "channel:789",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+    });
+
+    // Without rest, the fallback path through sendMessageDiscord is used.
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendDiscordTextMock).not.toHaveBeenCalled();
   });
 });
