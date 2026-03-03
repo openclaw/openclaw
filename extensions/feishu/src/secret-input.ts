@@ -1,11 +1,11 @@
 import {
   hasConfiguredSecretInput,
-  normalizeSecretInputString,
+  normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk";
 import { z } from "zod";
 
-export { hasConfiguredSecretInput, normalizeSecretInputString, normalizeSecretInputString };
+export { hasConfiguredSecretInput, normalizeResolvedSecretInputString, normalizeSecretInputString };
 
 export function buildSecretInputSchema() {
   return z.union([
