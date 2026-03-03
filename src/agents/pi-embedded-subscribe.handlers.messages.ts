@@ -444,18 +444,19 @@ export function handleMessageEnd(
     ctx.state.lastStreamedAssistantCleaned !== undefined,
   );
   const sameMediaUrls = areMediaUrlsEqual(mediaUrls, previousMediaUrls);
+  const mediaChanged = !sameMediaUrls;
   const sameAssistantPayload =
     hasPreviousAssistantSnapshot && cleanedText === (previousCleaned ?? "") && sameMediaUrls;
   let shouldEmitFinalAssistant = false;
   let finalDeltaText = cleanedText;
-  if ((cleanedText || hasMedia) && !sameAssistantPayload) {
+  if ((cleanedText || hasMedia || mediaChanged) && !sameAssistantPayload) {
     const previousCleanedValue = previousCleaned ?? "";
     if (!ctx.state.emittedAssistantUpdate || !hasPreviousAssistantSnapshot) {
       shouldEmitFinalAssistant = true;
       finalDeltaText = cleanedText;
     } else if (cleanedText.startsWith(previousCleanedValue)) {
       finalDeltaText = cleanedText.slice(previousCleanedValue.length);
-      shouldEmitFinalAssistant = Boolean(finalDeltaText || (hasMedia && !sameMediaUrls));
+      shouldEmitFinalAssistant = Boolean(finalDeltaText || mediaChanged);
     } else if (cleanedText !== previousCleanedValue) {
       // When providers rewrite earlier text, emit the full reconciled text.
       finalDeltaText = cleanedText;

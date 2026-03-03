@@ -531,6 +531,47 @@ describe("subscribeEmbeddedPiSession", () => {
     });
   });
 
+  it("emits a final assistant update when message_end removes streamed media", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello\nMEDIA: https://example.com/a.png" }],
+      },
+      assistantMessageEvent: { type: "start" },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toMatchObject({
+      text: "Hello",
+      delta: "Hello",
+      mediaUrls: ["https://example.com/a.png"],
+    });
+    expect(payloads[1]).toMatchObject({
+      text: "Hello",
+      delta: "",
+      mediaUrls: undefined,
+    });
+  });
+
   it("does not emit duplicate non-text snapshot events when payload is unchanged", () => {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
