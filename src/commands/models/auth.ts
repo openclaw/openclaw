@@ -1,4 +1,5 @@
 import { confirm as clackConfirm, select as clackSelect, text as clackText } from "@clack/prompts";
+import { loginOpenAICodex } from "@mariozechner/pi-ai";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import type {
   ProviderAuthMethod,
@@ -24,6 +25,7 @@ import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "../openai-codex-model-default.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
 import { updateConfig } from "./shared.js";
@@ -64,6 +66,40 @@ function resolveTokenProvider(raw?: string): TokenProvider | "custom" | null {
 function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
 }
+
+const BUILTIN_LOGIN_PROVIDERS: ProviderPlugin[] = [
+  {
+    id: "openai-codex",
+    label: "OpenAI Codex (ChatGPT OAuth)",
+    auth: [
+      {
+        id: "oauth", label: "OAuth",
+        kind: "oauth",
+        run: async (ctx) => {
+          const spin = ctx.prompter.progress("Starting OAuth flow…");
+          try {
+            const { onAuth, onPrompt } = ctx.oauth.createVpsAwareHandlers({
+              isRemote: ctx.isRemote,
+              prompter: ctx.prompter,
+              runtime: ctx.runtime,
+              spin,
+              openUrl: ctx.openUrl,
+              localBrowserMessage: "Complete sign-in in browser…",
+            });
+            const creds = await loginOpenAICodex({ onAuth, onPrompt, onProgress: (m) => spin.update(m) });
+            spin.stop("OpenAI OAuth complete");
+            return creds
+              ? { profiles: [{ profileId: "openai-codex:default", credential: { type: "oauth", provider: "openai-codex", ...creds } }], defaultModel: OPENAI_CODEX_DEFAULT_MODEL }
+              : { profiles: [] };
+          } catch (err) {
+            spin.stop("OpenAI OAuth failed");
+            throw err;
+          }
+        },
+      },
+    ],
+  },
+];
 
 export async function modelsAuthSetupTokenCommand(
   opts: { provider?: string; yes?: boolean },
@@ -342,16 +378,19 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   const workspaceDir =
     resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
 
-  const providers = resolvePluginProviders({ config, workspaceDir });
-  if (providers.length === 0) {
+  const providers = [...BUILTIN_LOGIN_PROVIDERS, ...resolvePluginProviders({ config, workspaceDir })];
+  const prompter = createClackPrompter();
+  const selectedFromFlag = resolveProviderMatch(providers, opts.provider);
+  if (opts.provider?.trim() && !selectedFromFlag) {
+    throw new Error("Unknown provider. Use --provider <id> to pick an available provider.");
+  }
+  if (!opts.provider?.trim() && providers.length === 0) {
     throw new Error(
-      `No provider plugins found. Install one via \`${formatCliCommand("openclaw plugins install")}\`.`,
+      `No auth providers found. Install one via \`${formatCliCommand("openclaw plugins install")}\`.`,
     );
   }
-
-  const prompter = createClackPrompter();
   const selectedProvider =
-    resolveProviderMatch(providers, opts.provider) ??
+    selectedFromFlag ??
     (await prompter
       .select({
         message: "Select a provider",
