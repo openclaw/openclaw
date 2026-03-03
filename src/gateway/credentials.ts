@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { MigrationService } from "../services/MigrationService.js";
 
 export type ExplicitGatewayAuth = {
   token?: string;
@@ -47,28 +48,20 @@ function readGatewayTokenEnv(
   env: NodeJS.ProcessEnv,
   includeLegacyEnv: boolean,
 ): string | undefined {
-  const primary = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
-  if (primary) {
-    return primary;
-  }
   if (!includeLegacyEnv) {
-    return undefined;
+    return trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
   }
-  return trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
+  return trimToUndefined(MigrationService.getEnv("GATEWAY_TOKEN", env));
 }
 
 function readGatewayPasswordEnv(
   env: NodeJS.ProcessEnv,
   includeLegacyEnv: boolean,
 ): string | undefined {
-  const primary = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
-  if (primary) {
-    return primary;
-  }
   if (!includeLegacyEnv) {
-    return undefined;
+    return trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
   }
-  return trimToUndefined(env.CLAWDBOT_GATEWAY_PASSWORD);
+  return trimToUndefined(MigrationService.getEnv("GATEWAY_PASSWORD", env));
 }
 
 export function resolveGatewayCredentialsFromValues(params: {

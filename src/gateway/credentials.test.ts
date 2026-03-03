@@ -372,6 +372,25 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
     expect(resolved).toEqual({ token: undefined, password: undefined });
   });
+
+  it("supports MOLTBOT env fallback when legacy env is explicitly allowed", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: cfg({
+        gateway: {
+          mode: "local",
+        },
+      }),
+      env: {
+        MOLTBOT_GATEWAY_TOKEN: "ancient-token",
+        MOLTBOT_GATEWAY_PASSWORD: "ancient-password",
+        OPENCLAW_ALLOW_LEGACY_ENV: "1",
+      } as NodeJS.ProcessEnv,
+    });
+    expect(resolved).toEqual({
+      token: "ancient-token",
+      password: "ancient-password",
+    });
+  });
 });
 
 describe("resolveGatewayCredentialsFromValues", () => {

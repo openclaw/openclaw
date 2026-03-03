@@ -41,8 +41,11 @@ function withGatewayAuthEnv<T>(env: NodeJS.ProcessEnv, fn: () => T): T {
   const keys = [
     "OPENCLAW_GATEWAY_TOKEN",
     "OPENCLAW_GATEWAY_PASSWORD",
+    "OPENCLAW_ALLOW_LEGACY_ENV",
     "CLAWDBOT_GATEWAY_TOKEN",
     "CLAWDBOT_GATEWAY_PASSWORD",
+    "MOLTBOT_GATEWAY_TOKEN",
+    "MOLTBOT_GATEWAY_PASSWORD",
   ] as const;
   const previous = new Map<string, string | undefined>();
   for (const key of keys) {
@@ -130,6 +133,7 @@ describe("gateway credential precedence parity", () => {
       env: {
         CLAWDBOT_GATEWAY_TOKEN: "legacy-token",
         CLAWDBOT_GATEWAY_PASSWORD: "legacy-password",
+        OPENCLAW_ALLOW_LEGACY_ENV: "1",
       } as NodeJS.ProcessEnv,
       expected: {
         call: { token: "legacy-token", password: "legacy-password" },
