@@ -91,6 +91,16 @@ const CARD_MAX_OUTPUT_CHARS = 8000;
 // structures from causing unbounded queue growth / memory exhaustion.
 const CARD_MAX_QUEUED_ARRAYS = 64;
 
+// Strip ANSI CSI/OSC escape sequences and non-printable control characters
+// (except \n and \t) from card text before it reaches logs or LLM context.
+// Prevents log/terminal injection via attacker-influenced card payloads (CWE-117).
+const ANSI_ESCAPE_RE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*\x07)/g;
+const CONTROL_CHAR_RE = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
+
+function sanitizeCardText(s: string): string {
+  return s.replace(ANSI_ESCAPE_RE, "").replace(CONTROL_CHAR_RE, "");
+}
+
 /**
  * Iterative BFS extraction of visible text from a Feishu interactive card.
  * Bounded by CARD_MAX_NODES, CARD_MAX_OUTPUT_CHARS, and CARD_MAX_QUEUED_ARRAYS
@@ -114,7 +124,8 @@ function extractCardTextElements(root: unknown[]): string[] {
 
       const pushText = (s: string) => {
         if (!s || outChars >= CARD_MAX_OUTPUT_CHARS) return;
-        const clipped = s.slice(0, CARD_MAX_OUTPUT_CHARS - outChars);
+        const clean = sanitizeCardText(s);
+        const clipped = clean.slice(0, CARD_MAX_OUTPUT_CHARS - outChars);
         out.push(clipped);
         outChars += clipped.length;
       };
