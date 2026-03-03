@@ -86,7 +86,7 @@ describe("isSystemdServiceEnabled", () => {
         "Command failed: systemctl --user is-enabled openclaw-gateway.service",
       ) as Error & { code?: number };
       err.code = 4;
-      cb(err, "not-found", "");
+      cb(err, "not-found", "Command failed: systemctl --user is-enabled openclaw-gateway.service");
     });
     const result = await isSystemdServiceEnabled({ env: {} });
     expect(result).toBe(false);
