@@ -370,9 +370,9 @@ describe("applyMinimaxApiConfig", () => {
     });
   });
 
-  it("does not set reasoning for non-reasoning models", () => {
+  it("keeps reasoning enabled for MiniMax-M2.5", () => {
     const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.5");
-    expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(false);
+    expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
   });
 
   it("preserves existing model params when adding alias", () => {
@@ -514,8 +514,8 @@ describe("primary model defaults", () => {
   it("sets correct primary model", () => {
     const configCases = [
       {
-        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5-Lightning"),
-        primaryModel: "minimax/MiniMax-M2.5-Lightning",
+        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5-highspeed"),
+        primaryModel: "minimax/MiniMax-M2.5-highspeed",
       },
       {
         getConfig: () => applyZaiConfig({}, { modelId: "glm-5" }),
