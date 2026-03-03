@@ -313,7 +313,7 @@ describe("gateway session utils", () => {
     );
   });
 
-  test("listAgentsForGateway keeps explicit agents.list scope over disk-only agents", async () => {
+  test("listAgentsForGateway keeps explicit agents.list scope over disk-only agents (scope boundary)", async () => {
     await withStateDirEnv("openclaw-agent-list-scope-", async ({ stateDir }) => {
       fs.mkdirSync(path.join(stateDir, "agents", "main"), { recursive: true });
       fs.mkdirSync(path.join(stateDir, "agents", "codex"), { recursive: true });
