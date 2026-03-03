@@ -6,12 +6,9 @@ import {
   type ExecSecurity,
   buildEnforcedShellCommand,
   evaluateShellAllowlist,
-  maxAsk,
-  minSecurity,
   recordAllowlistUse,
   requiresExecApproval,
   resolveAllowAlwaysPatterns,
-  resolveExecApprovals,
 } from "../infra/exec-approvals.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
@@ -21,8 +18,11 @@ import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
-  waitForExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
+import {
+  resolveApprovalDecisionOrUndefined,
+  resolveExecHostApprovalContext,
+} from "./bash-tools.exec-host-shared.js";
 import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
   DEFAULT_NOTIFY_TAIL_CHARS,
@@ -67,16 +67,12 @@ export type ProcessGatewayAllowlistResult = {
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
-  const approvals = resolveExecApprovals(params.agentId, {
+  const { approvals, hostSecurity, hostAsk, askFallback } = resolveExecHostApprovalContext({
+    agentId: params.agentId,
     security: params.security,
     ask: params.ask,
+    host: "gateway",
   });
-  const hostSecurity = minSecurity(params.security, approvals.agent.security);
-  const hostAsk = maxAsk(params.ask, approvals.agent.ask);
-  const askFallback = approvals.agent.askFallback;
-  if (hostSecurity === "deny") {
-    throw new Error("exec denied: host=gateway security=deny");
-  }
   const allowlistEval = evaluateShellAllowlist({
     command: params.command,
     allowlist: approvals.allowlist,
@@ -172,21 +168,19 @@ export async function processGatewayAllowlist(
     preResolvedDecision = registration.finalDecision;
 
     void (async () => {
-      let decision: string | null = preResolvedDecision ?? null;
-      try {
-        // Some gateways may return a final decision inline during registration.
-        // Only call waitDecision when registration did not already carry one.
-        if (preResolvedDecision === undefined) {
-          decision = await waitForExecApprovalDecision(approvalId);
-        }
-      } catch {
-        emitExecSystemEvent(
-          `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
-          {
-            sessionKey: params.notifySessionKey,
-            contextKey,
-          },
-        );
+      const decision = await resolveApprovalDecisionOrUndefined({
+        approvalId,
+        preResolvedDecision,
+        onFailure: () =>
+          emitExecSystemEvent(
+            `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
+            {
+              sessionKey: params.notifySessionKey,
+              contextKey,
+            },
+          ),
+      });
+      if (decision === undefined) {
         return;
       }
 

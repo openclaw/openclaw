@@ -17,18 +17,30 @@ function createPluginLog(): PluginHandlerLog {
 function createRoute(params: {
   path: string;
   pluginId?: string;
-  handler?: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
+  auth?: "gateway" | "plugin";
+  match?: "exact" | "prefix";
+  handler?: (req: IncomingMessage, res: ServerResponse) => boolean | void | Promise<boolean | void>;
 }) {
   return {
     pluginId: params.pluginId ?? "route",
     path: params.path,
+    auth: params.auth ?? "gateway",
+    match: params.match ?? "exact",
     handler: params.handler ?? (() => {}),
     source: params.pluginId ?? "route",
   };
 }
 
+function buildRepeatedEncodedSlash(depth: number): string {
+  let encodedSlash = "%2f";
+  for (let i = 1; i < depth; i++) {
+    encodedSlash = encodedSlash.replace(/%/g, "%25");
+  }
+  return encodedSlash;
+}
+
 describe("createGatewayPluginRequestHandler", () => {
-  it("returns false when no handlers are registered", async () => {
+  it("returns false when no routes are registered", async () => {
     const log = createPluginLog();
     const handler = createGatewayPluginRequestHandler({
       registry: createTestRegistry(),
@@ -39,35 +51,13 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(handled).toBe(false);
   });
 
-  it("continues until a handler reports it handled the request", async () => {
-    const first = vi.fn(async () => false);
-    const second = vi.fn(async () => true);
-    const handler = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpHandlers: [
-          { pluginId: "first", handler: first, source: "first" },
-          { pluginId: "second", handler: second, source: "second" },
-        ],
-      }),
-      log: createPluginLog(),
-    });
-
-    const { res } = makeMockHttpResponse();
-    const handled = await handler({} as IncomingMessage, res);
-    expect(handled).toBe(true);
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).toHaveBeenCalledTimes(1);
-  });
-
-  it("handles registered http routes before generic handlers", async () => {
+  it("handles exact route matches", async () => {
     const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
       res.statusCode = 200;
     });
-    const fallback = vi.fn(async () => true);
     const handler = createGatewayPluginRequestHandler({
       registry: createTestRegistry({
         httpRoutes: [createRoute({ path: "/demo", handler: routeHandler })],
-        httpHandlers: [{ pluginId: "fallback", handler: fallback, source: "fallback" }],
       }),
       log: createPluginLog(),
     });
@@ -76,18 +66,57 @@ describe("createGatewayPluginRequestHandler", () => {
     const handled = await handler({ url: "/demo" } as IncomingMessage, res);
     expect(handled).toBe(true);
     expect(routeHandler).toHaveBeenCalledTimes(1);
-    expect(fallback).not.toHaveBeenCalled();
   });
 
-  it("matches canonicalized route variants before generic handlers", async () => {
+  it("prefers exact matches before prefix matches", async () => {
+    const exactHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 200;
+    });
+    const prefixHandler = vi.fn(async () => true);
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({ path: "/api", match: "prefix", handler: prefixHandler }),
+          createRoute({ path: "/api/demo", match: "exact", handler: exactHandler }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/api/demo" } as IncomingMessage, res);
+    expect(handled).toBe(true);
+    expect(exactHandler).toHaveBeenCalledTimes(1);
+    expect(prefixHandler).not.toHaveBeenCalled();
+  });
+
+  it("supports route fallthrough when handler returns false", async () => {
+    const first = vi.fn(async () => false);
+    const second = vi.fn(async () => true);
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({ path: "/hook", match: "exact", handler: first }),
+          createRoute({ path: "/hook", match: "prefix", handler: second }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/hook" } as IncomingMessage, res);
+    expect(handled).toBe(true);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches canonicalized route variants", async () => {
     const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
       res.statusCode = 200;
     });
-    const fallback = vi.fn(async () => true);
     const handler = createGatewayPluginRequestHandler({
       registry: createTestRegistry({
         httpRoutes: [createRoute({ path: "/api/demo", handler: routeHandler })],
-        httpHandlers: [{ pluginId: "fallback", handler: fallback, source: "fallback" }],
       }),
       log: createPluginLog(),
     });
@@ -96,28 +125,26 @@ describe("createGatewayPluginRequestHandler", () => {
     const handled = await handler({ url: "/API//demo" } as IncomingMessage, res);
     expect(handled).toBe(true);
     expect(routeHandler).toHaveBeenCalledTimes(1);
-    expect(fallback).not.toHaveBeenCalled();
   });
 
-  it("logs and responds with 500 when a handler throws", async () => {
+  it("logs and responds with 500 when a route throws", async () => {
     const log = createPluginLog();
     const handler = createGatewayPluginRequestHandler({
       registry: createTestRegistry({
-        httpHandlers: [
-          {
-            pluginId: "boom",
+        httpRoutes: [
+          createRoute({
+            path: "/boom",
             handler: async () => {
               throw new Error("boom");
             },
-            source: "boom",
-          },
+          }),
         ],
       }),
       log,
     });
 
     const { res, setHeader, end } = makeMockHttpResponse();
-    const handled = await handler({} as IncomingMessage, res);
+    const handled = await handler({ url: "/boom" } as IncomingMessage, res);
     expect(handled).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("boom"));
     expect(res.statusCode).toBe(500);
@@ -126,7 +153,11 @@ describe("createGatewayPluginRequestHandler", () => {
   });
 });
 
-describe("plugin HTTP registry helpers", () => {
+describe("plugin HTTP route auth checks", () => {
+  const deeplyEncodedChannelPath =
+    "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile";
+  const decodeOverflowPublicPath = `/googlechat${buildRepeatedEncodedSlash(40)}public`;
+
   it("detects registered route paths", () => {
     const registry = createTestRegistry({
       httpRoutes: [createRoute({ path: "/demo" })],
@@ -144,12 +175,18 @@ describe("plugin HTTP registry helpers", () => {
     expect(isRegisteredPluginHttpRoutePath(registry, "/api/%2564emo")).toBe(true);
   });
 
-  it("enforces auth for protected and registered plugin routes", () => {
+  it("enforces auth for protected and gateway-auth routes", () => {
     const registry = createTestRegistry({
-      httpRoutes: [createRoute({ path: "/api/demo" })],
+      httpRoutes: [
+        createRoute({ path: "/googlechat", match: "prefix", auth: "plugin" }),
+        createRoute({ path: "/api/demo", auth: "gateway" }),
+      ],
     });
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api//demo")).toBe(true);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/googlechat/public")).toBe(false);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/channels/status")).toBe(true);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, deeplyEncodedChannelPath)).toBe(true);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, decodeOverflowPublicPath)).toBe(true);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/not-plugin")).toBe(false);
   });
 });

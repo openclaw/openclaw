@@ -187,30 +187,22 @@ export function createDiffsTool(params: {
           content: [
             {
               type: "text",
-              text:
-                `Diff ${image.format.toUpperCase()} generated at: ${artifactFile.path}\n` +
-                "Use the `message` tool with `path` or `filePath` to send this file.",
+              text: buildFileArtifactMessage({
+                format: image.format,
+                filePath: artifactFile.path,
+              }),
             },
           ],
-          details: {
-            title: rendered.title,
-            inputKind: rendered.inputKind,
-            fileCount: rendered.fileCount,
-            mode,
-            filePath: artifactFile.path,
-            imagePath: artifactFile.path,
-            path: artifactFile.path,
-            fileBytes: artifactFile.bytes,
-            imageBytes: artifactFile.bytes,
-            format: image.format,
-            fileFormat: image.format,
-            fileQuality: image.qualityPreset,
-            imageQuality: image.qualityPreset,
-            fileScale: image.scale,
-            imageScale: image.scale,
-            fileMaxWidth: image.maxWidth,
-            imageMaxWidth: image.maxWidth,
-          },
+          details: buildArtifactDetails({
+            baseDetails: {
+              title: rendered.title,
+              inputKind: rendered.inputKind,
+              fileCount: rendered.fileCount,
+              mode,
+            },
+            artifactFile,
+            image,
+          }),
         };
       }
 
@@ -266,28 +258,18 @@ export function createDiffsTool(params: {
           content: [
             {
               type: "text",
-              text:
-                `Diff viewer: ${viewerUrl}\n` +
-                `Diff ${image.format.toUpperCase()} generated at: ${artifactFile.path}\n` +
-                "Use the `message` tool with `path` or `filePath` to send this file.",
+              text: buildFileArtifactMessage({
+                format: image.format,
+                filePath: artifactFile.path,
+                viewerUrl,
+              }),
             },
           ],
-          details: {
-            ...baseDetails,
-            filePath: artifactFile.path,
-            imagePath: artifactFile.path,
-            path: artifactFile.path,
-            fileBytes: artifactFile.bytes,
-            imageBytes: artifactFile.bytes,
-            format: image.format,
-            fileFormat: image.format,
-            fileQuality: image.qualityPreset,
-            imageQuality: image.qualityPreset,
-            fileScale: image.scale,
-            imageScale: image.scale,
-            fileMaxWidth: image.maxWidth,
-            imageMaxWidth: image.maxWidth,
-          },
+          details: buildArtifactDetails({
+            baseDetails,
+            artifactFile,
+            image,
+          }),
         };
       } catch (error) {
         if (mode === "both") {
@@ -325,6 +307,40 @@ function normalizeOutputFormat(format: DiffOutputFormat | undefined): DiffOutput
 
 function isArtifactOnlyMode(mode: DiffMode): mode is "image" | "file" {
   return mode === "image" || mode === "file";
+}
+
+function buildArtifactDetails(params: {
+  baseDetails: Record<string, unknown>;
+  artifactFile: { path: string; bytes: number };
+  image: DiffRenderOptions["image"];
+}) {
+  return {
+    ...params.baseDetails,
+    filePath: params.artifactFile.path,
+    imagePath: params.artifactFile.path,
+    path: params.artifactFile.path,
+    fileBytes: params.artifactFile.bytes,
+    imageBytes: params.artifactFile.bytes,
+    format: params.image.format,
+    fileFormat: params.image.format,
+    fileQuality: params.image.qualityPreset,
+    imageQuality: params.image.qualityPreset,
+    fileScale: params.image.scale,
+    imageScale: params.image.scale,
+    fileMaxWidth: params.image.maxWidth,
+    imageMaxWidth: params.image.maxWidth,
+  };
+}
+
+function buildFileArtifactMessage(params: {
+  format: DiffOutputFormat;
+  filePath: string;
+  viewerUrl?: string;
+}): string {
+  const lines = params.viewerUrl ? [`Diff viewer: ${params.viewerUrl}`] : [];
+  lines.push(`Diff ${params.format.toUpperCase()} generated at: ${params.filePath}`);
+  lines.push("Use the `message` tool with `path` or `filePath` to send this file.");
+  return lines.join("\n");
 }
 
 async function renderDiffArtifactFile(params: {

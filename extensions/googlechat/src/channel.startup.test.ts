@@ -48,18 +48,14 @@ describe("googlechatPlugin gateway.startAccount", () => {
         statusPatchSink: (next) => patches.push({ ...next }),
       }),
     );
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
     let settled = false;
     void task.then(() => {
       settled = true;
     });
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() => {
+      expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce();
+    });
     expect(settled).toBe(false);
-
-    expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce();
     expect(unregister).not.toHaveBeenCalled();
 
     abort.abort();

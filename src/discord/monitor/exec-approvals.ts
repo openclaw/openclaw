@@ -24,7 +24,7 @@ import type {
 import { logDebug, logError } from "../../logger.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { compileSafeRegex } from "../../security/safe-regex.js";
+import { compileSafeRegex, testRegexWithBoundedInput } from "../../security/safe-regex.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -34,7 +34,6 @@ import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
 const EXEC_APPROVAL_KEY = "execapproval";
-
 export type { ExecApprovalRequest, ExecApprovalResolved };
 
 /** Extract Discord channel ID from a session key like "agent:main:discord:channel:123456789" */
@@ -372,7 +371,7 @@ export class DiscordExecApprovalHandler {
           return true;
         }
         const regex = compileSafeRegex(p);
-        return regex ? regex.test(session) : false;
+        return regex ? testRegexWithBoundedInput(regex, session) : false;
       });
       if (!matches) {
         return false;

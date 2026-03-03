@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
@@ -28,6 +28,20 @@ export function mockAgentPayloads(
     },
     ...extra,
   });
+}
+
+export function expectDirectTelegramDelivery(
+  deps: CliDeps,
+  params: { chatId: string; text: string; messageThreadId?: number },
+) {
+  expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
+  expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
+    params.chatId,
+    params.text,
+    expect.objectContaining(
+      params.messageThreadId === undefined ? {} : { messageThreadId: params.messageThreadId },
+    ),
+  );
 }
 
 export async function runTelegramAnnounceTurn(params: {

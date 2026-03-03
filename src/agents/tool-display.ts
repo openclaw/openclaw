@@ -1,3 +1,4 @@
+import SHARED_TOOL_DISPLAY_JSON from "../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
 import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
 import {
@@ -5,11 +6,10 @@ import {
   formatToolDetailText,
   formatDetailKey,
   normalizeToolName,
-  resolveActionArg,
-  resolveToolVerbAndDetail,
+  resolveToolVerbAndDetailForArgs,
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "./tool-display-common.js";
-import TOOL_DISPLAY_JSON from "./tool-display.json" with { type: "json" };
+import TOOL_DISPLAY_OVERRIDES_JSON from "./tool-display-overrides.json" with { type: "json" };
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
   emoji?: string;
@@ -30,9 +30,11 @@ export type ToolDisplay = {
   detail?: string;
 };
 
-const TOOL_DISPLAY_CONFIG = TOOL_DISPLAY_JSON as ToolDisplayConfig;
-const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" };
-const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
+const SHARED_TOOL_DISPLAY_CONFIG = SHARED_TOOL_DISPLAY_JSON as ToolDisplayConfig;
+const TOOL_DISPLAY_OVERRIDES = TOOL_DISPLAY_OVERRIDES_JSON as ToolDisplayConfig;
+const FALLBACK = TOOL_DISPLAY_OVERRIDES.fallback ??
+  SHARED_TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" };
+const TOOL_MAP = Object.assign({}, SHARED_TOOL_DISPLAY_CONFIG.tools, TOOL_DISPLAY_OVERRIDES.tools);
 const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
   agentId: "agent",
   sessionKey: "session",
@@ -64,12 +66,10 @@ export function resolveToolDisplay(params: {
   const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
-  const action = resolveActionArg(params.args);
-  let { verb, detail } = resolveToolVerbAndDetail({
+  let { verb, detail } = resolveToolVerbAndDetailForArgs({
     toolKey: key,
     args: params.args,
     meta: params.meta,
-    action,
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "summary",
@@ -93,7 +93,7 @@ export function resolveToolDisplay(params: {
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
   const detailRaw = display.detail ? redactToolDetail(display.detail) : undefined;
-  return formatToolDetailText(detailRaw, { prefixWithWith: true });
+  return formatToolDetailText(detailRaw);
 }
 
 export function formatToolSummary(display: ToolDisplay): string {
