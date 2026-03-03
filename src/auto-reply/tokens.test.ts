@@ -91,11 +91,21 @@ describe("parseContinuationSignal", () => {
     });
   });
 
-  it("parses CONTINUE_DELEGATE with multiline task", () => {
+  it("does not parse CONTINUE_DELEGATE with trailing text on subsequent lines", () => {
+    // Multiline content after CONTINUE_DELEGATE: without ---CONTEXT--- separator
+    // should NOT match — prevents mid-response instructional text from misfiring.
     const result = parseContinuationSignal("CONTINUE_DELEGATE:first do X\nthen do Y\nfinally Z");
+    expect(result).toBeNull();
+  });
+
+  it("parses CONTINUE_DELEGATE with multiline content in ---CONTEXT--- block", () => {
+    const result = parseContinuationSignal(
+      "CONTINUE_DELEGATE:do the thing\n---CONTEXT---\nfirst do X\nthen do Y\nfinally Z",
+    );
     expect(result).toEqual({
       kind: "delegate",
-      task: "first do X\nthen do Y\nfinally Z",
+      task: "do the thing",
+      context: "first do X\nthen do Y\nfinally Z",
     });
   });
 
@@ -121,6 +131,14 @@ describe("parseContinuationSignal", () => {
       "I've finished the analysis.\nCONTINUE_DELEGATE:review the results",
     );
     expect(result).toEqual({ kind: "delegate", task: "review the results" });
+  });
+
+  it("does not misfire on instructional CONTINUE_DELEGATE mid-response", () => {
+    // An agent explaining the signal in its reply should not trigger delegation
+    const result = parseContinuationSignal(
+      "Here is how you use it:\nCONTINUE_DELEGATE:example task\nAnd then the agent handles it.",
+    );
+    expect(result).toBeNull();
   });
 
   it("treats empty context after separator as no context", () => {

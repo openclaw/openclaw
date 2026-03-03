@@ -115,23 +115,30 @@ export function parseContinuationSignal(text: string | undefined): ContinuationS
 
   // Check for CONTINUE_DELEGATE:<task> at end of response, on its own line.
   // Must be preceded by newline or start-of-string to avoid matching mid-sentence.
-  // Optional context block: CONTINUE_DELEGATE:<task>\n---CONTEXT---\n<context>
-  const delegateMatch = trimmed.match(/(?:^|\n)CONTINUE_DELEGATE:(.+)$/s);
-  if (delegateMatch) {
-    const raw = delegateMatch[1].trim();
-    const contextSepFull = raw.indexOf("\n---CONTEXT---\n");
-    const contextSepEnd = raw.indexOf("\n---CONTEXT---");
-    const contextSep = contextSepFull !== -1 ? contextSepFull : contextSepEnd;
-    if (contextSep !== -1) {
-      const sepLen = contextSepFull !== -1 ? "\n---CONTEXT---\n".length : "\n---CONTEXT---".length;
-      const contextText = raw.slice(contextSep + sepLen).trim();
+  // The task is single-line (no `s` flag) — multiline content goes in the optional
+  // ---CONTEXT--- block. This prevents a mid-response instructional line like
+  // "CONTINUE_DELEGATE:example\nMore text" from being misread as a real signal.
+  const delegateWithContext = trimmed.match(
+    /(?:^|\n)CONTINUE_DELEGATE:([^\n]+)\n---CONTEXT---(?:\n([\s\S]*))?$/,
+  );
+  if (delegateWithContext) {
+    const task = delegateWithContext[1].trim();
+    const contextText = (delegateWithContext[2] ?? "").trim();
+    if (task) {
       return {
         kind: "delegate",
-        task: raw.slice(0, contextSep).trim(),
+        task,
         context: contextText || undefined,
       };
     }
-    return { kind: "delegate", task: raw };
+  }
+  // No context block — single-line task at end of string
+  const delegateSimple = trimmed.match(/(?:^|\n)CONTINUE_DELEGATE:([^\n]+)$/);
+  if (delegateSimple) {
+    const task = delegateSimple[1].trim();
+    if (task) {
+      return { kind: "delegate", task };
+    }
   }
 
   // Check for CONTINUE_WORK or CONTINUE_WORK:<delay> at end of response
@@ -162,8 +169,12 @@ export function stripContinuationSignal(text: string): {
 
   let stripped: string;
   if (signal.kind === "delegate") {
-    // Only strip the final CONTINUE_DELEGATE occurrence (anchor to end of string)
-    stripped = text.replace(/\bCONTINUE_DELEGATE:[^\n]*(?:\n---CONTEXT---\n[\s\S]*)?\s*$/, "");
+    // Strip the full DELEGATE signal: single-line task + optional ---CONTEXT--- block.
+    // Mirrors the parser grammar exactly.
+    stripped = text.replace(
+      /(?:^|\n)CONTINUE_DELEGATE:[^\n]+(?:\n---CONTEXT---(?:\n[\s\S]*)?)?\s*$/,
+      "",
+    );
   } else {
     // Only strip CONTINUE_WORK when it's the signal type parsed
     stripped = text.replace(/\bCONTINUE_WORK(?::\d+)?\s*$/, "");
