@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { RawData } from "ws";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { rawDataToString } from "../infra/ws.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -134,7 +135,7 @@ async function canRunCdpHealthCommand(
       handshakeTimeoutMs: timeoutMs,
     });
     let settled = false;
-    const onMessage = (raw: WebSocket.RawData) => {
+    const onMessage = (raw: RawData) => {
       if (settled) {
         return;
       }
