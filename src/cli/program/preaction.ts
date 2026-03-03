@@ -3,7 +3,12 @@ import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getCommandPath, getVerboseFlag, hasFlag, hasHelpOrVersion } from "../argv.js";
+import {
+  getCommandPathWithRootOptions,
+  getVerboseFlag,
+  hasFlag,
+  hasHelpOrVersion,
+} from "../argv.js";
 import { emitCliBanner } from "../banner.js";
 import { resolveCliName } from "../cli-name.js";
 
@@ -33,6 +38,22 @@ const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["doctor", "completion", "secrets"]
 const JSON_PARSE_ONLY_COMMANDS = new Set(["config set"]);
 let configGuardModulePromise: Promise<typeof import("./config-guard.js")> | undefined;
 let pluginRegistryModulePromise: Promise<typeof import("../plugin-registry.js")> | undefined;
+
+function shouldBypassConfigGuard(commandPath: string[]): boolean {
+  const [primary, secondary] = commandPath;
+  if (!primary) {
+    return false;
+  }
+  if (CONFIG_GUARD_BYPASS_COMMANDS.has(primary)) {
+    return true;
+  }
+  // config validate is the explicit validation command; let it render
+  // validation failures directly without preflight guard output duplication.
+  if (primary === "config" && secondary === "validate") {
+    return true;
+  }
+  return false;
+}
 
 function loadConfigGuardModule() {
   configGuardModulePromise ??= import("./config-guard.js");
@@ -82,7 +103,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (hasHelpOrVersion(argv)) {
       return;
     }
-    const commandPath = getCommandPath(argv, 2);
+    const commandPath = getCommandPathWithRootOptions(argv, 2);
     const hideBanner =
       isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER) ||
       commandPath[0] === "update" ||
@@ -100,7 +121,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (CONFIG_GUARD_BYPASS_COMMANDS.has(commandPath[0])) {
+    if (shouldBypassConfigGuard(commandPath)) {
       return;
     }
     const suppressDoctorStdout = isJsonOutputMode(commandPath, argv);
