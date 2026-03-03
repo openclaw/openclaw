@@ -84,6 +84,25 @@ export type ChatProps = {
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
+const BASE64_CHUNK_SIZE = 8192;
+
+export function encodeBytesToBase64(bytes: Uint8Array): string {
+  const binaryChunks: string[] = [];
+  for (let i = 0; i < bytes.length; i += BASE64_CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, i + BASE64_CHUNK_SIZE);
+    let binary = "";
+    for (let j = 0; j < chunk.length; j += 1) {
+      binary += String.fromCharCode(chunk[j]);
+    }
+    binaryChunks.push(binary);
+  }
+  return btoa(binaryChunks.join(""));
+}
+
+function arrayBufferToDataUrl(buffer: ArrayBuffer, mimeType: string): string {
+  const base64 = encodeBytesToBase64(new Uint8Array(buffer));
+  return `data:${mimeType};base64,${base64}`;
+}
 
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
@@ -190,7 +209,11 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
 
     const reader = new FileReader();
     reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
+      const result = reader.result;
+      if (!(result instanceof ArrayBuffer)) {
+        return;
+      }
+      const dataUrl = arrayBufferToDataUrl(result, file.type || "application/octet-stream");
       const newAttachment: ChatAttachment = {
         id: generateAttachmentId(),
         dataUrl,
@@ -199,7 +222,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
       const current = props.attachments ?? [];
       props.onAttachmentsChange?.([...current, newAttachment]);
     });
-    reader.readAsDataURL(file);
+    reader.readAsArrayBuffer(file);
   }
 }
 

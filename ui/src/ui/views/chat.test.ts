@@ -1,7 +1,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../types.ts";
-import { renderChat, type ChatProps } from "./chat.ts";
+import { encodeBytesToBase64, renderChat, type ChatProps } from "./chat.ts";
 
 function createSessions(): SessionsListResult {
   return {
@@ -50,6 +50,21 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
 }
 
 describe("chat view", () => {
+  it("encodes large byte arrays without overflowing the call stack", () => {
+    const bytes = new Uint8Array(4 * 1024 * 1024 + 13);
+    for (let i = 0; i < bytes.length; i += 1) {
+      bytes[i] = i % 251;
+    }
+
+    const base64 = encodeBytesToBase64(bytes);
+    const decoded = atob(base64);
+
+    expect(decoded.length).toBe(bytes.length);
+    expect(decoded.charCodeAt(0)).toBe(bytes[0]);
+    expect(decoded.charCodeAt(1_234_567)).toBe(bytes[1_234_567]);
+    expect(decoded.charCodeAt(decoded.length - 1)).toBe(bytes[bytes.length - 1]);
+  });
+
   it("renders compacting indicator as a badge", () => {
     const container = document.createElement("div");
     render(
