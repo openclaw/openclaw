@@ -115,7 +115,7 @@ function applyControlUiSecurityHeaders(res: ServerResponse) {
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Cache-Control", "no-store");
   res.end(JSON.stringify(body));
 }
 
@@ -218,9 +218,10 @@ export function handleControlUiAvatarRequest(
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", contentTypeForExt(ext));
-  // Static UI should never be cached aggressively while iterating; allow the
-  // browser to revalidate.
-  res.setHeader("Cache-Control", "no-cache");
+  const isShellHtml = path.basename(filePath).toLowerCase() === "index.html";
+  // Keep shell HTML uncached so upgrades do not pin old UI versions in browsers
+  // while still allowing revalidation behavior for versioned static assets.
+  res.setHeader("Cache-Control", isShellHtml ? "no-store" : "no-cache");
 }
 
 function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) {
@@ -230,7 +231,7 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
 
 function serveResolvedIndexHtml(res: ServerResponse, body: string) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Cache-Control", "no-store");
   res.end(body);
 }
 
@@ -341,7 +342,7 @@ export function handleControlUiHttpRequest(
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Cache-Control", "no-store");
       res.end();
       return true;
     }

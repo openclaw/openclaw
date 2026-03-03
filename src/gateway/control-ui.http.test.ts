@@ -46,7 +46,7 @@ describe("handleControlUiHttpRequest", () => {
     rootPath: string;
     basePath?: string;
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const handled = handleControlUiHttpRequest(
       { url: params.url, method: params.method } as IncomingMessage,
       res,
@@ -55,7 +55,7 @@ describe("handleControlUiHttpRequest", () => {
         root: { kind: "resolved", path: params.rootPath },
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   function runAvatarRequest(params: {
@@ -146,10 +146,25 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves control-ui shell HTML with no-store cache policy", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, setHeader } = makeMockHttpResponse();
+        const handled = handleControlUiHttpRequest(
+          { url: "/", method: "GET" } as IncomingMessage,
+          res,
+          { root: { kind: "resolved", path: tmp } },
+        );
+        expect(handled).toBe(true);
+        expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+      },
+    });
+  });
+
   it("serves bootstrap config JSON", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const { res, end } = makeMockHttpResponse();
+        const { res, end, setHeader } = makeMockHttpResponse();
         const handled = handleControlUiHttpRequest(
           { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
           res,
@@ -167,6 +182,22 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
         expect(parsed.assistantAvatar).toBe("/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");
+        expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+      },
+    });
+  });
+
+  it("serves static assets with revalidation cache policy", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "main.js", "console.log('ok');\n");
+        const { handled, setHeader } = runControlUiRequest({
+          url: "/assets/main.js",
+          method: "GET",
+          rootPath: tmp,
+        });
+        expect(handled).toBe(true);
+        expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
       },
     });
   });
