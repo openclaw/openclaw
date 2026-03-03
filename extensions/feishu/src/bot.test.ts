@@ -28,10 +28,11 @@ const {
   mockCreateFeishuClient: vi.fn(),
   mockResolveAgentRoute: vi.fn(() => ({
     agentId: "main",
+    channel: "feishu",
     accountId: "default",
     channel: "feishu",
     sessionKey: "agent:main:feishu:dm:ou-attacker",
-    mainSessionKey: "agent:main:feishu:dm:ou-attacker",
+    mainSessionKey: "agent:main:main",
     matchedBy: "default",
   })),
 }));
@@ -125,7 +126,9 @@ describe("handleFeishuMessage command authorization", () => {
   const mockBuildPairingReply = vi.fn(() => "Pairing response");
   const mockEnqueueSystemEvent = vi.fn();
   const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
+    id: "inbound-clip.mp4",
     path: "/tmp/inbound-clip.mp4",
+    size: Buffer.byteLength("video"),
     contentType: "video/mp4",
   });
 
@@ -134,10 +137,11 @@ describe("handleFeishuMessage command authorization", () => {
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
+      channel: "feishu",
       accountId: "default",
       channel: "feishu",
       sessionKey: "agent:main:feishu:dm:ou-attacker",
-      mainSessionKey: "agent:main:feishu:dm:ou-attacker",
+      mainSessionKey: "agent:main:main",
       matchedBy: "default",
     });
     mockCreateFeishuClient.mockReturnValue({
@@ -159,9 +163,9 @@ describe("handleFeishuMessage command authorization", () => {
               mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
           },
           reply: {
-            resolveEnvelopeFormatOptions: vi.fn(() => ({
-              template: "channel+name+time",
-            })) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+            resolveEnvelopeFormatOptions: vi.fn(
+              () => ({}),
+            ) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
             formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
             finalizeInboundContext:
               mockFinalizeInboundContext as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
@@ -174,7 +178,8 @@ describe("handleFeishuMessage command authorization", () => {
             resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
           },
           media: {
-            saveMediaBuffer: mockSaveMediaBuffer,
+            saveMediaBuffer:
+              mockSaveMediaBuffer as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
           },
           pairing: {
             readAllowFromStore: mockReadAllowFromStore,

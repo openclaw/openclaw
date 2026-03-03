@@ -91,6 +91,65 @@ export function registerControlUiAndPairingSuite(): void {
     expect(health.ok).toBe(true);
   };
 
+  const connectControlUiWithoutDeviceAndExpectOk = async (params: {
+    ws: WebSocket;
+    token?: string;
+    password?: string;
+  }) => {
+    const res = await connectReq(params.ws, {
+      ...(params.token ? { token: params.token } : {}),
+      ...(params.password ? { password: params.password } : {}),
+      device: null,
+      client: { ...CONTROL_UI_CLIENT },
+    });
+    expect(res.ok).toBe(true);
+    await expectStatusAndHealthOk(params.ws);
+  };
+
+  const createOperatorIdentityFixture = async (identityPrefix: string) => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+    const identityDir = await mkdtemp(join(tmpdir(), identityPrefix));
+    const identityPath = join(identityDir, "device.json");
+    const identity = loadOrCreateDeviceIdentity(identityPath);
+    return {
+      identityPath,
+      identity,
+      client: { ...TEST_OPERATOR_CLIENT },
+    };
+  };
+
+  const startServerWithOperatorIdentity = async (identityPrefix = "openclaw-device-scope-") => {
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    const { identityPath, identity, client } = await createOperatorIdentityFixture(identityPrefix);
+    return { server, ws, port, prevToken, identityPath, identity, client };
+  };
+
+  const getRequiredPairedMetadata = (
+    paired: Record<string, Record<string, unknown>>,
+    deviceId: string,
+  ) => {
+    const metadata = paired[deviceId];
+    expect(metadata).toBeTruthy();
+    if (!metadata) {
+      throw new Error(`Expected paired metadata for deviceId=${deviceId}`);
+    }
+    return metadata;
+  };
+
+  const stripPairedMetadataRolesAndScopes = async (deviceId: string) => {
+    const { resolvePairingPaths, readJsonFile } = await import("../infra/pairing-files.js");
+    const { writeJsonAtomic } = await import("../infra/json-files.js");
+    const { pairedPath } = resolvePairingPaths(undefined, "devices");
+    const paired = (await readJsonFile<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
+    const legacy = getRequiredPairedMetadata(paired, deviceId);
+    delete legacy.roles;
+    delete legacy.scopes;
+    await writeJsonAtomic(pairedPath, paired);
+  };
+
   const seedApprovedOperatorReadPairing = async (params: {
     identityPrefix: string;
     clientId: string;
@@ -98,16 +157,10 @@ export function registerControlUiAndPairingSuite(): void {
     displayName: string;
     platform: string;
   }): Promise<{ identityPath: string; identity: { deviceId: string } }> => {
-    const { mkdtemp } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
-      await import("../infra/device-identity.js");
+    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { approveDevicePairing, requestDevicePairing } =
       await import("../infra/device-pairing.js");
-    const identityDir = await mkdtemp(join(tmpdir(), params.identityPrefix));
-    const identityPath = join(identityDir, "device.json");
-    const identity = loadOrCreateDeviceIdentity(identityPath);
+    const { identityPath, identity } = await createOperatorIdentityFixture(params.identityPrefix);
     const devicePublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
     const seeded = await requestDevicePairing({
       deviceId: identity.deviceId,
@@ -175,13 +228,7 @@ export function registerControlUiAndPairingSuite(): void {
     const { server, ws, prevToken } = await startServerWithClient("secret", {
       wsHeaders: { origin: "http://127.0.0.1" },
     });
-    const res = await connectReq(ws, {
-      token: "secret",
-      device: null,
-      client: { ...CONTROL_UI_CLIENT },
-    });
-    expect(res.ok).toBe(true);
-    await expectStatusAndHealthOk(ws);
+    await connectControlUiWithoutDeviceAndExpectOk({ ws, token: "secret" });
     ws.close();
     await server.close();
     restoreGatewayToken(prevToken);
@@ -192,13 +239,7 @@ export function registerControlUiAndPairingSuite(): void {
     testState.gatewayAuth = { mode: "password", password: "secret" };
     await withGatewayServer(async ({ port }) => {
       const ws = await openWs(port, { origin: originForPort(port) });
-      const res = await connectReq(ws, {
-        password: "secret",
-        device: null,
-        client: { ...CONTROL_UI_CLIENT },
-      });
-      expect(res.ok).toBe(true);
-      await expectStatusAndHealthOk(ws);
+      await connectControlUiWithoutDeviceAndExpectOk({ ws, password: "secret" });
       ws.close();
     });
   });
@@ -450,16 +491,9 @@ export function registerControlUiAndPairingSuite(): void {
   });
 
   test("requires pairing for remote operator device identity with shared token auth", async () => {
-    const { mkdtemp } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
     const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
-    const { server, ws, port, prevToken } = await startServerWithClient("secret");
-    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-scope-"));
-    const identityPath = join(identityDir, "device.json");
-    const identity = loadOrCreateDeviceIdentity(identityPath);
-    const client = { ...TEST_OPERATOR_CLIENT };
+    const { server, ws, port, prevToken, identityPath, identity, client } =
+      await startServerWithOperatorIdentity();
     ws.close();
 
     const wsRemoteRead = await openWs(port, { host: "gateway.example" });
@@ -554,18 +588,12 @@ export function registerControlUiAndPairingSuite(): void {
   });
 
   test("merges remote node/operator pairing requests for the same unpaired device", async () => {
-    const { mkdtemp } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
     const { approveDevicePairing, getPairedDevice, listDevicePairing } =
       await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     ws.close();
-    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-scope-"));
-    const identityPath = join(identityDir, "device.json");
-    const identity = loadOrCreateDeviceIdentity(identityPath);
-    const client = { ...TEST_OPERATOR_CLIENT };
+    const { identityPath, identity, client } =
+      await createOperatorIdentityFixture("openclaw-device-scope-");
     const connectWithNonce = async (role: "operator" | "node", scopes: string[]) => {
       const socket = new WebSocket(`ws://127.0.0.1:${port}`, {
         headers: { host: "gateway.example" },
@@ -634,16 +662,9 @@ export function registerControlUiAndPairingSuite(): void {
   });
 
   test("allows operator.read connect when device is paired with operator.admin", async () => {
-    const { mkdtemp } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
     const { listDevicePairing } = await import("../infra/device-pairing.js");
-    const { server, ws, port, prevToken } = await startServerWithClient("secret");
-    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-scope-"));
-    const identityPath = join(identityDir, "device.json");
-    const identity = loadOrCreateDeviceIdentity(identityPath);
-    const client = { ...TEST_OPERATOR_CLIENT };
+    const { server, ws, port, prevToken, identityPath, identity, client } =
+      await startServerWithOperatorIdentity();
 
     const initialNonce = await readConnectChallengeNonce(ws);
     const initial = await connectReq(ws, {
@@ -687,18 +708,12 @@ export function registerControlUiAndPairingSuite(): void {
   });
 
   test("allows operator shared auth with legacy paired metadata", async () => {
-    const { mkdtemp } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
-      await import("../infra/device-identity.js");
-    const { resolvePairingPaths, readJsonFile } = await import("../infra/pairing-files.js");
-    const { writeJsonAtomic } = await import("../infra/json-files.js");
+    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
       await import("../infra/device-pairing.js");
-    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-legacy-meta-"));
-    const identityPath = join(identityDir, "device.json");
-    const identity = loadOrCreateDeviceIdentity(identityPath);
+    const { identityPath, identity } = await createOperatorIdentityFixture(
+      "openclaw-device-legacy-meta-",
+    );
     const deviceId = identity.deviceId;
     const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
     const pending = await requestDevicePairing({
@@ -713,15 +728,7 @@ export function registerControlUiAndPairingSuite(): void {
     });
     await approveDevicePairing(pending.request.requestId);
 
-    const { pairedPath } = resolvePairingPaths(undefined, "devices");
-    const paired = (await readJsonFile<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
-    const legacy = paired[deviceId];
-    if (!legacy) {
-      throw new Error(`Expected paired metadata for deviceId=${deviceId}`);
-    }
-    delete legacy.roles;
-    delete legacy.scopes;
-    await writeJsonAtomic(pairedPath, paired);
+    await stripPairedMetadataRolesAndScopes(deviceId);
 
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     let ws2: WebSocket | undefined;
@@ -758,8 +765,6 @@ export function registerControlUiAndPairingSuite(): void {
   });
 
   test("auto-approves local scope upgrades even when paired metadata is legacy-shaped", async () => {
-    const { readJsonFile, resolvePairingPaths } = await import("../infra/pairing-files.js");
-    const { writeJsonAtomic } = await import("../infra/json-files.js");
     const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     const { identity, identityPath } = await seedApprovedOperatorReadPairing({
       identityPrefix: "openclaw-device-legacy-",
@@ -769,16 +774,7 @@ export function registerControlUiAndPairingSuite(): void {
       platform: "test",
     });
 
-    const { pairedPath } = resolvePairingPaths(undefined, "devices");
-    const paired = (await readJsonFile<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
-    const legacy = paired[identity.deviceId];
-    expect(legacy).toBeTruthy();
-    if (!legacy) {
-      throw new Error(`Expected paired metadata for deviceId=${identity.deviceId}`);
-    }
-    delete legacy.roles;
-    delete legacy.scopes;
-    await writeJsonAtomic(pairedPath, paired);
+    await stripPairedMetadataRolesAndScopes(identity.deviceId);
 
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     let ws2: WebSocket | undefined;

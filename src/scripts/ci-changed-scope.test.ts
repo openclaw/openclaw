@@ -1,6 +1,14 @@
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-// @ts-expect-error -- script module intentionally has no .d.ts surface
-import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
+
+const require = createRequire(import.meta.url);
+const { detectChangedScope } = require("../../scripts/ci-changed-scope.mjs") as {
+  detectChangedScope: (paths: string[]) => {
+    runNode: boolean;
+    runMacos: boolean;
+    runAndroid: boolean;
+  };
+};
 
 describe("detectChangedScope", () => {
   it("fails safe when no paths are provided", () => {

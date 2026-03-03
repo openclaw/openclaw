@@ -50,10 +50,11 @@ const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
 const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "TESTCODE", created: true });
 const mockResolveAgentRoute = vi.fn(() => ({
   agentId: "main",
+  channel: "bluebubbles",
   accountId: "default",
   channel: "bluebubbles",
   sessionKey: "agent:main:bluebubbles:dm:+15551234567",
-  mainSessionKey: "agent:main:bluebubbles:dm:+15551234567",
+  mainSessionKey: "agent:main:main",
   matchedBy: "default",
 }));
 const mockBuildMentionRegexes = vi.fn(() => [/\bbert\b/i]);
@@ -79,7 +80,9 @@ const mockDispatchReplyWithBufferedBlockDispatcher = vi.fn(
 const mockHasControlCommand = vi.fn(() => false);
 const mockResolveCommandAuthorizedFromAuthorizers = vi.fn(() => false);
 const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
+  id: "test-media.jpg",
   path: "/tmp/test-media.jpg",
+  size: Buffer.byteLength("test"),
   contentType: "image/jpeg",
 });
 const mockResolveStorePath = vi.fn(() => "/tmp/sessions.json");
@@ -127,7 +130,8 @@ function createMockRuntime(): PluginRuntime {
         upsertPairingRequest: mockUpsertPairingRequest,
       },
       media: {
-        saveMediaBuffer: mockSaveMediaBuffer,
+        saveMediaBuffer:
+          mockSaveMediaBuffer as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
       },
       session: {
         resolveStorePath: mockResolveStorePath,
