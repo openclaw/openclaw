@@ -366,6 +366,36 @@
           },
           "streamPath": {
             "type": "string"
+          },
+          "whispercpp": {
+            "type": "object",
+            "description": "Local whisper.cpp config (used when sttProvider=local-whispercpp)",
+            "properties": {
+              "binPath": {
+                "type": "string",
+                "description": "Path to whisper.cpp CLI (whisper-cli/main)"
+              },
+              "modelPath": {
+                "type": "string",
+                "description": "Path to ggml model (e.g. ggml-base.bin)"
+              },
+              "language": {
+                "type": "string",
+                "description": "Language code (default: zh)"
+              },
+              "threads": {
+                "type": "number",
+                "description": "Threads passed to whisper.cpp (-t) if supported"
+              },
+              "extraArgs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Extra args appended to whisper.cpp CLI"
+              }
+            },
+            "additionalProperties": false
           }
         }
       },

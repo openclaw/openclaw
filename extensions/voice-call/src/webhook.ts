@@ -68,15 +68,19 @@ export class VoiceCallWebhookServer {
     let sttProvider: MediaStreamConfig["sttProvider"];
 
     if (sttProviderName === "local-whispercpp") {
+      const cfg = this.config.streaming?.whispercpp;
       const binPath =
-        process.env.VOICECALL_WHISPERCPP_BIN ?? process.env.VOICECALL_WHISPER_BIN ?? "";
+        cfg?.binPath ?? process.env.VOICECALL_WHISPERCPP_BIN ?? process.env.VOICECALL_WHISPER_BIN ?? "";
       const modelPath =
-        process.env.VOICECALL_WHISPERCPP_MODEL ?? process.env.VOICECALL_WHISPER_MODEL ?? "";
-      const language = process.env.VOICECALL_WHISPERCPP_LANG ?? "zh";
+        cfg?.modelPath ??
+        process.env.VOICECALL_WHISPERCPP_MODEL ??
+        process.env.VOICECALL_WHISPER_MODEL ??
+        "";
+      const language = cfg?.language ?? process.env.VOICECALL_WHISPERCPP_LANG ?? "zh";
 
       if (!binPath || !modelPath) {
         console.warn(
-          "[voice-call] Streaming enabled (local-whispercpp) but VOICECALL_WHISPERCPP_BIN/VOICECALL_WHISPERCPP_MODEL are not set",
+          "[voice-call] Streaming enabled (local-whispercpp) but whispercpp.binPath/modelPath are not configured (set streaming.whispercpp.* or VOICECALL_WHISPERCPP_BIN/VOICECALL_WHISPERCPP_MODEL)",
         );
         return;
       }
@@ -85,10 +89,13 @@ export class VoiceCallWebhookServer {
         binPath,
         modelPath,
         language,
+        threads: cfg?.threads,
+        extraArgs: cfg?.extraArgs,
         silenceDurationMs: this.config.streaming?.silenceDurationMs,
         vadThreshold: this.config.streaming?.vadThreshold,
       });
     } else {
+
       const apiKey = this.config.streaming?.openaiApiKey || process.env.OPENAI_API_KEY;
 
       if (!apiKey) {

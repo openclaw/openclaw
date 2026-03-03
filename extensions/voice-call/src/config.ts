@@ -213,6 +213,18 @@ export const VoiceCallStreamingConfigSchema = z
     openaiApiKey: z.string().min(1).optional(),
     /** OpenAI transcription model (default: gpt-4o-transcribe) */
     sttModel: z.string().min(1).default("gpt-4o-transcribe"),
+    /** whisper.cpp local streaming STT configuration (used when sttProvider=local-whispercpp) */
+    whispercpp: z
+      .object({
+        binPath: z.string().min(1).optional(),
+        modelPath: z.string().min(1).optional(),
+        language: z.string().min(1).optional(),
+        threads: z.number().int().positive().optional(),
+        extraArgs: z.array(z.string().min(1)).optional(),
+      })
+      .strict()
+      .optional(),
+
     /** VAD silence duration in ms before considering speech ended */
     silenceDurationMs: z.number().int().positive().default(800),
     /** VAD threshold 0-1 (higher = less sensitive) */
