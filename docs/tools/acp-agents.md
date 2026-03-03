@@ -313,7 +313,7 @@ See [Configuration Reference](/gateway/configuration-reference).
 Install and enable plugin:
 
 ```bash
-openclaw plugins install @openclaw/acpx
+openclaw plugins install acpx
 openclaw config set plugins.entries.acpx.enabled true
 ```
 
