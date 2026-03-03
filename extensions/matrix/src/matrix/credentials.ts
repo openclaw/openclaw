@@ -69,7 +69,7 @@ export function saveMatrixCredentials(
   accountId?: string | null,
 ): void {
   const dir = resolveMatrixCredentialsDir(env);
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 
   const credPath = resolveMatrixCredentialsPath(env, accountId);
 
@@ -82,7 +82,7 @@ export function saveMatrixCredentials(
     lastUsedAt: now,
   };
 
-  fs.writeFileSync(credPath, JSON.stringify(toSave, null, 2), "utf-8");
+  fs.writeFileSync(credPath, JSON.stringify(toSave, null, 2), { encoding: "utf-8", mode: 0o600 });
 }
 
 export function touchMatrixCredentials(
@@ -96,7 +96,7 @@ export function touchMatrixCredentials(
 
   existing.lastUsedAt = new Date().toISOString();
   const credPath = resolveMatrixCredentialsPath(env, accountId);
-  fs.writeFileSync(credPath, JSON.stringify(existing, null, 2), "utf-8");
+  fs.writeFileSync(credPath, JSON.stringify(existing, null, 2), { encoding: "utf-8", mode: 0o600 });
 }
 
 export function clearMatrixCredentials(
