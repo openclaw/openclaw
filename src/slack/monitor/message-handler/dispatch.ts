@@ -474,6 +474,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       onToolStart: async ({ name }: { name?: string }) => {
         if (!name) return;
         const label = toolStatusLabel(name);
+        didSetStatus = true;
         await ctx.setSlackThreadStatus({
           channelId: message.channel,
           threadTs: statusThreadTs,
