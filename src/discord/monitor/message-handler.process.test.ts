@@ -292,6 +292,34 @@ describe("processDiscordMessage ack reactions", () => {
     expect(emojis).not.toContain("👨‍💻");
   });
 
+  it("shows stall emojis for long no-progress runs", async () => {
+    vi.useFakeTimers();
+    let releaseDispatch!: () => void;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = () => resolve();
+    });
+    dispatchInboundMessage.mockImplementationOnce(async () => {
+      await dispatchGate;
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createBaseContext();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const runPromise = processDiscordMessage(ctx as any);
+
+    await vi.advanceTimersByTimeAsync(30_001);
+    releaseDispatch();
+    await vi.runAllTimersAsync();
+
+    await runPromise;
+    const emojis = (
+      sendMocks.reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
+    ).map((call) => call[2]);
+    expect(emojis).toContain(DEFAULT_EMOJIS.stallSoft);
+    expect(emojis).toContain(DEFAULT_EMOJIS.stallHard);
+    expect(emojis).toContain(DEFAULT_EMOJIS.done);
+  });
+
   it("keeps backlog waiting until prior message releases the lane", async () => {
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => {
@@ -303,7 +331,6 @@ describe("processDiscordMessage ack reactions", () => {
     });
     dispatchInboundMessage.mockImplementationOnce(async () => {
       return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
-    });
     });
 
     const first = await createBaseContext({
