@@ -13,6 +13,7 @@ export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
+const DATED_FILENAME_RE = /(\d{4})-(\d{2})-(\d{2})/;
 
 export function toDecayLambda(halfLifeDays: number): number {
   if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0) {
@@ -43,7 +44,16 @@ export function applyTemporalDecayToScore(params: {
 
 function parseMemoryDateFromPath(filePath: string): Date | null {
   const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "");
-  const match = DATED_MEMORY_PATH_RE.exec(normalized);
+
+  // First try the strict pattern (backward compatibility)
+  let match = DATED_MEMORY_PATH_RE.exec(normalized);
+
+  // If not found, try to extract date from anywhere in the basename
+  if (!match) {
+    const basename = path.basename(normalized, ".md");
+    match = DATED_FILENAME_RE.exec(basename);
+  }
+
   if (!match) {
     return null;
   }
@@ -70,13 +80,26 @@ function parseMemoryDateFromPath(filePath: string): Date | null {
 
 function isEvergreenMemoryPath(filePath: string): boolean {
   const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "");
+
+  // Root MEMORY.md is always evergreen
   if (normalized === "MEMORY.md" || normalized === "memory.md") {
     return true;
   }
+
+  // Non-memory paths are not evergreen (fall through to mtime fallback)
   if (!normalized.startsWith("memory/")) {
     return false;
   }
-  return !DATED_MEMORY_PATH_RE.test(normalized);
+
+  // If basename contains a date anywhere, it's temporal (not evergreen)
+  const basename = path.basename(normalized, ".md");
+  if (DATED_FILENAME_RE.test(basename)) {
+    return false;
+  }
+
+  // For backward compatibility: files without dates in their names
+  // remain evergreen (the original behavior)
+  return true;
 }
 
 async function extractTimestamp(params: {
