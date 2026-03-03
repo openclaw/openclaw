@@ -157,6 +157,7 @@ Define providers under `secrets.providers`:
 - `mode: "json"` expects JSON object payload and resolves `id` as pointer.
 - `mode: "singleValue"` expects ref id `"value"` and returns file contents.
 - Path must pass ownership/permission checks.
+- Windows fail-closed note: if ACL verification is unavailable for a path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
 
 ### Exec provider
 
@@ -165,6 +166,7 @@ Define providers under `secrets.providers`:
 - Set `allowSymlinkCommand: true` to allow symlink command paths (for example Homebrew shims). OpenClaw validates the resolved target path.
 - Pair `allowSymlinkCommand` with `trustedDirs` for package-manager paths (for example `["/opt/homebrew"]`).
 - Supports timeout, no-output timeout, output byte limits, env allowlist, and trusted dirs.
+- Windows fail-closed note: if ACL verification is unavailable for the command path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
 
 Request payload (stdin):
 

@@ -716,7 +716,7 @@ describe("gateway server cron", () => {
   }, 60_000);
 
   test("ignores non-string cron.webhookToken values without crashing webhook delivery", async () => {
-    const { prevSkipCron, dir } = await setupCronTestRun({
+    const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-webhook-secretinput-",
       cronEnabled: false,
     });
@@ -781,7 +781,7 @@ describe("gateway server cron", () => {
       expect(notifyArgs.init?.headers?.Authorization).toBeUndefined();
       expect(notifyArgs.init?.headers?.["Content-Type"]).toBe("application/json");
     } finally {
-      await cleanupCronTestRun({ ws, server, dir, prevSkipCron });
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
   }, 45_000);
 });

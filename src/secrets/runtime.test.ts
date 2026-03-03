@@ -14,6 +14,27 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
+
+function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
+  return {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+        models: [],
+      },
+    },
+  };
+}
+
+function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
+  return {
+    version: 1,
+    profiles,
+  };
+}
+
 describe("secrets runtime snapshot", () => {
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
