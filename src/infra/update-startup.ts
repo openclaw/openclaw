@@ -180,12 +180,16 @@ function setUpdateAvailableCache(params: {
   params.onUpdateAvailableChange?.(params.next);
 }
 
-function resolvePersistedUpdateAvailable(state: UpdateCheckState): UpdateAvailable | null {
+function resolvePersistedUpdateAvailable(params: {
+  state: UpdateCheckState;
+  channel: "stable" | "beta";
+}): UpdateAvailable | null {
+  const state = params.state;
   const latestVersion = state.lastAvailableVersion?.trim();
   if (!latestVersion) {
     return null;
   }
-  if (isStablePromotionAlias(VERSION, latestVersion)) {
+  if (params.channel === "stable" && isStablePromotionAlias(VERSION, latestVersion)) {
     return null;
   }
   const cmp = compareSemverStrings(VERSION, latestVersion);
@@ -355,8 +359,12 @@ export async function runGatewayUpdateCheck(params: {
   const state = await readState(statePath);
   const now = Date.now();
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
+  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
   if (shouldRunUpdateHints) {
-    const persistedAvailable = resolvePersistedUpdateAvailable(state);
+    const persistedAvailable = resolvePersistedUpdateAvailable({
+      state,
+      channel,
+    });
     setUpdateAvailableCache({
       next: persistedAvailable,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
@@ -403,7 +411,6 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
   const resolved = await resolveNpmChannelTag({ channel, timeoutMs: 2500 });
   const tag = resolved.tag;
   if (!resolved.version) {
