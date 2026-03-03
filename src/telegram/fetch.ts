@@ -16,6 +16,10 @@ let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
 let baselineGlobalDispatcherCaptured = false;
 let baselineGlobalDispatcher: unknown;
 const log = createSubsystemLogger("telegram/network");
+
+type RequestInitWithDispatcher = RequestInit & {
+  dispatcher?: unknown;
+};
 function isProxyLikeDispatcher(dispatcher: unknown): boolean {
   const ctorName = (dispatcher as { constructor?: { name?: string } })?.constructor?.name;
   return typeof ctorName === "string" && ctorName.includes("ProxyAgent");
@@ -123,45 +127,19 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
   }
 }
 
-function restoreTelegramDispatcherForSafeRetry(desiredAutoSelectFamily: boolean | null): boolean {
+function retryWithBaselineDispatcher(
+  sourceFetch: typeof fetch,
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> | null {
   if (!baselineGlobalDispatcherCaptured) {
-    return false;
+    return null;
   }
-  try {
-    setGlobalDispatcher(baselineGlobalDispatcher as Parameters<typeof setGlobalDispatcher>[0]);
-    // Preserve the decision marker so we don't immediately reinstall the same dispatcher.
-    appliedGlobalDispatcherAutoSelectFamily = desiredAutoSelectFamily;
-    log.warn("fetch fallback: restoring original undici dispatcher for safe retry");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function reapplyTelegramDispatcherWorkaround(desiredAutoSelectFamily: boolean | null): void {
-  if (desiredAutoSelectFamily === null) {
-    return;
-  }
-  const existingGlobalDispatcher = getGlobalDispatcher();
-  const shouldPreserveExistingProxy =
-    isProxyLikeDispatcher(existingGlobalDispatcher) && !hasProxyEnvConfigured();
-  if (shouldPreserveExistingProxy) {
-    return;
-  }
-  try {
-    setGlobalDispatcher(
-      new EnvHttpProxyAgent({
-        connect: {
-          autoSelectFamily: desiredAutoSelectFamily,
-          autoSelectFamilyAttemptTimeout: 300,
-        },
-      }),
-    );
-    appliedGlobalDispatcherAutoSelectFamily = desiredAutoSelectFamily;
-    log.info(`global undici dispatcher autoSelectFamily=${desiredAutoSelectFamily} (reapplied)`);
-  } catch {
-    // ignore if setGlobalDispatcher is unavailable
-  }
+  const initWithDispatcher: RequestInitWithDispatcher = init
+    ? { ...init, dispatcher: baselineGlobalDispatcher }
+    : { dispatcher: baselineGlobalDispatcher };
+  log.warn("fetch fallback: retrying request with baseline undici dispatcher");
+  return sourceFetch(input, initWithDispatcher);
 }
 
 function collectErrorCodes(err: unknown): Set<string> {
@@ -226,9 +204,6 @@ export function resolveTelegramFetch(
   options?: { network?: TelegramNetworkConfig },
 ): typeof fetch | undefined {
   applyTelegramNetworkWorkarounds(options?.network);
-  const desiredAutoSelectFamily = resolveTelegramAutoSelectFamilyDecision({
-    network: options?.network,
-  }).value;
   const sourceFetch = proxyFetch ? resolveFetch(proxyFetch) : resolveFetch();
   if (!sourceFetch) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
@@ -247,14 +222,10 @@ export function resolveTelegramFetch(
         try {
           return await sourceFetch(input, init);
         } catch (ipv4FallbackErr) {
-          if (
-            shouldRetryWithIpv4Fallback(ipv4FallbackErr) &&
-            restoreTelegramDispatcherForSafeRetry(desiredAutoSelectFamily)
-          ) {
-            try {
-              return await sourceFetch(input, init);
-            } finally {
-              reapplyTelegramDispatcherWorkaround(desiredAutoSelectFamily);
+          if (shouldRetryWithIpv4Fallback(ipv4FallbackErr)) {
+            const safeRetry = retryWithBaselineDispatcher(sourceFetch, input, init);
+            if (safeRetry) {
+              return await safeRetry;
             }
           }
           throw ipv4FallbackErr;
