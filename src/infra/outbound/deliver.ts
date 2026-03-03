@@ -36,7 +36,13 @@ import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
-import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
+import {
+  ackDelivery,
+  clearDeliveryInFlight,
+  enqueueDelivery,
+  failDelivery,
+  markDeliveryInFlight,
+} from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
@@ -466,6 +472,9 @@ export async function deliverOutboundPayloads(
         silent: params.silent,
         mirror: params.mirror,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
+  if (queueId) {
+    markDeliveryInFlight(queueId);
+  }
 
   // Wrap onError to detect partial failures under bestEffort mode.
   // When bestEffort is true, per-payload errors are caught and passed to onError
@@ -503,6 +512,10 @@ export async function deliverOutboundPayloads(
       }
     }
     throw err;
+  } finally {
+    if (queueId) {
+      clearDeliveryInFlight(queueId);
+    }
   }
 }
 

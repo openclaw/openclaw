@@ -9,6 +9,7 @@ import type { OutboundChannel } from "./targets.js";
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";
 const MAX_RETRIES = 5;
+const ACTIVE_DELIVERY_IDS = new Set<string>();
 
 /** Backoff delays in milliseconds indexed by retry count (1-based). */
 const BACKOFF_MS: readonly number[] = [
@@ -122,6 +123,24 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
     }
     // Already removed — no-op.
   }
+}
+
+/**
+ * Mark a queued delivery as actively being processed in this process.
+ * Recovery uses this to avoid replaying entries already in-flight.
+ */
+export function markDeliveryInFlight(id: string): void {
+  ACTIVE_DELIVERY_IDS.add(id);
+}
+
+/** Clear the in-flight marker for a queued delivery. */
+export function clearDeliveryInFlight(id: string): void {
+  ACTIVE_DELIVERY_IDS.delete(id);
+}
+
+/** Return true when the queued delivery is currently in-flight in this process. */
+export function isDeliveryInFlight(id: string): boolean {
+  return ACTIVE_DELIVERY_IDS.has(id);
 }
 
 /** Update a queue entry after a failed delivery attempt. */
@@ -299,15 +318,29 @@ export async function recoverPendingDeliveries(opts: {
   let failed = 0;
   let skippedMaxRetries = 0;
   let deferredBackoff = 0;
+  let deferredInFlight = 0;
 
   for (const entry of pending) {
     const now = Date.now();
     if (now >= deadline) {
-      const deferred = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
+      const deferred =
+        pending.length -
+        recovered -
+        failed -
+        skippedMaxRetries -
+        deferredBackoff -
+        deferredInFlight;
       opts.log.warn(
         `Recovery time budget exceeded — ${deferred} entries deferred to the next recovery pass`,
       );
       break;
+    }
+    if (isDeliveryInFlight(entry.id)) {
+      deferredInFlight += 1;
+      opts.log.info(
+        `Delivery ${entry.id} is currently in-flight — deferring to the next recovery pass`,
+      );
+      continue;
     }
     if (entry.retryCount >= MAX_RETRIES) {
       opts.log.warn(

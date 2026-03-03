@@ -7,11 +7,13 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   ackDelivery,
+  clearDeliveryInFlight,
   computeBackoffMs,
   type DeliverFn,
   enqueueDelivery,
   failDelivery,
   isEntryEligibleForRecoveryRetry,
+  markDeliveryInFlight,
   isPermanentDeliveryError,
   loadPendingDeliveries,
   MAX_RETRIES,
@@ -486,6 +488,34 @@ describe("delivery-queue", () => {
       expect(remaining).toHaveLength(1);
 
       expect(log.info).toHaveBeenCalledWith(expect.stringContaining("not ready for retry yet"));
+    });
+
+    it("skips entries currently in-flight in this process", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
+      markDeliveryInFlight(id);
+
+      try {
+        const deliver = vi.fn().mockResolvedValue([]);
+        const { result, log } = await runRecovery({ deliver, maxRecoveryMs: 60_000 });
+
+        expect(deliver).not.toHaveBeenCalled();
+        expect(result).toEqual({
+          recovered: 0,
+          failed: 0,
+          skippedMaxRetries: 0,
+          deferredBackoff: 0,
+        });
+
+        const remaining = await loadPendingDeliveries(tmpDir);
+        expect(remaining).toHaveLength(1);
+        expect(remaining[0]?.id).toBe(id);
+        expect(log.info).toHaveBeenCalledWith(expect.stringContaining("currently in-flight"));
+      } finally {
+        clearDeliveryInFlight(id);
+      }
     });
 
     it("continues past high-backoff entries and recovers ready entries behind them", async () => {
