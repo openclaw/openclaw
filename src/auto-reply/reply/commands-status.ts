@@ -2,6 +2,7 @@ import {
   resolveAgentDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
+  resolveAgentModelFallbacksOverride,
 } from "../../agents/agent-scope.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
@@ -160,6 +161,7 @@ export async function buildStatusReply(params: {
       })
     : selectedModelAuth;
   const agentDefaults = cfg.agents?.defaults ?? {};
+  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
   const statusText = buildStatusMessage({
     config: cfg,
     agent: {
@@ -167,6 +169,7 @@ export async function buildStatusReply(params: {
       model: {
         ...toAgentModelListLike(agentDefaults.model),
         primary: `${provider}/${model}`,
+        fallbacks: agentFallbacksOverride,
       },
       contextTokens,
       thinkingDefault: agentDefaults.thinkingDefault,

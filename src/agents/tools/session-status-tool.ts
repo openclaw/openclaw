@@ -22,7 +22,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { resolveAgentDir } from "../agent-scope.js";
+import { resolveAgentDir, resolveAgentModelFallbacksOverride } from "../agent-scope.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { resolveModelAuthLabel } from "../model-auth-label.js";
 import { loadModelCatalog } from "../model-catalog.js";
@@ -350,10 +350,11 @@ export function createSessionStatusTool(opts?: {
 
       const agentDefaults = cfg.agents?.defaults ?? {};
       const defaultLabel = `${configured.provider}/${configured.model}`;
+      const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, agentId);
       const agentModel =
         typeof agentDefaults.model === "object" && agentDefaults.model
-          ? { ...agentDefaults.model, primary: defaultLabel }
-          : { primary: defaultLabel };
+          ? { ...agentDefaults.model, primary: defaultLabel, fallbacks: agentFallbacksOverride }
+          : { primary: defaultLabel, fallbacks: agentFallbacksOverride };
       const statusText = buildStatusMessage({
         config: cfg,
         agent: {
