@@ -1,11 +1,56 @@
-import {
-  hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-} from "openclaw/plugin-sdk/feishu";
+import * as feishuSdk from "openclaw/plugin-sdk/feishu";
 import { z } from "zod";
 
-export { hasConfiguredSecretInput, normalizeResolvedSecretInputString, normalizeSecretInputString };
+const { hasConfiguredSecretInput } = feishuSdk;
+const _normalizeResolvedSecretInputString = feishuSdk.normalizeResolvedSecretInputString;
+const _normalizeSecretInputString = feishuSdk.normalizeSecretInputString;
+
+/**
+ * Local fallback for normalizeSecretInputString when the host openclaw version
+ * predates the export (added in 2026.3.2).
+ */
+function normalizeSecretInputStringFallback(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export const normalizeSecretInputString: typeof normalizeSecretInputStringFallback =
+  typeof _normalizeSecretInputString === "function"
+    ? _normalizeSecretInputString
+    : normalizeSecretInputStringFallback;
+
+/**
+ * Fallback for normalizeResolvedSecretInputString that preserves
+ * unresolved SecretRef validation: if the value looks like a SecretRef
+ * object (has a `source` key), throw so the user sees the real problem
+ * instead of silently treating the account as unconfigured.
+ */
+function normalizeResolvedSecretInputStringFallback(params: {
+  value: unknown;
+  refValue?: unknown;
+  path: string;
+}): string | undefined {
+  const normalized = normalizeSecretInputString(params.value);
+  if (normalized) {
+    return normalized;
+  }
+  if (params.value != null && typeof params.value === "object" && "source" in params.value) {
+    throw new Error(
+      `${params.path}: unresolved SecretRef. Resolve this against an active gateway runtime snapshot before reading it.`,
+    );
+  }
+  return undefined;
+}
+
+export const normalizeResolvedSecretInputString: typeof normalizeResolvedSecretInputStringFallback =
+  typeof _normalizeResolvedSecretInputString === "function"
+    ? _normalizeResolvedSecretInputString
+    : normalizeResolvedSecretInputStringFallback;
+
+export { hasConfiguredSecretInput };
 
 export function buildSecretInputSchema() {
   return z.union([
