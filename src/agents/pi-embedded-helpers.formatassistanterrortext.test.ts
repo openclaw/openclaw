@@ -159,10 +159,13 @@ describe("formatAssistantErrorText", () => {
   });
 });
 
-describe("isJsonParseError", () => {
-  it("detects 'Bad control character' errors", () => {
-    expect(
-      isJsonParseError(
+  it("detects 'Unterminated' string errors", () => {
+    expect(isJsonParseError("Unterminated string in JSON at position 42")).toBe(true);
+  });
+
+  it("detects 'Unexpected end of JSON input'", () => {
+    expect(isJsonParseError("Unexpected end of JSON input")).toBe(true);
+  });
         "Bad control character in string literal in JSON at position 144 (line 1 column 145)",
       ),
     ).toBe(true);
