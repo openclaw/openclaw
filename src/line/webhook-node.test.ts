@@ -195,7 +195,7 @@ describe("createLineNodeWebhookHandler", () => {
     );
   });
 
-  it("returns 500 when event processing fails so upstream can retry", async () => {
+  it("returns 200 immediately and logs when event processing fails", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
     const { secret } = createPostWebhookTestHarness(rawBody);
     const failingBot = {
@@ -213,10 +213,12 @@ describe("createLineNodeWebhookHandler", () => {
 
     const { res } = createRes();
     await runSignedPost({ handler: failingHandler, rawBody, secret, res });
+    await Promise.resolve();
 
-    expect(res.statusCode).toBe(500);
-    expect(res.body).toBe(JSON.stringify({ error: "Internal server error" }));
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe(JSON.stringify({ status: "ok" }));
     expect(failingBot.handleWebhook).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 
   it("returns 400 for invalid JSON payload even when signature is valid", async () => {

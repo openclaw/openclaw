@@ -288,7 +288,7 @@ describe("handleLineWebhookEvents", () => {
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
     expect(buildLineMessageContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        commandAuthorized: true,
+        commandAuthorized: false,
         allMedia: [
           {
             path: "/tmp/line-media-file.pdf",
@@ -300,8 +300,8 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("throws when an event handler fails", async () => {
-    const event = {
+  it("throws when an event handler fails and stops processing later events", async () => {
+    const failingEvent = {
       type: "message",
       message: { id: "m-err", type: "text", text: "hi" },
       replyToken: "reply-token",
@@ -311,13 +311,18 @@ describe("handleLineWebhookEvents", () => {
       webhookEventId: "evt-err",
       deliveryContext: { isRedelivery: false },
     } as MessageEvent;
+    const laterEvent = {
+      ...failingEvent,
+      message: { id: "m-later", type: "text", text: "hello" },
+      webhookEventId: "evt-later",
+    } as MessageEvent;
     const runtime = createRuntime();
     const processMessage = vi.fn(async () => {
       throw new Error("boom");
     });
 
     await expect(
-      handleLineWebhookEvents([event], {
+      handleLineWebhookEvents([failingEvent, laterEvent], {
         cfg: { channels: { line: {} } },
         account: {
           accountId: "default",
@@ -331,7 +336,8 @@ describe("handleLineWebhookEvents", () => {
         mediaMaxBytes: 1234,
         processMessage,
       }),
-    ).rejects.toThrow("line: 1 webhook event(s) failed");
+    ).rejects.toThrow("boom");
+    expect(processMessage).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 });
