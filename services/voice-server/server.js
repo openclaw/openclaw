@@ -528,7 +528,7 @@ class GatewayBrain {
           minProtocol: 3,
           maxProtocol: 3,
           client: {
-            id: "voice-server",
+            id: "cli",
             version: "4.0",
             platform: process.platform,
             mode: "backend",
@@ -546,8 +546,11 @@ class GatewayBrain {
   /**
    * Dispatch user text via gateway `agent` in async mode.
    * Returns immediately with request metadata + a completion promise.
+   *
+   * @param {string} userText
+   * @param {{ timeoutMs?: number, onAccepted?: Function|null, sessionKey?: string|null }} opts
    */
-  dispatchThink(userText, { timeoutMs = 30000, onAccepted = null } = {}) {
+  dispatchThink(userText, { timeoutMs = 30000, onAccepted = null, sessionKey = null } = {}) {
     if (!this.isConnected) {
       throw new Error("Gateway not connected");
     }
@@ -600,6 +603,11 @@ class GatewayBrain {
             id: reqId,
             method: "agent",
             params: {
+              agent: "main",
+              // sessionKey pins this request to a specific session. On first use the gateway
+              // creates a fresh session for this key; subsequent requests reuse it. This gives
+              // each voice call its own isolated conversation context.
+              ...(sessionKey ? { sessionKey } : {}),
               message: userText,
               idempotencyKey: reqId,
               deliver: false,
@@ -623,9 +631,13 @@ class GatewayBrain {
 
   /**
    * Compatibility helper: dispatch and await the final text.
+   *
+   * @param {string} userText
+   * @param {number} timeoutMs
+   * @param {string|null} sessionKey
    */
-  async think(userText, timeoutMs = 30000) {
-    const request = this.dispatchThink(userText, { timeoutMs });
+  async think(userText, timeoutMs = 30000, sessionKey = null) {
+    const request = this.dispatchThink(userText, { timeoutMs, sessionKey });
     const result = await request.completion;
     return result.text;
   }
@@ -667,6 +679,11 @@ class VoiceSession {
     this.streamSid = streamSid;
     this.brain = brain;
 
+    // Unique session key for this voice call. The gateway creates a fresh isolated
+    // session on the first agent RPC and reuses it for every subsequent turn in
+    // the same call — giving each call its own conversation context.
+    this.voiceSessionKey = `agent:main:voice-call:${randomUUID()}`;
+
     this.finalizedText = "";
     this.stt = null;
 
@@ -700,11 +717,13 @@ class VoiceSession {
         greeting = await this.brain.think(
           "[SYSTEM: Call just connected. Greet the caller warmly and briefly.]",
           10000,
+          this.voiceSessionKey,
         );
       } catch {
         console.log("  ⚠️ Gateway not ready for greeting, using default");
       }
     }
+    console.log(`  🔑 Voice session key: ${this.voiceSessionKey}`);
 
     await this.speak(greeting);
     console.log("✅ Greeting sent — listening...");
@@ -802,6 +821,7 @@ class VoiceSession {
     try {
       request = this.brain.dispatchThink(userText, {
         timeoutMs: 30000,
+        sessionKey: this.voiceSessionKey,
         onAccepted: ({ requestId, runId }) => {
           if (
             this.currentGenerationId !== myGeneration ||
@@ -887,6 +907,7 @@ class VoiceSession {
     try {
       request = this.brain.dispatchThink(userText, {
         timeoutMs: 30000,
+        sessionKey: this.voiceSessionKey,
         onAccepted: ({ requestId, runId }) => {
           if (
             this.currentGenerationId !== myGeneration ||
@@ -1072,10 +1093,90 @@ wss.on("connection", (ws) => {
   ws.on("error", (err) => console.error("❌ WS error:", err.message));
 });
 
-// ─── ngrok Tunnel ─────────────────────────────────────────────────
+// ─── Tunnel (cloudflared preferred; ngrok fallback) ───────────────
 
 async function startTunnel() {
-  // Pre-configure auth token if provided (enables longer sessions + custom domains).
+  // Use cloudflared by default — it supports concurrent tunnels without
+  // conflicting with other ngrok sessions (e.g. the openclaw-gateway).
+  const provider = (process.env.TUNNEL_PROVIDER ?? "cloudflared").trim().toLowerCase();
+
+  if (provider === "ngrok") {
+    return startNgrokTunnel();
+  }
+  return startCloudflaredTunnel();
+}
+
+async function startCloudflaredTunnel() {
+  return new Promise((resolve, reject) => {
+    console.log("🔒 Starting cloudflared tunnel...");
+    const cf = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${CONFIG.port}`], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let resolved = false;
+    let outputBuffer = "";
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        cf.kill("SIGTERM");
+        reject(new Error("cloudflared startup timed out (30s)"));
+      }
+    }, 30000);
+
+    const processLine = (line) => {
+      // cloudflared prints the public URL in lines containing trycloudflare.com or pages.dev
+      const match = line.match(/https:\/\/[a-zA-Z0-9-]+\.(trycloudflare\.com|pages\.dev)/);
+      if (match && !resolved) {
+        resolved = true;
+        clearTimeout(timeout);
+        tunnelUrl = match[0];
+        console.log(`🔒 cloudflared tunnel: ${tunnelUrl}`);
+        resolve(tunnelUrl);
+      }
+    };
+
+    const handleData = (data) => {
+      outputBuffer += data.toString();
+      const lines = outputBuffer.split("\n");
+      outputBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (line.trim()) {
+          processLine(line);
+        }
+      }
+    };
+
+    cf.stdout.on("data", handleData);
+    cf.stderr.on("data", handleData);
+
+    cf.on("error", (err) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeout);
+        reject(err);
+      }
+    });
+    cf.on("close", (code) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeout);
+        reject(new Error(`cloudflared exited (${code})`));
+      }
+    });
+
+    process.on("SIGINT", () => {
+      cf.kill("SIGTERM");
+      process.exit(0);
+    });
+    process.on("SIGTERM", () => {
+      cf.kill("SIGTERM");
+      process.exit(0);
+    });
+  });
+}
+
+async function startNgrokTunnel() {
   const authToken = (process.env.NGROK_AUTH_TOKEN ?? "").trim();
   const domain = (process.env.NGROK_DOMAIN ?? "").trim();
   if (authToken) {
@@ -1111,7 +1212,6 @@ async function startTunnel() {
     const processLine = (line) => {
       try {
         const log = JSON.parse(line);
-        // ngrok emits a 'started tunnel' JSON line with the public URL
         if ((log.msg === "started tunnel" || (log.addr && log.url)) && log.url && !resolved) {
           resolved = true;
           clearTimeout(timeout);
@@ -1120,7 +1220,7 @@ async function startTunnel() {
           resolve(tunnelUrl);
         }
       } catch {
-        /* non-JSON startup lines */
+        /* non-JSON */
       }
     };
 
@@ -1134,7 +1234,7 @@ async function startTunnel() {
         }
       }
     });
-    ng.stderr.on("data", () => {}); // ngrok logs go to stdout in JSON mode
+    ng.stderr.on("data", () => {});
     ng.on("error", (err) => {
       if (!resolved) {
         resolved = true;
@@ -1150,7 +1250,6 @@ async function startTunnel() {
       }
     });
 
-    // Forward shutdown signals to the ngrok child process.
     process.on("SIGINT", () => {
       ng.kill("SIGTERM");
       process.exit(0);

@@ -268,6 +268,7 @@
       "@napi-rs/canvas",
       "@whiskeysockets/baileys",
       "authenticate-pam",
+      "better-sqlite3",
       "esbuild",
       "koffi",
       "node-llama-cpp",

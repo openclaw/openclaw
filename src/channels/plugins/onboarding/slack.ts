@@ -77,10 +77,7 @@ function buildSlackManifest(botName: string) {
       event_subscriptions: {
         bot_events: [
           "app_mention",
-          "message.channels",
-          "message.groups",
-          "message.im",
-          "message.mpim",
+          "message",
           "reaction_added",
           "reaction_removed",
           "member_joined_channel",

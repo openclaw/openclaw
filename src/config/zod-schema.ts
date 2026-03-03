@@ -734,6 +734,37 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        startupCommands: z
+          .array(
+            z
+              .object({
+                id: z.string().optional(),
+                name: z.string().optional(),
+                command: z.string(),
+                args: z.array(z.string()).optional(),
+                cwd: z.string().optional(),
+                env: z.record(z.string(), z.string()).optional(),
+                enabled: z.boolean().optional(),
+                startPolicy: z
+                  .union([z.literal("always"), z.literal("reuse"), z.literal("never")])
+                  .optional(),
+                stopSignal: z.string().optional(),
+                stopTimeoutMs: z.number().int().positive().optional(),
+                restart: z.union([z.literal("off"), z.literal("on-failure")]).optional(),
+                log: z
+                  .object({
+                    mode: z
+                      .union([z.literal("inherit"), z.literal("file"), z.literal("discard")])
+                      .optional(),
+                    stdoutPath: z.string().optional(),
+                    stderrPath: z.string().optional(),
+                  })
+                  .strict()
+                  .optional(),
+              })
+              .strict(),
+          )
+          .optional(),
       })
       .strict()
       .optional(),
