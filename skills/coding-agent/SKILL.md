@@ -159,10 +159,10 @@ gh pr comment <PR#> --body "<review content>"
 
 ```bash
 # With PTY for proper terminal output
-bash pty:true workdir:~/project command:"claude 'Your task'"
+bash pty:true workdir:~/project command:"claude --dangerously-skip-permissions 'Your task'"
 
 # Background
-bash pty:true workdir:~/project background:true command:"claude 'Your task'"
+bash pty:true workdir:~/project background:true command:"claude --dangerously-skip-permissions 'Your task'"
 ```
 
 ---
