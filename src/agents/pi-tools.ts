@@ -39,7 +39,7 @@ import {
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
-import {assertRequiredParams }  from "./pi-tools.params.ts";
+import { assertRequiredParams } from "./pi-tools.params.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
