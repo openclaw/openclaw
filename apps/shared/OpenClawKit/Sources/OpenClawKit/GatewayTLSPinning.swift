@@ -25,13 +25,14 @@ public enum GatewayTLSStore {
 
     public static func loadFingerprint(stableID: String) -> String? {
         self.migrateFromUserDefaultsIfNeeded(stableID: stableID)
-        let raw = self.keychainLoad(account: stableID)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = GenericPasswordKeychainStore.loadString(service: self.keychainService, account: stableID)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         if raw?.isEmpty == false { return raw }
         return nil
     }
 
     public static func saveFingerprint(_ value: String, stableID: String) {
-        self.keychainSave(value, account: stableID)
+        _ = GenericPasswordKeychainStore.saveString(value, service: self.keychainService, account: stableID)
     }
 
     // MARK: - Migration
@@ -45,42 +46,12 @@ public enum GatewayTLSStore {
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !existing.isEmpty
         else { return }
-        if self.keychainLoad(account: stableID) == nil {
-            guard self.keychainSave(existing, account: stableID) else { return }
+        if GenericPasswordKeychainStore.loadString(service: self.keychainService, account: stableID) == nil {
+            guard GenericPasswordKeychainStore.saveString(existing, service: self.keychainService, account: stableID) else {
+                return
+            }
         }
         defaults.removeObject(forKey: legacyKey)
-    }
-
-    // MARK: - Self-contained Keychain helpers (OpenClawKit can't import iOS KeychainStore)
-
-    private static func keychainLoad(account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: self.keychainService,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    @discardableResult
-    private static func keychainSave(_ value: String, account: String) -> Bool {
-        let data = Data(value.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: self.keychainService,
-            kSecAttrAccount as String: account,
-        ]
-        // Delete-then-add to enforce accessibility attribute.
-        SecItemDelete(query as CFDictionary)
-        var insert = query
-        insert[kSecValueData as String] = data
-        insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        return SecItemAdd(insert as CFDictionary, nil) == errSecSuccess
     }
 }
 

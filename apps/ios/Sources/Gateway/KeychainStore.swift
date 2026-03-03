@@ -1,48 +1,16 @@
 import Foundation
-import Security
+import OpenClawKit
 
 enum KeychainStore {
     static func loadString(service: String, account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        GenericPasswordKeychainStore.loadString(service: service, account: account)
     }
 
     static func saveString(_ value: String, service: String, account: String) -> Bool {
-        // Delete-then-add ensures kSecAttrAccessible is always applied.
-        // SecItemUpdate cannot change the accessibility level of an existing item,
-        // so a stale item created with a weaker policy would retain it on update.
-        let data = Data(value.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-
-        SecItemDelete(query as CFDictionary)
-
-        var insert = query
-        insert[kSecValueData as String] = data
-        insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        return SecItemAdd(insert as CFDictionary, nil) == errSecSuccess
+        GenericPasswordKeychainStore.saveString(value, service: service, account: account)
     }
 
     static func delete(service: String, account: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        let status = SecItemDelete(query as CFDictionary)
-        return status == errSecSuccess || status == errSecItemNotFound
+        GenericPasswordKeychainStore.delete(service: service, account: account)
     }
 }
