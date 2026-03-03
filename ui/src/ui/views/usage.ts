@@ -260,24 +260,23 @@ export function renderUsage(props: UsageProps) {
 
   // Compute totals from sessions
   const computeSessionTotals = (sessions: UsageSessionEntry[]): UsageTotals => {
-    return sessions.reduce(
-      (acc, s) => {
-        if (!s.usage) return acc;
-        acc.input += s.usage.input;
-        acc.output += s.usage.output;
-        acc.cacheRead += s.usage.cacheRead;
-        acc.cacheWrite += s.usage.cacheWrite;
-        acc.totalTokens += s.usage.totalTokens;
-        acc.totalCost += s.usage.totalCost;
-        acc.inputCost += s.usage.inputCost ?? 0;
-        acc.outputCost += s.usage.outputCost ?? 0;
-        acc.cacheReadCost += s.usage.cacheReadCost ?? 0;
-        acc.cacheWriteCost += s.usage.cacheWriteCost ?? 0;
-        acc.missingCostEntries += s.usage.missingCostEntries ?? 0;
+    return sessions.reduce((acc, s) => {
+      if (!s.usage) {
         return acc;
-      },
-      emptyUsageTotals(),
-    );
+      }
+      acc.input += s.usage.input;
+      acc.output += s.usage.output;
+      acc.cacheRead += s.usage.cacheRead;
+      acc.cacheWrite += s.usage.cacheWrite;
+      acc.totalTokens += s.usage.totalTokens;
+      acc.totalCost += s.usage.totalCost;
+      acc.inputCost += s.usage.inputCost ?? 0;
+      acc.outputCost += s.usage.outputCost ?? 0;
+      acc.cacheReadCost += s.usage.cacheReadCost ?? 0;
+      acc.cacheWriteCost += s.usage.cacheWriteCost ?? 0;
+      acc.missingCostEntries += s.usage.missingCostEntries ?? 0;
+      return acc;
+    }, emptyUsageTotals());
   };
 
   // Compute totals from daily data for selected days (more accurate than session totals)
