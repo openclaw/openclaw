@@ -310,35 +310,30 @@ function listExistingAgentIdsFromDisk(): string[] {
 }
 
 function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
-  const agents = cfg.agents?.list ?? [];
-  if (agents.length > 0) {
-    const ids = new Set<string>();
-    for (const entry of agents) {
-      if (entry?.id) {
-        ids.add(normalizeAgentId(entry.id));
-      }
-    }
-    const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    ids.add(defaultId);
-    const sorted = Array.from(ids).filter(Boolean);
-    sorted.sort((a, b) => a.localeCompare(b));
-    return sorted.includes(defaultId)
-      ? [defaultId, ...sorted.filter((id) => id !== defaultId)]
-      : sorted;
-  }
-
+  // IMPORTANT: Always include agent stores that exist on disk.
+  // This covers dynamically-created agent dirs (for example ACP runtimes like agents/codex/*)
+  // even when users configure a restrictive agents.list.
   const ids = new Set<string>();
   const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
   ids.add(defaultId);
+
+  // Include configured agents.
+  for (const entry of cfg.agents?.list ?? []) {
+    if (entry?.id) {
+      ids.add(normalizeAgentId(entry.id));
+    }
+  }
+
+  // Include on-disk agents (covers ACP-created dirs).
   for (const id of listExistingAgentIdsFromDisk()) {
     ids.add(id);
   }
+
   const sorted = Array.from(ids).filter(Boolean);
   sorted.sort((a, b) => a.localeCompare(b));
-  if (sorted.includes(defaultId)) {
-    return [defaultId, ...sorted.filter((id) => id !== defaultId)];
-  }
-  return sorted;
+  return sorted.includes(defaultId)
+    ? [defaultId, ...sorted.filter((id) => id !== defaultId)]
+    : sorted;
 }
 
 export function listAgentsForGateway(cfg: OpenClawConfig): {

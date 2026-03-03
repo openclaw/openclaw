@@ -10,6 +10,7 @@ import {
   deriveSessionTitle,
   listAgentsForGateway,
   listSessionsFromStore,
+  loadCombinedSessionStoreForGateway,
   parseGroupKey,
   pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -309,6 +310,44 @@ describe("gateway session utils", () => {
     expect(result.agents[0]?.identity?.avatarUrl).toBe(
       `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
     );
+  });
+
+  test("loadCombinedSessionStoreForGateway includes on-disk ACP agent stores even when agents.list is configured", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-"));
+    const prevState = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      // Simulate dynamically-created ACP agent dirs on disk.
+      fs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
+      fs.mkdirSync(path.join(stateDir, "agents", "codex", "sessions"), { recursive: true });
+
+      fs.writeFileSync(
+        path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+        JSON.stringify({ "agent:main:main": { sessionId: "s-main", updatedAt: 1 } }),
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(stateDir, "agents", "codex", "sessions", "sessions.json"),
+        JSON.stringify({ "agent:codex:main": { sessionId: "s-codex", updatedAt: 2 } }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: { mainKey: "main" },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      const combined = loadCombinedSessionStoreForGateway(cfg);
+      expect(Object.keys(combined.store)).toEqual(
+        expect.arrayContaining(["agent:main:main", "agent:codex:main"]),
+      );
+    } finally {
+      if (prevState === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevState;
+      }
+    }
   });
 });
 
