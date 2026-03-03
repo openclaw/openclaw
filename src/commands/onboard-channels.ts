@@ -1,5 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
+import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins, getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelMeta } from "../channels/plugins/types.js";
@@ -41,6 +42,24 @@ type ChannelStatusSummary = {
   catalogEntries: ReturnType<typeof listChannelPluginCatalogEntries>;
   statusByChannel: Map<ChannelChoice, ChannelOnboardingStatus>;
   statusLines: string[];
+};
+
+const DINGTALK_COMMUNITY_CATALOG_ENTRY: ChannelPluginCatalogEntry = {
+  id: "dingtalk",
+  meta: {
+    id: "dingtalk",
+    label: "DingTalk",
+    selectionLabel: "DingTalk (钉钉)",
+    docsPath: "/channels/dingtalk",
+    docsLabel: "dingtalk",
+    blurb: "钉钉企业内部机器人（社区插件），使用 Stream 模式，无需公网 IP。",
+    order: 70,
+    aliases: ["dd", "ding"],
+  },
+  install: {
+    npmSpec: "@soimy/dingtalk",
+    defaultChoice: "npm",
+  },
 };
 
 function formatAccountLabel(accountId: string): string {
@@ -121,6 +140,12 @@ async function collectChannelStatus(params: {
   const catalogEntries = listChannelPluginCatalogEntries({ workspaceDir }).filter(
     (entry) => !installedIds.has(entry.id),
   );
+
+  if (!installedIds.has(DINGTALK_COMMUNITY_CATALOG_ENTRY.id)) {
+    if (!catalogEntries.some((entry) => entry.id === DINGTALK_COMMUNITY_CATALOG_ENTRY.id)) {
+      catalogEntries.push(DINGTALK_COMMUNITY_CATALOG_ENTRY);
+    }
+  }
   const statusEntries = await Promise.all(
     listChannelOnboardingAdapters().map((adapter) =>
       adapter.getStatus({
@@ -417,6 +442,12 @@ export async function setupChannels(
     const catalog = listChannelPluginCatalogEntries({ workspaceDir }).filter(
       (entry) => !installedIds.has(entry.id),
     );
+
+    if (!installedIds.has(DINGTALK_COMMUNITY_CATALOG_ENTRY.id)) {
+      if (!catalog.some((entry) => entry.id === DINGTALK_COMMUNITY_CATALOG_ENTRY.id)) {
+        catalog.push(DINGTALK_COMMUNITY_CATALOG_ENTRY);
+      }
+    }
     const metaById = new Map<string, ChannelMeta>();
     for (const meta of core) {
       metaById.set(meta.id, meta);
