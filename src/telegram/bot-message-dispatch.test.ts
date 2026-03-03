@@ -2,6 +2,10 @@ import path from "node:path";
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { STATE_DIR } from "../config/paths.js";
+import {
+  createSequencedTestDraftStream,
+  createTestDraftStream,
+} from "./draft-stream.test-helpers.js";
 
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
@@ -52,44 +56,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     loadSessionStore.mockReturnValue({});
   });
 
-  function createDraftStream(messageId?: number) {
-    let previewRevision = 0;
-    return {
-      update: vi.fn().mockImplementation(() => {
-        previewRevision += 1;
-      }),
-      flush: vi.fn().mockResolvedValue(true),
-      messageId: vi.fn().mockReturnValue(messageId),
-      previewMode: vi.fn().mockReturnValue("message"),
-      previewRevision: vi.fn().mockImplementation(() => previewRevision),
-      clear: vi.fn().mockResolvedValue(undefined),
-      stop: vi.fn().mockResolvedValue(undefined),
-      forceNewMessage: vi.fn(),
-    };
-  }
-
-  function createSequencedDraftStream(startMessageId = 1001) {
-    let activeMessageId: number | undefined;
-    let nextMessageId = startMessageId;
-    let previewRevision = 0;
-    return {
-      update: vi.fn().mockImplementation(() => {
-        if (activeMessageId == null) {
-          activeMessageId = nextMessageId++;
-        }
-        previewRevision += 1;
-      }),
-      flush: vi.fn().mockResolvedValue(true),
-      messageId: vi.fn().mockImplementation(() => activeMessageId),
-      previewMode: vi.fn().mockReturnValue("message"),
-      previewRevision: vi.fn().mockImplementation(() => previewRevision),
-      clear: vi.fn().mockResolvedValue(undefined),
-      stop: vi.fn().mockResolvedValue(undefined),
-      forceNewMessage: vi.fn().mockImplementation(() => {
-        activeMessageId = undefined;
-      }),
-    };
-  }
+  const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
+  const createSequencedDraftStream = (startMessageId = 1001) =>
+    createSequencedTestDraftStream(startMessageId);
 
   function setupDraftStreams(params?: { answerMessageId?: number; reasoningMessageId?: number }) {
     const answerDraftStream = createDraftStream(params?.answerMessageId);
