@@ -44,6 +44,20 @@ export function resolveDefaultGroupPolicy(cfg: GroupPolicyDefaultsConfig): Group
   return cfg.channels?.defaults?.groupPolicy;
 }
 
+export type ErrorPolicyDefaultsConfig = {
+  channels?: {
+    defaults?: {
+      errorPolicy?: import("./types.channels.js").ErrorPolicy;
+    };
+  };
+};
+
+export function resolveDefaultErrorPolicy(
+  cfg: ErrorPolicyDefaultsConfig,
+): import("./types.channels.js").ErrorPolicy | undefined {
+  return cfg.channels?.defaults?.errorPolicy;
+}
+
 export const GROUP_POLICY_BLOCKED_LABEL = {
   group: "group messages",
   guild: "guild messages",

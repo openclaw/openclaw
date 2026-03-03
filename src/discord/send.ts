@@ -38,6 +38,12 @@ export {
   unpinMessageDiscord,
 } from "./send.messages.js";
 export {
+  fetchReactionsDiscord,
+  reactMessageDiscord,
+  removeReactionDiscord,
+  removeOwnReactionsDiscord,
+} from "./send.reactions.js";
+export {
   sendMessageDiscord,
   sendPollDiscord,
   sendStickerDiscord,

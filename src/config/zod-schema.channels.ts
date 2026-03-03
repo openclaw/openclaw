@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const ErrorPolicySchema = z.enum(["reply", "silent", "react-only"]).optional();
+
 export const ChannelHeartbeatVisibilitySchema = z
   .object({
     showOk: z.boolean().optional(),

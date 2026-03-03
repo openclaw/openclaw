@@ -18,10 +18,20 @@ export type ChannelHeartbeatVisibilityConfig = {
   useIndicator?: boolean;
 };
 
+/**
+ * How to handle transient API errors (rate limit, overloaded, timeout) in channels.
+ * - "reply": Send error text as a reply in the channel (default)
+ * - "silent": Swallow the error, log server-side only
+ * - "react-only": React with ⚠️ emoji on the triggering message instead of text reply
+ */
+export type ErrorPolicy = "reply" | "silent" | "react-only";
+
 export type ChannelDefaultsConfig = {
   groupPolicy?: GroupPolicy;
   /** Default heartbeat visibility for all channels. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** How to handle transient API errors in group chats (default: "reply"). */
+  errorPolicy?: ErrorPolicy;
 };
 
 export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
@@ -39,6 +49,8 @@ export type ExtensionChannelConfig = {
   defaultAccount?: string;
   dmPolicy?: string;
   groupPolicy?: GroupPolicy;
+  /** How to handle transient API errors (rate limit, overloaded, timeout). */
+  errorPolicy?: ErrorPolicy;
   accounts?: Record<string, unknown>;
   [key: string]: unknown;
 };

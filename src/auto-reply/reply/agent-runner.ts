@@ -495,9 +495,28 @@ export async function runReplyAgent(params: {
         to: sessionCtx.To,
       }),
       accountId: sessionCtx.AccountId,
+      errorPolicy: cfg.channels?.defaults?.errorPolicy,
     });
-    const { replyPayloads } = payloadResult;
+    const { replyPayloads, errorReactionRequested } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
+
+    // Handle react-only mode: send ⚠️ emoji reaction instead of error text
+    if (
+      errorReactionRequested &&
+      sessionCtx.MessageSid &&
+      sessionCtx.OriginatingChannel === "discord"
+    ) {
+      try {
+        const { reactMessageDiscord } = await import("../../discord/send.js");
+        const channelId = sessionCtx.To || sessionCtx.OriginatingTo;
+        if (channelId) {
+          await reactMessageDiscord(channelId, sessionCtx.MessageSid, "⚠️");
+        }
+      } catch (error: unknown) {
+        // Reaction failed, but don't fail the whole reply
+        logVerbose(`Failed to send error reaction: ${String(error)}`);
+      }
+    }
 
     if (replyPayloads.length === 0) {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
