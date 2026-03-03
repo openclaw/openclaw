@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { bridgeAgentPersonaToClaudeMd } from "./acp-persona-bridge.js";
 
 // Minimal config type stub — only the fields we need
@@ -128,6 +128,36 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
 
     expect(result.bridged).toBe(false);
     expect(result.reason).toBe("no-persona-files");
+  });
+
+  it("refreshes bridge-generated CLAUDE.md for a different agent", async () => {
+    const { cfg, agentWorkspace, sessionCwd } = await setup({
+      "SOUL.md": "# Agent A\nI am agent A.",
+    });
+
+    // First bridge
+    await bridgeAgentPersonaToClaudeMd({
+      cfg: cfg as any,
+      agentId: "test-agent",
+      sessionCwd,
+    });
+
+    const firstContent = await fs.readFile(path.join(sessionCwd, "CLAUDE.md"), "utf-8");
+    expect(firstContent).toContain("I am agent A");
+
+    // Update persona for a second spawn
+    await fs.writeFile(path.join(agentWorkspace, "SOUL.md"), "# Agent B\nI am agent B.", "utf-8");
+
+    const result = await bridgeAgentPersonaToClaudeMd({
+      cfg: cfg as any,
+      agentId: "test-agent",
+      sessionCwd,
+    });
+
+    expect(result.bridged).toBe(true);
+    const refreshed = await fs.readFile(path.join(sessionCwd, "CLAUDE.md"), "utf-8");
+    expect(refreshed).toContain("I am agent B");
+    expect(refreshed).not.toContain("I am agent A");
   });
 
   it("skips empty persona files", async () => {
