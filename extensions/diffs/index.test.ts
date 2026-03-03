@@ -4,7 +4,7 @@ import { createMockServerResponse } from "../../src/test-utils/mock-http-respons
 import plugin from "./index.js";
 
 describe("diffs plugin registration", () => {
-  it("registers the tool, http route, and prompt guidance hook", () => {
+  it("registers the tool and http route", () => {
     const registerTool = vi.fn();
     const registerHttpRoute = vi.fn();
     const on = vi.fn();
@@ -43,8 +43,7 @@ describe("diffs plugin registration", () => {
       auth: "plugin",
       match: "prefix",
     });
-    expect(on).toHaveBeenCalledTimes(1);
-    expect(on.mock.calls[0]?.[0]).toBe("before_prompt_build");
+    expect(on).not.toHaveBeenCalled();
   });
 
   it("applies plugin-config defaults through registered tool and viewer handler", async () => {
