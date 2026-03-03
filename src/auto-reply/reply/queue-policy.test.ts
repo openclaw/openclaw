@@ -45,4 +45,16 @@ describe("resolveActiveRunQueueAction", () => {
       }),
     ).toBe("enqueue-followup");
   });
+
+  it("enqueues system-origin runs while active", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        isActive: true,
+        isHeartbeat: false,
+        isSystemRun: true,
+        shouldFollowup: false,
+        queueMode: "interrupt",
+      }),
+    ).toBe("enqueue-followup");
+  });
 });

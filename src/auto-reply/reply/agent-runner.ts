@@ -58,6 +58,12 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+const SYSTEM_MESSAGE_PROVIDERS = new Set(["cron", "hook", "system"]);
+
+function isSystemOriginRun(messageProvider: string | undefined): boolean {
+  const provider = messageProvider?.trim().toLowerCase();
+  return Boolean(provider && SYSTEM_MESSAGE_PROVIDERS.has(provider));
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -200,6 +206,7 @@ export async function runReplyAgent(params: {
   const activeRunQueueAction = resolveActiveRunQueueAction({
     isActive,
     isHeartbeat,
+    isSystemRun: isSystemOriginRun(followupRun.run.messageProvider),
     shouldFollowup,
     queueMode: resolvedQueue.mode,
   });
