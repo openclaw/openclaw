@@ -45,6 +45,14 @@ export default defineConfig([
     platform: "node",
   },
   {
+    // Compatibility export for community plugins that import the dispatcher by path (#25057).
+    entry: "src/auto-reply/reply/provider-dispatcher.ts",
+    outDir: "dist/auto-reply/reply",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
     entry: "src/extensionAPI.ts",
     env,
     fixedExtension: false,
