@@ -10,11 +10,6 @@
   "peerDependencies": {
     "openclaw": ">=2026.3.2"
   },
-  "peerDependenciesMeta": {
-    "openclaw": {
-      "optional": true
-    }
-  },
   "openclaw": {
     "extensions": [
       "./index.ts"
