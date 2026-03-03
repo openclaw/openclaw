@@ -1,4 +1,4 @@
-import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { resolveApiKeyForProvider, resolveEnvApiKey } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { type SecretInput, type SecretRef } from "../config/types.secrets.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
@@ -86,6 +86,27 @@ function resolveRefFallbackInput(params: {
     },
     resolvedValue: value,
   };
+}
+
+async function resolveExistingProviderApiKey(params: {
+  config: OpenClawConfig;
+  provider: string;
+}): Promise<{ apiKey: string; source: string } | null> {
+  try {
+    const resolved = await resolveApiKeyForProvider({
+      provider: params.provider,
+      cfg: params.config,
+    });
+    if (typeof resolved.apiKey !== "string" || resolved.apiKey.trim().length === 0) {
+      return null;
+    }
+    return {
+      apiKey: resolved.apiKey,
+      source: resolved.source,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function promptSecretRefForOnboarding(params: {
@@ -508,14 +529,24 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
     return resolved.resolvedValue;
   }
 
-  if (envKey && selectedMode === "plaintext") {
+  const existingApiKey = await resolveExistingProviderApiKey({
+    config: params.config,
+    provider: params.provider,
+  });
+  const existingCredentialLabel =
+    existingApiKey &&
+    (existingApiKey.source.startsWith("env:") || existingApiKey.source.startsWith("shell env:"))
+      ? params.envLabel
+      : `${params.provider} credentials`;
+
+  if (existingApiKey && selectedMode === "plaintext") {
     const useExisting = await params.prompter.confirm({
-      message: `Use existing ${params.envLabel} (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+      message: `Use existing ${existingCredentialLabel} (${existingApiKey.source}, ${formatApiKeyPreview(existingApiKey.apiKey)})?`,
       initialValue: true,
     });
     if (useExisting) {
-      await params.setCredential(envKey.apiKey, selectedMode);
-      return envKey.apiKey;
+      await params.setCredential(existingApiKey.apiKey, selectedMode);
+      return existingApiKey.apiKey;
     }
   }
 

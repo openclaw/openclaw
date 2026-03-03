@@ -113,4 +113,52 @@ describe("applyAuthChoiceOpenAI", () => {
     expect(parsed.profiles?.["openai:default"]?.key).toBe("sk-openai-token");
     expect(parsed.profiles?.["openai:default"]?.keyRef).toBeUndefined();
   });
+
+  it("reuses stored OpenAI profile key when reconfiguring models", async () => {
+    const agentDir = await setupTempState();
+    delete process.env.OPENAI_API_KEY;
+
+    const seedPrompter = createWizardPrompter({}, { defaultSelect: "" });
+    const runtime = createExitThrowingRuntime();
+    const seeded = await applyAuthChoiceOpenAI({
+      authChoice: "apiKey",
+      config: {},
+      prompter: seedPrompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "openai",
+        token: "sk-openai-seeded",
+      },
+    });
+    expect(seeded).not.toBeNull();
+
+    const confirm = vi.fn(async () => true);
+    const text = vi.fn(async () => "should-not-be-used");
+    const reconfigurePrompter = createWizardPrompter(
+      { confirm, text },
+      { defaultSelect: "plaintext" },
+    );
+    const result = await applyAuthChoiceOpenAI({
+      authChoice: "openai-api-key",
+      config: seeded?.config ?? {},
+      prompter: reconfigurePrompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result).not.toBeNull();
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("profile:openai:default"),
+      }),
+    );
+    expect(text).not.toHaveBeenCalled();
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(agentDir);
+    expect(parsed.profiles?.["openai:default"]?.key).toBe("sk-openai-seeded");
+    expect(parsed.profiles?.["openai:default"]?.keyRef).toBeUndefined();
+  });
 });
