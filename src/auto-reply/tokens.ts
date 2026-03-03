@@ -57,7 +57,10 @@ export function isSilentReplyPrefixText(
     return false;
   }
   const normalized = text.trimStart().toUpperCase();
-  if (!normalized || normalized.length < 2) {
+  if (!normalized) {
+    return false;
+  }
+  if (!normalized.includes("_")) {
     return false;
   }
   if (/[^A-Z_]/.test(normalized)) {
