@@ -138,6 +138,19 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe("errorserver error");
   });
 
+  it("preserves chunk boundaries when block replies were already streamed", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["First block line", "Second block line"],
+      lastAssistant: makeStoppedAssistant(),
+      preserveAssistantTextChunks: true,
+    });
+
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "First block line",
+      "Second block line",
+    ]);
+  });
+
   it("adds a fallback error when a tool fails and no assistant output exists", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "tab not found" },

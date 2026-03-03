@@ -127,6 +127,7 @@ export function buildEmbeddedRunPayloads(params: {
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
+  preserveAssistantTextChunks?: boolean;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -276,7 +277,9 @@ export function buildEmbeddedRunPayloads(params: {
         : []
   ).filter((text) => !shouldSuppressRawErrorText(text));
   const answerTexts =
-    rawAnswerTexts.length > 1 ? [coalesceAssistantTexts(rawAnswerTexts)] : rawAnswerTexts;
+    params.preserveAssistantTextChunks || rawAnswerTexts.length <= 1
+      ? rawAnswerTexts
+      : [coalesceAssistantTexts(rawAnswerTexts)];
 
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {

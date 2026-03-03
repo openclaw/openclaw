@@ -1239,6 +1239,7 @@ export async function runEmbeddedPiAgent(
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            preserveAssistantTextChunks: Boolean(params.onBlockReply),
           });
 
           // Timeout aborts can leave the run without any assistant payloads.
