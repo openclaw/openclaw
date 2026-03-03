@@ -46,4 +46,6 @@ if [ "${#format_files[@]}" -gt 0 ]; then
   "$RUN_NODE_TOOL" oxfmt --write -- "${format_files[@]}"
 fi
 
-git add -- "${files[@]}"
+# -f is needed because some tracked files live under gitignored directories
+# (e.g. skills/*/bin/) — plain `git add` rejects them even though they're tracked.
+git add -f -- "${files[@]}"
