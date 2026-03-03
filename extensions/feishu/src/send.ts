@@ -143,6 +143,7 @@ function extractCardTextElements(root: unknown[]): string[] {
       //   img, media, emotion, hr → skip (no readable text)
       if (Array.isArray(element)) {
         for (const inline of element as unknown[]) {
+          if (seenNodes++ >= CARD_MAX_NODES || outChars >= CARD_MAX_OUTPUT_CHARS) break;
           if (!inline || typeof inline !== "object") continue;
           const inEl = inline as Record<string, unknown>;
           const inTag = inEl.tag;
@@ -215,7 +216,7 @@ function parseInteractiveCardContent(parsed: unknown): string {
 
   // Legacy format: top-level "title" string (not inside a header object)
   if (typeof card.title === "string" && card.title) {
-    texts.push(card.title);
+    texts.push(sanitizeCardText(card.title));
   }
 
   // Extract header title + subtitle if present (sit outside the elements array)
@@ -225,7 +226,7 @@ function parseInteractiveCardContent(parsed: unknown): string {
     // subtitle: same shape as title — {tag: "plain_text"|"lark_md", content: "..."}
     if (h.subtitle && typeof h.subtitle === "object") {
       const c = (h.subtitle as Record<string, unknown>).content;
-      if (typeof c === "string" && c.trim()) texts.push(c.trim());
+      if (typeof c === "string" && c.trim()) texts.push(sanitizeCardText(c.trim()));
     }
   }
 
