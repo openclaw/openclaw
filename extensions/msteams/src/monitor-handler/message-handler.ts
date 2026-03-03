@@ -187,6 +187,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       groupAllowFrom,
       storeAllowFrom: storedAllowFrom,
       groupAllowFromFallbackToAllowFrom: false,
+      groupAuthIncludesPairingStore: msteamsCfg?.groupAuthIncludesPairingStore,
       isSenderAllowed: (allowFrom) =>
         resolveMSTeamsAllowlistMatch({
           allowFrom,

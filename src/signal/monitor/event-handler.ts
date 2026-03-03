@@ -490,6 +490,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupPolicy: deps.groupPolicy,
         allowFrom: deps.allowFrom,
         groupAllowFrom: deps.groupAllowFrom,
+        groupAuthIncludesPairingStore: deps.groupAuthIncludesPairingStore,
         sender,
       });
 

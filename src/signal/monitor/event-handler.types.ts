@@ -82,6 +82,7 @@ export type SignalEventHandlerDeps = {
   allowFrom: string[];
   groupAllowFrom: string[];
   groupPolicy: GroupPolicy;
+  groupAuthIncludesPairingStore?: boolean;
   reactionMode: SignalReactionNotificationMode;
   reactionAllowlist: string[];
   mediaMaxBytes: number;

@@ -247,6 +247,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       groupPolicy,
       dmPolicy,
       storeAllowFrom,
+      groupAuthIncludesPairingStore: imessageCfg.groupAuthIncludesPairingStore,
       historyLimit,
       groupHistories,
       echoCache: sentMessageCache,

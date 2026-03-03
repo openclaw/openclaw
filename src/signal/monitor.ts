@@ -433,6 +433,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       allowFrom,
       groupAllowFrom,
       groupPolicy,
+      groupAuthIncludesPairingStore: accountInfo.config.groupAuthIncludesPairingStore,
       reactionMode,
       reactionAllowlist,
       mediaMaxBytes,
