@@ -1,4 +1,4 @@
----
+﻿---
 summary: "Community-maintained OpenClaw plugins: browse, install, and submit your own"
 read_when:
   - You want to find third-party OpenClaw plugins
@@ -17,6 +17,19 @@ openclaw plugins install <npm-spec>
 ```
 
 ## Listed plugins
+
+### Berry Shield
+
+Runtime security plugin for OpenClaw with layered protection for risky actions,
+`1:1` (one code per action) and `1:N` (one code for related actions) confirmation,
+output redaction, audit evidence, and a dedicated `bshield` CLI.
+
+- **npm:** `@f4bioo/berry-shield`
+- **repo:** [github.com/F4bioo/berry-shield](https://github.com/F4bioo/berry-shield)
+
+```bash
+openclaw plugins install @f4bioo/berry-shield
+```
 
 ### Codex App Server Bridge
 
