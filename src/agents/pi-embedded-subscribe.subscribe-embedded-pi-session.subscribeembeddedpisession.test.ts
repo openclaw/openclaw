@@ -531,6 +531,42 @@ describe("subscribeEmbeddedPiSession", () => {
     });
   });
 
+  it("does not emit duplicate non-text snapshot events when payload is unchanged", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    const mediaOnlyMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "MEDIA: https://example.com/a.png" }],
+    };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: mediaOnlyMessage,
+      assistantMessageEvent: { type: "start" },
+    });
+    emit({
+      type: "message_update",
+      message: mediaOnlyMessage,
+      assistantMessageEvent: { type: "toolcall_delta", delta: '{"tool":"noop"}' },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      text: "",
+      delta: "",
+      mediaUrls: ["https://example.com/a.png"],
+    });
+  });
+
   it("emits non-text partial updates when only audio_as_voice is present", () => {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();

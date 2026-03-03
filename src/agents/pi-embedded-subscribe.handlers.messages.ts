@@ -204,6 +204,12 @@ export function handleMessageUpdate(
       const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
       const hasAudio = Boolean(parsedSnapshot.audioAsVoice);
       const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+      const previousSnapshot = ctx.state.lastStreamedAssistant?.trim();
+      const previousParsed = previousSnapshot
+        ? parseReplyDirectives(stripTrailingDirective(previousSnapshot))
+        : null;
+      const mediaChanged = !areMediaUrlsEqual(mediaUrls, previousParsed?.mediaUrls);
+      const audioChanged = hasAudio !== Boolean(previousParsed?.audioAsVoice);
 
       let shouldEmit = false;
       let deltaText = "";
@@ -213,7 +219,7 @@ export function handleMessageUpdate(
         shouldEmit = false;
       } else {
         deltaText = cleanedText.slice(previousCleaned.length);
-        shouldEmit = Boolean(deltaText || hasMedia || hasAudio);
+        shouldEmit = Boolean(deltaText || mediaChanged || audioChanged);
       }
 
       if (shouldEmit) {
