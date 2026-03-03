@@ -1684,8 +1684,10 @@ describe("broadcast dispatch", () => {
     vi.clearAllMocks();
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
+      channel: "feishu",
       accountId: "default",
       sessionKey: "agent:main:feishu:group:oc-broadcast-group",
+      mainSessionKey: "agent:main:main",
       matchedBy: "default",
     });
     mockCreateFeishuClient.mockReturnValue({
