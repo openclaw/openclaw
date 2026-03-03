@@ -145,5 +145,22 @@ export function isAuthErrorMessage(raw: string): boolean {
 }
 
 export function isOverloadedErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  // Exclude JSON parse errors (e.g. "Bad escaped character in JSON") that can
+  // occur when the Anthropic SDK streaming parser encounters invalid escape
+  // sequences (\w, \d, \s) in tool-use payloads.  These are not overload
+  // errors and should surface as-is so users can debug the real issue (#33280).
+  if (isJsonParseError(raw)) {
+    return false;
+  }
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
+}
+
+const JSON_PARSE_ERROR_RE =
+  /bad (?:escaped character|control character).*in json|unexpected (?:token|end of json)|json\.parse|syntaxerror.*json/i;
+
+export function isJsonParseError(raw: string): boolean {
+  return JSON_PARSE_ERROR_RE.test(raw);
 }

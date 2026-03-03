@@ -7,6 +7,7 @@ import {
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
+  isJsonParseError,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
@@ -18,6 +19,7 @@ export {
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
+  isJsonParseError,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
@@ -541,6 +543,14 @@ export function formatAssistantErrorText(
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
+  }
+
+  if (isJsonParseError(raw)) {
+    return (
+      "Streaming JSON parse error — the model likely emitted invalid escape sequences " +
+      "(e.g. regex patterns like \\w, \\d, \\s in tool arguments). " +
+      "Please retry. If this persists, try simplifying the prompt to avoid regex content."
+    );
   }
 
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
