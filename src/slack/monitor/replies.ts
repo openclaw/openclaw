@@ -32,7 +32,11 @@ export async function deliverReplies(params: {
 
     if (mediaList.length === 0) {
       const trimmed = text.trim();
-      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN) || isSilentReplyPrefixText(trimmed, SILENT_REPLY_TOKEN)) {
+      if (
+        !trimmed ||
+        isSilentReplyText(trimmed, SILENT_REPLY_TOKEN) ||
+        isSilentReplyPrefixText(trimmed, SILENT_REPLY_TOKEN)
+      ) {
         continue;
       }
       await sendMessageSlack(params.target, trimmed, {

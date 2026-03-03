@@ -254,7 +254,11 @@ export async function sendMessageSlack(
   opts: SlackSendOpts = {},
 ): Promise<SlackSendResult> {
   const trimmedMessage = message?.trim() ?? "";
-  if ((isSilentReplyText(trimmedMessage) || isSilentReplyPrefixText(trimmedMessage)) && !opts.mediaUrl && !opts.blocks) {
+  if (
+    (isSilentReplyText(trimmedMessage) || isSilentReplyPrefixText(trimmedMessage)) &&
+    !opts.mediaUrl &&
+    !opts.blocks
+  ) {
     logVerbose("slack send: suppressed NO_REPLY token (or prefix) before API call");
     return { messageId: "suppressed", channelId: "" };
   }
