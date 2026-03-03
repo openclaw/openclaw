@@ -104,7 +104,7 @@ async function packToArchive({
   return dest;
 }
 
-async function createVoiceCallArchiveBuffer(version: string): Promise<Buffer> {
+function readVoiceCallArchiveBuffer(version: string): Buffer {
   return fs.readFileSync(path.join(pluginFixturesDir, `voice-call-${version}.tgz`));
 }
 
@@ -123,27 +123,27 @@ function getArchiveFixturePath(params: {
   return archivePath;
 }
 
-async function createZipperArchiveBuffer(): Promise<Buffer> {
+function readZipperArchiveBuffer(): Buffer {
   return fs.readFileSync(path.join(pluginFixturesDir, "zipper-0.0.1.zip"));
 }
 
-const VOICE_CALL_ARCHIVE_V1_BUFFER_PROMISE = createVoiceCallArchiveBuffer("0.0.1");
-const VOICE_CALL_ARCHIVE_V2_BUFFER_PROMISE = createVoiceCallArchiveBuffer("0.0.2");
-const ZIPPER_ARCHIVE_BUFFER_PROMISE = createZipperArchiveBuffer();
+const VOICE_CALL_ARCHIVE_V1_BUFFER = readVoiceCallArchiveBuffer("0.0.1");
+const VOICE_CALL_ARCHIVE_V2_BUFFER = readVoiceCallArchiveBuffer("0.0.2");
+const ZIPPER_ARCHIVE_BUFFER = readZipperArchiveBuffer();
 
-async function getVoiceCallArchiveBuffer(version: string): Promise<Buffer> {
+function getVoiceCallArchiveBuffer(version: string): Buffer {
   if (version === "0.0.1") {
-    return VOICE_CALL_ARCHIVE_V1_BUFFER_PROMISE;
+    return VOICE_CALL_ARCHIVE_V1_BUFFER;
   }
   if (version === "0.0.2") {
-    return VOICE_CALL_ARCHIVE_V2_BUFFER_PROMISE;
+    return VOICE_CALL_ARCHIVE_V2_BUFFER;
   }
-  return createVoiceCallArchiveBuffer(version);
+  return readVoiceCallArchiveBuffer(version);
 }
 
 async function setupVoiceCallArchiveInstall(params: { outName: string; version: string }) {
   const stateDir = makeTempDir();
-  const archiveBuffer = await getVoiceCallArchiveBuffer(params.version);
+  const archiveBuffer = getVoiceCallArchiveBuffer(params.version);
   const archivePath = getArchiveFixturePath({
     cacheKey: `voice-call:${params.version}`,
     outName: params.outName,
@@ -435,7 +435,7 @@ describe("installPluginFromArchive", () => {
     const archivePath = getArchiveFixturePath({
       cacheKey: "zipper:0.0.1",
       outName: "zipper-0.0.1.zip",
-      buffer: await ZIPPER_ARCHIVE_BUFFER_PROMISE,
+      buffer: ZIPPER_ARCHIVE_BUFFER,
     });
 
     const extensionsDir = path.join(stateDir, "extensions");
@@ -451,12 +451,12 @@ describe("installPluginFromArchive", () => {
     const archiveV1 = getArchiveFixturePath({
       cacheKey: "voice-call:0.0.1",
       outName: "voice-call-0.0.1.tgz",
-      buffer: await VOICE_CALL_ARCHIVE_V1_BUFFER_PROMISE,
+      buffer: VOICE_CALL_ARCHIVE_V1_BUFFER,
     });
     const archiveV2 = getArchiveFixturePath({
       cacheKey: "voice-call:0.0.2",
       outName: "voice-call-0.0.2.tgz",
-      buffer: await VOICE_CALL_ARCHIVE_V2_BUFFER_PROMISE,
+      buffer: VOICE_CALL_ARCHIVE_V2_BUFFER,
     });
 
     const extensionsDir = path.join(stateDir, "extensions");
@@ -754,7 +754,7 @@ describe("installPluginFromNpmSpec", () => {
     fs.mkdirSync(extensionsDir, { recursive: true });
 
     const run = vi.mocked(runCommandWithTimeout);
-    const voiceCallArchiveBuffer = await VOICE_CALL_ARCHIVE_V1_BUFFER_PROMISE;
+    const voiceCallArchiveBuffer = VOICE_CALL_ARCHIVE_V1_BUFFER;
 
     let packTmpDir = "";
     const packedName = "voice-call-0.0.1.tgz";
