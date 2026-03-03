@@ -90,3 +90,16 @@ export function resolveChannelRestartReason(
   }
   return "stuck";
 }
+
+/**
+ * Extract `lastDisconnectAt` from a channel account snapshot's `lastDisconnect`
+ * field, which can be a string, an object with `at`, or null.
+ */
+export function extractLastDisconnectAt(
+  lastDisconnect: string | { at: number; [key: string]: unknown } | null | undefined,
+): number | undefined {
+  if (lastDisconnect != null && typeof lastDisconnect === "object") {
+    return lastDisconnect.at;
+  }
+  return undefined;
+}

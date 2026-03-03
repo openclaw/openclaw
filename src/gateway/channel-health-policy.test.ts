@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { evaluateChannelHealth, resolveChannelRestartReason } from "./channel-health-policy.js";
+import {
+  evaluateChannelHealth,
+  extractLastDisconnectAt,
+  resolveChannelRestartReason,
+} from "./channel-health-policy.js";
 
 describe("evaluateChannelHealth", () => {
   it("treats disabled accounts as healthy unmanaged", () => {
@@ -119,5 +123,23 @@ describe("reconnect grace period (#31710)", () => {
       policy,
     );
     expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
+  });
+});
+
+describe("extractLastDisconnectAt", () => {
+  it("extracts at from object", () => {
+    expect(extractLastDisconnectAt({ at: 12345, status: 1006 })).toBe(12345);
+  });
+
+  it("returns undefined for string", () => {
+    expect(extractLastDisconnectAt("some error")).toBeUndefined();
+  });
+
+  it("returns undefined for null", () => {
+    expect(extractLastDisconnectAt(null)).toBeUndefined();
+  });
+
+  it("returns undefined for undefined", () => {
+    expect(extractLastDisconnectAt(undefined)).toBeUndefined();
   });
 });

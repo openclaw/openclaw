@@ -2,6 +2,7 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   evaluateChannelHealth,
+  extractLastDisconnectAt,
   resolveChannelRestartReason,
   type ChannelHealthPolicy,
 } from "./channel-health-policy.js";
@@ -127,12 +128,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             staleEventThresholdMs: timing.staleEventThresholdMs,
             channelConnectGraceMs: timing.channelConnectGraceMs,
           };
-          // Extract lastDisconnectAt from the channel account snapshot so
-          // the health policy can apply a reconnect grace period (#31710).
-          const lastDisconnectAt =
-            status.lastDisconnect != null && typeof status.lastDisconnect === "object"
-              ? status.lastDisconnect.at
-              : undefined;
+          const lastDisconnectAt = extractLastDisconnectAt(status.lastDisconnect);
           const health = evaluateChannelHealth({ ...status, lastDisconnectAt }, healthPolicy);
           if (health.healthy) {
             continue;
