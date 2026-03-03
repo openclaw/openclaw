@@ -78,7 +78,7 @@ rotate_log() {
             # Linux stat syntax
             log_size="$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)"
         fi
-        
+
         if [[ "$log_size" -gt "$LOG_MAX_BYTES" ]]; then
             mv "$LOG_FILE" "${LOG_FILE}.1"
             log "INFO" "Log rotated"
@@ -98,7 +98,7 @@ rotate_log() {
 find_main_chrome_pids() {
     local pids=()
     local ps_output
-    
+
     # Get process list
     if [[ "$PLATFORM" == "macos" ]]; then
         # macOS ps syntax
@@ -107,7 +107,7 @@ find_main_chrome_pids() {
         # Linux ps syntax
         ps_output="$(ps -u "$(whoami)" -o pid=,args= 2>/dev/null)" || true
     fi
-    
+
     [[ -z "$ps_output" ]] && echo "" && return 0
 
     while IFS= read -r line; do
@@ -125,7 +125,7 @@ find_main_chrome_pids() {
         | grep -F "--user-data-dir=$OPENCLAW_USERDATA_DIR" \
         || true
     )
-    
+
     echo "${pids[*]}"
 }
 
@@ -137,7 +137,7 @@ get_elapsed_secs() {
         local etime
         etime=$(ps -p "$1" -o etime= 2>/dev/null | tr -d ' ')
         [[ -z "$etime" ]] && return 1
-        
+
         # Parse etime format and convert to seconds
         # Format can be: ss, mm:ss, hh:mm:ss, or dd-hh:mm:ss
         if [[ "$etime" =~ ^([0-9]+)-([0-9]{2}):([0-9]{2}):([0-9]{2})$ ]]; then
@@ -175,10 +175,10 @@ read_proc_cmdline() {
 has_active_cdp() {
     local pid="$1"
     local port
-    
+
     port="$(read_proc_cmdline "$pid" | grep -oE 'remote-debugging-port=[0-9]+' | cut -d= -f2)" || true
     [[ -z "$port" ]] && return 1
-    
+
     if [[ "$PLATFORM" == "macos" ]]; then
         # macOS: use lsof
         lsof -nP -iTCP:"$port" -sTCP:ESTABLISHED 2>/dev/null | grep -q "ESTABLISHED" && return 0
@@ -193,7 +193,7 @@ has_active_cdp() {
 get_tree_rss_mb() {
     local pid="$1"
     local total_kb=0
-    
+
     # Get children PIDs
     local children
     if [[ "$PLATFORM" == "macos" ]]; then
@@ -203,13 +203,13 @@ get_tree_rss_mb() {
         # Linux: use ps
         children="$(ps --ppid "$pid" -o pid= 2>/dev/null || true)"
     fi
-    
+
     # Sum RSS
     while IFS= read -r rss; do
         rss="$(echo "$rss" | tr -d ' ')"
         [[ -n "$rss" ]] && total_kb=$(( total_kb + rss ))
     done < <(echo "$children" | xargs -I{} ps -p {} -o rss= 2>/dev/null; ps -p "$pid" -o rss= 2>/dev/null)
-    
+
     echo $(( total_kb / 1024 ))
 }
 
@@ -263,15 +263,15 @@ do_scan() {
     if [[ "$remaining" -gt "$MAX_CHROME_INSTANCES" ]]; then
         # Sort by elapsed time (oldest first), keep newest, kill oldest excess
         IFS=$'\n' read -r -d '' -a sorted < <(printf '%s\n' "${surviving[@]}" | sort -t: -k2 -n)
-        
+
         local to_kill=$(( remaining - MAX_CHROME_INSTANCES ))
         for entry in "${sorted[@]:$MAX_CHROME_INSTANCES}"; do
             [[ -z "$entry" ]] && continue
             IFS=':' read -r pid elapsed rss_mb cdp <<< "$entry"
-            
+
             # Skip if has active CDP (protected)
             [[ "$cdp" -eq 1 ]] && continue
-            
+
             if [[ "$DRY_RUN" == "true" ]]; then
                 log "INFO" "[DRY-RUN] Would kill excess Chrome PID=$pid (max=$MAX_CHROME_INSTANCES, remaining=$remaining)"
             else
@@ -281,7 +281,7 @@ do_scan() {
                 kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
                 ((killed++)) || true
             fi
-            
+
             ((to_kill--)) || true
             [[ "$to_kill" -le 0 ]] && break
         done
@@ -294,31 +294,31 @@ do_scan() {
 show_status() {
     local pids_str
     pids_str="$(find_main_chrome_pids)"
-    
+
     echo "=== OpenClaw Chrome Process Status ==="
     echo "Platform: $PLATFORM"
     echo "User-data-dir: $OPENCLAW_USERDATA_DIR"
     echo ""
-    
+
     if [[ -z "$pids_str" ]]; then
         echo "No OpenClaw Chrome processes found."
         return 0
     fi
-    
+
     # FIX: Properly initialize array from space-separated PIDs
     read -ra pids <<< "$pids_str"
     echo "Found ${#pids[@]} process(es):"
     echo ""
-    
+
     for pid in "${pids[@]}"; do
         local elapsed rss_mb cdp="no"
         elapsed="$(get_elapsed_secs "$pid")" || continue
         rss_mb="$(get_tree_rss_mb "$pid")"
         has_active_cdp "$pid" && cdp="yes"
-        
+
         printf "  PID %-6s | Age: %-5ss | RSS: %-5sMB | CDP: %-3s\n" "$pid" "$elapsed" "$rss_mb" "$cdp"
     done
-    
+
     echo ""
     echo "Config: max=$MAX_CHROME_INSTANCES, idle_timeout=${IDLE_TIMEOUT_SECS}s"
 }
@@ -327,23 +327,23 @@ show_status() {
 kill_all_chrome() {
     local pids_str
     pids_str="$(find_main_chrome_pids)"
-    
+
     if [[ -z "$pids_str" ]]; then
         echo "No OpenClaw Chrome processes to kill."
         return 0
     fi
-    
+
     # FIX: Properly initialize array from space-separated PIDs
     read -ra pids <<< "$pids_str"
     echo "Killing ${#pids[@]} OpenClaw Chrome process(es)..."
-    
+
     for pid in "${pids[@]}"; do
         echo "  Killing PID $pid..."
         kill -TERM "$pid" 2>/dev/null || true
     done
-    
+
     sleep 2
-    
+
     # Check if any survived
     local remaining_str
     remaining_str="$(find_main_chrome_pids)"
@@ -355,17 +355,17 @@ kill_all_chrome() {
             kill -KILL "$pid" 2>/dev/null || true
         done
     fi
-    
+
     echo "Done."
 }
 
 # ── Daemon mode ──────────────────────────────────────────────────────────────
 run_daemon() {
     log "INFO" "Chrome cleanup daemon starting (platform=$PLATFORM, max=$MAX_CHROME_INSTANCES, idle=${IDLE_TIMEOUT_SECS}s)"
-    
+
     # FIX: Add signal handling for graceful shutdown
     trap 'log "INFO" "Received SIGTERM/SIGINT, shutting down gracefully"; exit 0' SIGTERM SIGINT
-    
+
     while true; do
         rotate_log
         do_scan
@@ -376,11 +376,11 @@ run_daemon() {
 # ── Main ─────────────────────────────────────────────────────────────────────
 main() {
     local mode="${1:-once}"
-    
+
     # Setup logging
     setup_logging
     rotate_log
-    
+
     case "$mode" in
         daemon)
             run_daemon
