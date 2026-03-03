@@ -1494,14 +1494,14 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
+    // The manifest registry keeps only the higher-precedence record (config > bundled).
+    // The loader sees a single candidate with a manifest and loads it.
     const entries = registry.plugins.filter((entry) => entry.id === "shadow");
     const loaded = entries.find((entry) => entry.status === "loaded");
-    const overridden = entries.find((entry) => entry.status === "disabled");
     expect(loaded?.origin).toBe("config");
-    expect(overridden?.origin).toBe("bundled");
   });
 
-  it("prefers bundled plugin over auto-discovered global duplicate ids", () => {
+  it("prefers globally-installed plugin over bundled copy (#32879)", () => {
     const bundledDir = makeTempDir();
     writePlugin({
       id: "feishu",
@@ -1534,12 +1534,11 @@ describe("loadOpenClawPlugins", () => {
         },
       });
 
+      // Global (installed) plugins are preferred over bundled copies.
+      // The installed copy has node_modules with required dependencies.
       const entries = registry.plugins.filter((entry) => entry.id === "feishu");
       const loaded = entries.find((entry) => entry.status === "loaded");
-      const overridden = entries.find((entry) => entry.status === "disabled");
-      expect(loaded?.origin).toBe("bundled");
-      expect(overridden?.origin).toBe("global");
-      expect(overridden?.error).toContain("overridden by bundled plugin");
+      expect(loaded?.origin).toBe("global");
     });
   });
 
