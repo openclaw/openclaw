@@ -130,7 +130,6 @@ export function registerWebhooksCli(program: Command) {
     .option("--include-body", "Include email body content", true)
     .option("--max-bytes <n>", "Max body bytes per message", String(DEFAULT_IMAP_MAX_BYTES))
     .option("--mark-seen", "Mark messages as seen after processing", true)
-    .option("--no-mark-seen", "Do not mark messages as seen after processing")
     .option("--hook-url <url>", "OpenClaw hook URL")
     .option("--hook-token <token>", "OpenClaw hook token")
     .option("--himalaya-config <path>", "Path to himalaya config file")
@@ -259,6 +258,20 @@ function numberOption(value: unknown): number | undefined {
 function booleanOption(value: unknown): boolean | undefined {
   if (value === undefined || value === null) {
     return undefined;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const lower = value.toLowerCase().trim();
+    if (lower === "false" || lower === "0" || lower === "no" || lower === "off") {
+      return false;
+    }
+    if (lower === "true" || lower === "1" || lower === "yes" || lower === "on") {
+      return true;
+    }
+    // Non-empty string defaults to true
+    return true;
   }
   return Boolean(value);
 }

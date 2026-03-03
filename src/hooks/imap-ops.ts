@@ -188,7 +188,7 @@ export async function runImapService(opts: ImapRunOptions) {
 
   // Import and start the watcher directly.
   const { startImapWatcher, stopImapWatcher } = await import("./imap-watcher.js");
-  const startResult = await startImapWatcher(config, overrides);
+  const startResult = await startImapWatcher(config, overrides, { skipHooksEnabledCheck: true });
   if (!startResult.started) {
     throw new Error(startResult.reason ?? "imap watcher failed to start");
   }

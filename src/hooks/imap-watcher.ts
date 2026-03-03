@@ -36,6 +36,14 @@ export type ImapWatcherStartResult = {
   reason?: string;
 };
 
+export type StartImapWatcherOptions = {
+  /**
+   * When true, skip the hooks.enabled check. Used by the run command
+   * which provides all necessary configuration via overrides.
+   */
+  skipHooksEnabledCheck?: boolean;
+};
+
 /**
  * Start the IMAP watcher service.
  * Called by the gateway if hooks.imap is configured.
@@ -43,10 +51,11 @@ export type ImapWatcherStartResult = {
 export async function startImapWatcher(
   cfg: OpenClawConfig,
   overrides?: import("./imap.js").ImapHookOverrides,
+  opts?: StartImapWatcherOptions,
 ): Promise<ImapWatcherStartResult> {
   log.debug("startImapWatcher called");
 
-  if (!cfg.hooks?.enabled) {
+  if (!opts?.skipHooksEnabledCheck && !cfg.hooks?.enabled) {
     log.debug("hooks not enabled, skipping start");
     return { started: false, reason: "hooks not enabled" };
   }
@@ -281,7 +290,9 @@ async function processEnvelope(
         `message ${envelope.id} read: original=${originalBodyLength} chars, truncated to ${body.length} chars (maxBytes=${cfg.maxBytes})`,
       );
     } catch (err) {
-      log.warn(`failed to read message ${envelope.id}: ${String(err)}`);
+      const msg = `failed to read message ${envelope.id}: ${String(err)}`;
+      log.error(msg);
+      throw new Error(msg, { cause: err });
     }
   } else {
     log.debug(`skipping body read (includeBody=false)`);
