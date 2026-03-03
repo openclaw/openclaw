@@ -40,6 +40,10 @@ const SCHTASKS_ACTIONS = new Map<string, GatewayManagementAction>([
 ]);
 const PNPM_OPTIONS_WITH_VALUE = new Set(["-c", "--dir", "-f", "--filter"]);
 const PNPM_EXEC_OPTIONS_WITH_VALUE = new Set(["--package"]);
+const CLI_HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-v", "--version"]);
+const GATEWAY_SERVICE_BOOLEAN_FLAGS = new Set(["--json"]);
+const GATEWAY_RESTART_EXTRA_FLAGS = new Set(["--hard"]);
+const SYSTEMCTL_HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "--version"]);
 const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
   "-H",
   "--host",
@@ -219,6 +223,22 @@ function hasSystemctlRemoteScope(argv: string[]): boolean {
   return false;
 }
 
+function hasSystemctlHelpOrVersion(argv: string[]): boolean {
+  for (let idx = 1; idx < argv.length; idx += 1) {
+    const token = normalizeLower(argv[idx]);
+    if (!token) {
+      continue;
+    }
+    if (token === FLAG_TERMINATOR) {
+      break;
+    }
+    if (SYSTEMCTL_HELP_OR_VERSION_FLAGS.has(token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function readPnpmCliArgv(argv: string[]): string[] | null {
   const second = argv[1]?.trim();
   if (second && normalizeExecutableToken(second) === "openclaw") {
@@ -377,7 +397,7 @@ function parseGatewayActionFromCliArgv(cliArgv: string[]): {
     }
 
     const lower = token.toLowerCase();
-    if (lower === "-h" || lower === "--help" || lower === "-v" || lower === "--version") {
+    if (CLI_HELP_OR_VERSION_FLAGS.has(lower)) {
       return null;
     }
 
@@ -405,12 +425,31 @@ function parseGatewayActionFromCliArgv(cliArgv: string[]): {
     return null;
   }
 
-  const trailing = new Set(
-    cliArgv.slice(gatewayIdx + 2).map((token) => token.trim().toLowerCase()),
-  );
-  if (trailing.has("--help") || trailing.has("-h")) {
+  const trailing = new Set<string>();
+  for (const rawToken of cliArgv.slice(gatewayIdx + 2)) {
+    const token = normalizeLower(rawToken);
+    if (!token) {
+      continue;
+    }
+    if (token === FLAG_TERMINATOR || CLI_HELP_OR_VERSION_FLAGS.has(token)) {
+      return null;
+    }
+    if (!token.startsWith("-")) {
+      return null;
+    }
+    trailing.add(token);
+  }
+
+  for (const token of trailing) {
+    if (GATEWAY_SERVICE_BOOLEAN_FLAGS.has(token)) {
+      continue;
+    }
+    if (actionRaw === "restart" && GATEWAY_RESTART_EXTRA_FLAGS.has(token)) {
+      continue;
+    }
     return null;
   }
+
   const hard = actionRaw === "restart" && trailing.has("--hard");
   return { action: actionRaw, hard };
 }
@@ -449,6 +488,9 @@ function parseGatewayActionFromSystemctlArgv(
   env: NodeJS.ProcessEnv,
 ): GatewayManagementAction | null {
   if (normalizeExecutableToken(argv[0] ?? "") !== "systemctl") {
+    return null;
+  }
+  if (hasSystemctlHelpOrVersion(argv)) {
     return null;
   }
   if (hasSystemctlRemoteScope(argv)) {

@@ -96,6 +96,21 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
+  it("detects gateway restart commands with supported flags", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "openclaw gateway restart --json",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
   it("detects package-manager wrapped restart commands", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "pnpm openclaw gateway restart",
@@ -179,6 +194,26 @@ describe("detectGatewayManagementExecCommand", () => {
   it("does not detect root help flag invocations that contain gateway restart tokens", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "openclaw --help gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect gateway restart commands with unsupported flags", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "openclaw gateway restart --bogus",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect gateway restart commands with unexpected operands", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "openclaw gateway restart now",
       cwd: process.cwd(),
       env: process.env,
     });
@@ -279,6 +314,22 @@ describe("detectGatewayManagementExecCommand", () => {
     });
 
     expect(detected).toBeNull();
+  });
+
+  it("does not detect systemctl help/version forms", () => {
+    const withHelp = detectGatewayManagementExecCommand({
+      command: "systemctl restart --help openclaw-gateway.service",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+    const withVersion = detectGatewayManagementExecCommand({
+      command: "systemctl --version restart openclaw-gateway.service",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(withHelp).toBeNull();
+    expect(withVersion).toBeNull();
   });
 
   it("does not match prefixed systemctl units unless explicitly configured", () => {
