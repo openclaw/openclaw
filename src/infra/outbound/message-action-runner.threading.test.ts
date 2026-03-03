@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { matrixPlugin } from "../../../extensions/matrix/src/channel.js";
 import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -49,6 +50,15 @@ const telegramConfig = {
   },
 } as OpenClawConfig;
 
+const matrixConfig = {
+  channels: {
+    matrix: {
+      homeserverUrl: "https://matrix.example.org",
+      accessToken: "matrix-test",
+    },
+  },
+} as OpenClawConfig;
+
 async function runThreadingAction(params: {
   cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
@@ -81,22 +91,30 @@ const defaultTelegramToolContext = {
 } as const;
 
 let createPluginRuntime: typeof import("../../plugins/runtime/index.js").createPluginRuntime;
+let setMatrixRuntime: typeof import("../../../extensions/matrix/src/runtime.js").setMatrixRuntime;
 let setSlackRuntime: typeof import("../../../extensions/slack/src/runtime.js").setSlackRuntime;
 let setTelegramRuntime: typeof import("../../../extensions/telegram/src/runtime.js").setTelegramRuntime;
 
 describe("runMessageAction threading auto-injection", () => {
   beforeAll(async () => {
     ({ createPluginRuntime } = await import("../../plugins/runtime/index.js"));
+    ({ setMatrixRuntime } = await import("../../../extensions/matrix/src/runtime.js"));
     ({ setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js"));
     ({ setTelegramRuntime } = await import("../../../extensions/telegram/src/runtime.js"));
   });
 
   beforeEach(() => {
     const runtime = createPluginRuntime();
+    setMatrixRuntime(runtime);
     setSlackRuntime(runtime);
     setTelegramRuntime(runtime);
     setActivePluginRegistry(
       createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: matrixPlugin,
+        },
         {
           pluginId: "slack",
           source: "test",
@@ -220,5 +238,69 @@ describe("runMessageAction threading auto-injection", () => {
 
     expect(call?.replyToId).toBe("777");
     expect(call?.ctx?.params?.replyTo).toBe("777");
+  });
+
+  it.each([
+    {
+      name: "injects threadId for matching room target",
+      target: "room:!abc:matrix.org",
+      expectedThreadId: "$thread-event-id",
+    },
+    {
+      name: "injects threadId for bare room id",
+      target: "!abc:matrix.org",
+      expectedThreadId: "$thread-event-id",
+    },
+    {
+      name: "injects threadId for matrix-prefixed room target",
+      target: "matrix:room:!abc:matrix.org",
+      expectedThreadId: "$thread-event-id",
+    },
+    {
+      name: "skips threadId when target room differs",
+      target: "room:!other:matrix.org",
+      expectedThreadId: undefined,
+    },
+  ] as const)("matrix auto-threading: $name", async (testCase) => {
+    mockHandledSendAction();
+
+    const call = await runThreadingAction({
+      cfg: matrixConfig,
+      actionParams: {
+        channel: "matrix",
+        target: testCase.target,
+        message: "hi",
+      },
+      toolContext: {
+        currentChannelId: "room:!abc:matrix.org",
+        currentThreadTs: "$thread-event-id",
+      },
+    });
+
+    expect(call?.ctx?.params?.threadId).toBe(testCase.expectedThreadId);
+    if (testCase.expectedThreadId !== undefined) {
+      expect(call?.threadId).toBe(testCase.expectedThreadId);
+    }
+  });
+
+  it("uses explicit matrix threadId when provided", async () => {
+    mockHandledSendAction();
+
+    const call = await runThreadingAction({
+      cfg: matrixConfig,
+      actionParams: {
+        channel: "matrix",
+        target: "room:!abc:matrix.org",
+        message: "hi",
+        threadId: "$explicit-thread",
+      },
+      toolContext: {
+        currentChannelId: "room:!abc:matrix.org",
+        currentThreadTs: "$thread-event-id",
+      },
+    });
+
+    expect(call?.threadId).toBe("$explicit-thread");
+    expect(call?.ctx?.params?.threadId).toBe("$explicit-thread");
   });
 });

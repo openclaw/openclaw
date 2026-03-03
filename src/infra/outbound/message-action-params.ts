@@ -52,6 +52,45 @@ export function resolveSlackAutoThreadId(params: {
  * are persistent sub-channels (not ephemeral reply threads), so auto-injection
  * should always apply when the target chat matches.
  */
+/**
+ * Strip Matrix target prefixes (`matrix:`, `room:`, `channel:`) to extract
+ * the bare room ID for comparison.  Mirrors `normalizeMatrixMessagingTarget`
+ * in the Matrix plugin.
+ */
+function stripMatrixTargetPrefix(raw: string): string {
+  let s = raw.trim();
+  if (s.toLowerCase().startsWith("matrix:")) {
+    s = s.slice("matrix:".length).trim();
+  }
+  s = s.replace(/^(room|channel):/i, "").trim();
+  return s;
+}
+
+/**
+ * Auto-inject Matrix thread ID when the message tool targets the same room
+ * the session originated from.  Mirrors the Telegram auto-threading pattern:
+ * Matrix threads are persistent (like Telegram forum topics), so we do not
+ * gate on `replyToMode`.
+ */
+export function resolveMatrixAutoThreadId(params: {
+  to: string;
+  toolContext?: ChannelThreadingToolContext;
+}): string | undefined {
+  const context = params.toolContext;
+  if (!context?.currentThreadTs || !context.currentChannelId) {
+    return undefined;
+  }
+  const parsedTo = stripMatrixTargetPrefix(params.to);
+  const parsedChannel = stripMatrixTargetPrefix(context.currentChannelId);
+  if (!parsedTo || !parsedChannel) {
+    return undefined;
+  }
+  if (parsedTo.toLowerCase() !== parsedChannel.toLowerCase()) {
+    return undefined;
+  }
+  return context.currentThreadTs;
+}
+
 export function resolveTelegramAutoThreadId(params: {
   to: string;
   toolContext?: ChannelThreadingToolContext;
