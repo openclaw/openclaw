@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import {
   createCliDeps,
+  expectDirectTelegramDelivery,
   mockAgentPayloads,
   runTelegramAnnounceTurn,
 } from "./isolated-agent.delivery.test-helpers.js";
@@ -30,14 +31,11 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
       expect(res.status).toBe("ok");
       expect(res.delivered).toBe(true);
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
-      expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
-        "123",
-        "forum message",
-        expect.objectContaining({
-          messageThreadId: 42,
-        }),
-      );
+      expectDirectTelegramDelivery(deps, {
+        chatId: "123",
+        text: "forum message",
+        messageThreadId: 42,
+      });
 
       vi.clearAllMocks();
       mockAgentPayloads([{ text: "plain message" }]);
