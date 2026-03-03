@@ -91,19 +91,37 @@ describe("memory watcher config", () => {
       expect.arrayContaining([
         path.join(workspaceDir, "MEMORY.md"),
         path.join(workspaceDir, "memory.md"),
-        path.join(workspaceDir, "memory", "**", "*.md"),
-        path.join(extraDir, "**", "*.md"),
+        path.join(workspaceDir, "memory"),
+        extraDir,
       ]),
     );
     expect(options.ignoreInitial).toBe(true);
     expect(options.awaitWriteFinish).toEqual({ stabilityThreshold: 25, pollInterval: 100 });
 
-    const ignored = options.ignored as ((watchPath: string) => boolean) | undefined;
+    const ignored = options.ignored as
+      | ((watchPath: string, stats?: { isFile(): boolean }) => boolean)
+      | undefined;
     expect(ignored).toBeTypeOf("function");
+    // Ignored directories still filtered by name
     expect(ignored?.(path.join(workspaceDir, "memory", "node_modules", "pkg", "index.md"))).toBe(
       true,
     );
     expect(ignored?.(path.join(workspaceDir, "memory", ".venv", "lib", "python.md"))).toBe(true);
+    // .md files in valid directories are accepted
     expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.md"))).toBe(false);
+    // Non-.md files are filtered when stats indicate a file
+    const fileStats = { isFile: () => true };
+    expect(ignored?.(path.join(workspaceDir, "memory", "project", "image.png"), fileStats)).toBe(
+      true,
+    );
+    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.md"), fileStats)).toBe(
+      false,
+    );
+    // Case-insensitive .md check (e.g. README.MD on macOS/Windows)
+    expect(ignored?.(path.join(workspaceDir, "memory", "NOTES.MD"), fileStats)).toBe(false);
+    // Non-.md files without stats (e.g. unlink events) are still filtered
+    expect(ignored?.(path.join(workspaceDir, "memory", "project", "image.png"))).toBe(true);
+    // Directories (no extension, no stats) are allowed through
+    expect(ignored?.(path.join(workspaceDir, "memory", "project"))).toBe(false);
   });
 });

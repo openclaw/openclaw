@@ -367,7 +367,7 @@ export abstract class MemoryManagerSyncOps {
     const watchPaths = new Set<string>([
       path.join(this.workspaceDir, "MEMORY.md"),
       path.join(this.workspaceDir, "memory.md"),
-      path.join(this.workspaceDir, "memory", "**", "*.md"),
+      path.join(this.workspaceDir, "memory"),
     ]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
     for (const entry of additionalPaths) {
@@ -377,7 +377,7 @@ export abstract class MemoryManagerSyncOps {
           continue;
         }
         if (stat.isDirectory()) {
-          watchPaths.add(path.join(entry, "**", "*.md"));
+          watchPaths.add(entry);
           continue;
         }
         if (stat.isFile() && entry.toLowerCase().endsWith(".md")) {
@@ -389,7 +389,23 @@ export abstract class MemoryManagerSyncOps {
     }
     this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
-      ignored: (watchPath) => shouldIgnoreMemoryWatchPath(String(watchPath)),
+      ignored: (watchPath, stats) => {
+        if (shouldIgnoreMemoryWatchPath(String(watchPath))) {
+          return true;
+        }
+        // chokidar v5 recurses directories natively; filter non-.md files.
+        // When stats are available, only filter known files; otherwise use
+        // the extension to catch non-.md paths even on unlink events where
+        // chokidar may not provide stats.
+        const isMd = String(watchPath).toLowerCase().endsWith(".md");
+        if (stats?.isFile() && !isMd) {
+          return true;
+        }
+        if (!stats && !isMd && path.extname(String(watchPath)) !== "") {
+          return true;
+        }
+        return false;
+      },
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,
         pollInterval: 100,
