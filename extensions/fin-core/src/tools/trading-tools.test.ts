@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExchangeConfig, RiskEvaluation } from "../types.js";
 import { ExchangeRegistry } from "../exchange-registry.js";
+import * as marketRules from "../market-rules.js";
 import { RiskController } from "../risk-controller.js";
 import { registerTradingTools } from "./trading-tools.js";
 
@@ -298,5 +299,105 @@ describe("trading-tools", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("not configured");
+  });
+
+  // ── fin_place_order: Market closed check ──
+
+  it("fin_place_order blocks when market is closed", async () => {
+    const spy = vi.spyOn(marketRules, "isMarketOpen").mockReturnValue(false);
+    try {
+      const { api, tools } = createToolCapture();
+      const reg = mockRegistry();
+      registerTradingTools(api as never, reg, riskEnabled(), exchangeConfigs());
+
+      const exec = tools.get("fin_place_order")!.execute;
+      const result = parseToolResult(
+        await exec("call-mkt-closed", {
+          exchange: "binance-test",
+          symbol: "BTC/USDT",
+          side: "buy",
+          type: "market",
+          amount: 0.001,
+        }),
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.blocked).toBe(true);
+      expect(result.reason).toContain("closed");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("fin_place_order proceeds when market is open (crypto always open)", async () => {
+    // Crypto is always open — no mock needed, real isMarketOpen returns true
+    const { api, tools } = createToolCapture();
+    const reg = mockRegistry();
+    registerTradingTools(api as never, reg, riskEnabled(), exchangeConfigs());
+
+    const exec = tools.get("fin_place_order")!.execute;
+    const result = parseToolResult(
+      await exec("call-mkt-open", {
+        exchange: "binance-test",
+        symbol: "BTC/USDT",
+        side: "buy",
+        type: "market",
+        amount: 0.001,
+      }),
+    );
+
+    // Should pass market check and proceed (auto-approved for small amount)
+    expect(result.success).toBe(true);
+  });
+
+  // ── fin_place_order: Lot size validation ──
+
+  it("fin_place_order blocks invalid lot size", async () => {
+    const spy = vi.spyOn(marketRules, "validateLotSize").mockReturnValue({
+      valid: false,
+      reason: "cn-a-share buy quantity must be a multiple of 100, got 50",
+    });
+    try {
+      const { api, tools } = createToolCapture();
+      const reg = mockRegistry();
+      registerTradingTools(api as never, reg, riskEnabled(), exchangeConfigs());
+
+      const exec = tools.get("fin_place_order")!.execute;
+      const result = parseToolResult(
+        await exec("call-lot-bad", {
+          exchange: "binance-test",
+          symbol: "600519.SS",
+          side: "buy",
+          type: "limit",
+          amount: 50,
+          price: 1800,
+        }),
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.blocked).toBe(true);
+      expect(result.reason).toContain("multiple of 100");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("fin_place_order allows valid lot size (crypto fractional)", async () => {
+    const { api, tools } = createToolCapture();
+    const reg = mockRegistry();
+    registerTradingTools(api as never, reg, riskEnabled(), exchangeConfigs());
+
+    const exec = tools.get("fin_place_order")!.execute;
+    const result = parseToolResult(
+      await exec("call-lot-ok", {
+        exchange: "binance-test",
+        symbol: "BTC/USDT",
+        side: "buy",
+        type: "market",
+        amount: 0.0001,
+      }),
+    );
+
+    expect(result.success).toBe(true);
   });
 });

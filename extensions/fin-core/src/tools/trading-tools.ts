@@ -8,6 +8,7 @@ import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import type { UnifiedExchangeAdapter } from "../adapters/adapter-interface.js";
 import { createAdapter } from "../adapters/adapter-factory.js";
 import type { ExchangeRegistry } from "../exchange-registry.js";
+import { isMarketOpen, validateLotSize } from "../market-rules.js";
 import type { RiskController } from "../risk-controller.js";
 import type { ExchangeConfig } from "../types.js";
 import { json } from "./json-helper.js";
@@ -51,8 +52,9 @@ export function registerTradingTools(
       name: "fin_place_order",
       label: "Place Order",
       description:
-        "Place a single order on a configured exchange (crypto, US stock, HK stock). " +
-        "Subject to 3-tier risk control: auto-execute (<$100), confirm ($100-$900), block (>$900).",
+        "Place a single order on a configured exchange (crypto, US stock, HK stock, A-share). " +
+        "Validates market hours, lot size rules (A-share/HK buy must be multiples of 100), " +
+        "then applies 3-tier risk control: auto-execute (<$100), confirm ($100-$900), block (>$900).",
       parameters: Type.Object({
         exchange: Type.Optional(
           Type.String({ description: "Exchange ID (e.g. 'binance-test'). Defaults to first configured." }),
@@ -81,6 +83,28 @@ export function registerTradingTools(
             registry,
             exchangeConfigs,
           );
+
+          // Pre-trade validations: market hours + lot size
+          if (!isMarketOpen(adapter.marketType)) {
+            return json({
+              success: false,
+              blocked: true,
+              reason: `Market ${adapter.marketType} is currently closed. Check trading hours and holidays.`,
+            });
+          }
+
+          const lotCheck = validateLotSize(
+            adapter.marketType,
+            params.side as "buy" | "sell",
+            params.amount as number,
+          );
+          if (!lotCheck.valid) {
+            return json({
+              success: false,
+              blocked: true,
+              reason: lotCheck.reason,
+            });
+          }
 
           // Estimate USD value for risk check
           const ticker = await adapter.fetchTicker(params.symbol as string);

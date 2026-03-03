@@ -193,7 +193,7 @@ const finCorePlugin = {
       exchange
         .command("add <name>")
         .description("Add an exchange connection")
-        .option("--exchange <type>", "Exchange type (binance, okx, bybit, hyperliquid, alpaca, futu)")
+        .option("--exchange <type>", "Exchange type (binance, okx, bybit, hyperliquid, alpaca, futu, openctp)")
         .option("--api-key <key>", "API key")
         .option("--secret <secret>", "API secret")
         .option("--passphrase <pass>", "API passphrase (OKX)")
