@@ -469,14 +469,18 @@ export const buildTelegramMessageContext = async ({
   }
 
   // Replace audio placeholder with transcript when preflight succeeds.
+  // Wrap the transcript in untrusted content framing so the LLM treats it
+  // as machine-generated (STT) rather than typed user input (#33360).
   if (hasAudio && bodyText === "<media:audio>" && preflightTranscript) {
-    bodyText = preflightTranscript;
+    bodyText = `[Audio transcript]: "${preflightTranscript}"`;
   }
 
   // Build bodyText fallback for messages that still have no text.
   if (!bodyText && allMedia.length > 0) {
     if (hasAudio) {
-      bodyText = preflightTranscript || "<media:audio>";
+      bodyText = preflightTranscript
+        ? `[Audio transcript]: "${preflightTranscript}"`
+        : "<media:audio>";
     } else {
       bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
     }
