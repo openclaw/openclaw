@@ -489,6 +489,40 @@ export async function getPageForTargetId(opts: {
     if (pages.length === 1) {
       return first;
     }
+
+    // For extension relay scenarios, try to recover from "tab not found"
+    // by resetting the cached Playwright connection and retrying once.
+    // This handles cases where navigation invalidates the cached connection
+    // but the CDP target still exists in /json/list.
+    const isExtensionRelay =
+      opts.cdpUrl.includes("127.0.0.1") ||
+      opts.cdpUrl.includes("localhost") ||
+      opts.cdpUrl.includes("18791") ||
+      opts.cdpUrl.includes("18792");
+
+    if (isExtensionRelay) {
+      // Force disconnect the cached Playwright connection
+      await forceDisconnectPlaywrightForTarget({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        reason: "recovering from tab not found after navigation",
+      });
+
+      // Retry with fresh connection
+      const { browser: retryBrowser } = await connectBrowser(opts.cdpUrl);
+      const retryPages = await getAllPages(retryBrowser);
+      if (retryPages.length > 0) {
+        const retryFound = await findPageByTargetId(retryBrowser, opts.targetId, opts.cdpUrl);
+        if (retryFound) {
+          return retryFound;
+        }
+        // If still only one page, use it as fallback
+        if (retryPages.length === 1) {
+          return retryPages[0];
+        }
+      }
+    }
+
     throw new Error("tab not found");
   }
   return found;
