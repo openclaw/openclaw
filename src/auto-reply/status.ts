@@ -13,6 +13,7 @@ import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/us
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
   resolveMainSessionKey,
   resolveSessionFilePath,
@@ -655,6 +656,17 @@ export function buildStatusMessage(args: StatusArgs): string {
         showFallbackAuth ? ` · 🔑 ${activeAuthLabelValue}` : ""
       } (${fallbackState.reason ?? "selected model unavailable"})`
     : null;
+  const hasModelOverride = Boolean(entry?.providerOverride || entry?.modelOverride);
+  const configuredFallbacks =
+    !fallbackState.active && !hasModelOverride
+      ? resolveAgentModelFallbackValues(args.config?.agents?.defaults?.model)
+          .map((fallback) => fallback.trim())
+          .filter((fallback) => fallback.length > 0)
+      : [];
+  const configuredFallbackLine =
+    configuredFallbacks.length > 0
+      ? `🔄 Fallback: ${configuredFallbacks.join(", ")} (configured)`
+      : null;
   const commit = resolveCommitHash();
   const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
   const usagePair = formatUsagePair(inputTokens, outputTokens);
@@ -670,6 +682,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.timeLine,
     modelLine,
     fallbackLine,
+    configuredFallbackLine,
     usageCostLine,
     cacheLine,
     `📚 ${contextLine}`,
