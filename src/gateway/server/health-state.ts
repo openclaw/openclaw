@@ -1,7 +1,6 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
-import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { CONFIG_PATH, STATE_DIR, loadConfig } from "../../config/config.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
@@ -136,18 +135,23 @@ export async function overlayHealthSnapshotWithRuntime(
       const runtimeSnapshot =
         runtime.channelAccounts[channelId]?.[accountId] ??
         (accountId === defaultAccountId ? runtime.channels[channelId] : undefined);
-      const overlay = await buildChannelAccountSnapshot({
-        plugin,
-        cfg,
-        accountId,
-        runtime: runtimeSnapshot,
-        probe: previous.probe,
-      });
       const nextAccount = {
         ...previous,
-        ...overlay,
         accountId,
       };
+      const nextAccountRecord = nextAccount as Record<string, unknown>;
+      const runtimeSnapshotRecord =
+        runtimeSnapshot && typeof runtimeSnapshot === "object"
+          ? (runtimeSnapshot as Record<string, unknown>)
+          : null;
+      if (runtimeSnapshotRecord) {
+        for (const key of CHANNEL_RUNTIME_OVERLAY_KEYS) {
+          const value = runtimeSnapshotRecord[key];
+          if (value !== undefined) {
+            nextAccountRecord[key] = value;
+          }
+        }
+      }
       if (previous.probe !== undefined) {
         nextAccount.probe = previous.probe;
       }

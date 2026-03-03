@@ -113,6 +113,8 @@ describe("refreshGatewayHealthSnapshot", () => {
           accountId: "default",
           enabled: true,
           configured: true,
+          botTokenSource: "config",
+          appTokenSource: "config",
           running: true,
           lastStartAt: 1_777_000_000_000,
           lastStopAt: null,
@@ -125,6 +127,8 @@ describe("refreshGatewayHealthSnapshot", () => {
             accountId: "default",
             enabled: true,
             configured: true,
+            botTokenSource: "config",
+            appTokenSource: "config",
             running: true,
             lastStartAt: 1_777_000_000_000,
             lastStopAt: null,
@@ -138,6 +142,9 @@ describe("refreshGatewayHealthSnapshot", () => {
   test("merges live runtime channel state into health snapshots", async () => {
     const input = buildBaseHealthSummary();
     input.channels.slack.configured = false;
+    if (input.channels.slack.accounts?.default) {
+      input.channels.slack.accounts.default.configured = false;
+    }
     const snap = await healthStateModule.overlayHealthSnapshotWithRuntime(input);
 
     expect(snap.channels.slack.botTokenSource).toBe("config");
@@ -147,6 +154,7 @@ describe("refreshGatewayHealthSnapshot", () => {
     expect(snap.channels.slack.configured).toBe(false);
     expect(snap.channels.slack.accounts?.default?.running).toBe(true);
     expect(snap.channels.slack.accounts?.default?.botTokenSource).toBe("config");
+    expect(snap.channels.slack.accounts?.default?.configured).toBe(false);
     expect(healthStateModule.getHealthCache()).toBeNull();
   });
 });
