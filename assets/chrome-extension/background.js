@@ -626,6 +626,26 @@ async function connectOrToggleForActiveTab() {
   }
 }
 
+// Send a message to the content script running in the given tab.
+// Auto-injects the content script if it hasn't been loaded yet (e.g. the tab
+// was opened before the extension was installed, or the service worker restarted).
+async function sendContentMessage(tabId, msg) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, msg)
+  } catch {
+    // Content script may not be injected yet — try injecting and retrying.
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        files: ['content.js'],
+      })
+    } catch (injectErr) {
+      throw new Error(`Content script injection failed: ${injectErr instanceof Error ? injectErr.message : String(injectErr)}`)
+    }
+    return await chrome.tabs.sendMessage(tabId, msg)
+  }
+}
+
 async function handleForwardCdpCommand(msg) {
   const method = String(msg?.params?.method || '').trim()
   const params = msg?.params?.params || undefined
@@ -644,6 +664,57 @@ async function handleForwardCdpCommand(msg) {
     })()
 
   if (!tabId) throw new Error(`No attached tab for method ${method}`)
+
+  // --- Content script methods (OpenClaw.*) ---------------------------------
+  // These route through chrome.tabs.sendMessage instead of chrome.debugger,
+  // providing a non-CDP fallback channel for DOM scanning, form filling,
+  // clicking, and page reading. Useful when Playwright's CDP approach fails
+  // (CSP restrictions, shadow DOM edge cases, government site framesets,
+  // React/Vue controlled inputs).
+
+  if (method === 'OpenClaw.scanPage') {
+    return await sendContentMessage(tabId, { type: 'OC_SCAN_PAGE' })
+  }
+
+  if (method === 'OpenClaw.fillFields') {
+    return await sendContentMessage(tabId, {
+      type: 'OC_FILL_FIELDS',
+      fields: params?.fields || [],
+      delayMs: params?.delayMs || 100,
+    })
+  }
+
+  if (method === 'OpenClaw.clickElement') {
+    return await sendContentMessage(tabId, {
+      type: 'OC_CLICK',
+      selector: params?.selector || '',
+    })
+  }
+
+  if (method === 'OpenClaw.clickByText') {
+    return await sendContentMessage(tabId, {
+      type: 'OC_CLICK_BY_TEXT',
+      text: params?.text || '',
+    })
+  }
+
+  if (method === 'OpenClaw.readPage') {
+    return await sendContentMessage(tabId, {
+      type: 'OC_READ_PAGE',
+      selector: params?.selector || undefined,
+    })
+  }
+
+  if (method === 'OpenClaw.executeJS') {
+    return await sendContentMessage(tabId, {
+      type: 'OC_EXECUTE_JS',
+      code: params?.code || '',
+    })
+  }
+
+  if (method === 'OpenClaw.getPageInfo') {
+    return await sendContentMessage(tabId, { type: 'OC_GET_PAGE_INFO' })
+  }
 
   /** @type {chrome.debugger.DebuggerSession} */
   const debuggee = { tabId }
@@ -886,13 +957,22 @@ chrome.debugger.onDetach.addListener((...args) => void whenReady(() => onDebugge
 
 chrome.action.onClicked.addListener(() => void whenReady(() => connectOrToggleForActiveTab()))
 
-// Refresh badge after navigation completes — service worker may have restarted
-// during navigation, losing ephemeral badge state.
+// Refresh badge and re-inject content scripts after navigation completes.
+// Service worker may have restarted during navigation, losing ephemeral badge
+// state. Content scripts need re-injection because navigation resets the page.
 chrome.webNavigation.onCompleted.addListener(({ tabId, frameId }) => void whenReady(() => {
   if (frameId !== 0) return
   const tab = tabs.get(tabId)
   if (tab?.state === 'connected') {
     setBadge(tabId, relayWs && relayWs.readyState === WebSocket.OPEN ? 'on' : 'connecting')
+
+    // Re-inject content script (declarative content_scripts handle most cases,
+    // but this covers tabs that were attached before the extension was installed
+    // or edge cases where the declarative injection didn't fire).
+    chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['content.js'],
+    }).catch(() => { /* ignore — CSP or chrome:// page */ })
   }
 }))
 
