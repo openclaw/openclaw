@@ -672,7 +672,7 @@ export function renderCron(props: CronProps) {
                   `
                 : html`
                     <div class="list" style="margin-top: 12px;">
-                      ${runs.map((entry) => renderRun(entry, props.basePath))}
+                      ${[...runs].sort((a, b) => b.ts - a.ts).map((entry) => renderRun(entry, props.basePath))}
                     </div>
                   `
           }
@@ -1569,7 +1569,7 @@ function renderJob(job: CronJob, props: CronProps) {
             ?disabled=${props.busy}
             @click=${(event: Event) => {
               event.stopPropagation();
-              selectAnd(() => props.onLoadRuns(job.id));
+              props.onLoadRuns(job.id);
             }}
           >
             ${t("cron.jobList.history")}
