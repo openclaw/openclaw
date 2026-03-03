@@ -108,20 +108,21 @@ function parseBearerToken(value: string | undefined): string | undefined {
   return token || undefined;
 }
 
-function getRelayAuthTokenFromRequest(req: IncomingMessage, url?: URL): string | undefined {
+function getRelayAuthTokensFromRequest(req: IncomingMessage, url?: URL): string[] {
+  const candidates: string[] = [];
   const headerToken = getHeader(req, RELAY_AUTH_HEADER)?.trim();
   if (headerToken) {
-    return headerToken;
-  }
-  const bearerToken = parseBearerToken(getHeader(req, "authorization"));
-  if (bearerToken) {
-    return bearerToken;
+    candidates.push(headerToken);
   }
   const queryToken = url?.searchParams.get("token")?.trim();
   if (queryToken) {
-    return queryToken;
+    candidates.push(queryToken);
   }
-  return undefined;
+  const bearerToken = parseBearerToken(getHeader(req, "authorization"));
+  if (bearerToken) {
+    candidates.push(bearerToken);
+  }
+  return Array.from(new Set(candidates));
 }
 
 export type ChromeExtensionRelayServer = {
@@ -574,8 +575,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
 
       if (path.startsWith("/json")) {
-        const token = getRelayAuthTokenFromRequest(req, url);
-        if (!token || !relayAuthTokens.has(token)) {
+        const tokens = getRelayAuthTokensFromRequest(req, url);
+        if (!tokens.some((token) => relayAuthTokens.has(token))) {
           res.writeHead(401);
           res.end("Unauthorized");
           return;
@@ -707,8 +708,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
 
       if (pathname === "/extension") {
-        const token = getRelayAuthTokenFromRequest(req, url);
-        if (!token || !relayAuthTokens.has(token)) {
+        const tokens = getRelayAuthTokensFromRequest(req, url);
+        if (!tokens.some((token) => relayAuthTokens.has(token))) {
           rejectUpgrade(socket, 401, "Unauthorized");
           return;
         }
@@ -732,8 +733,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
 
       if (pathname === "/cdp") {
-        const token = getRelayAuthTokenFromRequest(req, url);
-        if (!token || !relayAuthTokens.has(token)) {
+        const tokens = getRelayAuthTokensFromRequest(req, url);
+        if (!tokens.some((token) => relayAuthTokens.has(token))) {
           rejectUpgrade(socket, 401, "Unauthorized");
           return;
         }
