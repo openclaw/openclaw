@@ -53,6 +53,7 @@ vi.mock("./pi-embedded.js", () => ({
 
 vi.mock("./subagent-registry.js", () => ({
   countActiveDescendantRuns: () => 0,
+  countPendingDescendantRuns: () => 0,
   isSubagentSessionRunActive: () => true,
   resolveRequesterForChildSession: () => null,
 }));

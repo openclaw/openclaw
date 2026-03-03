@@ -1,9 +1,8 @@
 import type { Client } from "@buape/carbon";
-import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../../auto-reply/inbound-debounce.js";
+  createChannelInboundDebouncer,
+  shouldDebounceTextInbound,
+} from "../../channels/inbound-debounce-policy.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { danger } from "../../globals.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
@@ -29,11 +28,16 @@ export function createDiscordMessageHandler(
     groupPolicy: params.discordConfig?.groupPolicy,
     defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
   });
-  const ackReactionScope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
-  const debounceMs = resolveInboundDebounceMs({ cfg: params.cfg, channel: "discord" });
-
-  const debouncer = createInboundDebouncer<{ data: DiscordMessageEvent; client: Client }>({
-    debounceMs,
+  const ackReactionScope =
+    params.discordConfig?.ackReactionScope ??
+    params.cfg.messages?.ackReactionScope ??
+    "group-mentions";
+  const { debouncer } = createChannelInboundDebouncer<{
+    data: DiscordMessageEvent;
+    client: Client;
+  }>({
+    cfg: params.cfg,
+    channel: "discord",
     buildKey: (entry) => {
       const message = entry.data.message;
       const authorId = entry.data.author?.id;
@@ -54,17 +58,15 @@ export function createDiscordMessageHandler(
       if (!message) {
         return false;
       }
-      if (message.attachments && message.attachments.length > 0) {
-        return false;
-      }
-      if (hasDiscordMessageStickers(message)) {
-        return false;
-      }
       const baseText = resolveDiscordMessageText(message, { includeForwarded: false });
-      if (!baseText.trim()) {
-        return false;
-      }
-      return !hasControlCommand(baseText, params.cfg);
+      return shouldDebounceTextInbound({
+        text: baseText,
+        cfg: params.cfg,
+        hasMedia: Boolean(
+          (message.attachments && message.attachments.length > 0) ||
+          hasDiscordMessageStickers(message),
+        ),
+      });
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
@@ -82,7 +84,9 @@ export function createDiscordMessageHandler(
         if (!ctx) {
           return;
         }
-        await processDiscordMessage(ctx);
+        void processDiscordMessage(ctx).catch((err) => {
+          params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
+        });
         return;
       }
       const combinedBaseText = entries
@@ -126,7 +130,9 @@ export function createDiscordMessageHandler(
           ctxBatch.MessageSidLast = ids[ids.length - 1];
         }
       }
-      await processDiscordMessage(ctx);
+      void processDiscordMessage(ctx).catch((err) => {
+        params.runtime.error?.(danger(`discord process failed: ${String(err)}`));
+      });
     },
     onError: (err) => {
       params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));
@@ -135,6 +141,16 @@ export function createDiscordMessageHandler(
 
   return async (data, client) => {
     try {
+      // Filter bot-own messages before they enter the debounce queue.
+      // The same check exists in preflightDiscordMessage(), but by that point
+      // the message has already consumed debounce capacity and blocked
+      // legitimate user messages. On active servers this causes cumulative
+      // slowdown (see #15874).
+      const msgAuthorId = data.message?.author?.id ?? data.author?.id;
+      if (params.botUserId && msgAuthorId === params.botUserId) {
+        return;
+      }
+
       await debouncer.enqueue({ data, client });
     } catch (err) {
       params.runtime.error?.(danger(`handler failed: ${String(err)}`));
