@@ -218,14 +218,28 @@ if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
   if [[ -n "$EXISTING_CONFIG_TOKEN" ]]; then
     OPENCLAW_GATEWAY_TOKEN="$EXISTING_CONFIG_TOKEN"
     echo "Reusing gateway token from $OPENCLAW_CONFIG_DIR/openclaw.json"
-  elif command -v openssl >/dev/null 2>&1; then
-    OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
   else
-    OPENCLAW_GATEWAY_TOKEN="$(python3 - <<'PY'
+    # .env is read by Docker Compose but not by this shell script, so check it
+    # explicitly before generating a new token. Without this, re-running
+    # docker-setup.sh without the token exported in the shell would silently
+    # regenerate the token and break existing Control UI connections.
+    _DOTENV_PATH="$ROOT_DIR/.env"
+    _EXISTING_DOTENV_TOKEN=""
+    if [[ -f "$_DOTENV_PATH" ]]; then
+      _EXISTING_DOTENV_TOKEN="$(grep -E '^OPENCLAW_GATEWAY_TOKEN=' "$_DOTENV_PATH" | tail -1 | cut -d= -f2- | tr -d '\r')"
+    fi
+    if [[ -n "$_EXISTING_DOTENV_TOKEN" ]]; then
+      OPENCLAW_GATEWAY_TOKEN="$_EXISTING_DOTENV_TOKEN"
+      echo "Reusing gateway token from $_DOTENV_PATH"
+    elif command -v openssl >/dev/null 2>&1; then
+      OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
+    else
+      OPENCLAW_GATEWAY_TOKEN="$(python3 - <<'PY'
 import secrets
 print(secrets.token_hex(32))
 PY
 )"
+    fi
   fi
 fi
 export OPENCLAW_GATEWAY_TOKEN
