@@ -9,6 +9,17 @@ vi.mock("../infra/retry.js", () => ({
   retryAsync: async <T>(fn: () => Promise<T>) => fn(),
 }));
 
+vi.mock("./remote-http.js", () => ({
+  withRemoteHttpResponse: async <T>(params: {
+    url: string;
+    init?: RequestInit;
+    onResponse: (response: Response) => Promise<T>;
+  }) => {
+    const response = await fetch(params.url, params.init);
+    return await params.onResponse(response);
+  },
+}));
+
 describe("runVoyageEmbeddingBatches", () => {
   let runVoyageEmbeddingBatches: typeof import("./batch-voyage.js").runVoyageEmbeddingBatches;
 
