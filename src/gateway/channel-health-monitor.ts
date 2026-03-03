@@ -7,8 +7,17 @@ const log = createSubsystemLogger("gateway/health-monitor");
 const DEFAULT_CHECK_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_STARTUP_GRACE_MS = 60_000;
 const DEFAULT_COOLDOWN_CYCLES = 2;
-const DEFAULT_MAX_RESTARTS_PER_HOUR = 3;
+const DEFAULT_MAX_RESTARTS_PER_HOUR = 10;
 const ONE_HOUR_MS = 60 * 60_000;
+
+/**
+ * How long a connected channel can go without receiving any event before
+ * the health monitor treats it as a "stale socket" and triggers a restart.
+ * This catches the half-dead WebSocket scenario where the connection appears
+ * alive (health checks pass) but Slack silently stops delivering events.
+ */
+const DEFAULT_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
+const DEFAULT_CHANNEL_STARTUP_GRACE_MS = 120_000;
 
 export type ChannelHealthMonitorDeps = {
   channelManager: ChannelManager;
@@ -16,6 +25,8 @@ export type ChannelHealthMonitorDeps = {
   startupGraceMs?: number;
   cooldownCycles?: number;
   maxRestartsPerHour?: number;
+  staleEventThresholdMs?: number;
+  channelStartupGraceMs?: number;
   abortSignal?: AbortSignal;
 };
 
@@ -32,21 +43,48 @@ function isManagedAccount(snapshot: { enabled?: boolean; configured?: boolean })
   return snapshot.enabled !== false && snapshot.configured !== false;
 }
 
-function isChannelHealthy(snapshot: {
-  running?: boolean;
-  connected?: boolean;
-  enabled?: boolean;
-  configured?: boolean;
-}): boolean {
+function isChannelHealthy(
+  snapshot: {
+    running?: boolean;
+    connected?: boolean;
+    enabled?: boolean;
+    configured?: boolean;
+    lastEventAt?: number | null;
+    lastStartAt?: number | null;
+  },
+  opts: { now: number; staleEventThresholdMs: number; channelStartupGraceMs: number },
+): boolean {
   if (!isManagedAccount(snapshot)) {
     return true;
   }
   if (!snapshot.running) {
     return false;
   }
+  if (snapshot.lastStartAt != null) {
+    const upDuration = opts.now - snapshot.lastStartAt;
+    if (upDuration < opts.channelStartupGraceMs) {
+      return true;
+    }
+  }
   if (snapshot.connected === false) {
     return false;
   }
+
+  // Stale socket detection: if the channel has been running long enough
+  // (past the stale threshold) and we have never received an event, or the
+  // last event was received longer ago than the threshold, treat as unhealthy.
+  if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
+    const upSince = snapshot.lastStartAt ?? 0;
+    const upDuration = opts.now - upSince;
+    if (upDuration > opts.staleEventThresholdMs) {
+      const lastEvent = snapshot.lastEventAt ?? 0;
+      const eventAge = opts.now - lastEvent;
+      if (eventAge > opts.staleEventThresholdMs) {
+        return false;
+      }
+    }
+  }
+
   return true;
 }
 
@@ -57,6 +95,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     startupGraceMs = DEFAULT_STARTUP_GRACE_MS,
     cooldownCycles = DEFAULT_COOLDOWN_CYCLES,
     maxRestartsPerHour = DEFAULT_MAX_RESTARTS_PER_HOUR,
+    staleEventThresholdMs = DEFAULT_STALE_EVENT_THRESHOLD_MS,
+    channelStartupGraceMs = DEFAULT_CHANNEL_STARTUP_GRACE_MS,
     abortSignal,
   } = deps;
 
@@ -101,7 +141,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
-          if (isChannelHealthy(status)) {
+          if (isChannelHealthy(status, { now, staleEventThresholdMs, channelStartupGraceMs })) {
             continue;
           }
 
@@ -123,11 +163,19 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             continue;
           }
 
+          const isStaleSocket =
+            status.running &&
+            status.connected !== false &&
+            status.lastEventAt != null &&
+            now - (status.lastEventAt ?? 0) > staleEventThresholdMs;
+
           const reason = !status.running
             ? status.reconnectAttempts && status.reconnectAttempts >= 10
               ? "gave-up"
               : "stopped"
-            : "stuck";
+            : isStaleSocket
+              ? "stale-socket"
+              : "stuck";
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 

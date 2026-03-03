@@ -103,6 +103,7 @@ type ConsumeArchivedAnswerPreviewParams = {
 
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   const getLanePreviewText = (lane: DraftLaneState) => lane.lastPartialText;
+  const isDraftPreviewLane = (lane: DraftLaneState) => lane.stream?.previewMode?.() === "draft";
 
   const shouldSkipRegressivePreviewUpdate = (args: {
     currentPreviewText: string | undefined;
@@ -171,6 +172,34 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     previewMessageId: previewMessageIdOverride,
     previewTextSnapshot,
   }: TryUpdatePreviewParams): Promise<boolean> => {
+    const editPreview = (messageId: number, treatEditFailureAsDelivered: boolean) =>
+      tryEditPreviewMessage({
+        laneName,
+        messageId,
+        text,
+        context,
+        previewButtons,
+        updateLaneSnapshot,
+        lane,
+        treatEditFailureAsDelivered,
+      });
+    const finalizePreview = (
+      previewMessageId: number,
+      treatEditFailureAsDelivered: boolean,
+    ): boolean | Promise<boolean> => {
+      const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
+      const shouldSkipRegressive = shouldSkipRegressivePreviewUpdate({
+        currentPreviewText,
+        text,
+        skipRegressive,
+        hadPreviewMessage,
+      });
+      if (shouldSkipRegressive) {
+        params.markDelivered();
+        return true;
+      }
+      return editPreview(previewMessageId, treatEditFailureAsDelivered);
+    };
     if (!lane.stream) {
       return false;
     }
@@ -187,27 +216,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       if (typeof previewMessageId !== "number") {
         return false;
       }
-      const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
-      const shouldSkipRegressive = shouldSkipRegressivePreviewUpdate({
-        currentPreviewText,
-        text,
-        skipRegressive,
-        hadPreviewMessage,
-      });
-      if (shouldSkipRegressive) {
-        params.markDelivered();
-        return true;
-      }
-      return tryEditPreviewMessage({
-        laneName,
-        messageId: previewMessageId,
-        text,
-        context,
-        previewButtons,
-        updateLaneSnapshot,
-        lane,
-        treatEditFailureAsDelivered: true,
-      });
+      return finalizePreview(previewMessageId, true);
     }
     if (stopBeforeEdit) {
       await params.stopDraftLane(lane);
@@ -219,27 +228,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     if (typeof previewMessageId !== "number") {
       return false;
     }
-    const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
-    const shouldSkipRegressive = shouldSkipRegressivePreviewUpdate({
-      currentPreviewText,
-      text,
-      skipRegressive,
-      hadPreviewMessage,
-    });
-    if (shouldSkipRegressive) {
-      params.markDelivered();
-      return true;
-    }
-    return tryEditPreviewMessage({
-      laneName,
-      messageId: previewMessageId,
-      text,
-      context,
-      previewButtons,
-      updateLaneSnapshot,
-      lane,
-      treatEditFailureAsDelivered: false,
-    });
+    return finalizePreview(previewMessageId, false);
   };
 
   const consumeArchivedAnswerPreviewForFinal = async ({
@@ -344,6 +333,24 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
 
     if (allowPreviewUpdateForNonFinal && canEditViaPreview) {
+      if (isDraftPreviewLane(lane)) {
+        // DM draft flow has no message_id to edit; updates are sent via sendMessageDraft.
+        // Only mark as updated when the draft flush actually emits an update.
+        const previewRevisionBeforeFlush = lane.stream?.previewRevision?.() ?? 0;
+        lane.stream?.update(text);
+        await params.flushDraftLane(lane);
+        const previewUpdated = (lane.stream?.previewRevision?.() ?? 0) > previewRevisionBeforeFlush;
+        if (!previewUpdated) {
+          params.log(
+            `telegram: ${laneName} draft preview update not emitted; falling back to standard send`,
+          );
+          const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
+          return delivered ? "sent" : "skipped";
+        }
+        lane.lastPartialText = text;
+        params.markDelivered();
+        return "preview-updated";
+      }
       const updated = await tryUpdatePreviewForLane({
         lane,
         laneName,

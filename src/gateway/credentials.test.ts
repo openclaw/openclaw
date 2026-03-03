@@ -78,6 +78,19 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     expect(resolved).toEqual({});
   });
 
+  it("uses env credentials for env-sourced url overrides", () => {
+    const resolved = resolveGatewayCredentialsFor(
+      {
+        auth: DEFAULT_GATEWAY_AUTH,
+      },
+      {
+        urlOverride: "wss://example.com",
+        urlOverrideSource: "env",
+      },
+    );
+    expectEnvGatewayCredentials(resolved);
+  });
+
   it("uses local-mode environment values before local config", () => {
     const resolved = resolveGatewayCredentialsFor({
       mode: "local",

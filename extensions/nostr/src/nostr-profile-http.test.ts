@@ -6,7 +6,10 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  clearNostrProfileRateLimitStateForTest,
   createNostrProfileHttpHandler,
+  getNostrProfileRateLimitStateSizeForTest,
+  isNostrProfileRateLimitedForTest,
   type NostrProfileHttpContext,
 } from "./nostr-profile-http.js";
 
@@ -136,6 +139,7 @@ function mockSuccessfulProfileImport() {
 describe("nostr-profile-http", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearNostrProfileRateLimitStateForTest();
   });
 
   describe("route matching", () => {
@@ -357,6 +361,25 @@ describe("nostr-profile-http", () => {
           expect(data.error).toContain("Rate limit");
         }
       }
+    });
+
+    it("caps tracked rate-limit keys to prevent unbounded growth", () => {
+      const now = 1_000_000;
+      for (let i = 0; i < 2_500; i += 1) {
+        isNostrProfileRateLimitedForTest(`rate-cap-${i}`, now);
+      }
+      expect(getNostrProfileRateLimitStateSizeForTest()).toBeLessThanOrEqual(2_048);
+    });
+
+    it("prunes stale rate-limit keys after the window elapses", () => {
+      const now = 2_000_000;
+      for (let i = 0; i < 100; i += 1) {
+        isNostrProfileRateLimitedForTest(`rate-stale-${i}`, now);
+      }
+      expect(getNostrProfileRateLimitStateSizeForTest()).toBe(100);
+
+      isNostrProfileRateLimitedForTest("fresh", now + 60_001);
+      expect(getNostrProfileRateLimitStateSizeForTest()).toBe(1);
     });
   });
 

@@ -26,6 +26,23 @@ function createState(request: RequestFn, overrides: Partial<UsageState> = {}): U
   };
 }
 
+function expectSpecificTimezoneCalls(request: ReturnType<typeof vi.fn>, startCall: number): void {
+  expect(request).toHaveBeenNthCalledWith(startCall, "sessions.usage", {
+    startDate: "2026-02-16",
+    endDate: "2026-02-16",
+    mode: "specific",
+    utcOffset: "UTC+5:30",
+    limit: 1000,
+    includeContextWeight: true,
+  });
+  expect(request).toHaveBeenNthCalledWith(startCall + 1, "usage.cost", {
+    startDate: "2026-02-16",
+    endDate: "2026-02-16",
+    mode: "specific",
+    utcOffset: "UTC+5:30",
+  });
+}
+
 describe("usage controller date interpretation params", () => {
   beforeEach(() => {
     __test.resetLegacyUsageDateParamsCache();
@@ -48,20 +65,7 @@ describe("usage controller date interpretation params", () => {
 
     await loadUsage(state);
 
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-      mode: "specific",
-      utcOffset: "UTC+5:30",
-      limit: 1000,
-      includeContextWeight: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "usage.cost", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-      mode: "specific",
-      utcOffset: "UTC+5:30",
-    });
+    expectSpecificTimezoneCalls(request, 1);
   });
 
   it("sends utc mode without offset when usage timezone is utc", async () => {
@@ -124,20 +128,7 @@ describe("usage controller date interpretation params", () => {
 
     await loadUsage(state);
 
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-      mode: "specific",
-      utcOffset: "UTC+5:30",
-      limit: 1000,
-      includeContextWeight: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "usage.cost", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-      mode: "specific",
-      utcOffset: "UTC+5:30",
-    });
+    expectSpecificTimezoneCalls(request, 1);
     expect(request).toHaveBeenNthCalledWith(3, "sessions.usage", {
       startDate: "2026-02-16",
       endDate: "2026-02-16",

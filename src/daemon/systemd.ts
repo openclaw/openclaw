@@ -142,6 +142,39 @@ async function execSystemctl(
   return await execFileUtf8("systemctl", args);
 }
 
+function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
+  return (result.stderr || result.stdout || "").trim();
+}
+
+function isSystemctlMissing(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("not found") ||
+    normalized.includes("no such file or directory") ||
+    normalized.includes("spawn systemctl enoent") ||
+    normalized.includes("spawn systemctl eacces")
+  );
+}
+
+function isSystemdUnitNotEnabled(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("disabled") ||
+    normalized.includes("static") ||
+    normalized.includes("indirect") ||
+    normalized.includes("masked") ||
+    normalized.includes("not-found") ||
+    normalized.includes("could not be found") ||
+    normalized.includes("failed to get unit file state")
+  );
+}
+
 export async function isSystemdUserServiceAvailable(): Promise<boolean> {
   const res = await execSystemctl(["--user", "status"]);
   if (res.code === 0) {
@@ -174,8 +207,8 @@ async function assertSystemdAvailable() {
   if (res.code === 0) {
     return;
   }
-  const detail = res.stderr || res.stdout;
-  if (detail.toLowerCase().includes("not found")) {
+  const detail = readSystemctlDetail(res);
+  if (isSystemctlMissing(detail)) {
     throw new Error("systemctl not available; systemd user services are required on Linux.");
   }
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
@@ -312,11 +345,17 @@ export async function restartSystemdService({
 }
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
-  await assertSystemdAvailable();
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
-  return res.code === 0;
+  if (res.code === 0) {
+    return true;
+  }
+  const detail = readSystemctlDetail(res);
+  if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
+    return false;
+  }
+  throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
 }
 
 export async function readSystemdServiceRuntime(
@@ -327,7 +366,7 @@ export async function readSystemdServiceRuntime(
   } catch (err) {
     return {
       status: "unknown",
-      detail: String(err),
+      detail: err instanceof Error ? err.message : String(err),
     };
   }
   const serviceName = resolveSystemdServiceName(env);
@@ -373,8 +412,7 @@ async function isSystemctlAvailable(): Promise<boolean> {
   if (res.code === 0) {
     return true;
   }
-  const detail = (res.stderr || res.stdout).toLowerCase();
-  return !detail.includes("not found");
+  return !isSystemctlMissing(readSystemctlDetail(res));
 }
 
 export async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {

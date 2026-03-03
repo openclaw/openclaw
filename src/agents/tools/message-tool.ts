@@ -1,9 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import { BLUEBUBBLES_GROUP_ACTIONS } from "../../channels/plugins/bluebubbles-actions.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   listChannelMessageActions,
   supportsChannelMessageButtons,
+  supportsChannelMessageButtonsForChannel,
   supportsChannelMessageCards,
+  supportsChannelMessageCardsForChannel,
 } from "../../channels/plugins/message-actions.js";
 import {
   CHANNEL_MESSAGE_ACTION_NAMES,
@@ -213,14 +216,14 @@ function buildReactionSchema() {
     messageId: Type.Optional(
       Type.String({
         description:
-          "Target message id for reaction. For Telegram, if omitted, defaults to the current inbound message id when available.",
+          "Target message id for reaction. If omitted, defaults to the current inbound message id when available.",
       }),
     ),
     message_id: Type.Optional(
       Type.String({
         // Intentional duplicate alias for tool-schema discoverability in LLMs.
         description:
-          "snake_case alias of messageId. For Telegram, if omitted, defaults to the current inbound message id when available.",
+          "snake_case alias of messageId. If omitted, defaults to the current inbound message id when available.",
       }),
     ),
     emoji: Type.Optional(Type.String()),
@@ -283,6 +286,7 @@ function buildThreadSchema() {
   return {
     threadName: Type.Optional(Type.String()),
     autoArchiveMin: Type.Optional(Type.Number()),
+    appliedTags: Type.Optional(Type.Array(Type.String())),
   };
 }
 
@@ -412,10 +416,51 @@ type MessageToolOptions = {
   requesterSenderId?: string;
 };
 
-function buildMessageToolSchema(cfg: OpenClawConfig) {
-  const actions = listChannelMessageActions(cfg);
-  const includeButtons = supportsChannelMessageButtons(cfg);
-  const includeCards = supportsChannelMessageCards(cfg);
+function resolveMessageToolSchemaActions(params: {
+  cfg: OpenClawConfig;
+  currentChannelProvider?: string;
+  currentChannelId?: string;
+}): string[] {
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  if (currentChannel) {
+    const scopedActions = filterActionsForContext({
+      actions: listChannelSupportedActions({
+        cfg: params.cfg,
+        channel: currentChannel,
+      }),
+      channel: currentChannel,
+      currentChannelId: params.currentChannelId,
+    });
+    const allActions = new Set<string>(["send", ...scopedActions]);
+    // Include actions from other configured channels so isolated/cron agents
+    // can invoke cross-channel actions without validation errors.
+    for (const plugin of listChannelPlugins()) {
+      if (plugin.id === currentChannel) {
+        continue;
+      }
+      for (const action of listChannelSupportedActions({ cfg: params.cfg, channel: plugin.id })) {
+        allActions.add(action);
+      }
+    }
+    return Array.from(allActions);
+  }
+  const actions = listChannelMessageActions(params.cfg);
+  return actions.length > 0 ? actions : ["send"];
+}
+
+function buildMessageToolSchema(params: {
+  cfg: OpenClawConfig;
+  currentChannelProvider?: string;
+  currentChannelId?: string;
+}) {
+  const actions = resolveMessageToolSchemaActions(params);
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  const includeButtons = currentChannel
+    ? supportsChannelMessageButtonsForChannel({ cfg: params.cfg, channel: currentChannel })
+    : supportsChannelMessageButtons(params.cfg);
+  const includeCards = currentChannel
+    ? supportsChannelMessageCardsForChannel({ cfg: params.cfg, channel: currentChannel })
+    : supportsChannelMessageCards(params.cfg);
   return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
     includeButtons,
     includeCards,
@@ -464,7 +509,7 @@ function buildMessageToolDescription(options?: {
 }): string {
   const baseDescription = "Send, delete, and manage messages via channel plugins.";
 
-  // If we have a current channel, show only its supported actions
+  // If we have a current channel, show its actions and list other configured channels
   if (options?.currentChannel) {
     const channelActions = filterActionsForContext({
       actions: listChannelSupportedActions({
@@ -478,7 +523,25 @@ function buildMessageToolDescription(options?: {
       // Always include "send" as a base action
       const allActions = new Set(["send", ...channelActions]);
       const actionList = Array.from(allActions).toSorted().join(", ");
-      return `${baseDescription} Current channel (${options.currentChannel}) supports: ${actionList}.`;
+      let desc = `${baseDescription} Current channel (${options.currentChannel}) supports: ${actionList}.`;
+
+      // Include other configured channels so cron/isolated agents can discover them
+      const otherChannels: string[] = [];
+      for (const plugin of listChannelPlugins()) {
+        if (plugin.id === options.currentChannel) {
+          continue;
+        }
+        const actions = listChannelSupportedActions({ cfg: options.config, channel: plugin.id });
+        if (actions.length > 0) {
+          const all = new Set(["send", ...actions]);
+          otherChannels.push(`${plugin.id} (${Array.from(all).toSorted().join(", ")})`);
+        }
+      }
+      if (otherChannels.length > 0) {
+        desc += ` Other configured channels: ${otherChannels.join(", ")}.`;
+      }
+
+      return desc;
     }
   }
 
@@ -495,7 +558,13 @@ function buildMessageToolDescription(options?: {
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const agentAccountId = resolveAgentAccountId(options?.agentAccountId);
-  const schema = options?.config ? buildMessageToolSchema(options.config) : MessageToolSchema;
+  const schema = options?.config
+    ? buildMessageToolSchema({
+        cfg: options.config,
+        currentChannelProvider: options.currentChannelProvider,
+        currentChannelId: options.currentChannelId,
+      })
+    : MessageToolSchema;
   const description = buildMessageToolDescription({
     config: options?.config,
     currentChannel: options?.currentChannelProvider,

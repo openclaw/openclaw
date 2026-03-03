@@ -7,8 +7,7 @@ import {
   parseCameraClipPayload,
   parseCameraSnapPayload,
   writeCameraClipPayloadToFile,
-  writeBase64ToFile,
-  writeUrlToFile,
+  writeCameraPayloadToFile,
 } from "../../cli/nodes-camera.js";
 import { parseEnvPairs, parseTimeoutMs } from "../../cli/nodes-run.js";
 import {
@@ -18,6 +17,7 @@ import {
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parsePreparedSystemRunPayload } from "../../infra/system-run-approval-context.js";
 import { formatExecCommand } from "../../infra/system-run-command.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -27,7 +27,7 @@ import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
-import { listNodes, resolveNodeIdFromList, resolveNodeId } from "./nodes-utils.js";
+import { listNodes, resolveNode, resolveNodeId, resolveNodeIdFromList } from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -119,7 +119,7 @@ const NodesToolSchema = Type.Object({
   delayMs: Type.Optional(Type.Number()),
   deviceId: Type.Optional(Type.String()),
   duration: Type.Optional(Type.String()),
-  durationMs: Type.Optional(Type.Number()),
+  durationMs: Type.Optional(Type.Number({ maximum: 300_000 })),
   includeAudio: Type.Optional(Type.Boolean()),
   // screen_record
   fps: Type.Optional(Type.Number()),
@@ -229,7 +229,8 @@ export function createNodesTool(options?: {
           }
           case "camera_snap": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const resolvedNode = await resolveNode(gatewayOpts, node);
+            const nodeId = resolvedNode.nodeId;
             const facingRaw =
               typeof params.facing === "string" ? params.facing.toLowerCase() : "front";
             const facings: CameraFacing[] =
@@ -293,11 +294,12 @@ export function createNodesTool(options?: {
                 facing,
                 ext: isJpeg ? "jpg" : "png",
               });
-              if (payload.url) {
-                await writeUrlToFile(filePath, payload.url);
-              } else if (payload.base64) {
-                await writeBase64ToFile(filePath, payload.base64);
-              }
+              await writeCameraPayloadToFile({
+                filePath,
+                payload,
+                expectedHost: resolvedNode.remoteIp,
+                invalidPayloadMessage: "invalid camera.snap payload",
+              });
               content.push({ type: "text", text: `MEDIA:${filePath}` });
               if (payload.base64) {
                 content.push({
@@ -372,7 +374,8 @@ export function createNodesTool(options?: {
           }
           case "camera_clip": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const resolvedNode = await resolveNode(gatewayOpts, node);
+            const nodeId = resolvedNode.nodeId;
             const facing =
               typeof params.facing === "string" ? params.facing.toLowerCase() : "front";
             if (facing !== "front" && facing !== "back") {
@@ -406,6 +409,7 @@ export function createNodesTool(options?: {
             const filePath = await writeCameraClipPayloadToFile({
               payload,
               facing,
+              expectedHost: resolvedNode.remoteIp,
             });
             return {
               content: [{ type: "text", text: `FILE:${filePath}` }],
@@ -420,12 +424,14 @@ export function createNodesTool(options?: {
           case "screen_record": {
             const node = readStringParam(params, "node", { required: true });
             const nodeId = await resolveNodeId(gatewayOpts, node);
-            const durationMs =
+            const durationMs = Math.min(
               typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
                 ? params.durationMs
                 : typeof params.duration === "string"
                   ? parseDurationMs(params.duration)
-                  : 10_000;
+                  : 10_000,
+              300_000,
+            );
             const fps =
               typeof params.fps === "number" && Number.isFinite(params.fps) ? params.fps : 10;
             const screenIndex =
@@ -530,14 +536,36 @@ export function createNodesTool(options?: {
               typeof params.needsScreenRecording === "boolean"
                 ? params.needsScreenRecording
                 : undefined;
+            const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
+              "node.invoke",
+              gatewayOpts,
+              {
+                nodeId,
+                command: "system.run.prepare",
+                params: {
+                  command,
+                  rawCommand: formatExecCommand(command),
+                  cwd,
+                  agentId,
+                  sessionKey,
+                },
+                timeoutMs: invokeTimeoutMs,
+                idempotencyKey: crypto.randomUUID(),
+              },
+            );
+            const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+            if (!prepared) {
+              throw new Error("invalid system.run.prepare response");
+            }
             const runParams = {
-              command,
-              cwd,
+              command: prepared.plan.argv,
+              rawCommand: prepared.plan.rawCommand ?? prepared.cmdText,
+              cwd: prepared.plan.cwd ?? cwd,
               env,
               timeoutMs: commandTimeoutMs,
               needsScreenRecording,
-              agentId,
-              sessionKey,
+              agentId: prepared.plan.agentId ?? agentId,
+              sessionKey: prepared.plan.sessionKey ?? sessionKey,
             };
 
             // First attempt without approval flags.
@@ -560,20 +588,20 @@ export function createNodesTool(options?: {
             // Node requires approval – create a pending approval request on
             // the gateway and wait for the user to approve/deny via the UI.
             const APPROVAL_TIMEOUT_MS = 120_000;
-            const cmdText = formatExecCommand(command);
             const approvalId = crypto.randomUUID();
             const approvalResult = await callGatewayTool(
               "exec.approval.request",
               { ...gatewayOpts, timeoutMs: APPROVAL_TIMEOUT_MS + 5_000 },
               {
                 id: approvalId,
-                command: cmdText,
-                commandArgv: command,
-                cwd,
+                command: prepared.cmdText,
+                commandArgv: prepared.plan.argv,
+                systemRunPlan: prepared.plan,
+                cwd: prepared.plan.cwd ?? cwd,
                 nodeId,
                 host: "node",
-                agentId,
-                sessionKey,
+                agentId: prepared.plan.agentId ?? agentId,
+                sessionKey: prepared.plan.sessionKey ?? sessionKey,
                 turnSourceChannel,
                 turnSourceTo,
                 turnSourceAccountId,
