@@ -34,15 +34,27 @@ export function isSilentReplyPrefixText(
   if (!text) {
     return false;
   }
-  const normalized = text.trimStart().toUpperCase();
+  const raw = text.trimStart();
+  const normalized = raw.toUpperCase();
   if (!normalized) {
-    return false;
-  }
-  if (!normalized.includes("_")) {
     return false;
   }
   if (/[^A-Z_]/.test(normalized)) {
     return false;
   }
-  return token.toUpperCase().startsWith(normalized);
+
+  const upperToken = token.toUpperCase();
+  if (normalized.includes("_")) {
+    return upperToken.startsWith(normalized);
+  }
+
+  // Only treat alpha-only prefixes as control-token prefixes when the source
+  // chunk is already uppercase. This keeps natural-language "No" replies visible
+  // while suppressing streamed "NO" fragments of NO_REPLY.
+  if (raw !== raw.toUpperCase()) {
+    return false;
+  }
+
+  const alphaPrefix = upperToken.split("_", 1)[0] ?? upperToken;
+  return alphaPrefix.startsWith(normalized);
 }
