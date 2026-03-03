@@ -335,7 +335,7 @@ jobs:
     timeout-minutes: 45
     env:
       NODE_OPTIONS: --max-old-space-size=6144
-      # Keep total concurrency predictable on the 16 vCPU runner.
+      # Keep total concurrency predictable on the 32 vCPU runner.
       # Windows shard 2 has shown intermittent instability at 2 workers.
       OPENCLAW_TEST_WORKERS: 1
     defaults:
@@ -348,22 +348,32 @@ jobs:
           - runtime: node
             task: test
             shard_index: 1
-            shard_count: 4
+            shard_count: 6
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 2
-            shard_count: 4
+            shard_count: 6
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 3
-            shard_count: 4
+            shard_count: 6
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 4
-            shard_count: 4
+            shard_count: 6
+            command: pnpm test
+          - runtime: node
+            task: test
+            shard_index: 5
+            shard_count: 6
+            command: pnpm test
+          - runtime: node
+            task: test
+            shard_index: 6
+            shard_count: 6
             command: pnpm test
     steps:
       - name: Checkout
@@ -402,6 +412,7 @@ jobs:
           pnpm-version: "10.23.0"
           cache-key-suffix: "node22"
           use-restore-keys: "false"
+          use-actions-cache: "false"
 
       - name: Runtime versions
         run: |
