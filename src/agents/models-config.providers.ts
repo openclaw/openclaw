@@ -637,7 +637,7 @@ function buildMinimaxPortalProvider(): ProviderConfig {
 
 function buildMoonshotProvider(baseUrl?: string): ProviderConfig {
   return {
-    baseUrl: baseUrl?.trim() ?? MOONSHOT_BASE_URL,
+    baseUrl: baseUrl?.trim() || MOONSHOT_BASE_URL,
     api: "openai-completions",
     models: [
       {
