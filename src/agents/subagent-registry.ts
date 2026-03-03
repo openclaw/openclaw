@@ -408,6 +408,14 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
       defaultRuntime.log(
         `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
       );
+      // Release cleanup lock immediately so resume/retry is not blocked if
+      // finalize runs on a later turn.
+      const current = subagentRuns.get(runId);
+      if (current && !current.cleanupCompletedAt) {
+        current.cleanupHandled = false;
+        resumedRuns.delete(runId);
+        persistSubagentRuns();
+      }
       void finalizeSubagentCleanup(runId, entry.cleanup, false);
     });
   return true;
