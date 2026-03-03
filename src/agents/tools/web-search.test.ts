@@ -3,6 +3,7 @@ import { withEnv } from "../../test-utils/env.js";
 import { __testing } from "./web-search.js";
 
 const {
+  resolveSearchProvider,
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
   isDirectPerplexityBaseUrl,
@@ -19,6 +20,7 @@ const {
   resolveKimiBaseUrl,
   extractKimiCitations,
 } = __testing;
+type SearchConfig = Parameters<typeof resolveSearchProvider>[0];
 
 describe("web_search perplexity baseUrl defaults", () => {
   it("detects a Perplexity key prefix", () => {
@@ -61,9 +63,28 @@ describe("web_search perplexity baseUrl defaults", () => {
     );
   });
 
-  it("defaults to OpenRouter for unknown config key formats", () => {
-    expect(resolvePerplexityBaseUrl(undefined, "config", "weird-key")).toBe(
-      "https://openrouter.ai/api/v1",
+  it("fails fast for unknown config key formats", () => {
+    expect(() => resolvePerplexityBaseUrl(undefined, "config", "weird-key")).toThrow(
+      "Ambiguous Perplexity API key format.",
+    );
+  });
+});
+
+describe("web_search provider resolution", () => {
+  it("honors explicit provider config values", () => {
+    expect(resolveSearchProvider({ provider: "grok" } as SearchConfig)).toBe("grok");
+  });
+
+  it("auto-detects Perplexity only when provider is absent", () => {
+    expect(resolveSearchProvider(undefined, "perplexity_env")).toBe("perplexity");
+    expect(resolveSearchProvider({ provider: "" } as SearchConfig, "perplexity_env")).toBe(
+      "brave",
+    );
+  });
+
+  it("throws for unsupported explicit provider values", () => {
+    expect(() => resolveSearchProvider({ provider: "duckduckgo" } as SearchConfig)).toThrow(
+      "Unsupported web search provider",
     );
   });
 });

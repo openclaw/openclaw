@@ -401,6 +401,11 @@ export async function runCronIsolatedAgentTurn(params: {
     await persistSessionEntry();
   }
 
+  // Prevent duplicate execution across concurrent CronService instances.
+  if (cronSession.sessionEntry.systemSent) {
+    return { status: "skipped", summary: "Cron already processed by another instance." };
+  }
+
   // Persist the intended model and systemSent before the run so that
   // sessions_list reflects the cron override even if the run fails or is
   // still in progress (#21057).  Best-effort: a filesystem error here

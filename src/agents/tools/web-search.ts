@@ -336,11 +336,15 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
   };
 }
 
-function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDERS)[number] {
+function resolveSearchProvider(
+  search?: WebSearchConfig,
+  perplexitySource: PerplexityApiKeySource = "none",
+): (typeof SEARCH_PROVIDERS)[number] {
+  const hasProviderField = Boolean(search && "provider" in search);
   const raw =
-    search && "provider" in search && typeof search.provider === "string"
+    hasProviderField && typeof search.provider === "string"
       ? search.provider.trim().toLowerCase()
-      : "";
+      : undefined;
   if (raw === "perplexity") {
     return "perplexity";
   }
@@ -357,8 +361,15 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     return "brave";
   }
 
-  // Auto-detect provider from available API keys (priority order)
-  if (raw === "") {
+  // If user explicitly set an invalid provider, fail fast.
+  if (hasProviderField && raw) {
+    throw new Error(
+      `Unsupported web search provider: "${search?.provider}". Valid options are: ${SEARCH_PROVIDERS.join(", ")}`,
+    );
+  }
+
+  // Auto-detect provider from available API keys only when provider is absent.
+  if (!hasProviderField) {
     // 1. Brave
     if (resolveSearchApiKey(search)) {
       logVerbose(
@@ -383,9 +394,11 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       return "kimi";
     }
     // 4. Perplexity
-    const perplexityConfig = resolvePerplexityConfig(search);
-    const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
-    if (perplexityKey) {
+    const inferredPerplexitySource =
+      perplexitySource !== "none"
+        ? perplexitySource
+        : resolvePerplexityApiKey(resolvePerplexityConfig(search)).source;
+    if (inferredPerplexitySource !== "none") {
       logVerbose(
         'web_search: no provider configured, auto-detected "perplexity" from available API keys',
       );
@@ -473,7 +486,7 @@ function resolvePerplexityBaseUrl(
   if (apiKeySource === "openrouter_env") {
     return DEFAULT_PERPLEXITY_BASE_URL;
   }
-  if (apiKeySource === "config") {
+  if (apiKeySource === "config" && apiKey) {
     const inferred = inferPerplexityBaseUrlFromApiKey(apiKey);
     if (inferred === "direct") {
       return PERPLEXITY_DIRECT_BASE_URL;
@@ -481,6 +494,9 @@ function resolvePerplexityBaseUrl(
     if (inferred === "openrouter") {
       return DEFAULT_PERPLEXITY_BASE_URL;
     }
+    throw new Error(
+      "Ambiguous Perplexity API key format. Please explicitly set 'baseUrl' in your tools.web.search.perplexity configuration.",
+    );
   }
   return DEFAULT_PERPLEXITY_BASE_URL;
 }
@@ -1344,8 +1360,9 @@ export function createWebSearchTool(options?: {
     return null;
   }
 
-  const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
+  const perplexityAuth = resolvePerplexityApiKey(perplexityConfig);
+  const provider = resolveSearchProvider(search, perplexityAuth.source);
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
@@ -1367,11 +1384,9 @@ export function createWebSearchTool(options?: {
     description,
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args) => {
-      const perplexityAuth =
-        provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
       const apiKey =
         provider === "perplexity"
-          ? perplexityAuth?.apiKey
+          ? perplexityAuth.apiKey
           : provider === "grok"
             ? resolveGrokApiKey(grokConfig)
             : provider === "kimi"
@@ -1441,8 +1456,8 @@ export function createWebSearchTool(options?: {
         freshness,
         perplexityBaseUrl: resolvePerplexityBaseUrl(
           perplexityConfig,
-          perplexityAuth?.source,
-          perplexityAuth?.apiKey,
+          perplexityAuth.source,
+          perplexityAuth.apiKey,
         ),
         perplexityModel: resolvePerplexityModel(perplexityConfig),
         grokModel: resolveGrokModel(grokConfig),
