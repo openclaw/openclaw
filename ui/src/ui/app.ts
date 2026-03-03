@@ -152,6 +152,7 @@ export class OpenClawApp extends LitElement {
   @state() fallbackStatus: FallbackStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
+  @state() chatPendingMessages: Array<{ text: string; mode: "steered" | "queued" }> = [];
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
@@ -249,7 +250,6 @@ export class OpenClawApp extends LitElement {
   @state() sessionsFilterLimit = "120";
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
-  @state() sessionsHideCron = true;
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;
@@ -315,10 +315,6 @@ export class OpenClawApp extends LitElement {
   @state() cronJobsLimit = 50;
   @state() cronJobsQuery = "";
   @state() cronJobsEnabledFilter: import("./types.js").CronJobsEnabledFilter = "all";
-  @state() cronJobsScheduleKindFilter: import("./controllers/cron.js").CronJobsScheduleKindFilter =
-    "all";
-  @state() cronJobsLastStatusFilter: import("./controllers/cron.js").CronJobsLastStatusFilter =
-    "all";
   @state() cronJobsSortBy: import("./types.js").CronJobsSortBy = "nextRunAtMs";
   @state() cronJobsSortDir: import("./types.js").CronSortDir = "asc";
   @state() cronStatus: CronStatus | null = null;

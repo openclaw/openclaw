@@ -7,7 +7,13 @@ export type MatchedOriginInfo = {
   tokenOnlyAuth: boolean;
 };
 
-type OriginCheckResult = { ok: true; matched?: MatchedOriginInfo } | { ok: false; reason: string };
+type OriginCheckResult =
+  | {
+      ok: true;
+      matched?: MatchedOriginInfo;
+      matchedBy?: "allowlist" | "host-header-fallback" | "local-loopback";
+    }
+  | { ok: false; reason: string };
 
 function parseOrigin(
   originRaw?: string,
@@ -59,16 +65,18 @@ export function checkBrowserOrigin(params: {
 
   const entries = (params.allowedOrigins ?? []).map(normalizeOriginEntry);
 
-  // Wildcard check
+  // Check wildcard (allows all origins, no tokenOnlyAuth)
   if (entries.some((e) => e.origin === "*")) {
-    return { ok: true };
+    return { ok: true, matchedBy: "allowlist" };
   }
 
+  // Check exact origin match (supports tokenOnlyAuth per entry)
   const matched = entries.find((e) => e.origin && e.origin === parsedOrigin.origin);
   if (matched) {
     return {
       ok: true,
       matched: { tokenOnlyAuth: matched.tokenOnlyAuth },
+      matchedBy: "allowlist",
     };
   }
 
@@ -78,7 +86,12 @@ export function checkBrowserOrigin(params: {
     requestHost &&
     parsedOrigin.host === requestHost
   ) {
-    return { ok: true };
+    return { ok: true, matchedBy: "host-header-fallback" };
+  }
+
+  const requestHostname = resolveHostName(requestHost);
+  if (isLoopbackHost(parsedOrigin.hostname) && isLoopbackHost(requestHostname)) {
+    return { ok: true, matchedBy: "local-loopback" };
   }
 
   // Dev fallback only for genuinely local socket clients, not Host-header claims.
