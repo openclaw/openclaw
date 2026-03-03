@@ -209,7 +209,7 @@ describe("getMessageFeishu", () => {
     );
   });
 
-  it("extracts text from legacy post-format interactive card (array-of-arrays elements)", async () => {
+  it("extracts text from legacy post-format card (array-of-arrays content field)", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
       data: {
@@ -221,15 +221,20 @@ describe("getMessageFeishu", () => {
             body: {
               content: JSON.stringify({
                 title: "[critical] Alert Title",
-                elements: [
+                content: [
                   [
-                    { tag: "text", text: "PSM:" },
+                    { tag: "text", text: "PSM:", style: ["bold"] },
                     { tag: "text", text: " my-service" },
                   ],
                   [
-                    { tag: "text", text: "Cluster:" },
-                    { tag: "text", text: " Singapore" },
+                    { tag: "a", href: "http://example.com", text: "view link" },
+                    { tag: "at", user_id: "@_user_1", user_name: "Alice" },
                   ],
+                  [{ tag: "code_block", language: "GO", text: "func main() {}" }],
+                  // these tags have no readable text and should be skipped
+                  [{ tag: "img", image_key: "img_xxx" }],
+                  [{ tag: "emotion", emoji_type: "SMILE" }],
+                  [{ tag: "hr" }],
                 ],
               }),
             },
@@ -242,7 +247,12 @@ describe("getMessageFeishu", () => {
     expect(result?.content).toContain("[critical] Alert Title");
     expect(result?.content).toContain("PSM:");
     expect(result?.content).toContain("my-service");
-    expect(result?.content).toContain("Singapore");
+    expect(result?.content).toContain("view link");
+    expect(result?.content).toContain("Alice");
+    expect(result?.content).toContain("func main()");
+    // img / emotion / hr should not produce output
+    expect(result?.content).not.toContain("img_xxx");
+    expect(result?.content).not.toContain("SMILE");
   });
 
   it("returns [Interactive Card] placeholder when no text can be extracted", async () => {

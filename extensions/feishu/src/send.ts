@@ -136,15 +136,29 @@ function extractCardTextElements(root: unknown[]): string[] {
       if (++seenNodes > CARD_MAX_NODES) break;
       if (!element || typeof element !== "object") continue;
 
-      // Legacy post/rich-text format: elements is array-of-arrays where each
-      // inner array is a row of inline elements ({tag:"text",text:...} | {tag:"a",...}).
-      // Feishu returns this format for externally-forwarded interactive cards.
+      // Legacy post/rich-text format: elements/content is array-of-arrays where each
+      // inner array is a row of inline elements. Supported tags:
+      //   text, a (link), at (mention) → extract .text
+      //   code_block → extract .text
+      //   img, media, emotion, hr → skip (no readable text)
       if (Array.isArray(element)) {
         for (const inline of element as unknown[]) {
           if (!inline || typeof inline !== "object") continue;
           const inEl = inline as Record<string, unknown>;
-          if (typeof inEl.text === "string" && inEl.text.trim()) {
+          const inTag = inEl.tag;
+          if (
+            (inTag === "text" || inTag === "a" || inTag === "code_block") &&
+            typeof inEl.text === "string" &&
+            inEl.text.trim()
+          ) {
             pushText(inEl.text.trim());
+          } else if (
+            inTag === "at" &&
+            typeof inEl.user_name === "string" &&
+            inEl.user_name.trim()
+          ) {
+            // at-mention: use user_name as display text
+            pushText(inEl.user_name.trim());
           }
         }
         continue;
@@ -213,16 +227,19 @@ function parseInteractiveCardContent(parsed: unknown): string {
     );
   }
 
-  // Extract body elements — support both schema 1.0 (card.elements) and
-  // schema 2.0 (card.body.elements, used by buildMarkdownCard and most
-  // modern Feishu alert/notification cards).
+  // Extract body — priority order:
+  // 1. card.elements  — schema 1.0 flat elements array
+  // 2. card.body.elements — schema 2.0 (buildMarkdownCard, modern alert cards)
+  // 3. card.content — legacy post/rich-text format (array-of-arrays rows)
   const bodyElements = Array.isArray(card.elements)
     ? (card.elements as unknown[])
     : card.body &&
         typeof card.body === "object" &&
         Array.isArray((card.body as Record<string, unknown>).elements)
       ? ((card.body as Record<string, unknown>).elements as unknown[])
-      : [];
+      : Array.isArray(card.content)
+        ? (card.content as unknown[])
+        : [];
   texts.push(...extractCardTextElements(bodyElements));
 
   return texts.join("\n").trim() || "[Interactive Card]";
