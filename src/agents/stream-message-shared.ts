@@ -1,4 +1,5 @@
 import type { AssistantMessage, StopReason, Usage } from "@mariozechner/pi-ai";
+import { sanitizeRawAssistantErrorForTranscript } from "./pi-embedded-helpers.js";
 
 export type StreamModelDescriptor = {
   api: string;
@@ -85,6 +86,7 @@ export function buildStreamErrorAssistantMessage(params: {
       timestamp: params.timestamp,
     }),
     stopReason: "error",
-    errorMessage: params.errorMessage,
+    // Keep transcript error payloads compact to avoid context bloat during retries.
+    errorMessage: sanitizeRawAssistantErrorForTranscript(params.errorMessage),
   };
 }

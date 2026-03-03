@@ -184,8 +184,10 @@ const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
+const HTML_TAG_RE = /<\s*\/?\s*[a-z][^>]*>/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
 const TRANSIENT_HTTP_ERROR_CODES = new Set([500, 502, 503, 504, 521, 522, 523, 524, 529]);
+const MAX_TRANSCRIPT_ERROR_CHARS = 180;
 const HTTP_ERROR_HINTS = [
   "error",
   "bad request",
@@ -453,6 +455,10 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return "LLM request failed with an unknown error.";
   }
 
+  if (HTML_ERROR_PREFIX_RE.test(trimmed) && /<\/html>/i.test(trimmed)) {
+    return "The AI service is temporarily unavailable. Please try again in a moment.";
+  }
+
   const leadingStatus = extractLeadingHttpStatus(trimmed);
   if (leadingStatus && isCloudflareOrHtmlErrorPage(trimmed)) {
     return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
@@ -475,6 +481,51 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   }
 
   return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+}
+
+function truncateForTranscript(text: string): string {
+  return text.length > MAX_TRANSCRIPT_ERROR_CHARS
+    ? `${text.slice(0, MAX_TRANSCRIPT_ERROR_CHARS)}…`
+    : text;
+}
+
+export function sanitizeRawAssistantErrorForTranscript(raw?: string): string {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) {
+    return "LLM request failed with an unknown error.";
+  }
+
+  const leadingStatus = extractLeadingHttpStatus(trimmed);
+  if (leadingStatus && isCloudflareOrHtmlErrorPage(trimmed)) {
+    return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}).`;
+  }
+
+  if (HTML_ERROR_PREFIX_RE.test(trimmed) && /<\/html>/i.test(trimmed)) {
+    return "The AI service returned an HTML error page.";
+  }
+
+  const info = parseApiErrorInfo(trimmed);
+  if (info?.message) {
+    const prefix = info.httpCode ? `HTTP ${info.httpCode}` : "LLM error";
+    const type = info.type ? ` ${info.type}` : "";
+    const compact = info.message.replace(/\s+/g, " ").trim();
+    return truncateForTranscript(`${prefix}${type}: ${compact}`);
+  }
+
+  const httpMatch = trimmed.match(HTTP_STATUS_PREFIX_RE);
+  if (httpMatch) {
+    const rest = httpMatch[2].trim();
+    if (!rest.startsWith("{")) {
+      return truncateForTranscript(`HTTP ${httpMatch[1]}: ${rest.replace(/\s+/g, " ").trim()}`);
+    }
+  }
+
+  if (HTML_TAG_RE.test(trimmed)) {
+    return "The AI service returned an HTML error page.";
+  }
+
+  const normalized = trimmed.replace(/\s+/g, " ").trim();
+  return truncateForTranscript(normalized);
 }
 
 export function formatAssistantErrorText(

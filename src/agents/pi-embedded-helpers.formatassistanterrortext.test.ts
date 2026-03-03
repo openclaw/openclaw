@@ -5,6 +5,7 @@ import {
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
+  sanitizeRawAssistantErrorForTranscript,
 } from "./pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
@@ -151,5 +152,32 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
     );
+  });
+
+  it("sanitizes raw HTML payloads even without a leading HTTP status", () => {
+    const htmlError = `<!DOCTYPE html><html><body>error page</body></html>`;
+    expect(formatRawAssistantErrorForUi(htmlError)).toBe(
+      "The AI service is temporarily unavailable. Please try again in a moment.",
+    );
+  });
+});
+
+describe("sanitizeRawAssistantErrorForTranscript", () => {
+  it("removes HTML payloads before transcript storage", () => {
+    const htmlError = `<!DOCTYPE html><html><body>cloudflare challenge</body></html>`;
+    expect(sanitizeRawAssistantErrorForTranscript(htmlError)).toBe(
+      "The AI service returned an HTML error page.",
+    );
+  });
+
+  it("drops volatile request ids and truncates long payloads", () => {
+    const raw =
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"' +
+      "x".repeat(300) +
+      '"},"request_id":"req_123"}';
+    const text = sanitizeRawAssistantErrorForTranscript(raw);
+    expect(text).toContain("HTTP 429 rate_limit_error:");
+    expect(text).not.toContain("req_123");
+    expect(text.length).toBeLessThanOrEqual(181);
   });
 });
