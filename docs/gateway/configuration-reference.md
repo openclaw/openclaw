@@ -833,7 +833,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       },
       imageModel: {
         primary: "openrouter/qwen/qwen-2.5-vl-72b-instruct:free",
-        fallbacks: ["openrouter/google/gemini-2.0-flash-vision:free"],
+        fallbacks: ["openrouter/google/gemini-2.5-flash-lite-vision:free"],
       },
       pdfModel: {
         primary: "anthropic/claude-opus-4-6",
@@ -2275,7 +2275,7 @@ See [Plugins](/tools/plugin).
       // allowedHostnames: ["localhost"],
     },
     profiles: {
-      openclaw: { cdpPort: 18800, color: "#FF4500" },
+      openclaw: { cdpPort: 18800, color: "#FF4500", lockTab: true },
       work: { cdpPort: 18801, color: "#0066CC" },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
@@ -2285,11 +2285,14 @@ See [Plugins](/tools/plugin).
     // extraArgs: [],
     // executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     // attachOnly: false,
+    // disableLaunch: false,
   },
 }
 ```
 
 - `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
+- `disableLaunch: true` prevents all browser launches (via local Chrome or Playwright). Forces `attachOnly: true`.
+- `profiles.<name>.lockTab: true` locks OpenClaw to the first/selected tab for this profile and prevents switching.
 - `ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` when unset (trusted-network model).
 - Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: false` for strict public-only browser navigation.
 - `ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
