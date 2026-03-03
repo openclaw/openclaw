@@ -186,7 +186,10 @@ export async function runImapService(opts: ImapRunOptions) {
 
   // Import and start the watcher directly.
   const { startImapWatcher, stopImapWatcher } = await import("./imap-watcher.js");
-  await startImapWatcher(config, overrides);
+  const startResult = await startImapWatcher(config, overrides);
+  if (!startResult.started) {
+    throw new Error(startResult.reason ?? "imap watcher failed to start");
+  }
 
   // Keep process alive and handle signals for graceful shutdown.
   let shuttingDown = false;

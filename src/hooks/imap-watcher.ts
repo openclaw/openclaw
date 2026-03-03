@@ -51,11 +51,6 @@ export async function startImapWatcher(
     return { started: false, reason: "hooks not enabled" };
   }
 
-  if (!cfg.hooks?.imap?.account) {
-    log.debug("no imap account configured, skipping start");
-    return { started: false, reason: "no imap account configured" };
-  }
-
   log.debug(`checking himalaya availability...`);
   if (!isHimalayaAvailable()) {
     log.debug("himalaya binary not found");
@@ -63,7 +58,7 @@ export async function startImapWatcher(
   }
   log.debug("himalaya binary found");
 
-  log.debug(`resolving imap config for account: ${cfg.hooks.imap.account}`);
+  log.debug("resolving imap config");
   const resolved = resolveImapHookRuntimeConfig(cfg, overrides ?? {});
   if (!resolved.ok) {
     log.debug(`config resolution failed: ${resolved.error}`);
@@ -305,7 +300,7 @@ async function deliverToHook(cfg: ImapHookRuntimeConfig, payload: unknown): Prom
         "Content-Type": "application/json",
         Authorization: `Bearer ${cfg.hookToken}`,
       },
-      body: JSON.stringify(payload),
+      body: payloadJson,
       signal: controller.signal,
     });
     clearTimeout(timeout);
