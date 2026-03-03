@@ -66,20 +66,11 @@ async function fetchOpenAiBatchStatus(params: {
   openAi: OpenAiEmbeddingClient;
   batchId: string;
 }): Promise<OpenAiBatchStatus> {
-  const baseUrl = normalizeBatchBaseUrl(params.openAi);
-  return await withRemoteHttpResponse({
-    url: `${baseUrl}/batches/${params.batchId}`,
-    ssrfPolicy: params.openAi.ssrfPolicy,
-    init: {
-      headers: buildBatchHeaders(params.openAi, { json: true }),
-    },
-    onResponse: async (res) => {
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`openai batch status failed: ${res.status} ${text}`);
-      }
-      return (await res.json()) as OpenAiBatchStatus;
-    },
+  return await fetchOpenAiBatchResource({
+    openAi: params.openAi,
+    path: `/batches/${params.batchId}`,
+    errorPrefix: "openai batch status",
+    parse: async (res) => (await res.json()) as OpenAiBatchStatus,
   });
 }
 
@@ -87,9 +78,23 @@ async function fetchOpenAiFileContent(params: {
   openAi: OpenAiEmbeddingClient;
   fileId: string;
 }): Promise<string> {
+  return await fetchOpenAiBatchResource({
+    openAi: params.openAi,
+    path: `/files/${params.fileId}/content`,
+    errorPrefix: "openai batch file content",
+    parse: async (res) => await res.text(),
+  });
+}
+
+async function fetchOpenAiBatchResource<T>(params: {
+  openAi: OpenAiEmbeddingClient;
+  path: string;
+  errorPrefix: string;
+  parse: (res: Response) => Promise<T>;
+}): Promise<T> {
   const baseUrl = normalizeBatchBaseUrl(params.openAi);
   return await withRemoteHttpResponse({
-    url: `${baseUrl}/files/${params.fileId}/content`,
+    url: `${baseUrl}${params.path}`,
     ssrfPolicy: params.openAi.ssrfPolicy,
     init: {
       headers: buildBatchHeaders(params.openAi, { json: true }),
@@ -97,9 +102,9 @@ async function fetchOpenAiFileContent(params: {
     onResponse: async (res) => {
       if (!res.ok) {
         const text = await res.text();
-        throw new Error(`openai batch file content failed: ${res.status} ${text}`);
+        throw new Error(`${params.errorPrefix} failed: ${res.status} ${text}`);
       }
-      return await res.text();
+      return await params.parse(res);
     },
   });
 }
