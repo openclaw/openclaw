@@ -18,6 +18,11 @@ export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
   clientIp?: string;
+  /**
+   * Session keys this connection has interacted with via chat.send or
+   * chat.history.  Used by the broadcaster to scope chat event delivery.
+   */
+  chatSessionKeys?: Set<string>;
   canvasHostUrl?: string;
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;

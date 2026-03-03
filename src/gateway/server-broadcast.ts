@@ -39,6 +39,10 @@ export type GatewayBroadcastToConnIdsFn = (
 ) => void;
 
 function hasAdminScope(client: GatewayWsClient): boolean {
+  const role = client.connect.role ?? "operator";
+  if (role !== "operator") {
+    return false;
+  }
   const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
 }

@@ -540,16 +540,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       limit?: number;
     };
 
-    // Track session association for session-scoped chat event delivery.
-    if (client && sessionKey) {
-      const wsClient = client as unknown as { chatSessionKeys?: Set<string> };
-      if (!wsClient.chatSessionKeys) {
-        wsClient.chatSessionKeys = new Set();
-      }
-      wsClient.chatSessionKeys.add(sessionKey);
-    }
+    const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
 
-    const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
+    // Track canonical session key for session-scoped chat event delivery.
+    if (client && canonicalKey) {
+      if (!client.chatSessionKeys) {
+        client.chatSessionKeys = new Set();
+      }
+      client.chatSessionKeys.add(canonicalKey);
+    }
     const sessionId = entry?.sessionId;
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
@@ -693,17 +692,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       idempotencyKey: string;
     };
-    // Track session association for session-scoped chat event delivery.
-    // After the first chat.send, this connection will only receive chat
-    // events for sessions it has interacted with (unless it holds admin scope).
-    if (client && p.sessionKey) {
-      const wsClient = client as unknown as { chatSessionKeys?: Set<string> };
-      if (!wsClient.chatSessionKeys) {
-        wsClient.chatSessionKeys = new Set();
-      }
-      wsClient.chatSessionKeys.add(p.sessionKey);
-    }
-
     const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
     if (!sanitizedMessageResult.ok) {
       respond(
@@ -742,6 +730,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+
+    // Track canonical session key for session-scoped chat event delivery.
+    if (client && sessionKey) {
+      if (!client.chatSessionKeys) {
+        client.chatSessionKeys = new Set();
+      }
+      client.chatSessionKeys.add(sessionKey);
+    }
+
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,

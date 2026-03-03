@@ -33,7 +33,7 @@ function createMockClient(overrides: {
 
 function getSentPayloads(client: GatewayWsClient): unknown[] {
   return (client.socket.send as ReturnType<typeof vi.fn>).mock.calls.map(
-    ([raw]: [string]) => JSON.parse(raw).payload,
+    (args: unknown[]) => JSON.parse(args[0] as string).payload,
   );
 }
 
@@ -106,6 +106,23 @@ describe("chat broadcast session scoping", () => {
     expect(getSentPayloads(legacyClient)).toHaveLength(1);
     // Scoped client subscribed to session-1 → does NOT get session-2
     expect(getSentPayloads(scopedClient)).toHaveLength(0);
+  });
+
+  it("does NOT treat admin scope on non-operator role as admin", () => {
+    const nodeClient = createMockClient({
+      connId: "node",
+      scopes: ["operator.admin"],
+      chatSessionKeys: new Set(["session-2"]),
+    });
+    // Override role to "node" — admin scope should not apply
+    (nodeClient.connect as Record<string, unknown>).role = "node";
+    const clients = new Set([nodeClient]);
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("chat", { sessionKey: "session-1", text: "hello" });
+
+    // Non-operator role with admin scope should NOT bypass session scoping
+    expect(getSentPayloads(nodeClient)).toHaveLength(0);
   });
 
   it("does NOT scope non-chat events", () => {
