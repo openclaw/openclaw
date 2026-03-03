@@ -70,7 +70,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 
     public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
         let task = self.session.webSocketTask(with: url)
-        task.maximumMessageSize = 4 * 1024 * 1024
+        task.maximumMessageSize = 16 * 1024 * 1024
         return WebSocketTaskBox(task: task)
     }
 
