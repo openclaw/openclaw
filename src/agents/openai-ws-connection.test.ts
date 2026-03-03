@@ -171,6 +171,20 @@ function buildManager(opts?: ConstructorParameters<typeof OpenAIWebSocketManager
   });
 }
 
+function attachErrorCollector(manager: OpenAIWebSocketManager) {
+  const errors: Error[] = [];
+  manager.on("error", (e) => errors.push(e));
+  return errors;
+}
+
+async function connectManagerAndGetSocket(manager: OpenAIWebSocketManager) {
+  const connectPromise = manager.connect("sk-test");
+  const sock = lastSocket();
+  sock.simulateOpen();
+  await connectPromise;
+  return sock;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -576,13 +590,8 @@ describe("OpenAIWebSocketManager", () => {
   describe("error handling", () => {
     it("emits error event on malformed JSON message", async () => {
       const manager = buildManager();
-      const p = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await p;
-
-      const errors: Error[] = [];
-      manager.on("error", (e) => errors.push(e));
+      const sock = await connectManagerAndGetSocket(manager);
+      const errors = attachErrorCollector(manager);
 
       sock.emit("message", Buffer.from("not valid json{{{{"));
 
@@ -592,13 +601,8 @@ describe("OpenAIWebSocketManager", () => {
 
     it("emits error event when message has no type field", async () => {
       const manager = buildManager();
-      const p = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await p;
-
-      const errors: Error[] = [];
-      manager.on("error", (e) => errors.push(e));
+      const sock = await connectManagerAndGetSocket(manager);
+      const errors = attachErrorCollector(manager);
 
       sock.emit("message", Buffer.from(JSON.stringify({ foo: "bar" })));
 
@@ -611,9 +615,7 @@ describe("OpenAIWebSocketManager", () => {
       const p = manager.connect("sk-test").catch(() => {
         /* ignore rejection */
       });
-
-      const errors: Error[] = [];
-      manager.on("error", (e) => errors.push(e));
+      const errors = attachErrorCollector(manager);
 
       lastSocket().simulateError(new Error("SSL handshake failed"));
       await p;
@@ -626,9 +628,7 @@ describe("OpenAIWebSocketManager", () => {
       const p = manager.connect("sk-test").catch(() => {
         /* ignore rejection */
       });
-
-      const errors: Error[] = [];
-      manager.on("error", (e) => errors.push(e));
+      const errors = attachErrorCollector(manager);
 
       // Fire two errors in quick succession — previously the second would
       // be unhandled because .once("error") removed the handler after #1.
