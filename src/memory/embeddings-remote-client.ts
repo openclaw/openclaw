@@ -1,6 +1,7 @@
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { EmbeddingProviderOptions } from "./embeddings.js";
+import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
 
 export type RemoteEmbeddingProviderId = "openai" | "voyage" | "mistral";
@@ -11,7 +12,10 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   defaultBaseUrl: string;
 }): Promise<{ baseUrl: string; headers: Record<string, string>; ssrfPolicy?: SsrFPolicy }> {
   const remote = params.options.remote;
-  const remoteApiKey = remote?.apiKey?.trim();
+  const remoteApiKey = normalizeResolvedSecretInputString({
+    value: remote?.apiKey,
+    path: "agents.*.memorySearch.remote.apiKey",
+  });
   const remoteBaseUrl = remote?.baseUrl?.trim();
   const providerConfig = params.options.config.models?.providers?.[params.provider];
   const apiKey = remoteApiKey

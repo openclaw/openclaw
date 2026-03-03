@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import {
   Button,
   ChannelSelectMenu,
@@ -25,6 +24,7 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, MessageFlags, TextInputStyle } from "discord-api-types/v10";
+import crypto from "node:crypto";
 
 export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
 export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";
@@ -646,8 +646,12 @@ export function parseDiscordModalCustomId(id: string): string | null {
   return modalId;
 }
 
+function isDiscordComponentWildcardRegistrationId(id: string): boolean {
+  return /^__openclaw_discord_component_[a-z_]+_wildcard__$/.test(id);
+}
+
 export function parseDiscordComponentCustomIdForCarbon(id: string): ComponentParserResult {
-  if (id === "*") {
+  if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
     return { key: "*", data: {} };
   }
   const parsed = parseCustomId(id);
@@ -658,7 +662,7 @@ export function parseDiscordComponentCustomIdForCarbon(id: string): ComponentPar
 }
 
 export function parseDiscordModalCustomIdForCarbon(id: string): ComponentParserResult {
-  if (id === "*") {
+  if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
     return { key: "*", data: {} };
   }
   const parsed = parseCustomId(id);

@@ -1,38 +1,21 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
-import { readStringParam } from "../../agents/tools/common.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
+import { readStringParam } from "../../agents/tools/common.js";
+import { createRootScopedReadFile } from "../../infra/fs-safe.js";
 import { extensionForMime } from "../../media/mime.js";
+import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
 import { parseSlackTarget } from "../../slack/targets.js";
 import { parseTelegramTarget } from "../../telegram/targets.js";
 import { loadWebMedia } from "../../web/media.js";
 
-export function readBooleanParam(
-  params: Record<string, unknown>,
-  key: string,
-): boolean | undefined {
-  const raw = params[key];
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (typeof raw === "string") {
-    const trimmed = raw.trim().toLowerCase();
-    if (trimmed === "true") {
-      return true;
-    }
-    if (trimmed === "false") {
-      return false;
-    }
-  }
-  return undefined;
-}
+export const readBooleanParam = readBooleanParamShared;
 
 export function resolveSlackAutoThreadId(params: {
   to: string;
@@ -210,10 +193,13 @@ function buildAttachmentMediaLoadOptions(params: {
       localRoots?: readonly string[];
     } {
   if (params.policy.mode === "sandbox") {
+    const readSandboxFile = createRootScopedReadFile({
+      rootDir: params.policy.sandboxRoot.trim(),
+    });
     return {
       maxBytes: params.maxBytes,
       sandboxValidated: true,
-      readFile: (filePath: string) => fs.readFile(filePath),
+      readFile: readSandboxFile,
     };
   }
   return {

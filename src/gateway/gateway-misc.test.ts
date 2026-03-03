@@ -1,8 +1,12 @@
-import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, test, vi } from "vitest";
+import type { RequestFrame } from "./protocol/index.js";
+import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
+import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
 import { GatewayClient } from "./client.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
@@ -10,15 +14,11 @@ import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
-import type { RequestFrame } from "./protocol/index.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunRegistry } from "./server-chat.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
-import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
-import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 
 function makeControlUiResponse() {
   const res = {
@@ -334,7 +334,7 @@ describe("resolveNodeCommandAllowlist", () => {
     }
   });
 
-  it("includes Android notifications.list by default", () => {
+  it("includes Android notifications and device diagnostics commands by default", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
       {
@@ -344,7 +344,10 @@ describe("resolveNodeCommandAllowlist", () => {
     );
 
     expect(allow.has("notifications.list")).toBe(true);
-    expect(allow.has("system.notify")).toBe(false);
+    expect(allow.has("notifications.actions")).toBe(true);
+    expect(allow.has("device.permissions")).toBe(true);
+    expect(allow.has("device.health")).toBe(true);
+    expect(allow.has("system.notify")).toBe(true);
   });
 
   it("can explicitly allow dangerous commands via allowCommands", () => {
@@ -361,6 +364,34 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("camera.snap")).toBe(true);
     expect(allow.has("screen.record")).toBe(true);
     expect(allow.has("camera.clip")).toBe(false);
+  });
+
+  it("treats unknown/confusable metadata as fail-safe for system.run defaults", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "iPhοne",
+        deviceFamily: "iPhοne",
+      },
+    );
+
+    expect(allow.has("system.run")).toBe(false);
+    expect(allow.has("system.which")).toBe(false);
+    expect(allow.has("system.notify")).toBe(true);
+  });
+
+  it("normalizes dotted-I platform values to iOS classification", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "İOS",
+        deviceFamily: "iPhone",
+      },
+    );
+
+    expect(allow.has("system.run")).toBe(false);
+    expect(allow.has("system.which")).toBe(false);
+    expect(allow.has("device.info")).toBe(true);
   });
 });
 

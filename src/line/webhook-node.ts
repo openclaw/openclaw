@@ -1,30 +1,32 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebhookRequestBody } from "@line/bot-sdk";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { RuntimeEnv } from "../runtime.js";
 import { danger, logVerbose } from "../globals.js";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../infra/http-body.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { validateLineSignature } from "./signature.js";
 import { isLineWebhookVerificationRequest, parseLineWebhookBody } from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
+const LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES = 64 * 1024;
 const LINE_WEBHOOK_UNSIGNED_MAX_BODY_BYTES = 4 * 1024;
-const LINE_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS = 5_000;
 
 export async function readLineWebhookRequestBody(
   req: IncomingMessage,
   maxBytes = LINE_WEBHOOK_MAX_BODY_BYTES,
+  timeoutMs = LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
 ): Promise<string> {
   return await readRequestBodyWithLimit(req, {
     maxBytes,
-    timeoutMs: LINE_WEBHOOK_BODY_TIMEOUT_MS,
+    timeoutMs,
   });
 }
 
-type ReadBodyFn = (req: IncomingMessage, maxBytes: number) => Promise<string>;
+type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs?: number) => Promise<string>;
 
 export function createLineNodeWebhookHandler(params: {
   channelSecret: string;
@@ -37,8 +39,13 @@ export function createLineNodeWebhookHandler(params: {
   const readBody = params.readBody ?? readLineWebhookRequestBody;
 
   return async (req: IncomingMessage, res: ServerResponse) => {
-    // Handle GET requests for webhook verification
-    if (req.method === "GET") {
+    // Some webhook validators and health probes use GET/HEAD.
+    if (req.method === "GET" || req.method === "HEAD") {
+      if (req.method === "HEAD") {
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/plain");
       res.end("OK");
@@ -48,7 +55,7 @@ export function createLineNodeWebhookHandler(params: {
     // Only accept POST requests
     if (req.method !== "POST") {
       res.statusCode = 405;
-      res.setHeader("Allow", "GET, POST");
+      res.setHeader("Allow", "GET, HEAD, POST");
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Method Not Allowed" }));
       return;
@@ -64,9 +71,9 @@ export function createLineNodeWebhookHandler(params: {
             : undefined;
       const hasSignature = typeof signature === "string" && signature.trim().length > 0;
       const bodyLimit = hasSignature
-        ? maxBodyBytes
+        ? Math.min(maxBodyBytes, LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES)
         : Math.min(maxBodyBytes, LINE_WEBHOOK_UNSIGNED_MAX_BODY_BYTES);
-      const rawBody = await readBody(req, bodyLimit);
+      const rawBody = await readBody(req, bodyLimit, LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS);
 
       // Parse once; we may need it for verification requests and for event processing.
       const body = parseLineWebhookBody(rawBody);
@@ -104,18 +111,14 @@ export function createLineNodeWebhookHandler(params: {
         return;
       }
 
-      // Respond immediately with 200 to avoid LINE timeout
+      if (body.events && body.events.length > 0) {
+        logVerbose(`line: received ${body.events.length} webhook events`);
+        await params.bot.handleWebhook(body);
+      }
+
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ status: "ok" }));
-
-      // Process events asynchronously
-      if (body.events && body.events.length > 0) {
-        logVerbose(`line: received ${body.events.length} webhook events`);
-        await params.bot.handleWebhook(body).catch((err) => {
-          params.runtime.error?.(danger(`line webhook handler failed: ${String(err)}`));
-        });
-      }
     } catch (err) {
       if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
         res.statusCode = 413;

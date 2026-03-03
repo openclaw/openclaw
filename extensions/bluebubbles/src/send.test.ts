@@ -1,6 +1,7 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
+import type { BlueBubblesSendTarget } from "./types.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { clearBlueBubblesRuntime, setBlueBubblesRuntime } from "./runtime.js";
 import { sendMessageBlueBubbles, resolveChatGuidForTarget } from "./send.js";
@@ -9,7 +10,6 @@ import {
   installBlueBubblesFetchTestHooks,
   mockBlueBubblesPrivateApiStatusOnce,
 } from "./test-harness.js";
-import type { BlueBubblesSendTarget } from "./types.js";
 
 const mockFetch = vi.fn();
 const privateApiStatusMock = vi.mocked(getCachedBlueBubblesPrivateApiStatus);
@@ -719,6 +719,30 @@ describe("send", () => {
       });
 
       expect(result.messageId).toBe("msg-guid-789");
+    });
+
+    it("extracts top-level message_id from response payload", async () => {
+      mockResolvedHandleTarget();
+      mockSendResponse({ message_id: "bb-msg-321" });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
+
+      expect(result.messageId).toBe("bb-msg-321");
+    });
+
+    it("extracts nested result.message_id from response payload", async () => {
+      mockResolvedHandleTarget();
+      mockSendResponse({ result: { message_id: "bb-msg-654" } });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
+
+      expect(result.messageId).toBe("bb-msg-654");
     });
 
     it("resolves credentials from config", async () => {

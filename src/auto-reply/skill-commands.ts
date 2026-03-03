@@ -1,7 +1,12 @@
 import fs from "node:fs";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  listAgentIds,
+  resolveAgentSkillsFilter,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
+import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
+import { logVerbose } from "../globals.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { listChatCommands } from "./commands-registry.js";
 
@@ -45,25 +50,57 @@ export function listSkillCommandsForAgents(params: {
   cfg: OpenClawConfig;
   agentIds?: string[];
 }): SkillCommandSpec[] {
+  const mergeSkillFilters = (existing?: string[], incoming?: string[]): string[] | undefined => {
+    // undefined = no allowlist (unrestricted); [] = explicit empty allowlist (no skills).
+    // If any agent is unrestricted for this workspace, keep command discovery unrestricted.
+    if (existing === undefined || incoming === undefined) {
+      return undefined;
+    }
+    // An empty allowlist contributes no skills but does not widen the merge to unrestricted.
+    if (existing.length === 0) {
+      return Array.from(new Set(incoming));
+    }
+    if (incoming.length === 0) {
+      return Array.from(new Set(existing));
+    }
+    return Array.from(new Set([...existing, ...incoming]));
+  };
+
+  const agentIds = params.agentIds ?? listAgentIds(params.cfg);
   const used = listReservedChatSlashCommandNames();
   const entries: SkillCommandSpec[] = [];
-  const agentIds = params.agentIds ?? listAgentIds(params.cfg);
-  // Track visited workspace dirs to avoid registering duplicate commands
-  // when multiple agents share the same workspace directory (#5717).
-  const visitedDirs = new Set<string>();
+  // Group by canonical workspace to avoid duplicate registration when multiple
+  // agents share the same directory (#5717), while still honoring per-agent filters.
+  const workspaceFilters = new Map<string, { workspaceDir: string; skillFilter?: string[] }>();
   for (const agentId of agentIds) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     if (!fs.existsSync(workspaceDir)) {
+      logVerbose(`Skipping agent "${agentId}": workspace does not exist: ${workspaceDir}`);
       continue;
     }
-    // Resolve to canonical path to handle symlinks and relative paths
-    const canonicalDir = fs.realpathSync(workspaceDir);
-    if (visitedDirs.has(canonicalDir)) {
+    let canonicalDir: string;
+    try {
+      canonicalDir = fs.realpathSync(workspaceDir);
+    } catch {
+      logVerbose(`Skipping agent "${agentId}": cannot resolve workspace: ${workspaceDir}`);
       continue;
     }
-    visitedDirs.add(canonicalDir);
+    const skillFilter = resolveAgentSkillsFilter(params.cfg, agentId);
+    const existing = workspaceFilters.get(canonicalDir);
+    if (existing) {
+      existing.skillFilter = mergeSkillFilters(existing.skillFilter, skillFilter);
+      continue;
+    }
+    workspaceFilters.set(canonicalDir, {
+      workspaceDir,
+      skillFilter,
+    });
+  }
+
+  for (const { workspaceDir, skillFilter } of workspaceFilters.values()) {
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       config: params.cfg,
+      skillFilter,
       eligibility: { remote: getRemoteSkillEligibility() },
       reservedNames: used,
     });

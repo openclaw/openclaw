@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DiscordActionConfig } from "../../config/config.js";
+import type { DiscordSendComponents, DiscordSendEmbeds } from "../../discord/send.shared.js";
 import { readDiscordComponentSpec } from "../../discord/components.js";
 import {
   createThreadDiscord,
@@ -23,7 +24,6 @@ import {
   sendVoiceMessageDiscord,
   unpinMessageDiscord,
 } from "../../discord/send.js";
-import type { DiscordSendComponents, DiscordSendEmbeds } from "../../discord/send.shared.js";
 import { resolveDiscordChannelId } from "../../discord/targets.js";
 import { withNormalizedTimestamp } from "../date-time.js";
 import { assertMediaNotDataUrl } from "../sandbox-paths.js";
@@ -363,13 +363,17 @@ export async function handleDiscordMessagingAction(
         typeof autoArchiveMinutesRaw === "number" && Number.isFinite(autoArchiveMinutesRaw)
           ? autoArchiveMinutesRaw
           : undefined;
+      const appliedTags = readStringArrayParam(params, "appliedTags");
+      const payload = {
+        name,
+        messageId,
+        autoArchiveMinutes,
+        content,
+        appliedTags: appliedTags ?? undefined,
+      };
       const thread = accountId
-        ? await createThreadDiscord(
-            channelId,
-            { name, messageId, autoArchiveMinutes, content },
-            { accountId },
-          )
-        : await createThreadDiscord(channelId, { name, messageId, autoArchiveMinutes, content });
+        ? await createThreadDiscord(channelId, payload, { accountId })
+        : await createThreadDiscord(channelId, payload);
       return jsonResult({ ok: true, thread });
     }
     case "threadList": {

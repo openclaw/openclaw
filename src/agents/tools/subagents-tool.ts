@@ -1,5 +1,7 @@
-import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
+import crypto from "node:crypto";
+import type { SessionEntry } from "../../config/sessions.js";
+import type { AnyAgentTool } from "./common.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
 import {
   resolveSubagentLabel,
@@ -9,7 +11,6 @@ import {
 } from "../../auto-reply/reply/subagents-utils.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { loadConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
@@ -31,13 +32,13 @@ import { optionalStringEnum } from "../schema/typebox.js";
 import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
 import {
   clearSubagentRunSteerRestart,
+  countPendingDescendantRuns,
   listSubagentRunsForRequester,
   markSubagentRunTerminated,
   markSubagentRunForSteerRestart,
   replaceSubagentRunAfterSteer,
   type SubagentRunRecord,
 } from "../subagent-registry.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
@@ -70,7 +71,10 @@ type ResolvedRequesterKey = {
   callerIsSubagent: boolean;
 };
 
-function resolveRunStatus(entry: SubagentRunRecord) {
+function resolveRunStatus(entry: SubagentRunRecord, options?: { hasPendingDescendants?: boolean }) {
+  if (options?.hasPendingDescendants) {
+    return "active";
+  }
   if (!entry.endedAt) {
     return "running";
   }
@@ -365,6 +369,16 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
         const recentCutoff = now - recentMinutes * 60_000;
         const cache = new Map<string, Record<string, SessionEntry>>();
 
+        const pendingDescendantCache = new Map<string, boolean>();
+        const hasPendingDescendants = (sessionKey: string) => {
+          if (pendingDescendantCache.has(sessionKey)) {
+            return pendingDescendantCache.get(sessionKey) === true;
+          }
+          const hasPending = countPendingDescendantRuns(sessionKey) > 0;
+          pendingDescendantCache.set(sessionKey, hasPending);
+          return hasPending;
+        };
+
         let index = 1;
         const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
           const sessionEntry = resolveSessionEntryForKey({
@@ -374,7 +388,9 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           }).entry;
           const totalTokens = resolveTotalTokens(sessionEntry);
           const usageText = formatTokenUsageDisplay(sessionEntry);
-          const status = resolveRunStatus(entry);
+          const status = resolveRunStatus(entry, {
+            hasPendingDescendants: hasPendingDescendants(entry.childSessionKey),
+          });
           const runtime = formatDurationCompact(runtimeMs);
           const label = truncateLine(resolveSubagentLabel(entry), 48);
           const task = truncateLine(entry.task.trim(), 72);
@@ -396,10 +412,15 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           return { line, view: entry.endedAt ? { ...baseView, endedAt: entry.endedAt } : baseView };
         };
         const active = runs
-          .filter((entry) => !entry.endedAt)
+          .filter((entry) => !entry.endedAt || hasPendingDescendants(entry.childSessionKey))
           .map((entry) => buildListEntry(entry, now - (entry.startedAt ?? entry.createdAt)));
         const recent = runs
-          .filter((entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff)
+          .filter(
+            (entry) =>
+              !!entry.endedAt &&
+              !hasPendingDescendants(entry.childSessionKey) &&
+              (entry.endedAt ?? 0) >= recentCutoff,
+          )
           .map((entry) =>
             buildListEntry(entry, (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt)),
           );

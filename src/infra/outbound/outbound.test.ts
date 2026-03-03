@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { OutboundDeliveryJson } from "./format.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   ackDelivery,
@@ -20,7 +21,6 @@ import {
 } from "./delivery-queue.js";
 import { DirectoryCache } from "./directory-cache.js";
 import { buildOutboundResultEnvelope } from "./envelope.js";
-import type { OutboundDeliveryJson } from "./format.js";
 import {
   buildOutboundDeliveryJson,
   formatGatewaySummary,
@@ -41,13 +41,24 @@ import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
 
 describe("delivery-queue", () => {
   let tmpDir: string;
+  let fixtureRoot = "";
+  let fixtureCount = 0;
 
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dq-test-"));
+  beforeAll(() => {
+    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dq-suite-"));
   });
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+  beforeEach(() => {
+    tmpDir = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+  });
+
+  afterAll(() => {
+    if (!fixtureRoot) {
+      return;
+    }
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    fixtureRoot = "";
   });
 
   describe("enqueue + ack lifecycle", () => {
@@ -891,6 +902,7 @@ describe("resolveOutboundSessionRoute", () => {
       channel: string;
       target: string;
       replyToId?: string;
+      threadId?: string;
       expected: {
         sessionKey: string;
         from?: string;
@@ -925,12 +937,39 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Telegram DM with topic",
+        cfg: perChannelPeerCfg,
+        channel: "telegram",
+        target: "123456789:topic:99",
+        expected: {
+          sessionKey: "agent:main:telegram:direct:123456789:thread:99",
+          from: "telegram:123456789:topic:99",
+          to: "telegram:123456789",
+          threadId: 99,
+          chatType: "direct",
+        },
+      },
+      {
         name: "Telegram unresolved username DM",
         cfg: perChannelPeerCfg,
         channel: "telegram",
         target: "@alice",
         expected: {
           sessionKey: "agent:main:telegram:direct:@alice",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Telegram DM scoped threadId fallback",
+        cfg: perChannelPeerCfg,
+        channel: "telegram",
+        target: "12345",
+        threadId: "12345:99",
+        expected: {
+          sessionKey: "agent:main:telegram:direct:12345:thread:99",
+          from: "telegram:12345:topic:99",
+          to: "telegram:12345",
+          threadId: 99,
           chatType: "direct",
         },
       },
@@ -973,6 +1012,42 @@ describe("resolveOutboundSessionRoute", () => {
           from: "slack:group:G123",
         },
       },
+      {
+        name: "Feishu explicit group prefix keeps group routing",
+        cfg: baseConfig,
+        channel: "feishu",
+        target: "group:oc_group_chat",
+        expected: {
+          sessionKey: "agent:main:feishu:group:oc_group_chat",
+          from: "feishu:group:oc_group_chat",
+          to: "oc_group_chat",
+          chatType: "group",
+        },
+      },
+      {
+        name: "Feishu explicit dm prefix keeps direct routing",
+        cfg: perChannelPeerCfg,
+        channel: "feishu",
+        target: "dm:oc_dm_chat",
+        expected: {
+          sessionKey: "agent:main:feishu:direct:oc_dm_chat",
+          from: "feishu:oc_dm_chat",
+          to: "oc_dm_chat",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Feishu bare oc_ target defaults to direct routing",
+        cfg: perChannelPeerCfg,
+        channel: "feishu",
+        target: "oc_ambiguous_chat",
+        expected: {
+          sessionKey: "agent:main:feishu:direct:oc_ambiguous_chat",
+          from: "feishu:oc_ambiguous_chat",
+          to: "oc_ambiguous_chat",
+          chatType: "direct",
+        },
+      },
     ];
 
     for (const testCase of cases) {
@@ -982,6 +1057,7 @@ describe("resolveOutboundSessionRoute", () => {
         agentId: "main",
         target: testCase.target,
         replyToId: testCase.replyToId,
+        threadId: testCase.threadId,
       });
       expect(route?.sessionKey, testCase.name).toBe(testCase.expected.sessionKey);
       if (testCase.expected.from !== undefined) {

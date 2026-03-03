@@ -1,7 +1,7 @@
-import crypto from "node:crypto";
 import type { WebhookRequestBody } from "@line/bot-sdk";
+import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { createLineWebhookMiddleware } from "./webhook.js";
+import { createLineWebhookMiddleware, startLineWebhook } from "./webhook.js";
 
 const sign = (body: string, secret: string) =>
   crypto.createHmac("SHA256", secret).update(body).digest("base64");
@@ -54,6 +54,15 @@ async function invokeWebhook(params: {
 }
 
 describe("createLineWebhookMiddleware", () => {
+  it("rejects startup when channel secret is missing", () => {
+    expect(() =>
+      startLineWebhook({
+        channelSecret: "   ",
+        onEvents: async () => {},
+      }),
+    ).toThrow(/requires a non-empty channel secret/i);
+  });
+
   it.each([
     ["raw string body", JSON.stringify({ events: [{ type: "message" }] })],
     ["raw buffer body", Buffer.from(JSON.stringify({ events: [{ type: "follow" }] }), "utf-8")],
@@ -110,5 +119,33 @@ describe("createLineWebhookMiddleware", () => {
       error: "Missing raw request body for signature verification",
     });
     expect(onEvents).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 when event processing fails and does not acknowledge with 200", async () => {
+    const onEvents = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const middleware = createLineWebhookMiddleware({
+      channelSecret: SECRET,
+      onEvents,
+      runtime,
+    });
+
+    const req = {
+      headers: { "x-line-signature": sign(rawBody, SECRET) },
+      body: rawBody,
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const res = createRes();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await middleware(req, res, {} as any);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.status).not.toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ error: "Internal server error" });
+    expect(runtime.error).toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createTelegramActionGate } from "../../telegram/accounts.js";
 import type { TelegramButtonStyle, TelegramInlineButtons } from "../../telegram/button-types.js";
+import { createTelegramActionGate } from "../../telegram/accounts.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
@@ -89,9 +89,14 @@ export async function handleTelegramAction(
     mediaLocalRoots?: readonly string[];
   },
 ): Promise<AgentToolResult<unknown>> {
-  const action = readStringParam(params, "action", { required: true });
-  const accountId = readStringParam(params, "accountId");
-  const isActionEnabled = createTelegramActionGate({ cfg, accountId });
+  const { action, accountId } = {
+    action: readStringParam(params, "action", { required: true }),
+    accountId: readStringParam(params, "accountId"),
+  };
+  const isActionEnabled = createTelegramActionGate({
+    cfg,
+    accountId,
+  });
 
   if (action === "react") {
     // All react failures return soft results (jsonResult with ok:false) instead

@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
@@ -19,7 +21,6 @@ import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
-import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
 const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
@@ -76,10 +77,10 @@ export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSumm
 }
 
 export async function getStatusSummary(
-  options: { includeSensitive?: boolean } = {},
+  options: { includeSensitive?: boolean; config?: OpenClawConfig } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true } = options;
-  const cfg = loadConfig();
+  const cfg = options.config ?? loadConfig();
   const linkContext = await resolveLinkChannelContext(cfg);
   const agentList = listAgentsForGateway(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {

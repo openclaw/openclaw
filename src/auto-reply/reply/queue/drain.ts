@@ -1,3 +1,4 @@
+import type { FollowupRun } from "./types.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   buildCollectPrompt,
@@ -11,7 +12,23 @@ import {
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
-import type { FollowupRun } from "./types.js";
+
+// Persists the most recent runFollowup callback per queue key so that
+// enqueueFollowupRun can restart a drain that finished and deleted the queue.
+const FOLLOWUP_RUN_CALLBACKS = new Map<string, (run: FollowupRun) => Promise<void>>();
+
+export function clearFollowupDrainCallback(key: string): void {
+  FOLLOWUP_RUN_CALLBACKS.delete(key);
+}
+
+/** Restart the drain for `key` if it is currently idle, using the stored callback. */
+export function kickFollowupDrainIfIdle(key: string): void {
+  const cb = FOLLOWUP_RUN_CALLBACKS.get(key);
+  if (!cb) {
+    return;
+  }
+  scheduleFollowupDrain(key, cb);
+}
 
 type OriginRoutingMetadata = Pick<
   FollowupRun,
@@ -54,6 +71,9 @@ export function scheduleFollowupDrain(
   if (!queue) {
     return;
   }
+  // Cache callback only when a drain actually starts. Avoid keeping stale
+  // callbacks around from finalize calls where no queue work is pending.
+  FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
   void (async () => {
     try {
       const collectState = { forceIndividualCollect: false };

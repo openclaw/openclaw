@@ -1,10 +1,3 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import fs from "node:fs";
-import { homedir } from "node:os";
-import path from "node:path";
-import * as readline from "node:readline";
-import { Readable, Writable } from "node:stream";
-import { fileURLToPath } from "node:url";
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
@@ -13,8 +6,19 @@ import {
   type RequestPermissionResponse,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
+import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+import * as readline from "node:readline";
+import { Readable, Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "../plugin-sdk/windows-spawn.js";
 import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
 
 const SAFE_AUTO_APPROVE_TOOL_IDS = new Set(["read", "search", "web_search", "memory_search"]);
@@ -342,6 +346,45 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
   return args;
 }
 
+export function resolveAcpClientSpawnEnv(
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return { ...baseEnv, OPENCLAW_SHELL: "acp-client" };
+}
+
+type AcpSpawnRuntime = {
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+};
+
+const DEFAULT_ACP_SPAWN_RUNTIME: AcpSpawnRuntime = {
+  platform: process.platform,
+  env: process.env,
+  execPath: process.execPath,
+};
+
+export function resolveAcpClientSpawnInvocation(
+  params: { serverCommand: string; serverArgs: string[] },
+  runtime: AcpSpawnRuntime = DEFAULT_ACP_SPAWN_RUNTIME,
+): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
+  const program = resolveWindowsSpawnProgram({
+    command: params.serverCommand,
+    platform: runtime.platform,
+    env: runtime.env,
+    execPath: runtime.execPath,
+    packageName: "openclaw",
+    allowShellFallback: true,
+  });
+  const resolved = materializeWindowsSpawnProgram(program, params.serverArgs);
+  return {
+    command: resolved.command,
+    args: resolved.argv,
+    shell: resolved.shell,
+    windowsHide: resolved.windowsHide,
+  };
+}
+
 function resolveSelfEntryPath(): string | null {
   // Prefer a path relative to the built module location (dist/acp/client.js -> dist/entry.js).
   try {
@@ -407,12 +450,24 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const entryPath = resolveSelfEntryPath();
   const serverCommand = opts.serverCommand ?? (entryPath ? process.execPath : "openclaw");
   const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : [entryPath, ...serverArgs];
+  const spawnEnv = resolveAcpClientSpawnEnv();
+  const spawnInvocation = resolveAcpClientSpawnInvocation(
+    { serverCommand, serverArgs: effectiveArgs },
+    {
+      platform: process.platform,
+      env: spawnEnv,
+      execPath: process.execPath,
+    },
+  );
 
-  log(`spawning: ${serverCommand} ${effectiveArgs.join(" ")}`);
+  log(`spawning: ${spawnInvocation.command} ${spawnInvocation.args.join(" ")}`);
 
-  const agent = spawn(serverCommand, effectiveArgs, {
+  const agent = spawn(spawnInvocation.command, spawnInvocation.args, {
     stdio: ["pipe", "pipe", "inherit"],
     cwd,
+    env: spawnEnv,
+    shell: spawnInvocation.shell,
+    windowsHide: spawnInvocation.windowsHide,
   });
 
   if (!agent.stdin || !agent.stdout) {

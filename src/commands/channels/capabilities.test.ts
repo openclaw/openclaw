@@ -1,8 +1,8 @@
 process.env.NO_COLOR = "1";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import { fetchSlackScopes } from "../../slack/scopes.js";
 import { channelsCapabilitiesCommand } from "./capabilities.js";
 
@@ -90,6 +90,7 @@ describe("channelsCapabilitiesCommand", () => {
       account: {
         accountId: "default",
         botToken: "xoxb-bot",
+        userToken: "xoxp-user",
         config: { userToken: "xoxp-user" },
       },
       probe: { ok: true, bot: { name: "openclaw" }, team: { name: "team" } },

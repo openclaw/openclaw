@@ -1,7 +1,13 @@
 import path from "node:path";
-import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type {
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+  MediaUnderstandingProvider,
+} from "./types.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import {
   extractFileContentFromSource,
@@ -10,6 +16,7 @@ import {
 } from "../media/input-files.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
+import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import {
   extractMediaUserText,
   formatAudioTranscripts,
@@ -24,12 +31,6 @@ import {
   resolveMediaAttachmentLocalRoots,
   runCapability,
 } from "./runner.js";
-import type {
-  MediaUnderstandingCapability,
-  MediaUnderstandingDecision,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
 
 export type ApplyMediaUnderstandingResult = {
   outputs: MediaUnderstandingOutput[];
@@ -527,6 +528,16 @@ export async function applyMediaUnderstanding(params: {
         } else {
           ctx.CommandBody = transcript;
           ctx.RawBody = transcript;
+        }
+        // Echo transcript back to chat before agent processing, if configured.
+        const audioCfg = cfg.tools?.media?.audio;
+        if (audioCfg?.echoTranscript && transcript) {
+          await sendTranscriptEcho({
+            ctx,
+            cfg,
+            transcript,
+            format: audioCfg.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+          });
         }
       } else if (originalUserText) {
         ctx.CommandBody = originalUserText;

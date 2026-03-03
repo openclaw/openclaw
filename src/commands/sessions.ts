@@ -1,3 +1,4 @@
+import type { RuntimeEnv } from "../runtime.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { loadConfig } from "../config/config.js";
@@ -5,9 +6,8 @@ import { loadSessionStore, resolveFreshSessionTotalTokens } from "../config/sess
 import { classifySessionKey } from "../gateway/session-utils.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { resolveSessionStoreTargets } from "./session-store-targets.js";
+import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
@@ -95,16 +95,16 @@ export async function sessionsCommand(
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(displayDefaults.model) ??
     DEFAULT_CONTEXT_TOKENS;
-  let targets: ReturnType<typeof resolveSessionStoreTargets>;
-  try {
-    targets = resolveSessionStoreTargets(cfg, {
+  const targets = resolveSessionStoreTargetsOrExit({
+    cfg,
+    opts: {
       store: opts.store,
       agent: opts.agent,
       allAgents: opts.allAgents,
-    });
-  } catch (error) {
-    runtime.error(error instanceof Error ? error.message : String(error));
-    runtime.exit(1);
+    },
+    runtime,
+  });
+  if (!targets) {
     return;
   }
 

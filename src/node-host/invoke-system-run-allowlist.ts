@@ -1,7 +1,9 @@
+import type { RunResult } from "./invoke-types.js";
 import {
   analyzeArgvCommand,
   evaluateExecAllowlist,
   evaluateShellAllowlist,
+  resolvePlannedSegmentArgv,
   resolveExecApprovals,
   type ExecAllowlistEntry,
   type ExecCommandSegment,
@@ -9,7 +11,6 @@ import {
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import type { RunResult } from "./invoke-types.js";
 
 export type SystemRunAllowlistAnalysis = {
   analysisOk: boolean;
@@ -95,7 +96,7 @@ export function resolvePlannedAllowlistArgv(params: {
   ) {
     return undefined;
   }
-  const plannedAllowlistArgv = params.segments[0]?.resolution?.effectiveArgv;
+  const plannedAllowlistArgv = resolvePlannedSegmentArgv(params.segments[0]);
   return plannedAllowlistArgv && plannedAllowlistArgv.length > 0 ? plannedAllowlistArgv : null;
 }
 

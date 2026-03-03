@@ -1,11 +1,11 @@
-import { listChannelDocks } from "../channels/dock.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
   CommandCategory,
   CommandScope,
 } from "./commands-registry.types.js";
+import { listChannelDocks } from "../channels/dock.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import { listThinkingLevels } from "./thinking.js";
 
 type DefineChatCommandInput = {
@@ -265,15 +265,15 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "session",
       nativeName: "session",
-      description: "Manage session-level settings (for example /session ttl).",
+      description: "Manage session-level settings (for example /session idle).",
       textAlias: "/session",
       category: "session",
       args: [
         {
           name: "action",
-          description: "ttl",
+          description: "idle | max-age",
           type: "string",
-          choices: ["ttl"],
+          choices: ["idle", "max-age"],
         },
         {
           name: "value",

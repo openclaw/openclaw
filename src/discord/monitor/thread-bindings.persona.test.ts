@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 import {
   resolveThreadBindingPersona,
   resolveThreadBindingPersonaFromRecord,
 } from "./thread-bindings.persona.js";
-import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 describe("thread binding persona", () => {
   it("prefers explicit label and prefixes with gear", () => {
@@ -26,6 +26,7 @@ describe("thread binding persona", () => {
       agentId: "codex",
       boundBy: "system",
       boundAt: Date.now(),
+      lastActivityAt: Date.now(),
       label: "codex-thread",
     } satisfies ThreadBindingRecord;
     expect(resolveThreadBindingPersonaFromRecord(record)).toBe("⚙️ codex-thread");

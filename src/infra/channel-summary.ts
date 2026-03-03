@@ -1,9 +1,11 @@
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
 import {
   buildChannelAccountSnapshot,
   formatChannelAllowFrom,
+  resolveChannelAccountConfigured,
+  resolveChannelAccountEnabled,
 } from "../channels/account-summary.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
@@ -37,32 +39,6 @@ const formatAccountLabel = (params: { accountId: string; name?: string }) => {
 
 const accountLine = (label: string, details: string[]) =>
   `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
-
-const resolveAccountEnabled = (
-  plugin: ChannelPlugin,
-  account: unknown,
-  cfg: OpenClawConfig,
-): boolean => {
-  if (plugin.config.isEnabled) {
-    return plugin.config.isEnabled(account, cfg);
-  }
-  if (!account || typeof account !== "object") {
-    return true;
-  }
-  const enabled = (account as { enabled?: boolean }).enabled;
-  return enabled !== false;
-};
-
-const resolveAccountConfigured = async (
-  plugin: ChannelPlugin,
-  account: unknown,
-  cfg: OpenClawConfig,
-): Promise<boolean> => {
-  if (plugin.config.isConfigured) {
-    return await plugin.config.isConfigured(account, cfg);
-  }
-  return true;
-};
 
 const buildAccountDetails = (params: {
   entry: ChannelAccountEntry;
@@ -133,8 +109,12 @@ export async function buildChannelSummary(
 
     for (const accountId of resolvedAccountIds) {
       const account = plugin.config.resolveAccount(effective, accountId);
-      const enabled = resolveAccountEnabled(plugin, account, effective);
-      const configured = await resolveAccountConfigured(plugin, account, effective);
+      const enabled = resolveChannelAccountEnabled({ plugin, account, cfg: effective });
+      const configured = await resolveChannelAccountConfigured({
+        plugin,
+        account,
+        cfg: effective,
+      });
       const snapshot = buildChannelAccountSnapshot({
         plugin,
         account,

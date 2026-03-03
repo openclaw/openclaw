@@ -1,14 +1,17 @@
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
+import type { AnyAgentTool } from "./tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
-import type { AnyAgentTool } from "./tools/common.js";
 
 export type HookContext = {
   agentId?: string;
   sessionKey?: string;
+  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  sessionId?: string;
+  runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
 };
 
@@ -20,6 +23,13 @@ const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+
+function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
+  if (params.runId && params.runId.trim()) {
+    return `${params.runId}:${params.toolCallId}`;
+  }
+  return params.toolCallId;
+}
 
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
   if (!state.toolLoopWarningBuckets) {
@@ -139,16 +149,22 @@ export async function runBeforeToolCallHook(args: {
 
   try {
     const normalizedParams = isPlainObject(params) ? params : {};
+    const toolContext = {
+      toolName,
+      ...(args.ctx?.agentId ? { agentId: args.ctx.agentId } : {}),
+      ...(args.ctx?.sessionKey ? { sessionKey: args.ctx.sessionKey } : {}),
+      ...(args.ctx?.sessionId ? { sessionId: args.ctx.sessionId } : {}),
+      ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
+      ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+    };
     const hookResult = await hookRunner.runBeforeToolCall(
       {
         toolName,
         params: normalizedParams,
+        ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
+        ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
       },
-      {
-        toolName,
-        agentId: args.ctx?.agentId,
-        sessionKey: args.ctx?.sessionKey,
-      },
+      toolContext,
     );
 
     if (hookResult?.block) {
@@ -194,7 +210,8 @@ export function wrapToolWithBeforeToolCallHook(
         throw new Error(outcome.reason);
       }
       if (toolCallId) {
-        adjustedParamsByToolCallId.set(toolCallId, outcome.params);
+        const adjustedParamsKey = buildAdjustedParamsKey({ runId: ctx?.runId, toolCallId });
+        adjustedParamsByToolCallId.set(adjustedParamsKey, outcome.params);
         if (adjustedParamsByToolCallId.size > MAX_TRACKED_ADJUSTED_PARAMS) {
           const oldest = adjustedParamsByToolCallId.keys().next().value;
           if (oldest) {
@@ -237,14 +254,16 @@ export function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean
   return taggedTool[BEFORE_TOOL_CALL_WRAPPED] === true;
 }
 
-export function consumeAdjustedParamsForToolCall(toolCallId: string): unknown {
-  const params = adjustedParamsByToolCallId.get(toolCallId);
-  adjustedParamsByToolCallId.delete(toolCallId);
+export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
+  const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
+  const params = adjustedParamsByToolCallId.get(adjustedParamsKey);
+  adjustedParamsByToolCallId.delete(adjustedParamsKey);
   return params;
 }
 
 export const __testing = {
   BEFORE_TOOL_CALL_WRAPPED,
+  buildAdjustedParamsKey,
   adjustedParamsByToolCallId,
   runBeforeToolCallHook,
   isPlainObject,

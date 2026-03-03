@@ -1,0 +1,89 @@
+import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
+import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
+import {
+  isAudioAttachment,
+  isImageAttachment,
+  isVideoAttachment,
+} from "./attachments.normalize.js";
+
+const DEFAULT_MAX_ATTACHMENTS = 1;
+
+function orderAttachments(
+  attachments: MediaAttachment[],
+  prefer?: MediaUnderstandingAttachmentsConfig["prefer"],
+): MediaAttachment[] {
+  const list = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
+  if (!prefer || prefer === "first") {
+    return list;
+  }
+  if (prefer === "last") {
+    return [...list].toReversed();
+  }
+  if (prefer === "path") {
+    const withPath = list.filter((item) => item.path);
+    const withoutPath = list.filter((item) => !item.path);
+    return [...withPath, ...withoutPath];
+  }
+  if (prefer === "url") {
+    const withUrl = list.filter((item) => item.url);
+    const withoutUrl = list.filter((item) => !item.url);
+    return [...withUrl, ...withoutUrl];
+  }
+  return list;
+}
+
+function isAttachmentRecord(value: unknown): value is MediaAttachment {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const entry = value as Record<string, unknown>;
+  if (typeof entry.index !== "number") {
+    return false;
+  }
+  if (entry.path !== undefined && typeof entry.path !== "string") {
+    return false;
+  }
+  if (entry.url !== undefined && typeof entry.url !== "string") {
+    return false;
+  }
+  if (entry.mime !== undefined && typeof entry.mime !== "string") {
+    return false;
+  }
+  if (entry.alreadyTranscribed !== undefined && typeof entry.alreadyTranscribed !== "boolean") {
+    return false;
+  }
+  return true;
+}
+
+export function selectAttachments(params: {
+  capability: MediaUnderstandingCapability;
+  attachments: MediaAttachment[];
+  policy?: MediaUnderstandingAttachmentsConfig;
+}): MediaAttachment[] {
+  const { capability, attachments, policy } = params;
+  const input = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
+  const matches = input.filter((item) => {
+    // Skip already-transcribed audio attachments from preflight
+    if (capability === "audio" && item.alreadyTranscribed) {
+      return false;
+    }
+    if (capability === "image") {
+      return isImageAttachment(item);
+    }
+    if (capability === "audio") {
+      return isAudioAttachment(item);
+    }
+    return isVideoAttachment(item);
+  });
+  if (matches.length === 0) {
+    return [];
+  }
+
+  const ordered = orderAttachments(matches, policy?.prefer);
+  const mode = policy?.mode ?? "first";
+  const maxAttachments = policy?.maxAttachments ?? DEFAULT_MAX_ATTACHMENTS;
+  if (mode === "all") {
+    return ordered.slice(0, Math.max(1, maxAttachments));
+  }
+  return ordered.slice(0, 1);
+}

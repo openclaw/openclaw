@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import type { CronJob } from "../types.js";
+import type { CronServiceState } from "./state.js";
 import {
   buildDeliveryFromLegacyPayload,
   hasLegacyDeliveryHints,
@@ -8,10 +10,8 @@ import { parseAbsoluteTimeMs } from "../parse.js";
 import { migrateLegacyCronPayload } from "../payload-migration.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../stagger.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import { inferLegacyName, normalizeOptionalText } from "./normalize.js";
-import type { CronServiceState } from "./state.js";
 
 function buildDeliveryPatchFromLegacyPayload(payload: Record<string, unknown>) {
   const deliver = payload.deliver;
@@ -92,12 +92,17 @@ function normalizePayloadKind(payload: Record<string, unknown>) {
 function inferPayloadIfMissing(raw: Record<string, unknown>) {
   const message = typeof raw.message === "string" ? raw.message.trim() : "";
   const text = typeof raw.text === "string" ? raw.text.trim() : "";
+  const command = typeof raw.command === "string" ? raw.command.trim() : "";
   if (message) {
     raw.payload = { kind: "agentTurn", message };
     return true;
   }
   if (text) {
     raw.payload = { kind: "systemEvent", text };
+    return true;
+  }
+  if (command) {
+    raw.payload = { kind: "systemEvent", text: command };
     return true;
   }
   return false;
@@ -209,6 +214,12 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   if ("provider" in raw) {
     delete raw.provider;
   }
+  if ("command" in raw) {
+    delete raw.command;
+  }
+  if ("timeout" in raw) {
+    delete raw.timeout;
+  }
 }
 
 async function getFileMtimeMs(path: string): Promise<number | null> {
@@ -248,6 +259,26 @@ export async function ensureLoaded(
       mutated = true;
     }
 
+    const rawId = typeof raw.id === "string" ? raw.id.trim() : "";
+    const legacyJobId = typeof raw.jobId === "string" ? raw.jobId.trim() : "";
+    if (!rawId && legacyJobId) {
+      raw.id = legacyJobId;
+      mutated = true;
+    } else if (rawId && raw.id !== rawId) {
+      raw.id = rawId;
+      mutated = true;
+    }
+    if ("jobId" in raw) {
+      delete raw.jobId;
+      mutated = true;
+    }
+
+    if (typeof raw.schedule === "string") {
+      const expr = raw.schedule.trim();
+      raw.schedule = { kind: "cron", expr };
+      mutated = true;
+    }
+
     const nameRaw = raw.name;
     if (typeof nameRaw !== "string" || nameRaw.trim().length === 0) {
       raw.name = inferLegacyName({
@@ -276,6 +307,22 @@ export async function ensureLoaded(
 
     if (typeof raw.enabled !== "boolean") {
       raw.enabled = true;
+      mutated = true;
+    }
+
+    const wakeModeRaw = typeof raw.wakeMode === "string" ? raw.wakeMode.trim().toLowerCase() : "";
+    if (wakeModeRaw === "next-heartbeat") {
+      if (raw.wakeMode !== "next-heartbeat") {
+        raw.wakeMode = "next-heartbeat";
+        mutated = true;
+      }
+    } else if (wakeModeRaw === "now") {
+      if (raw.wakeMode !== "now") {
+        raw.wakeMode = "now";
+        mutated = true;
+      }
+    } else {
+      raw.wakeMode = "now";
       mutated = true;
     }
 
@@ -323,7 +370,9 @@ export async function ensureLoaded(
       "channel" in raw ||
       "to" in raw ||
       "bestEffortDeliver" in raw ||
-      "provider" in raw;
+      "provider" in raw ||
+      "command" in raw ||
+      "timeout" in raw;
     if (hadLegacyTopLevelFields) {
       stripLegacyTopLevelFields(raw);
       mutated = true;
@@ -383,13 +432,24 @@ export async function ensureLoaded(
       }
 
       const exprRaw = typeof sched.expr === "string" ? sched.expr.trim() : "";
-      if (typeof sched.expr === "string" && sched.expr !== exprRaw) {
-        sched.expr = exprRaw;
+      const legacyCronRaw = typeof sched.cron === "string" ? sched.cron.trim() : "";
+      let normalizedExpr = exprRaw;
+      if (!normalizedExpr && legacyCronRaw) {
+        normalizedExpr = legacyCronRaw;
+        sched.expr = normalizedExpr;
         mutated = true;
       }
-      if ((kind === "cron" || sched.kind === "cron") && exprRaw) {
+      if (typeof sched.expr === "string" && sched.expr !== normalizedExpr) {
+        sched.expr = normalizedExpr;
+        mutated = true;
+      }
+      if ("cron" in sched) {
+        delete sched.cron;
+        mutated = true;
+      }
+      if ((kind === "cron" || sched.kind === "cron") && normalizedExpr) {
         const explicitStaggerMs = normalizeCronStaggerMs(sched.staggerMs);
-        const defaultStaggerMs = resolveDefaultCronStaggerMs(exprRaw);
+        const defaultStaggerMs = resolveDefaultCronStaggerMs(normalizedExpr);
         const targetStaggerMs = explicitStaggerMs ?? defaultStaggerMs;
         if (targetStaggerMs === undefined) {
           if ("staggerMs" in sched) {
@@ -428,6 +488,21 @@ export async function ensureLoaded(
 
     const payloadKind =
       payloadRecord && typeof payloadRecord.kind === "string" ? payloadRecord.kind : "";
+    const normalizedSessionTarget =
+      typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
+    if (normalizedSessionTarget === "main" || normalizedSessionTarget === "isolated") {
+      if (raw.sessionTarget !== normalizedSessionTarget) {
+        raw.sessionTarget = normalizedSessionTarget;
+        mutated = true;
+      }
+    } else {
+      const inferredSessionTarget = payloadKind === "agentTurn" ? "isolated" : "main";
+      if (raw.sessionTarget !== inferredSessionTarget) {
+        raw.sessionTarget = inferredSessionTarget;
+        mutated = true;
+      }
+    }
+
     const sessionTarget =
       typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
     const isIsolatedAgentTurn =

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
@@ -6,10 +5,15 @@ import type {
   TextContent,
   ToolCall,
   Tool,
-  Usage,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  buildAssistantMessage as buildStreamAssistantMessage,
+  buildStreamErrorAssistantMessage,
+  buildUsageWithNoCost,
+} from "./stream-message-shared.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
@@ -342,25 +346,15 @@ export function buildAssistantMessage(
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
 
-  const usage: Usage = {
-    input: response.prompt_eval_count ?? 0,
-    output: response.eval_count ?? 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: (response.prompt_eval_count ?? 0) + (response.eval_count ?? 0),
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-
-  return {
-    role: "assistant",
+  return buildStreamAssistantMessage({
+    model: modelInfo,
     content,
     stopReason,
-    api: modelInfo.api,
-    provider: modelInfo.provider,
-    model: modelInfo.id,
-    usage,
-    timestamp: Date.now(),
-  };
+    usage: buildUsageWithNoCost({
+      input: response.prompt_eval_count ?? 0,
+      output: response.eval_count ?? 0,
+    }),
+  });
 }
 
 // ── NDJSON streaming parser ─────────────────────────────────────────────────
@@ -521,24 +515,10 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
         stream.push({
           type: "error",
           reason: "error",
-          error: {
-            role: "assistant" as const,
-            content: [],
-            stopReason: "error" as StopReason,
+          error: buildStreamErrorAssistantMessage({
+            model,
             errorMessage,
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            timestamp: Date.now(),
-          },
+          }),
         });
       } finally {
         stream.end();

@@ -1,6 +1,5 @@
 import type { APIChannel, APIMessage } from "discord-api-types/v10";
 import { ChannelType, Routes } from "discord-api-types/v10";
-import { resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordMessageEdit,
   DiscordMessageQuery,
@@ -9,6 +8,7 @@ import type {
   DiscordThreadCreate,
   DiscordThreadList,
 } from "./send.types.js";
+import { resolveDiscordRest } from "./send.shared.js";
 
 export async function readMessagesDiscord(
   channelId: string,
@@ -124,6 +124,9 @@ export async function createThreadDiscord(
   if (isForumLike) {
     const starterContent = payload.content?.trim() ? payload.content : payload.name;
     body.message = { content: starterContent };
+    if (payload.appliedTags?.length) {
+      body.applied_tags = payload.appliedTags;
+    }
   }
   // When creating a standalone thread (no messageId) in a non-forum channel,
   // default to public thread (type 11). Discord defaults to private (type 12)

@@ -1,6 +1,6 @@
 import type { GuardedFetchResult } from "../../infra/net/fetch-guard.js";
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { LookupFn, SsrFPolicy } from "../../infra/net/ssrf.js";
+import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 export { fetchWithTimeout } from "../../utils/fetch-timeout.js";
 
 const MAX_ERROR_CHARS = 300;
@@ -46,6 +46,27 @@ export async function postTranscriptionRequest(params: {
       method: "POST",
       headers: params.headers,
       body: params.body,
+    },
+    params.timeoutMs,
+    params.fetchFn,
+    params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+  );
+}
+
+export async function postJsonRequest(params: {
+  url: string;
+  headers: Headers;
+  body: unknown;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+  allowPrivateNetwork?: boolean;
+}) {
+  return fetchWithTimeoutGuarded(
+    params.url,
+    {
+      method: "POST",
+      headers: params.headers,
+      body: JSON.stringify(params.body),
     },
     params.timeoutMs,
     params.fetchFn,

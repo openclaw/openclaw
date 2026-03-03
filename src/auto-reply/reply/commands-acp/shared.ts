@@ -1,15 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import path from "node:path";
-import { toAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
 import type { AcpRuntimeError } from "../../../acp/runtime/errors.js";
 import type { AcpRuntimeSessionMode } from "../../../acp/runtime/types.js";
-import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
-import { normalizeAgentId } from "../../../routing/session-key.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
+import { toAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
+import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
 import { resolveAcpCommandChannel, resolveAcpCommandThreadId } from "./context.js";
+export { resolveAcpInstallCommandHint, resolveConfiguredAcpBackendId } from "./install-hints.js";
 
 export const COMMAND = "/acp";
 export const ACP_SPAWN_USAGE =
@@ -402,26 +400,6 @@ export function resolveAcpHelpText(): string {
     "- /focus and /unfocus also work with ACP session keys.",
     "- ACP dispatch of normal thread messages is controlled by acp.dispatch.enabled.",
   ].join("\n");
-}
-
-export function resolveConfiguredAcpBackendId(cfg: OpenClawConfig): string {
-  return cfg.acp?.backend?.trim() || "acpx";
-}
-
-export function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
-  const configured = cfg.acp?.runtime?.installCommand?.trim();
-  if (configured) {
-    return configured;
-  }
-  const backendId = resolveConfiguredAcpBackendId(cfg).toLowerCase();
-  if (backendId === "acpx") {
-    const localPath = path.resolve(process.cwd(), "extensions/acpx");
-    if (existsSync(localPath)) {
-      return `openclaw plugins install ${localPath}`;
-    }
-    return "openclaw plugins install @openclaw/acpx";
-  }
-  return `Install and enable the plugin that provides ACP backend "${backendId}".`;
 }
 
 export function formatRuntimeOptionsText(options: AcpSessionRuntimeOptions): string {

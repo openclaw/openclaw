@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { resolveCronDeliveryPlan } from "./delivery.js";
 import type { CronJob } from "./types.js";
+import { resolveCronDeliveryPlan, resolveFailureDestination } from "./delivery.js";
 
 function makeJob(overrides: Partial<CronJob>): CronJob {
   const now = Date.now();
@@ -43,6 +43,18 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.requested).toBe(false);
   });
 
+  it("resolves mode=none with requested=false and no channel (#21808)", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: { mode: "none", to: "telegram:123" },
+      }),
+    );
+    expect(plan.mode).toBe("none");
+    expect(plan.requested).toBe(false);
+    expect(plan.channel).toBeUndefined();
+    expect(plan.to).toBe("telegram:123");
+  });
+
   it("resolves webhook mode without channel routing", () => {
     const plan = resolveCronDeliveryPlan(
       makeJob({
@@ -71,5 +83,98 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.channel).toBe("telegram");
     expect(plan.to).toBe("123");
     expect(plan.accountId).toBe("bot-a");
+  });
+});
+
+describe("resolveFailureDestination", () => {
+  it("merges global defaults with job-level overrides", () => {
+    const plan = resolveFailureDestination(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "111",
+          failureDestination: { channel: "signal", mode: "announce" },
+        },
+      }),
+      {
+        channel: "telegram",
+        to: "222",
+        mode: "announce",
+        accountId: "global-account",
+      },
+    );
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "signal",
+      to: "222",
+      accountId: "global-account",
+    });
+  });
+
+  it("returns null for webhook mode without destination URL", () => {
+    const plan = resolveFailureDestination(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "111",
+          failureDestination: { mode: "webhook" },
+        },
+      }),
+      undefined,
+    );
+    expect(plan).toBeNull();
+  });
+
+  it("returns null when failure destination matches primary delivery target", () => {
+    const plan = resolveFailureDestination(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "111",
+          accountId: "bot-a",
+          failureDestination: {
+            mode: "announce",
+            channel: "telegram",
+            to: "111",
+            accountId: "bot-a",
+          },
+        },
+      }),
+      undefined,
+    );
+    expect(plan).toBeNull();
+  });
+
+  it("allows job-level failure destination fields to clear inherited global values", () => {
+    const plan = resolveFailureDestination(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "111",
+          failureDestination: {
+            mode: "announce",
+            channel: undefined as never,
+            to: undefined as never,
+            accountId: undefined as never,
+          },
+        },
+      }),
+      {
+        channel: "signal",
+        to: "group-abc",
+        accountId: "global-account",
+        mode: "announce",
+      },
+    );
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "last",
+      to: undefined,
+      accountId: undefined,
+    });
   });
 });

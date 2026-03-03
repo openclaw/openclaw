@@ -1,7 +1,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import type { CronJob } from "../types.ts";
+import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import { renderCron, type CronProps } from "./cron.ts";
 
 function createJob(id: string): CronJob {
@@ -29,6 +29,8 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     jobsHasMore: false,
     jobsQuery: "",
     jobsEnabledFilter: "all",
+    jobsScheduleKindFilter: "all",
+    jobsLastStatusFilter: "all",
     jobsSortBy: "nextRunAtMs",
     jobsSortDir: "asc",
     error: null,
@@ -55,6 +57,7 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     thinkingSuggestions: [],
     timezoneSuggestions: [],
     deliveryToSuggestions: [],
+    accountSuggestions: [],
     onFormChange: () => undefined,
     onRefresh: () => undefined,
     onAdd: () => undefined,
@@ -67,6 +70,7 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     onLoadRuns: () => undefined,
     onLoadMoreJobs: () => undefined,
     onJobsFiltersChange: () => undefined,
+    onJobsFiltersReset: () => undefined,
     onLoadMoreRuns: () => undefined,
     onRunsFiltersChange: () => undefined,
     ...overrides,
@@ -246,6 +250,58 @@ describe("cron view", () => {
     expect(container.textContent).not.toContain("Next 13");
   });
 
+  it("calls onJobsFiltersChange when schedule filter changes", () => {
+    const container = document.createElement("div");
+    const onJobsFiltersChange = vi.fn();
+    render(renderCron(createProps({ onJobsFiltersChange })), container);
+
+    const select = container.querySelector('select[data-test-id="cron-jobs-schedule-filter"]');
+    expect(select).not.toBeNull();
+    if (!(select instanceof HTMLSelectElement)) {
+      return;
+    }
+    select.value = "cron";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsScheduleKindFilter: "cron" });
+  });
+
+  it("calls onJobsFiltersChange when last-run filter changes", () => {
+    const container = document.createElement("div");
+    const onJobsFiltersChange = vi.fn();
+    render(renderCron(createProps({ onJobsFiltersChange })), container);
+
+    const select = container.querySelector('select[data-test-id="cron-jobs-last-status-filter"]');
+    expect(select).not.toBeNull();
+    if (!(select instanceof HTMLSelectElement)) {
+      return;
+    }
+    select.value = "error";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsLastStatusFilter: "error" });
+  });
+
+  it("calls onJobsFiltersReset when reset button is clicked", () => {
+    const container = document.createElement("div");
+    const onJobsFiltersReset = vi.fn();
+    render(
+      renderCron(
+        createProps({
+          jobsQuery: "digest",
+          onJobsFiltersReset,
+        }),
+      ),
+      container,
+    );
+
+    const reset = container.querySelector('button[data-test-id="cron-jobs-filters-reset"]');
+    expect(reset).not.toBeNull();
+    reset?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onJobsFiltersReset).toHaveBeenCalledTimes(1);
+  });
+
   it("shows webhook delivery option in the form", () => {
     const container = document.createElement("div");
     render(
@@ -368,6 +424,7 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Advanced");
     expect(container.textContent).toContain("Exact timing (no stagger)");
     expect(container.textContent).toContain("Stagger window");
+    expect(container.textContent).toContain("Light context");
     expect(container.textContent).toContain("Model");
     expect(container.textContent).toContain("Thinking");
     expect(container.textContent).toContain("Best effort delivery");
@@ -491,9 +548,9 @@ describe("cron view", () => {
             payloadText: "",
           },
           fieldErrors: {
-            name: "Name is required.",
-            cronExpr: "Cron expression is required.",
-            payloadText: "Agent message is required.",
+            name: "cron.errors.nameRequired",
+            cronExpr: "cron.errors.cronExprRequired",
+            payloadText: "cron.errors.agentMessageRequired",
           },
           canSubmit: false,
         }),
@@ -527,9 +584,9 @@ describe("cron view", () => {
             payloadText: "",
           },
           fieldErrors: {
-            name: "Name is required.",
-            everyAmount: "Interval must be greater than 0.",
-            payloadText: "Agent message is required.",
+            name: "cron.errors.nameRequired",
+            everyAmount: "cron.errors.everyAmountInvalid",
+            payloadText: "cron.errors.agentMessageRequired",
           },
           canSubmit: false,
         }),
@@ -616,12 +673,37 @@ describe("cron view", () => {
     removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onToggle).toHaveBeenCalledWith(job, false);
-    expect(onRun).toHaveBeenCalledWith(job);
+    expect(onRun).toHaveBeenCalledWith(job, "force");
     expect(onRemove).toHaveBeenCalledWith(job);
     expect(onLoadRuns).toHaveBeenCalledTimes(3);
     expect(onLoadRuns).toHaveBeenNthCalledWith(1, "job-actions");
     expect(onLoadRuns).toHaveBeenNthCalledWith(2, "job-actions");
     expect(onLoadRuns).toHaveBeenNthCalledWith(3, "job-actions");
+  });
+
+  it("wires Run if due action with due mode", () => {
+    const container = document.createElement("div");
+    const onRun = vi.fn();
+    const onLoadRuns = vi.fn();
+    const job = createJob("job-due");
+    render(
+      renderCron(
+        createProps({
+          jobs: [job],
+          onRun,
+          onLoadRuns,
+        }),
+      ),
+      container,
+    );
+
+    const runDueButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Run if due",
+    );
+    expect(runDueButton).not.toBeUndefined();
+    runDueButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onRun).toHaveBeenCalledWith(job, "due");
   });
 
   it("renders suggestion datalists for agent/model/thinking/timezone", () => {
@@ -635,6 +717,7 @@ describe("cron view", () => {
           thinkingSuggestions: ["low"],
           timezoneSuggestions: ["UTC"],
           deliveryToSuggestions: ["+15551234567"],
+          accountSuggestions: ["default"],
         }),
       ),
       container,
@@ -645,10 +728,14 @@ describe("cron view", () => {
     expect(container.querySelector("datalist#cron-thinking-suggestions")).not.toBeNull();
     expect(container.querySelector("datalist#cron-tz-suggestions")).not.toBeNull();
     expect(container.querySelector("datalist#cron-delivery-to-suggestions")).not.toBeNull();
+    expect(container.querySelector("datalist#cron-delivery-account-suggestions")).not.toBeNull();
     expect(container.querySelector('input[list="cron-agent-suggestions"]')).not.toBeNull();
     expect(container.querySelector('input[list="cron-model-suggestions"]')).not.toBeNull();
     expect(container.querySelector('input[list="cron-thinking-suggestions"]')).not.toBeNull();
     expect(container.querySelector('input[list="cron-tz-suggestions"]')).not.toBeNull();
     expect(container.querySelector('input[list="cron-delivery-to-suggestions"]')).not.toBeNull();
+    expect(
+      container.querySelector('input[list="cron-delivery-account-suggestions"]'),
+    ).not.toBeNull();
   });
 });

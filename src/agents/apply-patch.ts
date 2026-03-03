@@ -1,14 +1,15 @@
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { openBoundaryFile, type BoundaryFileOpenResult } from "../infra/boundary-file-read.js";
 import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
-import { assertSandboxPath, resolveSandboxInputPath } from "./sandbox-paths.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
+import { assertSandboxPath } from "./sandbox-paths.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
 const END_PATCH_MARKER = "*** End Patch";
@@ -261,7 +262,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         await fs.writeFile(filePath, content, "utf8");
         return;
       }
-      const relative = toRelativeWorkspacePath(options.cwd, filePath);
+      const relative = toRelativeSandboxPath(options.cwd, filePath);
       await writeFileWithinRoot({
         rootDir: options.cwd,
         relativePath: relative,
@@ -318,25 +319,11 @@ async function resolvePatchPath(
           allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })
       ).resolved
-    : resolvePathFromCwd(filePath, options.cwd);
+    : resolvePathFromInput(filePath, options.cwd);
   return {
     resolved,
     display: toDisplayPath(resolved, options.cwd),
   };
-}
-
-function resolvePathFromCwd(filePath: string, cwd: string): string {
-  return path.normalize(resolveSandboxInputPath(filePath, cwd));
-}
-
-function toRelativeWorkspacePath(workspaceRoot: string, absolutePath: string): string {
-  const rootResolved = path.resolve(workspaceRoot);
-  const resolved = path.resolve(absolutePath);
-  const relative = path.relative(rootResolved, resolved);
-  if (!relative || relative === "." || relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Path escapes sandbox root (${workspaceRoot}): ${absolutePath}`);
-  }
-  return relative;
 }
 
 function assertBoundaryRead(

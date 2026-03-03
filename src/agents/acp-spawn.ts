@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import type { AcpRuntimeSessionMode } from "../acp/runtime/types.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import {
   cleanupFailedAcpSpawn,
@@ -9,7 +11,6 @@ import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
 } from "../acp/runtime/session-identifiers.js";
-import type { AcpRuntimeSessionMode } from "../acp/runtime/types.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -17,11 +18,11 @@ import {
 import {
   formatThreadBindingDisabledError,
   formatThreadBindingSpawnDisabledError,
-  resolveThreadBindingSessionTtlMsForChannel,
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
 import { loadConfig } from "../config/config.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import {
@@ -31,9 +32,12 @@ import {
 } from "../infra/outbound/session-binding-service.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 
 export const ACP_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
+export const ACP_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
+export type SpawnAcpSandboxMode = (typeof ACP_SPAWN_SANDBOX_MODES)[number];
 
 export type SpawnAcpParams = {
   task: string;
@@ -42,6 +46,7 @@ export type SpawnAcpParams = {
   cwd?: string;
   mode?: SpawnAcpMode;
   thread?: boolean;
+  sandbox?: SpawnAcpSandboxMode;
 };
 
 export type SpawnAcpContext = {
@@ -50,6 +55,7 @@ export type SpawnAcpContext = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  sandboxed?: boolean;
 };
 
 export type SpawnAcpResult = {
@@ -227,6 +233,26 @@ export async function spawnAcpDirect(
       error: "ACP is disabled by policy (`acp.enabled=false`).",
     };
   }
+  const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
+  const requesterRuntime = resolveSandboxRuntimeStatus({
+    cfg,
+    sessionKey: ctx.agentSessionKey,
+  });
+  const requesterSandboxed = ctx.sandboxed === true || requesterRuntime.sandboxed;
+  if (requesterSandboxed) {
+    return {
+      status: "forbidden",
+      error:
+        'Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.',
+    };
+  }
+  if (sandboxMode === "require") {
+    return {
+      status: "forbidden",
+      error:
+        'sessions_spawn sandbox="require" is unsupported for runtime="acp" because ACP sessions run outside the sandbox. Use runtime="subagent" or sandbox="inherit".',
+    };
+  }
 
   const requestThreadBinding = params.thread === true;
   const spawnMode = resolveSpawnMode({
@@ -329,7 +355,12 @@ export async function spawnAcpDirect(
           introText: resolveThreadBindingIntroText({
             agentId: targetAgentId,
             label: params.label || undefined,
-            sessionTtlMs: resolveThreadBindingSessionTtlMsForChannel({
+            idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
+              cfg,
+              channel: preparedBinding.channel,
+              accountId: preparedBinding.accountId,
+            }),
+            maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
               cfg,
               channel: preparedBinding.channel,
               accountId: preparedBinding.accountId,

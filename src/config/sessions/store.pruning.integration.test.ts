@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
+import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } from "./store.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
 vi.mock("../config.js", () => ({
@@ -31,6 +31,19 @@ function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>
         mode: "enforce",
         pruneAfter: "7d",
         maxEntries: 500,
+        rotateBytes: 10_485_760,
+      },
+    },
+  });
+}
+
+function applyCappedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
+  mockLoadConfig.mockReturnValue({
+    session: {
+      maintenance: {
+        mode: "enforce",
+        pruneAfter: "365d",
+        maxEntries: 1,
         rotateBytes: 10_485_760,
       },
     },
@@ -216,16 +229,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("archives transcript files for entries evicted by maxEntries capping", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "365d",
-          maxEntries: 1,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyCappedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const oldestSessionId = "oldest-session";
@@ -251,16 +255,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   });
 
   it("does not archive external transcript paths when capping entries", async () => {
-    mockLoadConfig.mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "365d",
-          maxEntries: 1,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
+    applyCappedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
     const externalDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-external-cap-"));

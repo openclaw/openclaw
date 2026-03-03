@@ -1,12 +1,22 @@
 import path from "node:path";
-import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { assertSandboxPath } from "./sandbox-paths.js";
 
 export type SandboxedBridgeMediaPathConfig = {
   root: string;
   bridge: SandboxFsBridge;
   workspaceOnly?: boolean;
 };
+
+export function createSandboxBridgeReadFile(params: {
+  sandbox: Pick<SandboxedBridgeMediaPathConfig, "root" | "bridge">;
+}): (filePath: string) => Promise<Buffer> {
+  return async (filePath: string) =>
+    await params.sandbox.bridge.readFile({
+      filePath,
+      cwd: params.sandbox.root,
+    });
+}
 
 export async function resolveSandboxedBridgeMediaPath(params: {
   sandbox: SandboxedBridgeMediaPathConfig;

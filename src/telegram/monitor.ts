@@ -1,13 +1,13 @@
 import { type RunOptions, run } from "@grammyjs/runner";
-import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -270,6 +270,13 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           });
         return stopPromise;
       };
+      const stopBot = () => {
+        return Promise.resolve(bot.stop())
+          .then(() => undefined)
+          .catch(() => {
+            // Bot may already be stopped by runner stop/abort paths.
+          });
+      };
       const stopOnAbort = () => {
         if (opts.abortSignal?.aborted) {
           void stopRunner();
@@ -309,6 +316,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       } finally {
         opts.abortSignal?.removeEventListener("abort", stopOnAbort);
         await stopRunner();
+        await stopBot();
       }
     };
 

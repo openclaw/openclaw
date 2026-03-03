@@ -1,5 +1,7 @@
-import { type ChannelId, getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { type ChannelId, getChannelPlugin } from "../../channels/plugins/index.js";
+import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
+import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { requireValidConfigSnapshot } from "../config-validation.js";
@@ -9,7 +11,19 @@ export type ChatChannel = ChannelId;
 export async function requireValidConfig(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<OpenClawConfig | null> {
-  return await requireValidConfigSnapshot(runtime);
+  const cfg = await requireValidConfigSnapshot(runtime);
+  if (!cfg) {
+    return null;
+  }
+  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+    config: cfg,
+    commandName: "channels",
+    targetIds: getChannelsCommandSecretTargetIds(),
+  });
+  for (const entry of diagnostics) {
+    runtime.log(`[secrets] ${entry}`);
+  }
+  return resolvedConfig;
 }
 
 export function formatAccountLabel(params: { accountId: string; name?: string }) {

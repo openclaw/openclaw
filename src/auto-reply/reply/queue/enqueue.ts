@@ -1,6 +1,7 @@
-import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
-import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
+import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
+import { kickFollowupDrainIfIdle } from "./drain.js";
+import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 
 function isRunAlreadyQueued(
   run: FollowupRun,
@@ -53,6 +54,12 @@ export function enqueueFollowupRun(
   }
 
   queue.items.push(run);
+  // If drain finished and deleted the queue before this item arrived, a new queue
+  // object was created (draining: false) but nobody scheduled a drain for it.
+  // Use the cached callback to restart the drain now.
+  if (!queue.draining) {
+    kickFollowupDrainIfIdle(key);
+  }
   return true;
 }
 

@@ -1,9 +1,9 @@
-import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadConfig } from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { loadModelsConfig } from "./load-config.js";
 import {
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
@@ -44,7 +44,7 @@ export async function listFallbacksCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const cfg = loadConfig();
+  const cfg = await loadModelsConfig({ commandName: `models ${params.key} list`, runtime });
   const fallbacks = getFallbacks(cfg, params.key);
 
   if (opts.json) {

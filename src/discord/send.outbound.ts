@@ -1,18 +1,20 @@
+import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
+import { ChannelType, Routes } from "discord-api-types/v10";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
-import { ChannelType, Routes } from "discord-api-types/v10";
+import type { RetryConfig } from "../infra/retry.js";
+import type { PollInput } from "../polls.js";
+import type { DiscordSendResult } from "./send.types.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import type { RetryConfig } from "../infra/retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { maxBytesForKind } from "../media/constants.js";
 import { extensionForMime } from "../media/mime.js";
-import type { PollInput } from "../polls.js";
+import { unlinkIfExists } from "../media/temp-files.js";
 import { loadWebMediaRaw } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import {
@@ -34,7 +36,6 @@ import {
   type DiscordSendComponents,
   type DiscordSendEmbeds,
 } from "./send.shared.js";
-import type { DiscordSendResult } from "./send.types.js";
 import {
   ensureOggOpus,
   getVoiceMessageMetadata,
@@ -543,18 +544,7 @@ export async function sendVoiceMessageDiscord(
     }
     throw err;
   } finally {
-    // Clean up temporary OGG file if we created one
-    if (oggCleanup && oggPath) {
-      try {
-        await fs.unlink(oggPath);
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
-    try {
-      await fs.unlink(localInputPath);
-    } catch {
-      // Ignore cleanup errors
-    }
+    await unlinkIfExists(oggCleanup ? oggPath : null);
+    await unlinkIfExists(localInputPath);
   }
 }

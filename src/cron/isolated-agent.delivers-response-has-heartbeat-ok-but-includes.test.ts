@@ -1,16 +1,16 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CliDeps } from "../cli/deps.js";
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
-import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import {
-  makeCfg,
-  makeJob,
-  withTempCronHome,
-  writeSessionStore,
-} from "./isolated-agent.test-harness.js";
+import { makeCfg, makeJob, writeSessionStore } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
+
+async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+  return withTempHomeBase(fn, { prefix: "openclaw-cron-heartbeat-suite-" });
+}
 
 async function createTelegramDeliveryFixture(home: string): Promise<{
   storePath: string;
@@ -75,7 +75,7 @@ describe("runCronIsolatedAgentTurn", () => {
   });
 
   it("does not fan out telegram cron delivery across allowFrom entries", async () => {
-    await withTempCronHome(async (home) => {
+    await withTempHome(async (home) => {
       const { storePath, deps } = await createTelegramDeliveryFixture(home);
       mockEmbeddedAgentPayloads([
         { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
@@ -116,8 +116,29 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("suppresses announce delivery for multi-payload narration ending in HEARTBEAT_OK", async () => {
+    await withTempHome(async (home) => {
+      const { storePath, deps } = await createTelegramDeliveryFixture(home);
+      mockEmbeddedAgentPayloads([
+        { text: "Checked inbox and calendar. Nothing actionable yet." },
+        { text: "HEARTBEAT_OK" },
+      ]);
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(false);
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    });
+  });
+
   it("handles media heartbeat delivery and announce cleanup modes", async () => {
-    await withTempCronHome(async (home) => {
+    await withTempHome(async (home) => {
       const { storePath, deps } = await createTelegramDeliveryFixture(home);
 
       // Media should still be delivered even if text is just HEARTBEAT_OK.
@@ -200,7 +221,7 @@ describe("runCronIsolatedAgentTurn", () => {
   });
 
   it("skips structured outbound delivery when timeout abort is already set", async () => {
-    await withTempCronHome(async (home) => {
+    await withTempHome(async (home) => {
       const { storePath, deps } = await createTelegramDeliveryFixture(home);
       const controller = new AbortController();
       controller.abort("cron: job execution timed out");
@@ -224,7 +245,7 @@ describe("runCronIsolatedAgentTurn", () => {
   });
 
   it("uses a unique announce childRunId for each cron run", async () => {
-    await withTempCronHome(async (home) => {
+    await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, {
         lastProvider: "telegram",
         lastChannel: "telegram",
@@ -251,23 +272,30 @@ describe("runCronIsolatedAgentTurn", () => {
       const job = makeJob({ kind: "agentTurn", message: "do it" });
       job.delivery = { mode: "announce", channel: "last" };
 
-      await runCronIsolatedAgentTurn({
-        cfg,
-        deps,
-        job,
-        message: "do it",
-        sessionKey: "cron:job-1",
-        lane: "cron",
-      });
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      await runCronIsolatedAgentTurn({
-        cfg,
-        deps,
-        job,
-        message: "do it",
-        sessionKey: "cron:job-1",
-        lane: "cron",
-      });
+      const nowSpy = vi.spyOn(Date, "now");
+      let now = Date.now();
+      nowSpy.mockImplementation(() => now);
+      try {
+        await runCronIsolatedAgentTurn({
+          cfg,
+          deps,
+          job,
+          message: "do it",
+          sessionKey: "cron:job-1",
+          lane: "cron",
+        });
+        now += 5;
+        await runCronIsolatedAgentTurn({
+          cfg,
+          deps,
+          job,
+          message: "do it",
+          sessionKey: "cron:job-1",
+          lane: "cron",
+        });
+      } finally {
+        nowSpy.mockRestore();
+      }
 
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
       const firstArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as

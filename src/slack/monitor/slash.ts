@@ -1,16 +1,16 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
 import type { ChatCommandDefinition, CommandArgs } from "../../auto-reply/commands-registry.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { ResolvedSlackAccount } from "../accounts.js";
+import type { SlackMonitorContext } from "./context.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../../config/commands.js";
 import { danger, logVerbose } from "../../globals.js";
 import { chunkItems } from "../../utils/chunk-items.js";
-import type { ResolvedSlackAccount } from "../accounts.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "./allow-list.js";
 import { resolveSlackEffectiveAllowFrom } from "./auth.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
-import type { SlackMonitorContext } from "./context.js";
 import { normalizeSlackChannelType } from "./context.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
 import {
@@ -274,7 +274,7 @@ export async function registerSlackMonitorSlashCommands(params: {
 
   const supportsInteractiveArgMenus =
     typeof (ctx.app as { action?: unknown }).action === "function";
-  const supportsExternalArgMenus = typeof (ctx.app as { options?: unknown }).options === "function";
+  let supportsExternalArgMenus = typeof (ctx.app as { options?: unknown }).options === "function";
 
   const slashCommand = resolveSlackSlashCommandConfig(
     ctx.slashCommand ?? account.config.slashCommand,
@@ -284,12 +284,20 @@ export async function registerSlackMonitorSlashCommands(params: {
     command: SlackCommandMiddlewareArgs["command"];
     ack: SlackCommandMiddlewareArgs["ack"];
     respond: SlackCommandMiddlewareArgs["respond"];
+    body?: unknown;
     prompt: string;
     commandArgs?: CommandArgs;
     commandDefinition?: ChatCommandDefinition;
   }) => {
-    const { command, ack, respond, prompt, commandArgs, commandDefinition } = p;
+    const { command, ack, respond, body, prompt, commandArgs, commandDefinition } = p;
     try {
+      if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
+        await ack();
+        runtime.log?.(
+          `slack: drop slash command from user=${command.user_id ?? "unknown"} channel=${command.channel_id ?? "unknown"} (mismatched app/team)`,
+        );
+        return;
+      }
       if (!prompt.trim()) {
         await ack({
           text: "Message required.",
@@ -377,11 +385,11 @@ export async function registerSlackMonitorSlashCommands(params: {
           channelId: command.channel_id,
           channelName: channelInfo?.name,
           channels: ctx.channelsConfig,
+          channelKeys: ctx.channelsConfigKeys,
           defaultRequireMention: ctx.defaultRequireMention,
         });
         if (ctx.useAccessGroups) {
-          const channelAllowlistConfigured =
-            Boolean(ctx.channelsConfig) && Object.keys(ctx.channelsConfig ?? {}).length > 0;
+          const channelAllowlistConfigured = (ctx.channelsConfigKeys?.length ?? 0) > 0;
           const channelAllowed = channelConfig?.allowed !== false;
           if (
             !isSlackChannelAllowedByPolicy({
@@ -502,11 +510,11 @@ export async function registerSlackMonitorSlashCommands(params: {
       const [
         { resolveConversationLabel },
         { createReplyPrefixOptions },
-        { recordSessionMetaFromInbound, resolveStorePath },
+        { recordInboundSessionMetaSafe },
       ] = await Promise.all([
         import("../../channels/conversation-label.js"),
         import("../../channels/reply-prefix.js"),
-        import("../../config/sessions.js"),
+        import("../../channels/session-meta.js"),
       ]);
 
       const route = resolveAgentRoute({
@@ -570,18 +578,14 @@ export async function registerSlackMonitorSlashCommands(params: {
         OriginatingTo: `user:${command.user_id}`,
       });
 
-      const storePath = resolveStorePath(cfg.session?.store, {
+      await recordInboundSessionMetaSafe({
+        cfg,
         agentId: route.agentId,
+        sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+        ctx: ctxPayload,
+        onError: (err) =>
+          runtime.error?.(danger(`slack slash: failed updating session meta: ${String(err)}`)),
       });
-      try {
-        await recordSessionMetaFromInbound({
-          storePath,
-          sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-          ctx: ctxPayload,
-        });
-      } catch (err) {
-        runtime.error?.(danger(`slack slash: failed updating session meta: ${String(err)}`));
-      }
 
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
@@ -667,7 +671,7 @@ export async function registerSlackMonitorSlashCommands(params: {
     for (const command of nativeCommands) {
       ctx.app.command(
         `/${command.name}`,
-        async ({ command: cmd, ack, respond }: SlackCommandMiddlewareArgs) => {
+        async ({ command: cmd, ack, respond, body }: SlackCommandMiddlewareArgs) => {
           const commandDefinition = registry.findCommandByNativeName(command.name, "slack");
           const rawText = cmd.text?.trim() ?? "";
           const commandArgs = commandDefinition
@@ -684,6 +688,7 @@ export async function registerSlackMonitorSlashCommands(params: {
             command: cmd,
             ack,
             respond,
+            body,
             prompt,
             commandArgs,
             commandDefinition: commandDefinition ?? undefined,
@@ -694,11 +699,12 @@ export async function registerSlackMonitorSlashCommands(params: {
   } else if (slashCommand.enabled) {
     ctx.app.command(
       buildSlackSlashCommandMatcher(slashCommand.name),
-      async ({ command, ack, respond }: SlackCommandMiddlewareArgs) => {
+      async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
         await handleSlashCommand({
           command,
           ack,
           respond,
+          body,
           prompt: command.text?.trim() ?? "",
         });
       },
@@ -725,6 +731,11 @@ export async function registerSlackMonitorSlashCommands(params: {
       return;
     }
     appWithOptions.options(SLACK_COMMAND_ARG_ACTION_ID, async ({ ack, body }) => {
+      if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
+        await ack({ options: [] });
+        runtime.log?.("slack: drop slash arg options payload (mismatched app/team)");
+        return;
+      }
       const typedBody = body as {
         value?: string;
         user?: { id?: string };
@@ -758,7 +769,17 @@ export async function registerSlackMonitorSlashCommands(params: {
       await ack({ options });
     });
   };
-  registerArgOptions();
+  // Treat external arg-menu registration as best-effort: if Bolt's app.options()
+  // throws (e.g. from receiver init issues), disable external selects and fall back
+  // to static_select/button menus instead of crashing the entire provider startup.
+  try {
+    registerArgOptions();
+  } catch (err) {
+    supportsExternalArgMenus = false;
+    logVerbose(
+      `slack: external arg-menu registration failed, falling back to static menus: ${String(err)}`,
+    );
+  }
 
   const registerArgAction = (actionId: string) => {
     (
@@ -769,6 +790,10 @@ export async function registerSlackMonitorSlashCommands(params: {
       const { ack, body, respond } = args;
       const action = args.action as { value?: string; selected_option?: { value?: string } };
       await ack();
+      if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
+        runtime.log?.("slack: drop slash arg action payload (mismatched app/team)");
+        return;
+      }
       const respondFn =
         respond ??
         (async (payload: { text: string; blocks?: SlackBlock[]; response_type?: string }) => {
@@ -826,6 +851,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         command: commandPayload,
         ack: async () => {},
         respond: respondFn,
+        body,
         prompt,
         commandArgs,
         commandDefinition: commandDefinition ?? undefined,

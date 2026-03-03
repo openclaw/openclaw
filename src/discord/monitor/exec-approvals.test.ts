@@ -1,11 +1,11 @@
+import type { ButtonInteraction, ComponentData } from "@buape/carbon";
+import { Routes } from "discord-api-types/v10";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { ButtonInteraction, ComponentData } from "@buape/carbon";
-import { Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clearSessionStoreCacheForTest } from "../../config/sessions.js";
 import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions.js";
 import {
   buildExecApprovalCustomId,
   extractDiscordChannelId,
@@ -316,6 +316,17 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
       sessionFilter: ["(a+)+$"],
     });
     expect(handler.shouldHandle(createRequest({ sessionKey: `${"a".repeat(28)}!` }))).toBe(false);
+  });
+
+  it("matches long session keys with tail-bounded regex checks", () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      sessionFilter: ["discord:tail$"],
+    });
+    expect(
+      handler.shouldHandle(createRequest({ sessionKey: `${"x".repeat(5000)}discord:tail` })),
+    ).toBe(true);
   });
 
   it("filters by discord account when session store includes account", () => {

@@ -1,14 +1,15 @@
 import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
+import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { danger } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import {
   getCronChannelOptions,
   parseAt,
+  parseCronStaggerMs,
   parseDurationMs,
   printCronList,
   warnIfCronSchedulerDisabled,
@@ -84,6 +85,7 @@ export function registerCronAddCommand(cron: Command) {
       .option("--thinking <level>", "Thinking level for agent jobs (off|minimal|low|medium|high)")
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option("--light-context", "Use lightweight bootstrap context for agent jobs", false)
       .option("--announce", "Announce summary to a chat (subagent-style)", false)
       .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
       .option("--no-deliver", "Disable announce delivery and skip main-session summary")
@@ -92,6 +94,7 @@ export function registerCronAddCommand(cron: Command) {
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
+      .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
       .option("--json", "Output JSON", false)
       .action(async (opts: GatewayRpcOpts & Record<string, unknown>, cmd?: Command) => {
@@ -127,19 +130,7 @@ export function registerCronAddCommand(cron: Command) {
               }
               return { kind: "every" as const, everyMs };
             }
-            const staggerMs = (() => {
-              if (useExact) {
-                return 0;
-              }
-              if (!staggerRaw) {
-                return undefined;
-              }
-              const parsed = parseDurationMs(staggerRaw);
-              if (!parsed) {
-                throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
-              }
-              return parsed;
-            })();
+            const staggerMs = parseCronStaggerMs({ staggerRaw, useExact });
             return {
               kind: "cron" as const,
               expr: cronExpr,
@@ -188,6 +179,7 @@ export function registerCronAddCommand(cron: Command) {
                   : undefined,
               timeoutSeconds:
                 timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
+              lightContext: opts.lightContext === true ? true : undefined,
             };
           })();
 
@@ -219,6 +211,15 @@ export function registerCronAddCommand(cron: Command) {
             (sessionTarget !== "isolated" || payload.kind !== "agentTurn")
           ) {
             throw new Error("--announce/--no-deliver require --session isolated.");
+          }
+
+          const accountId =
+            typeof opts.account === "string" && opts.account.trim()
+              ? opts.account.trim()
+              : undefined;
+
+          if (accountId && (sessionTarget !== "isolated" || payload.kind !== "agentTurn")) {
+            throw new Error("--account requires an isolated agentTurn job with delivery.");
           }
 
           const deliveryMode =
@@ -265,6 +266,7 @@ export function registerCronAddCommand(cron: Command) {
                       ? opts.channel.trim()
                       : undefined,
                   to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
+                  accountId,
                   bestEffort: opts.bestEffortDeliver ? true : undefined,
                 }
               : undefined,

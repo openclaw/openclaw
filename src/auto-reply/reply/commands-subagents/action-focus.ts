@@ -1,15 +1,16 @@
+import type { CommandHandlerResult } from "../commands-types.js";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
 } from "../../../acp/runtime/session-identifiers.js";
 import { readAcpSessionEntry } from "../../../acp/runtime/session-meta.js";
 import {
-  resolveDiscordThreadBindingSessionTtlMs,
+  resolveDiscordThreadBindingIdleTimeoutMs,
+  resolveDiscordThreadBindingMaxAgeMs,
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
 } from "../../../discord/monitor/thread-bindings.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-import type { CommandHandlerResult } from "../commands-types.js";
 import {
   type SubagentsCommandContext,
   isDiscordSurface,
@@ -109,7 +110,11 @@ export async function handleSubagentsFocusAction(
         introText: resolveThreadBindingIntroText({
           agentId: focusTarget.agentId,
           label,
-          sessionTtlMs: resolveDiscordThreadBindingSessionTtlMs({
+          idleTimeoutMs: resolveDiscordThreadBindingIdleTimeoutMs({
+            cfg: params.cfg,
+            accountId,
+          }),
+          maxAgeMs: resolveDiscordThreadBindingMaxAgeMs({
             cfg: params.cfg,
             accountId,
           }),

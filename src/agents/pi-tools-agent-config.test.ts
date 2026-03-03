@@ -4,9 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { createOpenClawCodingTools } from "./pi-tools.js";
 import type { SandboxDockerConfig } from "./sandbox.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
 type ToolWithExecute = {
@@ -27,6 +27,16 @@ describe("Agent-specific tool filtering", () => {
     rename: async () => {},
     stat: async () => null,
   };
+
+  function expectReadOnlyToolSet(toolNames: string[], extraDenied: string[] = []) {
+    expect(toolNames).toContain("read");
+    expect(toolNames).not.toContain("exec");
+    expect(toolNames).not.toContain("write");
+    expect(toolNames).not.toContain("apply_patch");
+    for (const toolName of extraDenied) {
+      expect(toolNames).not.toContain(toolName);
+    }
+  }
 
   async function withApplyPatchEscapeCase(
     opts: { workspaceOnly?: boolean },
@@ -250,12 +260,10 @@ describe("Agent-specific tool filtering", () => {
       agentDir: "/tmp/agent-restricted",
     });
 
-    const toolNames = tools.map((t) => t.name);
-    expect(toolNames).toContain("read");
-    expect(toolNames).not.toContain("exec");
-    expect(toolNames).not.toContain("write");
-    expect(toolNames).not.toContain("apply_patch");
-    expect(toolNames).not.toContain("edit");
+    expectReadOnlyToolSet(
+      tools.map((t) => t.name),
+      ["edit"],
+    );
   });
 
   it("should apply provider-specific tool policy", () => {
@@ -279,11 +287,7 @@ describe("Agent-specific tool filtering", () => {
       modelId: "claude-opus-4-6-thinking",
     });
 
-    const toolNames = tools.map((t) => t.name);
-    expect(toolNames).toContain("read");
-    expect(toolNames).not.toContain("exec");
-    expect(toolNames).not.toContain("write");
-    expect(toolNames).not.toContain("apply_patch");
+    expectReadOnlyToolSet(tools.map((t) => t.name));
   });
 
   it("should apply provider-specific tool profile overrides", () => {

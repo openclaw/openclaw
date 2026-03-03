@@ -1,12 +1,12 @@
 import type { ChunkMode } from "../../auto-reply/chunk.js";
-import { chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
-import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
+import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
-import { sendMessageSlack } from "../send.js";
+import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -17,6 +17,7 @@ export async function deliverReplies(params: {
   textLimit: number;
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all";
+  identity?: SlackSendIdentity;
 }) {
   for (const payload of params.replies) {
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
@@ -38,6 +39,7 @@ export async function deliverReplies(params: {
         token: params.token,
         threadTs,
         accountId: params.accountId,
+        ...(params.identity ? { identity: params.identity } : {}),
       });
     } else {
       let first = true;
@@ -49,6 +51,7 @@ export async function deliverReplies(params: {
           mediaUrl,
           threadTs,
           accountId: params.accountId,
+          ...(params.identity ? { identity: params.identity } : {}),
         });
       }
     }

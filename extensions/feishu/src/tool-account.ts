@@ -1,15 +1,24 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveToolsConfig } from "./tools-config.js";
-import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
 
 type AccountAwareParams = { accountId?: string };
 
 function normalizeOptionalAccountId(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function readConfiguredDefaultAccountId(config: OpenClawPluginApi["config"]): string | undefined {
+  const value = (config?.channels?.feishu as { defaultAccount?: unknown } | undefined)
+    ?.defaultAccount;
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return normalizeOptionalAccountId(value);
 }
 
 export function resolveFeishuToolAccount(params: {
@@ -24,6 +33,7 @@ export function resolveFeishuToolAccount(params: {
     cfg: params.api.config,
     accountId:
       normalizeOptionalAccountId(params.executeParams?.accountId) ??
+      readConfiguredDefaultAccountId(params.api.config) ??
       normalizeOptionalAccountId(params.defaultAccountId),
   });
 }
@@ -41,6 +51,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
 ): Required<FeishuToolsConfig> {
   const merged: Required<FeishuToolsConfig> = {
     doc: false,
+    chat: false,
     wiki: false,
     drive: false,
     perm: false,
@@ -49,6 +60,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
   for (const account of accounts) {
     const cfg = resolveToolsConfig(account.config.tools);
     merged.doc = merged.doc || cfg.doc;
+    merged.chat = merged.chat || cfg.chat;
     merged.wiki = merged.wiki || cfg.wiki;
     merged.drive = merged.drive || cfg.drive;
     merged.perm = merged.perm || cfg.perm;

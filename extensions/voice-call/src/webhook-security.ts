@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import { getHeader } from "./http-headers.js";
 import type { WebhookContext } from "./types.js";
+import { getHeader } from "./http-headers.js";
 
 const REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const REPLAY_CACHE_MAX_ENTRIES = 10_000;
@@ -379,6 +379,41 @@ function isLoopbackAddress(address?: string): boolean {
   return false;
 }
 
+function stripPortFromUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.port) {
+      return url;
+    }
+    parsed.port = "";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+function setPortOnUrl(url: string, port: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.port = port;
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+function extractPortFromHostHeader(hostHeader?: string): string | undefined {
+  if (!hostHeader) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(`https://${hostHeader}`);
+    return parsed.port || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Result of Twilio webhook verification with detailed info.
  */
@@ -607,6 +642,45 @@ export function verifyTwilioWebhook(
     });
     const isReplay = markReplay(twilioReplayCache, replayKey);
     return { ok: true, verificationUrl, isReplay, verifiedRequestKey: replayKey };
+  }
+
+  // Twilio webhook signatures can differ in whether port is included.
+  // Retry a small, deterministic set of URL variants before failing closed.
+  const variants = new Set<string>();
+  variants.add(verificationUrl);
+  variants.add(stripPortFromUrl(verificationUrl));
+
+  if (options?.publicUrl) {
+    try {
+      const publicPort = new URL(options.publicUrl).port;
+      if (publicPort) {
+        variants.add(setPortOnUrl(verificationUrl, publicPort));
+      }
+    } catch {
+      // ignore invalid publicUrl; primary verification already used best effort
+    }
+  }
+
+  const hostHeaderPort = extractPortFromHostHeader(getHeader(ctx.headers, "host"));
+  if (hostHeaderPort) {
+    variants.add(setPortOnUrl(verificationUrl, hostHeaderPort));
+  }
+
+  for (const candidateUrl of variants) {
+    if (candidateUrl === verificationUrl) {
+      continue;
+    }
+    const isValidCandidate = validateTwilioSignature(authToken, signature, candidateUrl, params);
+    if (!isValidCandidate) {
+      continue;
+    }
+    const replayKey = createTwilioReplayKey({
+      verificationUrl: candidateUrl,
+      signature,
+      requestParams: params,
+    });
+    const isReplay = markReplay(twilioReplayCache, replayKey);
+    return { ok: true, verificationUrl: candidateUrl, isReplay, verifiedRequestKey: replayKey };
   }
 
   // Check if this is ngrok free tier - the URL might have different format

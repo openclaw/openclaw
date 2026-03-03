@@ -1,7 +1,7 @@
-import { getChannelDock } from "../../channels/dock.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
+import { getChannelDock } from "../../channels/dock.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { resolveAccountEntry } from "../../routing/account-lookup.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
@@ -66,8 +66,8 @@ export type BlockStreamingChunking = {
   flushOnParagraph?: boolean;
 };
 
-function clampPositiveInteger(
-  value: number | undefined,
+export function clampPositiveInteger(
+  value: unknown,
   fallback: number,
   bounds: { min: number; max: number },
 ): number {

@@ -93,13 +93,18 @@ export function registerCronSimpleCommands(cron: Command) {
       .description("Run a cron job now (debug)")
       .argument("<id>", "Job id")
       .option("--due", "Run only when due (default behavior in older versions)", false)
-      .action(async (id, opts) => {
+      .action(async (id, opts, command) => {
         try {
+          if (command.getOptionValueSource("timeout") === "default") {
+            opts.timeout = "600000";
+          }
           const res = await callGatewayFromCli("cron.run", opts, {
             id,
             mode: opts.due ? "due" : "force",
           });
           defaultRuntime.log(JSON.stringify(res, null, 2));
+          const result = res as { ok?: boolean; ran?: boolean } | undefined;
+          defaultRuntime.exit(result?.ok && result?.ran ? 0 : 1);
         } catch (err) {
           defaultRuntime.error(danger(String(err)));
           defaultRuntime.exit(1);

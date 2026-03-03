@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import type { TelnyxConfig } from "../config.js";
 import type {
   EndReason,
+  GetCallStatusInput,
+  GetCallStatusResult,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
@@ -14,8 +16,8 @@ import type {
   WebhookParseOptions,
   WebhookVerificationResult,
 } from "../types.js";
-import { verifyTelnyxWebhook } from "../webhook-security.js";
 import type { VoiceCallProvider } from "./base.js";
+import { verifyTelnyxWebhook } from "../webhook-security.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 
 /**
@@ -290,6 +292,37 @@ export class TelnyxProvider implements VoiceCallProvider {
       { command_id: crypto.randomUUID() },
       { allowNotFound: true },
     );
+  }
+
+  async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
+    try {
+      const data = await guardedJsonApiRequest<{ data?: { state?: string; is_alive?: boolean } }>({
+        url: `${this.baseUrl}/calls/${input.providerCallId}`,
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        allowNotFound: true,
+        allowedHostnames: [this.apiHost],
+        auditContext: "telnyx-get-call-status",
+        errorPrefix: "Telnyx get call status error",
+      });
+
+      if (!data) {
+        return { status: "not-found", isTerminal: true };
+      }
+
+      const state = data.data?.state ?? "unknown";
+      const isAlive = data.data?.is_alive;
+      // If is_alive is missing, treat as unknown rather than terminal (P1 fix)
+      if (isAlive === undefined) {
+        return { status: state, isTerminal: false, isUnknown: true };
+      }
+      return { status: state, isTerminal: !isAlive };
+    } catch {
+      return { status: "error", isTerminal: false, isUnknown: true };
+    }
   }
 }
 
