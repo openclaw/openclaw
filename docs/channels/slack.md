@@ -238,56 +238,124 @@ and still route command execution against the target conversation session (`Comm
 {
   "features": {
     "slash_commands": [
-      { "command": "/help", "description": "OpenClaw /help", "should_escape": false },
-      { "command": "/commands", "description": "OpenClaw /commands", "should_escape": false },
-      { "command": "/skill", "description": "OpenClaw /skill", "should_escape": false },
-      { "command": "/agentstatus", "description": "OpenClaw /agentstatus", "should_escape": false },
-      { "command": "/approve", "description": "OpenClaw /approve", "should_escape": false },
-      { "command": "/context", "description": "OpenClaw /context", "should_escape": false },
+      { "command": "/help", "description": "Show available commands.", "should_escape": false },
+      { "command": "/commands", "description": "List all slash commands.", "should_escape": false },
+      { "command": "/skill", "description": "Run a skill by name.", "should_escape": false },
+      { "command": "/agentstatus", "description": "Show current status.", "should_escape": false },
       {
-        "command": "/export-session",
-        "description": "OpenClaw /export-session",
+        "command": "/approve",
+        "description": "Approve or deny exec requests.",
         "should_escape": false
       },
-      { "command": "/tts", "description": "OpenClaw /tts", "should_escape": false },
-      { "command": "/whoami", "description": "OpenClaw /whoami", "should_escape": false },
-      { "command": "/session", "description": "OpenClaw /session", "should_escape": false },
-      { "command": "/subagents", "description": "OpenClaw /subagents", "should_escape": false },
-      { "command": "/acp", "description": "OpenClaw /acp", "should_escape": false },
-      { "command": "/focus", "description": "OpenClaw /focus", "should_escape": false },
-      { "command": "/unfocus", "description": "OpenClaw /unfocus", "should_escape": false },
-      { "command": "/agents", "description": "OpenClaw /agents", "should_escape": false },
-      { "command": "/kill", "description": "OpenClaw /kill", "should_escape": false },
-      { "command": "/steer", "description": "OpenClaw /steer", "should_escape": false },
-      { "command": "/config", "description": "OpenClaw /config", "should_escape": false },
-      { "command": "/debug", "description": "OpenClaw /debug", "should_escape": false },
-      { "command": "/usage", "description": "OpenClaw /usage", "should_escape": false },
-      { "command": "/stop", "description": "OpenClaw /stop", "should_escape": false },
-      { "command": "/restart", "description": "OpenClaw /restart", "should_escape": false },
-      { "command": "/activation", "description": "OpenClaw /activation", "should_escape": false },
-      { "command": "/send", "description": "OpenClaw /send", "should_escape": false },
-      { "command": "/reset", "description": "OpenClaw /reset", "should_escape": false },
-      { "command": "/new", "description": "OpenClaw /new", "should_escape": false },
-      { "command": "/compact", "description": "OpenClaw /compact", "should_escape": false },
-      { "command": "/think", "description": "OpenClaw /think", "should_escape": false },
-      { "command": "/verbose", "description": "OpenClaw /verbose", "should_escape": false },
-      { "command": "/reasoning", "description": "OpenClaw /reasoning", "should_escape": false },
-      { "command": "/elevated", "description": "OpenClaw /elevated", "should_escape": false },
-      { "command": "/exec", "description": "OpenClaw /exec", "should_escape": false },
-      { "command": "/model", "description": "OpenClaw /model", "should_escape": false },
-      { "command": "/models", "description": "OpenClaw /models", "should_escape": false },
-      { "command": "/queue", "description": "OpenClaw /queue", "should_escape": false },
+      {
+        "command": "/context",
+        "description": "Explain how context is built and used.",
+        "should_escape": false
+      },
+      {
+        "command": "/export-session",
+        "description": "Export this session to HTML.",
+        "should_escape": false
+      },
+      { "command": "/tts", "description": "Control text-to-speech (TTS).", "should_escape": false },
+      { "command": "/whoami", "description": "Show your sender id.", "should_escape": false },
+      {
+        "command": "/session",
+        "description": "Manage session settings (idle/max-age).",
+        "should_escape": false
+      },
+      {
+        "command": "/subagents",
+        "description": "List, spawn, or control subagent runs.",
+        "should_escape": false
+      },
+      {
+        "command": "/acp",
+        "description": "Manage ACP sessions and runtime options.",
+        "should_escape": false
+      },
+      {
+        "command": "/focus",
+        "description": "Bind this thread to a session target.",
+        "should_escape": false
+      },
+      {
+        "command": "/unfocus",
+        "description": "Remove the current thread binding.",
+        "should_escape": false
+      },
+      { "command": "/agents", "description": "List thread-bound agents.", "should_escape": false },
+      {
+        "command": "/kill",
+        "description": "Kill a running subagent (or all).",
+        "should_escape": false
+      },
+      {
+        "command": "/steer",
+        "description": "Send guidance to a running subagent.",
+        "should_escape": false
+      },
+      { "command": "/config", "description": "Show or set config values.", "should_escape": false },
+      {
+        "command": "/debug",
+        "description": "Set runtime debug overrides.",
+        "should_escape": false
+      },
+      {
+        "command": "/usage",
+        "description": "Show usage footer or cost summary.",
+        "should_escape": false
+      },
+      { "command": "/stop", "description": "Stop the current run.", "should_escape": false },
+      { "command": "/restart", "description": "Restart OpenClaw.", "should_escape": false },
+      {
+        "command": "/activation",
+        "description": "Set group activation mode.",
+        "should_escape": false
+      },
+      { "command": "/send", "description": "Set send policy.", "should_escape": false },
+      { "command": "/reset", "description": "Reset the current session.", "should_escape": false },
+      { "command": "/new", "description": "Start a new session.", "should_escape": false },
+      {
+        "command": "/compact",
+        "description": "Compact the session context.",
+        "should_escape": false
+      },
+      { "command": "/think", "description": "Set thinking level.", "should_escape": false },
+      { "command": "/verbose", "description": "Toggle verbose mode.", "should_escape": false },
+      {
+        "command": "/reasoning",
+        "description": "Toggle reasoning visibility.",
+        "should_escape": false
+      },
+      { "command": "/elevated", "description": "Toggle elevated mode.", "should_escape": false },
+      {
+        "command": "/exec",
+        "description": "Set exec defaults for this session.",
+        "should_escape": false
+      },
+      { "command": "/model", "description": "Show or set the model.", "should_escape": false },
+      {
+        "command": "/models",
+        "description": "List providers or provider models.",
+        "should_escape": false
+      },
+      { "command": "/queue", "description": "Adjust queue settings.", "should_escape": false },
       {
         "command": "/dock_telegram",
-        "description": "OpenClaw /dock_telegram",
+        "description": "Open Telegram dock commands.",
         "should_escape": false
       },
       {
         "command": "/dock_discord",
-        "description": "OpenClaw /dock_discord",
+        "description": "Open Discord dock commands.",
         "should_escape": false
       },
-      { "command": "/dock_slack", "description": "OpenClaw /dock_slack", "should_escape": false }
+      {
+        "command": "/dock_slack",
+        "description": "Open Slack dock commands.",
+        "should_escape": false
+      }
     ]
   }
 }
