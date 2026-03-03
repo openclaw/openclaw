@@ -166,6 +166,7 @@ export {
 } from "../channels/plugins/onboarding/helpers.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
+export { waitForAbortSignal } from "../infra/abort-signal.js";
 export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export { resolveAllowlistMatchByCandidates } from "../channels/allowlist-match.js";
