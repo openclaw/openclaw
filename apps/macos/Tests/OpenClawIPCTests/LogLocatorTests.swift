@@ -4,7 +4,7 @@ import Testing
 @testable import OpenClaw
 
 @Suite struct LogLocatorTests {
-    @Test func launchdGatewayLogPathEnsuresTmpDirExists() throws {
+    @Test func launchdGatewayLogPathEnsuresTmpDirExists() {
         let fm = FileManager()
         let baseDir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         let logDir = baseDir.appendingPathComponent("openclaw-tests-\(UUID().uuidString)")

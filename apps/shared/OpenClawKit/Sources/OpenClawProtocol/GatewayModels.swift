@@ -534,6 +534,7 @@ public struct AgentParams: Codable, Sendable {
     public let besteffortdeliver: Bool?
     public let lane: String?
     public let extrasystemprompt: String?
+    public let internalevents: [[String: AnyCodable]]?
     public let inputprovenance: [String: AnyCodable]?
     public let idempotencykey: String
     public let label: String?
@@ -561,6 +562,7 @@ public struct AgentParams: Codable, Sendable {
         besteffortdeliver: Bool?,
         lane: String?,
         extrasystemprompt: String?,
+        internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
         idempotencykey: String,
         label: String?,
@@ -587,6 +589,7 @@ public struct AgentParams: Codable, Sendable {
         self.besteffortdeliver = besteffortdeliver
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
+        self.internalevents = internalevents
         self.inputprovenance = inputprovenance
         self.idempotencykey = idempotencykey
         self.label = label
@@ -615,6 +618,7 @@ public struct AgentParams: Codable, Sendable {
         case besteffortdeliver = "bestEffortDeliver"
         case lane
         case extrasystemprompt = "extraSystemPrompt"
+        case internalevents = "internalEvents"
         case inputprovenance = "inputProvenance"
         case idempotencykey = "idempotencyKey"
         case label
@@ -1023,6 +1027,74 @@ public struct PushTestResult: Codable, Sendable {
         case tokensuffix = "tokenSuffix"
         case topic
         case environment
+    }
+}
+
+public struct SecretsReloadParams: Codable, Sendable {}
+
+public struct SecretsResolveParams: Codable, Sendable {
+    public let commandname: String
+    public let targetids: [String]
+
+    public init(
+        commandname: String,
+        targetids: [String])
+    {
+        self.commandname = commandname
+        self.targetids = targetids
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case commandname = "commandName"
+        case targetids = "targetIds"
+    }
+}
+
+public struct SecretsResolveAssignment: Codable, Sendable {
+    public let path: String?
+    public let pathsegments: [String]
+    public let value: AnyCodable
+
+    public init(
+        path: String?,
+        pathsegments: [String],
+        value: AnyCodable)
+    {
+        self.path = path
+        self.pathsegments = pathsegments
+        self.value = value
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case pathsegments = "pathSegments"
+        case value
+    }
+}
+
+public struct SecretsResolveResult: Codable, Sendable {
+    public let ok: Bool?
+    public let assignments: [SecretsResolveAssignment]?
+    public let diagnostics: [String]?
+    public let inactiverefpaths: [String]?
+
+    public init(
+        ok: Bool?,
+        assignments: [SecretsResolveAssignment]?,
+        diagnostics: [String]?,
+        inactiverefpaths: [String]?)
+    {
+        self.ok = ok
+        self.assignments = assignments
+        self.diagnostics = diagnostics
+        self.inactiverefpaths = inactiverefpaths
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case assignments
+        case diagnostics
+        case inactiverefpaths = "inactiveRefPaths"
     }
 }
 
@@ -2818,7 +2890,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
     public let command: String
     public let commandargv: [String]?
-    public let systemrunplanv2: [String: AnyCodable]?
+    public let systemrunplan: [String: AnyCodable]?
     public let env: [String: AnyCodable]?
     public let cwd: AnyCodable?
     public let nodeid: AnyCodable?
@@ -2839,7 +2911,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         id: String?,
         command: String,
         commandargv: [String]?,
-        systemrunplanv2: [String: AnyCodable]?,
+        systemrunplan: [String: AnyCodable]?,
         env: [String: AnyCodable]?,
         cwd: AnyCodable?,
         nodeid: AnyCodable?,
@@ -2859,7 +2931,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.id = id
         self.command = command
         self.commandargv = commandargv
-        self.systemrunplanv2 = systemrunplanv2
+        self.systemrunplan = systemrunplan
         self.env = env
         self.cwd = cwd
         self.nodeid = nodeid
@@ -2881,7 +2953,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case id
         case command
         case commandargv = "commandArgv"
-        case systemrunplanv2 = "systemRunPlanV2"
+        case systemrunplan = "systemRunPlan"
         case env
         case cwd
         case nodeid = "nodeId"

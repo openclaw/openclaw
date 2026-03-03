@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.3.2
+
+### Changes
+
+- Rebuilt the plugin to use native `zca-js` integration inside OpenClaw (no external `zca` CLI runtime dependency).
+
+### Breaking
+
+- **BREAKING:** Removed the old external CLI-based backend (`zca`/`openzca`/`zca-cli`) from runtime flow. Existing setups that depended on external CLI binaries should re-login with `openclaw channels login --channel zalouser` after upgrading.
+
 ## 2026.3.1
 
 ### Changes

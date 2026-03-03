@@ -21,6 +21,9 @@ import {
 } from "./runtime-internals/events.js";
 import {
   resolveSpawnFailure,
+  type SpawnCommandCache,
+  type SpawnCommandOptions,
+  type SpawnResolutionEvent,
   spawnAndCollect,
   spawnWithResolvedCommand,
   waitForExit,
@@ -94,6 +97,9 @@ export class AcpxRuntime implements AcpRuntime {
   private healthy = false;
   private readonly logger?: PluginLogger;
   private readonly queueOwnerTtlSeconds: number;
+  private readonly spawnCommandCache: SpawnCommandCache = {};
+  private readonly spawnCommandOptions: SpawnCommandOptions;
+  private readonly loggedSpawnResolutions = new Set<string>();
 
   constructor(
     private readonly config: ResolvedAcpxPluginConfig,
@@ -110,10 +116,28 @@ export class AcpxRuntime implements AcpRuntime {
       requestedQueueOwnerTtlSeconds >= 0
         ? requestedQueueOwnerTtlSeconds
         : this.config.queueOwnerTtlSeconds;
+    this.spawnCommandOptions = {
+      strictWindowsCmdWrapper: this.config.strictWindowsCmdWrapper,
+      cache: this.spawnCommandCache,
+      onResolved: (event) => {
+        this.logSpawnResolution(event);
+      },
+    };
   }
 
   isHealthy(): boolean {
     return this.healthy;
+  }
+
+  private logSpawnResolution(event: SpawnResolutionEvent): void {
+    const key = `${event.command}::${event.strictWindowsCmdWrapper ? "strict" : "compat"}::${event.resolution}`;
+    if (event.cacheHit || this.loggedSpawnResolutions.has(key)) {
+      return;
+    }
+    this.loggedSpawnResolutions.add(key);
+    this.logger?.debug?.(
+      `acpx spawn resolver: command=${event.command} mode=${event.strictWindowsCmdWrapper ? "strict" : "compat"} resolution=${event.resolution}`,
+    );
   }
 
   async probeAvailability(): Promise<void> {
@@ -121,6 +145,7 @@ export class AcpxRuntime implements AcpRuntime {
       command: this.config.command,
       cwd: this.config.cwd,
       expectedVersion: this.config.expectedVersion,
+      spawnOptions: this.spawnCommandOptions,
     });
     if (!versionCheck.ok) {
       this.healthy = false;
@@ -128,11 +153,14 @@ export class AcpxRuntime implements AcpRuntime {
     }
 
     try {
-      const result = await spawnAndCollect({
-        command: this.config.command,
-        args: ["--help"],
-        cwd: this.config.cwd,
-      });
+      const result = await spawnAndCollect(
+        {
+          command: this.config.command,
+          args: ["--help"],
+          cwd: this.config.cwd,
+        },
+        this.spawnCommandOptions,
+      );
       this.healthy = result.error == null && (result.code ?? 0) === 0;
     } catch {
       this.healthy = false;
@@ -217,11 +245,14 @@ export class AcpxRuntime implements AcpRuntime {
     if (input.signal) {
       input.signal.addEventListener("abort", onAbort, { once: true });
     }
-    const child = spawnWithResolvedCommand({
-      command: this.config.command,
-      args,
-      cwd: state.cwd,
-    });
+    const child = spawnWithResolvedCommand(
+      {
+        command: this.config.command,
+        args,
+        cwd: state.cwd,
+      },
+      this.spawnCommandOptions,
+    );
     child.stdin.on("error", () => {
       // Ignore EPIPE when the child exits before stdin flush completes.
     });
@@ -379,6 +410,7 @@ export class AcpxRuntime implements AcpRuntime {
       command: this.config.command,
       cwd: this.config.cwd,
       expectedVersion: this.config.expectedVersion,
+      spawnOptions: this.spawnCommandOptions,
     });
     if (!versionCheck.ok) {
       this.healthy = false;
@@ -396,11 +428,14 @@ export class AcpxRuntime implements AcpRuntime {
     }
 
     try {
-      const result = await spawnAndCollect({
-        command: this.config.command,
-        args: ["--help"],
-        cwd: this.config.cwd,
-      });
+      const result = await spawnAndCollect(
+        {
+          command: this.config.command,
+          args: ["--help"],
+          cwd: this.config.cwd,
+        },
+        this.spawnCommandOptions,
+      );
       if (result.error) {
         const spawnFailure = resolveSpawnFailure(result.error, this.config.cwd);
         if (spawnFailure === "missing-command") {
@@ -528,11 +563,14 @@ export class AcpxRuntime implements AcpRuntime {
     fallbackCode: AcpRuntimeErrorCode;
     ignoreNoSession?: boolean;
   }): Promise<AcpxJsonObject[]> {
-    const result = await spawnAndCollect({
-      command: this.config.command,
-      args: params.args,
-      cwd: params.cwd,
-    });
+    const result = await spawnAndCollect(
+      {
+        command: this.config.command,
+        args: params.args,
+        cwd: params.cwd,
+      },
+      this.spawnCommandOptions,
+    );
 
     if (result.error) {
       const spawnFailure = resolveSpawnFailure(result.error, params.cwd);

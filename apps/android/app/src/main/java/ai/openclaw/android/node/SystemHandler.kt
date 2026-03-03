@@ -67,9 +67,6 @@ private class AndroidSystemNotificationPoster(
   }
 
   private fun ensureChannel(priority: String?): String {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-      return NOTIFICATION_CHANNEL_BASE_ID
-    }
     val normalizedPriority = priority.orEmpty().trim().lowercase()
     val (suffix, importance, name) =
       when (normalizedPriority) {

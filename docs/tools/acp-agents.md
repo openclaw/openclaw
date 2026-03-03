@@ -75,7 +75,7 @@ Thread binding support is adapter-specific. If the active channel adapter does n
 Required feature flags for thread-bound ACP:
 
 - `acp.enabled=true`
-- `acp.dispatch.enabled=true`
+- `acp.dispatch.enabled` is on by default (set `false` to pause ACP dispatch)
 - Channel-adapter ACP thread-spawn flag enabled (adapter-specific)
   - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
 
@@ -119,6 +119,19 @@ Interface details:
   - `mode: "session"` requires `thread: true`
 - `cwd` (optional): requested runtime working directory (validated by backend/runtime policy).
 - `label` (optional): operator-facing label used in session/banner text.
+
+## Sandbox compatibility
+
+ACP sessions currently run on the host runtime, not inside the OpenClaw sandbox.
+
+Current limitations:
+
+- If the requester session is sandboxed, ACP spawns are blocked.
+  - Error: `Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.`
+- `sessions_spawn` with `runtime: "acp"` does not support `sandbox: "require"`.
+  - Error: `sessions_spawn sandbox="require" is unsupported for runtime="acp" because ACP sessions run outside the sandbox. Use runtime="subagent" or sandbox="inherit".`
+
+Use `runtime: "subagent"` when you need sandbox-enforced execution.
 
 ### From `/acp` command
 
@@ -236,6 +249,7 @@ Current acpx built-in harness aliases:
 - `codex`
 - `opencode`
 - `gemini`
+- `kimi`
 
 When OpenClaw uses the acpx backend, prefer these values for `agentId` unless your acpx config defines custom agent aliases.
 
@@ -249,10 +263,11 @@ Core ACP baseline:
 {
   acp: {
     enabled: true,
+    // Optional. Default is true; set false to pause ACP dispatch while keeping /acp controls.
     dispatch: { enabled: true },
     backend: "acpx",
     defaultAgent: "codex",
-    allowedAgents: ["pi", "claude", "codex", "opencode", "gemini"],
+    allowedAgents: ["pi", "claude", "codex", "opencode", "gemini", "kimi"],
     maxConcurrentSessions: 8,
     stream: {
       coalesceIdleMs: 300,
@@ -298,7 +313,7 @@ See [Configuration Reference](/gateway/configuration-reference).
 Install and enable plugin:
 
 ```bash
-openclaw plugins install @openclaw/acpx
+openclaw plugins install acpx
 openclaw config set plugins.entries.acpx.enabled true
 ```
 
@@ -316,7 +331,7 @@ Then verify backend health:
 
 ### acpx command and version configuration
 
-By default, `@openclaw/acpx` uses the plugin-local pinned binary:
+By default, the acpx plugin (published as `@openclaw/acpx`) uses the plugin-local pinned binary:
 
 1. Command defaults to `extensions/acpx/node_modules/.bin/acpx`.
 2. Expected version defaults to the extension pin.
@@ -353,16 +368,59 @@ Notes:
 
 See [Plugins](/tools/plugin).
 
+## Permission configuration
+
+ACP sessions run non-interactively — there is no TTY to approve or deny file-write and shell-exec permission prompts. The acpx plugin provides two config keys that control how permissions are handled:
+
+### `permissionMode`
+
+Controls which operations the harness agent can perform without prompting.
+
+| Value           | Behavior                                                  |
+| --------------- | --------------------------------------------------------- |
+| `approve-all`   | Auto-approve all file writes and shell commands.          |
+| `approve-reads` | Auto-approve reads only; writes and exec require prompts. |
+| `deny-all`      | Deny all permission prompts.                              |
+
+### `nonInteractivePermissions`
+
+Controls what happens when a permission prompt would be shown but no interactive TTY is available (which is always the case for ACP sessions).
+
+| Value  | Behavior                                                          |
+| ------ | ----------------------------------------------------------------- |
+| `fail` | Abort the session with `AcpRuntimeError`. **(default)**           |
+| `deny` | Silently deny the permission and continue (graceful degradation). |
+
+### Configuration
+
+Set via plugin config:
+
+```bash
+openclaw config set plugins.entries.acpx.config.permissionMode approve-all
+openclaw config set plugins.entries.acpx.config.nonInteractivePermissions fail
+```
+
+Restart the gateway after changing these values.
+
+> **Important:** OpenClaw currently defaults to `permissionMode=approve-reads` and `nonInteractivePermissions=fail`. In non-interactive ACP sessions, any write or exec that triggers a permission prompt can fail with `AcpRuntimeError: Permission prompt unavailable in non-interactive mode`.
+>
+> If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions degrade gracefully instead of crashing.
+
 ## Troubleshooting
 
-| Symptom                                                                 | Likely cause                                   | Fix                                                        |
-| ----------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
-| `ACP runtime backend is not configured`                                 | Backend plugin missing or disabled.            | Install and enable backend plugin, then run `/acp doctor`. |
-| `ACP is disabled by policy (acp.enabled=false)`                         | ACP globally disabled.                         | Set `acp.enabled=true`.                                    |
-| `ACP dispatch is disabled by policy (acp.dispatch.enabled=false)`       | Dispatch from normal thread messages disabled. | Set `acp.dispatch.enabled=true`.                           |
-| `ACP agent "<id>" is not allowed by policy`                             | Agent not in allowlist.                        | Use allowed `agentId` or update `acp.allowedAgents`.       |
-| `Unable to resolve session target: ...`                                 | Bad key/id/label token.                        | Run `/acp sessions`, copy exact key/label, retry.          |
-| `--thread here requires running /acp spawn inside an active ... thread` | `--thread here` used outside a thread context. | Move to target thread or use `--thread auto`/`off`.        |
-| `Only <user-id> can rebind this thread.`                                | Another user owns thread binding.              | Rebind as owner or use a different thread.                 |
-| `Thread bindings are unavailable for <channel>.`                        | Adapter lacks thread binding capability.       | Use `--thread off` or move to supported adapter/channel.   |
-| Missing ACP metadata for bound session                                  | Stale/deleted ACP session metadata.            | Recreate with `/acp spawn`, then rebind/focus thread.      |
+| Symptom                                                                  | Likely cause                                                                    | Fix                                                                                                                                                               |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ACP runtime backend is not configured`                                  | Backend plugin missing or disabled.                                             | Install and enable backend plugin, then run `/acp doctor`.                                                                                                        |
+| `ACP is disabled by policy (acp.enabled=false)`                          | ACP globally disabled.                                                          | Set `acp.enabled=true`.                                                                                                                                           |
+| `ACP dispatch is disabled by policy (acp.dispatch.enabled=false)`        | Dispatch from normal thread messages disabled.                                  | Set `acp.dispatch.enabled=true`.                                                                                                                                  |
+| `ACP agent "<id>" is not allowed by policy`                              | Agent not in allowlist.                                                         | Use allowed `agentId` or update `acp.allowedAgents`.                                                                                                              |
+| `Unable to resolve session target: ...`                                  | Bad key/id/label token.                                                         | Run `/acp sessions`, copy exact key/label, retry.                                                                                                                 |
+| `--thread here requires running /acp spawn inside an active ... thread`  | `--thread here` used outside a thread context.                                  | Move to target thread or use `--thread auto`/`off`.                                                                                                               |
+| `Only <user-id> can rebind this thread.`                                 | Another user owns thread binding.                                               | Rebind as owner or use a different thread.                                                                                                                        |
+| `Thread bindings are unavailable for <channel>.`                         | Adapter lacks thread binding capability.                                        | Use `--thread off` or move to supported adapter/channel.                                                                                                          |
+| `Sandboxed sessions cannot spawn ACP sessions ...`                       | ACP runtime is host-side; requester session is sandboxed.                       | Use `runtime="subagent"` from sandboxed sessions, or run ACP spawn from a non-sandboxed session.                                                                  |
+| `sessions_spawn sandbox="require" is unsupported for runtime="acp" ...`  | `sandbox="require"` requested for ACP runtime.                                  | Use `runtime="subagent"` for required sandboxing, or use ACP with `sandbox="inherit"` from a non-sandboxed session.                                               |
+| Missing ACP metadata for bound session                                   | Stale/deleted ACP session metadata.                                             | Recreate with `/acp spawn`, then rebind/focus thread.                                                                                                             |
+| `AcpRuntimeError: Permission prompt unavailable in non-interactive mode` | `permissionMode` blocks writes/exec in non-interactive ACP session.             | Set `plugins.entries.acpx.config.permissionMode` to `approve-all` and restart gateway. See [Permission configuration](#permission-configuration).                 |
+| ACP session fails early with little output                               | Permission prompts are blocked by `permissionMode`/`nonInteractivePermissions`. | Check gateway logs for `AcpRuntimeError`. For full permissions, set `permissionMode=approve-all`; for graceful degradation, set `nonInteractivePermissions=deny`. |
+| ACP session stalls indefinitely after completing work                    | Harness process finished but ACP session did not report completion.             | Monitor with `ps aux \| grep acpx`; kill stale processes manually.                                                                                                |

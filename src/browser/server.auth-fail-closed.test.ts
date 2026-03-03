@@ -1,5 +1,5 @@
-import { createServer, type AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getFreePort } from "./test-port.js";
 
 const mocks = vi.hoisted(() => ({
   controlPort: 0,
@@ -12,12 +12,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
+  const browserConfig = {
+    enabled: true,
+  };
   return {
     ...actual,
     loadConfig: () => ({
-      browser: {
-        enabled: true,
-      },
+      browser: browserConfig,
     }),
   };
 });
@@ -57,17 +58,6 @@ vi.mock("./pw-ai-state.js", () => ({
 
 const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
   await import("./server.js");
-
-async function getFreePort(): Promise<number> {
-  const probe = createServer();
-  await new Promise<void>((resolve, reject) => {
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => resolve());
-  });
-  const addr = probe.address() as AddressInfo;
-  await new Promise<void>((resolve) => probe.close(() => resolve()));
-  return addr.port;
-}
 
 describe("browser control auth bootstrap failures", () => {
   beforeEach(async () => {

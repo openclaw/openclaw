@@ -10,6 +10,7 @@ title: "OpenAI"
 
 OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in** for subscription
 access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in.
+OpenAI explicitly supports subscription OAuth usage in external tools/workflows like OpenClaw.
 
 ## Option A: OpenAI API key (OpenAI Platform)
 
@@ -29,7 +30,7 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 ```json5
 {
   env: { OPENAI_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "openai/gpt-5.1-codex" } } },
+  agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
 }
 ```
 
@@ -68,6 +69,14 @@ You can set `agents.defaults.models.<provider/model>.params.transport`:
 - `"websocket"`: force WebSocket
 - `"auto"`: try WebSocket, then fall back to SSE
 
+For `openai/*` (Responses API), OpenClaw also enables WebSocket warm-up by
+default (`openaiWsWarmup: true`) when WebSocket transport is used.
+
+Related OpenAI docs:
+
+- [Realtime API with WebSocket](https://platform.openai.com/docs/guides/realtime-websocket)
+- [Streaming API responses (SSE)](https://platform.openai.com/docs/guides/streaming-responses)
+
 ```json5
 {
   agents: {
@@ -77,6 +86,47 @@ You can set `agents.defaults.models.<provider/model>.params.transport`:
         "openai-codex/gpt-5.3-codex": {
           params: {
             transport: "auto",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+### OpenAI WebSocket warm-up
+
+OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
+`openai/*` to reduce first-turn latency when using WebSocket transport.
+
+### Disable warm-up
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.2": {
+          params: {
+            openaiWsWarmup: false,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+### Enable warm-up explicitly
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.2": {
+          params: {
+            openaiWsWarmup: true,
           },
         },
       },
@@ -107,7 +157,7 @@ Responses models (for example Azure OpenAI Responses):
   agents: {
     defaults: {
       models: {
-        "azure-openai-responses/gpt-4o": {
+        "azure-openai-responses/gpt-5.2": {
           params: {
             responsesServerCompaction: true,
           },
@@ -125,7 +175,7 @@ Responses models (for example Azure OpenAI Responses):
   agents: {
     defaults: {
       models: {
-        "openai/gpt-5": {
+        "openai/gpt-5.2": {
           params: {
             responsesServerCompaction: true,
             responsesCompactThreshold: 120000,
@@ -144,7 +194,7 @@ Responses models (for example Azure OpenAI Responses):
   agents: {
     defaults: {
       models: {
-        "openai/gpt-5": {
+        "openai/gpt-5.2": {
           params: {
             responsesServerCompaction: false,
           },

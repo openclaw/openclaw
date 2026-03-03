@@ -30,7 +30,6 @@ import type {
   StopReason,
   TextContent,
   ToolCall,
-  Usage,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
 import {
@@ -42,6 +41,12 @@ import {
   type ResponseObject,
 } from "./openai-ws-connection.js";
 import { log } from "./pi-embedded-runner/logger.js";
+import {
+  buildAssistantMessage,
+  buildAssistantMessageWithZeroUsage,
+  buildUsageWithNoCost,
+  buildStreamErrorAssistantMessage,
+} from "./stream-message-shared.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Per-session state
@@ -53,6 +58,8 @@ interface WsSession {
   lastContextLength: number;
   /** True if the connection has been established at least once. */
   everConnected: boolean;
+  /** True once a best-effort warm-up attempt has run for this session. */
+  warmUpAttempted: boolean;
   /** True if the session is permanently broken (no more reconnect). */
   broken: boolean;
 }
@@ -93,6 +100,14 @@ export function hasWsSession(sessionId: string): boolean {
 // ─────────────────────────────────────────────────────────────────────────────
 
 type AnyMessage = Message & { role: string; content: unknown };
+
+function toNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
 
 /** Convert pi-ai content (string | ContentPart[]) to plain text. */
 function contentToText(content: unknown): string {
@@ -204,11 +219,16 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
               });
               textParts.length = 0;
             }
+            const callId = toNonEmptyString(block.id);
+            const toolName = toNonEmptyString(block.name);
+            if (!callId || !toolName) {
+              continue;
+            }
             // Push function_call item
             items.push({
               type: "function_call",
-              call_id: typeof block.id === "string" ? block.id : `call_${randomUUID()}`,
-              name: block.name ?? "",
+              call_id: callId,
+              name: toolName,
               arguments:
                 typeof block.arguments === "string"
                   ? block.arguments
@@ -238,14 +258,19 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
 
     if (m.role === "toolResult") {
       const tr = m as unknown as {
-        toolCallId: string;
+        toolCallId?: string;
+        toolUseId?: string;
         content: unknown;
         isError: boolean;
       };
+      const callId = toNonEmptyString(tr.toolCallId) ?? toNonEmptyString(tr.toolUseId);
+      if (!callId) {
+        continue;
+      }
       const outputText = contentToText(tr.content);
       items.push({
         type: "function_call_output",
-        call_id: tr.toolCallId,
+        call_id: callId,
         output: outputText,
       });
       continue;
@@ -273,10 +298,14 @@ export function buildAssistantMessageFromResponse(
         }
       }
     } else if (item.type === "function_call") {
+      const toolName = toNonEmptyString(item.name);
+      if (!toolName) {
+        continue;
+      }
       content.push({
         type: "toolCall",
-        id: item.call_id,
-        name: item.name,
+        id: toNonEmptyString(item.call_id) ?? `call_${randomUUID()}`,
+        name: toolName,
         arguments: (() => {
           try {
             return JSON.parse(item.arguments) as Record<string, unknown>;
@@ -292,25 +321,16 @@ export function buildAssistantMessageFromResponse(
   const hasToolCalls = content.some((c) => c.type === "toolCall");
   const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
 
-  const usage: Usage = {
-    input: response.usage?.input_tokens ?? 0,
-    output: response.usage?.output_tokens ?? 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: response.usage?.total_tokens ?? 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-
-  return {
-    role: "assistant",
+  return buildAssistantMessage({
+    model: modelInfo,
     content,
     stopReason,
-    api: modelInfo.api,
-    provider: modelInfo.provider,
-    model: modelInfo.id,
-    usage,
-    timestamp: Date.now(),
-  };
+    usage: buildUsageWithNoCost({
+      input: response.usage?.input_tokens ?? 0,
+      output: response.usage?.output_tokens ?? 0,
+      totalTokens: response.usage?.total_tokens ?? 0,
+    }),
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -325,12 +345,75 @@ export interface OpenAIWebSocketStreamOptions {
 }
 
 type WsTransport = "sse" | "websocket" | "auto";
+const WARM_UP_TIMEOUT_MS = 8_000;
 
 function resolveWsTransport(options: Parameters<StreamFn>[2]): WsTransport {
   const transport = (options as { transport?: unknown } | undefined)?.transport;
   return transport === "sse" || transport === "websocket" || transport === "auto"
     ? transport
     : "auto";
+}
+
+type WsOptions = Parameters<StreamFn>[2] & { openaiWsWarmup?: unknown; signal?: AbortSignal };
+
+function resolveWsWarmup(options: Parameters<StreamFn>[2]): boolean {
+  const warmup = (options as WsOptions | undefined)?.openaiWsWarmup;
+  return warmup === true;
+}
+
+async function runWarmUp(params: {
+  manager: OpenAIWebSocketManager;
+  modelId: string;
+  tools: FunctionToolDefinition[];
+  instructions?: string;
+  signal?: AbortSignal;
+}): Promise<void> {
+  if (params.signal?.aborted) {
+    throw new Error("aborted");
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`warm-up timed out after ${WARM_UP_TIMEOUT_MS}ms`));
+    }, WARM_UP_TIMEOUT_MS);
+
+    const abortHandler = () => {
+      cleanup();
+      reject(new Error("aborted"));
+    };
+    const closeHandler = (code: number, reason: string) => {
+      cleanup();
+      reject(new Error(`warm-up closed (code=${code}, reason=${reason || "unknown"})`));
+    };
+    const unsubscribe = params.manager.onMessage((event) => {
+      if (event.type === "response.completed") {
+        cleanup();
+        resolve();
+      } else if (event.type === "response.failed") {
+        cleanup();
+        const errMsg = event.response?.error?.message ?? "Response failed";
+        reject(new Error(`warm-up failed: ${errMsg}`));
+      } else if (event.type === "error") {
+        cleanup();
+        reject(new Error(`warm-up error: ${event.message} (code=${event.code})`));
+      }
+    });
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      params.signal?.removeEventListener("abort", abortHandler);
+      params.manager.off("close", closeHandler);
+      unsubscribe();
+    };
+
+    params.signal?.addEventListener("abort", abortHandler, { once: true });
+    params.manager.on("close", closeHandler);
+    params.manager.warmUp({
+      model: params.modelId,
+      tools: params.tools.length > 0 ? params.tools : undefined,
+      instructions: params.instructions,
+    });
+  });
 }
 
 /**
@@ -369,6 +452,7 @@ export function createOpenAIWebSocketStreamFn(
           manager,
           lastContextLength: 0,
           everConnected: false,
+          warmUpAttempted: false,
           broken: false,
         };
         wsRegistry.set(sessionId, session);
@@ -414,6 +498,29 @@ export function createOpenAIWebSocketStreamFn(
         }
         wsRegistry.delete(sessionId);
         return fallbackToHttp(model, context, options, eventStream, opts.signal);
+      }
+
+      const signal = opts.signal ?? (options as WsOptions | undefined)?.signal;
+
+      if (resolveWsWarmup(options) && !session.warmUpAttempted) {
+        session.warmUpAttempted = true;
+        try {
+          await runWarmUp({
+            manager: session.manager,
+            modelId: model.id,
+            tools: convertTools(context.tools),
+            instructions: context.systemPrompt ?? undefined,
+            signal,
+          });
+          log.debug(`[ws-stream] warm-up completed for session=${sessionId}`);
+        } catch (warmErr) {
+          if (signal?.aborted) {
+            throw warmErr instanceof Error ? warmErr : new Error(String(warmErr));
+          }
+          log.warn(
+            `[ws-stream] warm-up failed for session=${sessionId}; continuing without warm-up. error=${String(warmErr)}`,
+          );
+        }
       }
 
       // ── 3. Compute incremental vs full input ─────────────────────────────
@@ -516,23 +623,11 @@ export function createOpenAIWebSocketStreamFn(
 
       eventStream.push({
         type: "start",
-        partial: {
-          role: "assistant",
+        partial: buildAssistantMessageWithZeroUsage({
+          model,
           content: [],
           stopReason: "stop",
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          timestamp: Date.now(),
-        },
+        }),
       });
 
       // ── 5. Wait for response.completed ───────────────────────────────────
@@ -544,7 +639,6 @@ export function createOpenAIWebSocketStreamFn(
           cleanup();
           reject(new Error("aborted"));
         };
-        const signal = opts.signal ?? (options as { signal?: AbortSignal } | undefined)?.signal;
         if (signal?.aborted) {
           reject(new Error("aborted"));
           return;
@@ -590,23 +684,11 @@ export function createOpenAIWebSocketStreamFn(
             reject(new Error(`OpenAI WebSocket error: ${event.message} (code=${event.code})`));
           } else if (event.type === "response.output_text.delta") {
             // Stream partial text updates for responsive UI
-            const partialMsg: AssistantMessage = {
-              role: "assistant",
+            const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
+              model,
               content: [{ type: "text", text: event.delta }],
               stopReason: "stop",
-              api: model.api,
-              provider: model.provider,
-              model: model.id,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              timestamp: Date.now(),
-            };
+            });
             eventStream.push({
               type: "text_delta",
               contentIndex: 0,
@@ -625,24 +707,10 @@ export function createOpenAIWebSocketStreamFn(
         eventStream.push({
           type: "error",
           reason: "error",
-          error: {
-            role: "assistant" as const,
-            content: [],
-            stopReason: "error" as StopReason,
+          error: buildStreamErrorAssistantMessage({
+            model,
             errorMessage,
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            timestamp: Date.now(),
-          },
+          }),
         });
         eventStream.end();
       }),

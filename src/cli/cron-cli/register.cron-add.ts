@@ -9,6 +9,7 @@ import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import {
   getCronChannelOptions,
   parseAt,
+  parseCronStaggerMs,
   parseDurationMs,
   printCronList,
   warnIfCronSchedulerDisabled,
@@ -84,6 +85,7 @@ export function registerCronAddCommand(cron: Command) {
       .option("--thinking <level>", "Thinking level for agent jobs (off|minimal|low|medium|high)")
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option("--light-context", "Use lightweight bootstrap context for agent jobs", false)
       .option("--announce", "Announce summary to a chat (subagent-style)", false)
       .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
       .option("--no-deliver", "Disable announce delivery and skip main-session summary")
@@ -128,19 +130,7 @@ export function registerCronAddCommand(cron: Command) {
               }
               return { kind: "every" as const, everyMs };
             }
-            const staggerMs = (() => {
-              if (useExact) {
-                return 0;
-              }
-              if (!staggerRaw) {
-                return undefined;
-              }
-              const parsed = parseDurationMs(staggerRaw);
-              if (!parsed) {
-                throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
-              }
-              return parsed;
-            })();
+            const staggerMs = parseCronStaggerMs({ staggerRaw, useExact });
             return {
               kind: "cron" as const,
               expr: cronExpr,
@@ -189,6 +179,7 @@ export function registerCronAddCommand(cron: Command) {
                   : undefined,
               timeoutSeconds:
                 timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
+              lightContext: opts.lightContext === true ? true : undefined,
             };
           })();
 

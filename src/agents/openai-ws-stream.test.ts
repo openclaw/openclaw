@@ -70,6 +70,27 @@ const { MockManager } = vi.hoisted(() => {
         throw new Error("Mock send failure");
       }
       this.sentEvents.push(event);
+      const maybeEvent = event as { type?: string; generate?: boolean; model?: string } | null;
+      // Auto-complete warm-up events so warm-up-enabled tests don't hang waiting
+      // for the warm-up terminal event.
+      if (maybeEvent?.type === "response.create" && maybeEvent.generate === false) {
+        queueMicrotask(() => {
+          this.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject(`warmup-${Date.now()}`),
+          });
+        });
+      }
+    }
+
+    warmUp(params: { model: string; tools?: unknown[]; instructions?: string }): void {
+      this.send({
+        type: "response.create",
+        generate: false,
+        model: params.model,
+        ...(params.tools ? { tools: params.tools } : {}),
+        ...(params.instructions ? { instructions: params.instructions } : {}),
+      });
     }
 
     onMessage(handler: (event: unknown) => void): () => void {
@@ -375,7 +396,7 @@ describe("convertMessagesToInputItems", () => {
       ["Let me run that."],
       [{ id: "call_1", name: "exec", args: { cmd: "ls" } }],
     );
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     // Should produce a text message and a function_call item
@@ -400,6 +421,41 @@ describe("convertMessagesToInputItems", () => {
       type: "function_call_output",
       call_id: "call_1",
       output: "file.txt",
+    });
+  });
+
+  it("drops tool result messages with empty tool call id", () => {
+    const msg = {
+      role: "toolResult" as const,
+      toolCallId: "   ",
+      toolName: "test_tool",
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toEqual([]);
+  });
+
+  it("falls back to toolUseId when toolCallId is missing", () => {
+    const msg = {
+      role: "toolResult" as const,
+      toolUseId: "call_from_tool_use",
+      toolName: "test_tool",
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_from_tool_use",
+      output: "ok",
     });
   });
 
@@ -431,6 +487,14 @@ describe("convertMessagesToInputItems", () => {
     >[0]);
     expect(items).toHaveLength(1);
     expect(items[0]?.type).toBe("function_call");
+  });
+
+  it("drops assistant tool calls with empty ids", () => {
+    const msg = assistantMsg([], [{ id: "   ", name: "read", args: { path: "/tmp/a" } }]);
+    const items = convertMessagesToInputItems([msg] as Parameters<
+      typeof convertMessagesToInputItems
+    >[0]);
+    expect(items).toEqual([]);
   });
 
   it("skips thinking blocks in assistant messages", () => {
@@ -966,6 +1030,67 @@ describe("createOpenAIWebSocketStreamFn", () => {
         }
       });
     });
+  });
+
+  it("sends warm-up event before first request when openaiWsWarmup=true", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-warmup-enabled");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { openaiWsWarmup: true } as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-warm", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            // consume
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents as Array<Record<string, unknown>>;
+    expect(sent).toHaveLength(2);
+    expect(sent[0]?.type).toBe("response.create");
+    expect(sent[0]?.generate).toBe(false);
+    expect(sent[1]?.type).toBe("response.create");
+  });
+
+  it("skips warm-up when openaiWsWarmup=false", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-warmup-disabled");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { openaiWsWarmup: false } as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-nowarm", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            // consume
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents as Array<Record<string, unknown>>;
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.type).toBe("response.create");
+    expect(sent[0]?.generate).toBeUndefined();
   });
 });
 
