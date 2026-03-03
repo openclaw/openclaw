@@ -50,8 +50,11 @@ const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
 const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "TESTCODE", created: true });
 const mockResolveAgentRoute = vi.fn(() => ({
   agentId: "main",
+  channel: "bluebubbles",
   accountId: "default",
   sessionKey: "agent:main:bluebubbles:dm:+15551234567",
+  mainSessionKey: "agent:main:main",
+  matchedBy: "default",
 }));
 const mockBuildMentionRegexes = vi.fn(() => [/\bbert\b/i]);
 const mockMatchesMentionPatterns = vi.fn((text: string, regexes: RegExp[]) =>
@@ -76,7 +79,9 @@ const mockDispatchReplyWithBufferedBlockDispatcher = vi.fn(
 const mockHasControlCommand = vi.fn(() => false);
 const mockResolveCommandAuthorizedFromAuthorizers = vi.fn(() => false);
 const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
+  id: "test-media.jpg",
   path: "/tmp/test-media.jpg",
+  size: Buffer.byteLength("test"),
   contentType: "image/jpeg",
 });
 const mockResolveStorePath = vi.fn(() => "/tmp/sessions.json");
@@ -104,17 +109,21 @@ function createMockRuntime(): PluginRuntime {
         chunkByNewline: mockChunkByNewline,
         chunkMarkdownTextWithMode: mockChunkMarkdownTextWithMode,
         chunkTextWithMode: mockChunkTextWithMode,
-        resolveChunkMode: mockResolveChunkMode,
+        resolveChunkMode:
+          mockResolveChunkMode as unknown as PluginRuntime["channel"]["text"]["resolveChunkMode"],
         hasControlCommand: mockHasControlCommand,
       },
       reply: {
-        dispatchReplyWithBufferedBlockDispatcher: mockDispatchReplyWithBufferedBlockDispatcher,
+        dispatchReplyWithBufferedBlockDispatcher:
+          mockDispatchReplyWithBufferedBlockDispatcher as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
         formatAgentEnvelope: mockFormatAgentEnvelope,
         formatInboundEnvelope: mockFormatInboundEnvelope,
-        resolveEnvelopeFormatOptions: mockResolveEnvelopeFormatOptions,
+        resolveEnvelopeFormatOptions:
+          mockResolveEnvelopeFormatOptions as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
       },
       routing: {
-        resolveAgentRoute: mockResolveAgentRoute,
+        resolveAgentRoute:
+          mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
       },
       pairing: {
         buildPairingReply: mockBuildPairingReply,
@@ -122,7 +131,8 @@ function createMockRuntime(): PluginRuntime {
         upsertPairingRequest: mockUpsertPairingRequest,
       },
       media: {
-        saveMediaBuffer: mockSaveMediaBuffer,
+        saveMediaBuffer:
+          mockSaveMediaBuffer as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
       },
       session: {
         resolveStorePath: mockResolveStorePath,
@@ -134,7 +144,8 @@ function createMockRuntime(): PluginRuntime {
         matchesMentionWithExplicit: mockMatchesMentionWithExplicit,
       },
       groups: {
-        resolveGroupPolicy: mockResolveGroupPolicy,
+        resolveGroupPolicy:
+          mockResolveGroupPolicy as unknown as PluginRuntime["channel"]["groups"]["resolveGroupPolicy"],
         resolveRequireMention: mockResolveRequireMention,
       },
       commands: {

@@ -22,6 +22,7 @@ type SecretsConfigureOptions = {
   planOut?: string;
   providersOnly?: boolean;
   skipProviderSetup?: boolean;
+  agent?: string;
   json?: boolean;
 };
 type SecretsApplyOptions = {
@@ -123,6 +124,10 @@ export function registerSecretsCli(program: Command) {
       "Skip provider setup and only map credential fields to existing providers",
       false,
     )
+    .option(
+      "--agent <id>",
+      "Agent id for auth-profiles targets (default: configured default agent)",
+    )
     .option("--plan-out <path>", "Write generated plan JSON to a file")
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsConfigureOptions) => {
@@ -130,6 +135,7 @@ export function registerSecretsCli(program: Command) {
         const configured = await runSecretsConfigureInteractive({
           providersOnly: Boolean(opts.providersOnly),
           skipProviderSetup: Boolean(opts.skipProviderSetup),
+          agentId: typeof opts.agent === "string" ? opts.agent : undefined,
         });
         if (opts.planOut) {
           fs.writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");

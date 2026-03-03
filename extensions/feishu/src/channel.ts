@@ -38,6 +38,22 @@ const meta: ChannelMeta = {
   order: 70,
 };
 
+const secretInputJsonSchema = {
+  oneOf: [
+    { type: "string" },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["source", "provider", "id"],
+      properties: {
+        source: { type: "string", enum: ["env", "file", "exec"] },
+        provider: { type: "string", minLength: 1 },
+        id: { type: "string", minLength: 1 },
+      },
+    },
+  ],
+} as const;
+
 export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   id: "feishu",
   meta: {
@@ -81,9 +97,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         enabled: { type: "boolean" },
         defaultAccount: { type: "string" },
         appId: { type: "string" },
-        appSecret: { type: "string" },
+        appSecret: secretInputJsonSchema,
         encryptKey: { type: "string" },
-        verificationToken: { type: "string" },
+        verificationToken: secretInputJsonSchema,
         domain: {
           oneOf: [
             { type: "string", enum: ["feishu", "lark"] },
@@ -122,9 +138,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               enabled: { type: "boolean" },
               name: { type: "string" },
               appId: { type: "string" },
-              appSecret: { type: "string" },
+              appSecret: secretInputJsonSchema,
               encryptKey: { type: "string" },
-              verificationToken: { type: "string" },
+              verificationToken: secretInputJsonSchema,
               domain: { type: "string", enum: ["feishu", "lark"] },
               connectionMode: { type: "string", enum: ["websocket", "webhook"] },
               webhookHost: { type: "string" },
