@@ -38,6 +38,8 @@ export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
 };
 
+export type { FallbackAttempt } from "./model-fallback.types.js";
+
 type ModelFallbackRunFn<T> = (
   provider: string,
   model: string,
