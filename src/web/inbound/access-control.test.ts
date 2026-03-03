@@ -239,3 +239,32 @@ describe("selfChatMode: outbound DMs to third parties (#32632)", () => {
     expect(result.allowed).toBe(true);
   });
 });
+
+describe("selfChatMode: LID-format JID handling (#32632)", () => {
+  it("should block outbound DM when remoteJid is an unresolvable LID JID", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          selfChatMode: true,
+          allowFrom: ["+15550009999"],
+        },
+      },
+    });
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550009999",
+      selfE164: "+15550009999",
+      senderE164: "+15550009999",
+      group: false,
+      pushName: "Me",
+      isFromMe: true,
+      sock: { sendMessage: sendMessageMock },
+      // LID-format JID that cannot be resolved to E164
+      remoteJid: "123456789:0@lid",
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.isSelfChat).toBe(false);
+  });
+});

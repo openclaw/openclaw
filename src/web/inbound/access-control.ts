@@ -76,8 +76,11 @@ export async function checkInboundAccessControl(params: {
   // True self-chat: both sender AND recipient are the user's own number.
   // Without this, outbound DMs to third parties are misidentified as self-chat
   // when selfChatMode is enabled (see #32632).
+  // NOTE: If remoteJid cannot be resolved (e.g. LID-format JID without cached
+  // mapping), we default to false (not self-chat) as a safe fallback to avoid
+  // re-introducing the outbound DM bypass.
   const remoteE164 = jidToE164(params.remoteJid);
-  const isTrueSelfChat = isSamePhone && (!remoteE164 || remoteE164 === params.selfE164);
+  const isTrueSelfChat = isSamePhone && remoteE164 !== null && remoteE164 === params.selfE164;
   const isSelfChat = account.selfChatMode ?? isSelfChatMode(params.selfE164, configuredAllowFrom);
   const pairingGraceMs =
     typeof params.pairingGraceMs === "number" && params.pairingGraceMs > 0
