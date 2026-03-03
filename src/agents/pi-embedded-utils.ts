@@ -11,7 +11,7 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
 
 const LEGACY_TOOL_CALL_SNIPPET_RE = /<tool_call\b[^>]*>(?:(?:"[^"]*"|'[^']*'|[^<"'`])+?)\/>/i;
 const MARKDOWN_CODE_OR_LEGACY_TOOL_CALL_RE =
-  /```[\s\S]*?```|`[^`\n]+`|<tool_call\b[^>]*>(?:(?:"[^"]*"|'[^']*'|[^<"'`])+?)\/>/gi;
+  /```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]+`|<tool_call\b[^>]*>(?:(?:"[^"]*"|'[^']*'|[^<"'`])+?)\/>/gi;
 
 /**
  * Strip malformed Minimax tool invocations that leak into text content.
@@ -41,7 +41,7 @@ export function stripMinimaxToolCallXml(text: string): string {
   }
   // Remove legacy self-closing tool call snippets that can leak into user text.
   cleaned = cleaned.replace(MARKDOWN_CODE_OR_LEGACY_TOOL_CALL_RE, (match) =>
-    match.startsWith("`") ? match : "",
+    match.startsWith("<tool_call") ? "" : match,
   );
 
   return cleaned;
