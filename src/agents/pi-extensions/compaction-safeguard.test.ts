@@ -439,7 +439,7 @@ describe("compaction-safeguard extension model fallback", () => {
 });
 
 describe("compaction-safeguard double-compaction guard", () => {
-  it("cancels compaction when there are no real messages to summarize", async () => {
+  it("gracefully skips summarization when there are no real messages (empty list)", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model });
@@ -460,7 +460,84 @@ describe("compaction-safeguard double-compaction guard", () => {
       event: mockEvent,
       apiKey: "sk-test",
     });
-    expect(result).toEqual({ cancel: true });
+    // Should return a compaction result (not cancel) so the SDK can proceed
+    const typed = result as { compaction?: { summary: string; firstKeptEntryId: string } };
+    expect(typed.compaction).toBeDefined();
+    expect(typed.compaction!.summary).toBe("No conversation history to summarize.");
+    expect(typed.compaction!.firstKeptEntryId).toBe("entry-1");
+    // Should NOT call getApiKey since no LLM summarization is needed
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves previousSummary when no real messages to summarize", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-2",
+        tokensBefore: 2000,
+        previousSummary: "## Goal\nPrevious session context.",
+        fileOps: { read: ["src/foo.ts"], edited: [], written: [] },
+        settings: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "sk-test",
+    });
+    const typed = result as {
+      compaction?: {
+        summary: string;
+        firstKeptEntryId: string;
+        tokensBefore: number;
+        details: { readFiles: string[]; modifiedFiles: string[] };
+      };
+    };
+    expect(typed.compaction).toBeDefined();
+    // Previous summary should be preserved
+    expect(typed.compaction!.summary).toContain("## Goal\nPrevious session context.");
+    // File operations should be appended
+    expect(typed.compaction!.summary).toContain("src/foo.ts");
+    expect(typed.compaction!.firstKeptEntryId).toBe("entry-2");
+    expect(typed.compaction!.tokensBefore).toBe(2000);
+    expect(typed.compaction!.details.readFiles).toEqual(["src/foo.ts"]);
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("gracefully skips when messages exist but none are real conversation types", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          // bashExecution and custom roles are NOT "real conversation messages"
+          { role: "bashExecution", command: "ls", output: "file.txt", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-3",
+        tokensBefore: 1000,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "sk-test",
+    });
+    const typed = result as { compaction?: { summary: string } };
+    expect(typed.compaction).toBeDefined();
+    expect(typed.compaction!.summary).toBe("No conversation history to summarize.");
     expect(getApiKeyMock).not.toHaveBeenCalled();
   });
 
