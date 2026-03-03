@@ -184,6 +184,9 @@ export class GatewayClient {
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
       this.ws = null;
+      // Reset sequence so after reconnect (or gateway restart) we don't treat the new
+      // stream as a gap. See: https://github.com/openclaw/openclaw/issues/32628
+      this.lastSeq = null;
       // Clear persisted device auth state only when device-token auth was active.
       // Shared token/password failures can return the same close reason but should
       // not erase a valid cached device token.

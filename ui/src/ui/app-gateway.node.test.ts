@@ -130,7 +130,7 @@ describe("connectGateway", () => {
 
     secondClient.emitGap(20, 24);
     expect(host.lastError).toBe(
-      "event gap detected (expected seq 20, got 24); refresh recommended",
+      "event gap (expected 20, got 24). Can occur after gateway restart or reconnection; functionality is unaffected. Refresh to clear.",
     );
   });
 
