@@ -240,6 +240,37 @@ export function cleanupExpiredThreads(): number {
 }
 
 /**
+ * Flush participant data to disk synchronously.
+ * Intended for use in process exit handlers where async I/O is not possible.
+ */
+export function flushToDiskSync(): void {
+  flushToDisk();
+}
+
+/**
+ * Register a process exit handler that flushes participant data to disk.
+ * Call once during gateway startup to prevent data loss on shutdown.
+ */
+export function registerThreadParticipantExitHandler(): void {
+  process.on("exit", flushToDiskSync);
+}
+
+/**
+ * Start periodic garbage collection for expired thread entries.
+ * Returns a cleanup function that stops the interval timer.
+ */
+export function startThreadParticipantMaintenance(): { stop: () => void } {
+  const MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+  const timer = setInterval(() => {
+    cleanupExpiredThreads();
+  }, MAINTENANCE_INTERVAL_MS);
+  timer.unref();
+  return {
+    stop: () => clearInterval(timer),
+  };
+}
+
+/**
  * Set custom state directory (for testing or explicit configuration).
  */
 export function setThreadParticipantStateDir(dir: string): void {

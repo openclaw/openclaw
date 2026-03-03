@@ -150,10 +150,7 @@ export async function preflightDiscordMessage(
 
     // Rate-limit agent-to-agent messages to prevent infinite ping-pong loops
     if (siblingBypass && params.botUserId) {
-      const blocked = checkA2ARateLimit(author.id, params.botUserId, {
-        maxMessagesPerWindow: 6,
-        windowMs: 60_000,
-      });
+      const blocked = checkA2ARateLimit(author.id, params.botUserId);
       if (blocked) {
         logVerbose(
           `discord: drop sibling bot message (A2A rate limit exceeded: ${author.id} <-> ${params.botUserId})`,

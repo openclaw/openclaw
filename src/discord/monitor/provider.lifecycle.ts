@@ -6,6 +6,7 @@ import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import type { DiscordVoiceManager } from "../voice/manager.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
+import { unregisterSiblingBot } from "./sibling-bots.js";
 
 type ExecApprovalsHandler = {
   start: () => Promise<void>;
@@ -22,6 +23,7 @@ export async function runDiscordGatewayLifecycle(params: {
   voiceManagerRef: { current: DiscordVoiceManager | null };
   execApprovalsHandler: ExecApprovalsHandler | null;
   threadBindings: { stop: () => void };
+  botUserId?: string;
   pendingGatewayErrors?: unknown[];
   releaseEarlyGatewayErrorGuard?: () => void;
 }) {
@@ -135,6 +137,9 @@ export async function runDiscordGatewayLifecycle(params: {
     }
   } finally {
     params.releaseEarlyGatewayErrorGuard?.();
+    if (params.botUserId) {
+      unregisterSiblingBot(params.botUserId);
+    }
     unregisterGateway(params.accountId);
     stopGatewayLogging();
     if (helloTimeoutId) {

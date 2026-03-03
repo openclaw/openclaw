@@ -733,6 +733,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       voiceManagerRef,
       execApprovalsHandler,
       threadBindings,
+      botUserId,
       pendingGatewayErrors: earlyGatewayErrorGuard.pendingErrors,
       releaseEarlyGatewayErrorGuard,
     });

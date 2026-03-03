@@ -21,6 +21,10 @@ import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { startA2aRetryScheduler } from "../discord/a2a-retry/index.js";
 import { startDmRetryScheduler } from "../discord/dm-retry/scheduler.js";
+import {
+  registerThreadParticipantExitHandler,
+  startThreadParticipantMaintenance,
+} from "../discord/monitor/thread-participants.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
   clearInternalHooks,
@@ -202,6 +206,10 @@ export async function startGatewaySidecars(params: {
     params.log.warn(`a2a-retry scheduler failed to start: ${String(err)}`);
   }
 
+  // Start thread participant maintenance (periodic GC + exit flush).
+  registerThreadParticipantExitHandler();
+  const threadParticipantMaintenance = startThreadParticipantMaintenance();
+
   // Start task tracker for automatic CURRENT_TASK.md updates.
   try {
     startTaskTracker(params.cfg);
@@ -307,5 +315,6 @@ export async function startGatewaySidecars(params: {
     taskContinuationRunner,
     taskSelfDriving,
     taskStepContinuation,
+    threadParticipantMaintenance,
   };
 }

@@ -28,6 +28,10 @@ export interface A2aMentionStore {
 
 const STORE_VERSION = 1;
 const STORE_FILENAME = "a2a-mention-tracking.json";
+const MAX_TRACKED = 1000;
+
+// ── In-memory cache ─────────────────────────────────────────────────
+let cachedStore: A2aMentionStore | null = null;
 
 function getStorePath(): string {
   return path.join(resolveStateDir(), STORE_FILENAME);
@@ -48,20 +52,34 @@ function isValidStore(value: unknown): value is A2aMentionStore {
 }
 
 export function loadA2aMentionStore(): A2aMentionStore {
+  if (cachedStore) {
+    return cachedStore;
+  }
   const storePath = getStorePath();
   try {
     const raw = fs.readFileSync(storePath, "utf-8");
     const parsed = JSON5.parse(raw);
     if (isValidStore(parsed)) {
+      cachedStore = parsed;
       return parsed;
     }
-    return createEmptyStore();
+    const empty = createEmptyStore();
+    cachedStore = empty;
+    return empty;
   } catch {
-    return createEmptyStore();
+    const empty = createEmptyStore();
+    cachedStore = empty;
+    return empty;
   }
 }
 
+/** Invalidate the in-memory cache (for tests). */
+export function invalidateA2aMentionCache(): void {
+  cachedStore = null;
+}
+
 async function saveA2aMentionStore(store: A2aMentionStore): Promise<void> {
+  cachedStore = store;
   const storePath = getStorePath();
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);
@@ -98,6 +116,19 @@ export async function trackOutboundMention(params: {
     status: "pending",
   };
   store.tracked[mention.id] = mention;
+
+  // Evict oldest non-pending entries when exceeding capacity
+  const ids = Object.keys(store.tracked);
+  if (ids.length > MAX_TRACKED) {
+    const nonPending = Object.values(store.tracked)
+      .filter((m) => m.status !== "pending")
+      .toSorted((a, b) => a.lastAttemptAt - b.lastAttemptAt);
+    const excess = ids.length - MAX_TRACKED;
+    for (let i = 0; i < excess && i < nonPending.length; i++) {
+      delete store.tracked[nonPending[i].id];
+    }
+  }
+
   await saveA2aMentionStore(store);
   return mention;
 }

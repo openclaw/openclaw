@@ -35,6 +35,11 @@ function getSiblingBotReverseMap(): Map<string, string> {
 /** Register a bot user ID as a sibling agent. */
 export function registerSiblingBot(botId: string, agentId?: string): void {
   if (botId) {
+    // Clean up old reverse mapping before overwriting
+    const oldAgentId = getSiblingBotMap().get(botId);
+    if (oldAgentId) {
+      getSiblingBotReverseMap().delete(oldAgentId);
+    }
     getSiblingBotMap().set(botId, agentId ?? "");
     if (agentId) {
       getSiblingBotReverseMap().set(agentId, botId);
