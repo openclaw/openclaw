@@ -478,6 +478,50 @@ describe("runMessageAction context isolation", () => {
     });
   });
 
+  it("does not collapse distinct alphanumeric handles when matching known groups", async () => {
+    await withSandbox(async (workspaceDir) => {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "routing-targets.json"),
+        JSON.stringify({
+          groups: {
+            alpha_handles: {
+              member_handles: ["C11111111", "U22222222"],
+              channels: {
+                slack: "channel:C12345678",
+              },
+            },
+          },
+        }),
+      );
+
+      const cfg = {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+          },
+        },
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } as OpenClawConfig;
+
+      await expect(
+        runDrySend({
+          cfg,
+          actionParams: {
+            channel: "slack",
+            targets: ["U11111111", "C22222222"],
+            message: "hi",
+          },
+        }),
+      ).rejects.toThrow(/single destination/i);
+    });
+  });
+
   it("does not reroute to bluebubbles when explicit channel hint has no mapped group target", async () => {
     await withSandbox(async (workspaceDir) => {
       await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });

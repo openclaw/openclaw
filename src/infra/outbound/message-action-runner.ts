@@ -194,6 +194,11 @@ function normalizeRoutingHandle(value: string): string {
   if (lower.includes("@")) {
     return lower;
   }
+  // Preserve opaque alphanumeric handles (e.g., Slack/Discord IDs) to avoid
+  // collisions like C123... vs U123... when matching group member sets.
+  if (/[a-z]/i.test(trimmed)) {
+    return lower;
+  }
   const digits = lower.replace(/\D/g, "");
   if (!digits) {
     return lower;
