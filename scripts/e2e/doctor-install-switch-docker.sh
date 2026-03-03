@@ -37,8 +37,10 @@ case "$cmd" in
     unit="${args[1]:-}"
     unit_path="$HOME/.config/systemd/user/${unit}"
     if [ -f "$unit_path" ]; then
+      echo "enabled"
       exit 0
     fi
+    echo "disabled" >&2
     exit 1
     ;;
   show)
