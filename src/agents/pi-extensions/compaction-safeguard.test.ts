@@ -5,6 +5,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardRuntime,
@@ -218,11 +219,11 @@ describe("computeAdaptiveChunkRatio", () => {
     // Small messages: 1000 tokens each, well under 10% of context
     const messages: AgentMessage[] = [
       { role: "user", content: "x".repeat(1000), timestamp: Date.now() },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(1000) }],
         timestamp: Date.now(),
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
@@ -233,11 +234,11 @@ describe("computeAdaptiveChunkRatio", () => {
     // Large messages: ~50K tokens each (25% of context)
     const messages: AgentMessage[] = [
       { role: "user", content: "x".repeat(50_000 * 4), timestamp: Date.now() },
-      {
+      castAgentMessage({
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(50_000 * 4) }],
         timestamp: Date.now(),
-      } as unknown as AgentMessage,
+      }),
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
