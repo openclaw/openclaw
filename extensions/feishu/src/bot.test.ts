@@ -1823,6 +1823,41 @@ describe("broadcast dispatch", () => {
     expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
   });
 
+  it("allows first topic message without mention when firstMessageInTopicTrigger=true", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-topic-group": {
+              requireMention: true,
+              firstMessageInTopicTrigger: true,
+            },
+          },
+        },
+      },
+    } as unknown as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-sender" } },
+      message: {
+        message_id: "msg-topic-first-no-mention",
+        chat_id: "oc-topic-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "first topic message" }),
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves single-agent dispatch when no broadcast config", async () => {
     const cfg: ClawdbotConfig = {
       channels: {

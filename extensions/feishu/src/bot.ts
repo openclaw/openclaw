@@ -1049,7 +1049,12 @@ export async function handleFeishuMessage(params: {
       groupConfig,
     }));
 
-    if (requireMention && !ctx.mentionedBot) {
+    const firstMessageInTopicTrigger =
+      groupConfig?.firstMessageInTopicTrigger ?? feishuCfg?.firstMessageInTopicTrigger ?? false;
+    const isFirstMessageInTopic = !ctx.rootId && !ctx.parentId;
+    const allowWithoutMention = firstMessageInTopicTrigger && isFirstMessageInTopic;
+
+    if (requireMention && !ctx.mentionedBot && !allowWithoutMention) {
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
       // Record to pending history for non-broadcast groups only. For broadcast groups,
       // the mentioned handler's broadcast dispatch writes the turn directly into all
@@ -1069,6 +1074,11 @@ export async function handleFeishuMessage(params: {
         });
       }
       return;
+    }
+    if (requireMention && !ctx.mentionedBot && allowWithoutMention) {
+      log(
+        `feishu[${account.accountId}]: first topic message trigger enabled for group ${ctx.chatId}`,
+      );
     }
   } else {
   }
