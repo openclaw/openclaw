@@ -24,6 +24,9 @@ const normalizeProvider = (value?: string | null) => value?.trim().toLowerCase()
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
+const resolveInboundSenderId = (ctx: MsgContext) =>
+  ctx.SenderId ?? ctx.SenderE164 ?? ctx.SenderUsername ?? ctx.From ?? "";
+
 function resolveInboundTextBody(ctx: MsgContext): string {
   const candidates = [ctx.BodyForCommands, ctx.CommandBody, ctx.RawBody, ctx.Body];
   for (const candidate of candidates) {
@@ -103,6 +106,7 @@ export function shouldSkipDuplicateInbound(
   }
   const sessionKey = ctx.SessionKey?.trim() ?? "";
   const accountId = ctx.AccountId?.trim() ?? "";
+  const senderId = resolveInboundSenderId(ctx).trim();
   const threadId =
     ctx.MessageThreadId !== undefined && ctx.MessageThreadId !== null
       ? String(ctx.MessageThreadId)
@@ -115,7 +119,7 @@ export function shouldSkipDuplicateInbound(
     return false;
   }
 
-  const heartbeatKey = [provider, accountId, sessionKey, peerId, threadId, dedupeBody]
+  const heartbeatKey = [provider, accountId, sessionKey, peerId, senderId, threadId, dedupeBody]
     .filter(Boolean)
     .join("|");
   const heartbeatCache = opts?.heartbeatCache ?? heartbeatPollDedupeCache;

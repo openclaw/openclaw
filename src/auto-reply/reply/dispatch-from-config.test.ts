@@ -1557,6 +1557,48 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(2);
   });
 
+  it("does not dedupe heartbeat polls across different senders in the same session", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    const firstCtx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:group:12345",
+      SessionKey: "agent:main:main",
+      From: "telegram:user:111",
+      MessageSid: "msg-1",
+      CommandBody: `${HEARTBEAT_PROMPT}\nCurrent time: 2026-03-03 12:00 (Asia/Taipei)`,
+    });
+    const secondCtx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:group:12345",
+      SessionKey: "agent:main:main",
+      From: "telegram:user:222",
+      MessageSid: "msg-2",
+      CommandBody: `${HEARTBEAT_PROMPT}\nCurrent time: 2026-03-03 12:01 (Asia/Taipei)`,
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: firstCtx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+    await dispatchReplyFromConfig({
+      ctx: secondCtx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(2);
+  });
+
   it("emits message_received hook with originating channel metadata", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockReturnValue(true);
