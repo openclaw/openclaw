@@ -36,6 +36,24 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "startup-connect-grace" });
   });
 
+  it("treats active runs as busy even when disconnected", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        activeRuns: 1,
+      },
+      {
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
+  });
+
   it("flags stale sockets when no events arrive beyond threshold", () => {
     const evaluation = evaluateChannelHealth(
       {
