@@ -139,7 +139,9 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  const allowBots = params.discordConfig?.allowBots ?? false;
+  const allowBotsSetting = params.discordConfig?.allowBots;
+  const allowBotsMode =
+    allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting === true ? "all" : "off";
   if (params.botUserId && author.id === params.botUserId) {
     // Always ignore own messages to prevent self-reply loops
     return null;
@@ -166,7 +168,7 @@ export async function preflightDiscordMessage(
   });
 
   if (author.bot) {
-    if (!allowBots && !sender.isPluralKit) {
+    if (allowBotsMode === "off" && !sender.isPluralKit) {
       logVerbose("discord: drop bot message (allowBots=false)");
       return null;
     }
@@ -652,6 +654,15 @@ export async function preflightDiscordMessage(
         limit: params.historyLimit,
         entry: historyEntry ?? null,
       });
+      return null;
+    }
+  }
+
+  if (author.bot && !sender.isPluralKit && allowBotsMode === "mentions") {
+    const botMentioned = isDirectMessage || wasMentioned || implicitMention;
+    if (!botMentioned) {
+      logDebug(`[discord-preflight] drop: bot message missing mention (allowBots=mentions)`);
+      logVerbose("discord: drop bot message (allowBots=mentions, missing mention)");
       return null;
     }
   }
