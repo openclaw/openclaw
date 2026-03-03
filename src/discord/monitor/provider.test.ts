@@ -450,6 +450,48 @@ describe("monitorDiscordProvider", () => {
     expect(commandNames).toContain("cron_jobs");
   });
 
+  it("normalizes plugin command names to lowercase before Discord registration", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    getPluginCommandSpecsMock.mockReturnValue([
+      { name: "Cron_Jobs", description: "List cron jobs", acceptsArgs: false },
+    ]);
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const commandNames = (createDiscordNativeCommandMock.mock.calls as Array<unknown[]>)
+      .map((call) => (call[0] as { command?: { name?: string } } | undefined)?.command?.name)
+      .filter((value): value is string => typeof value === "string");
+    expect(commandNames).toContain("cron_jobs");
+    expect(commandNames).not.toContain("Cron_Jobs");
+  });
+
+  it("skips invalid plugin command specs for Discord deploy and reports runtime errors", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    const runtime = baseRuntime();
+    getPluginCommandSpecsMock.mockReturnValue([
+      { name: "bad name", description: "desc", acceptsArgs: false },
+      { name: "valid_name", description: "x".repeat(101), acceptsArgs: false },
+      { name: "ok_name", description: "ok desc", acceptsArgs: false },
+    ]);
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime,
+    });
+
+    const commandNames = (createDiscordNativeCommandMock.mock.calls as Array<unknown[]>)
+      .map((call) => (call[0] as { command?: { name?: string } } | undefined)?.command?.name)
+      .filter((value): value is string => typeof value === "string");
+    expect(commandNames).toContain("cmd");
+    expect(commandNames).toContain("ok_name");
+    expect(commandNames).not.toContain("bad name");
+    expect(commandNames).not.toContain("valid_name");
+    expect(runtime.error).toHaveBeenCalled();
+  });
+
   it("reports connected status on startup and shutdown", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
     const setStatus = vi.fn();

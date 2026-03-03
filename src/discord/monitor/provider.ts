@@ -144,6 +144,9 @@ function dedupeSkillCommandsForDiscord(
   return deduped;
 }
 
+const DISCORD_SLASH_COMMAND_NAME_RE = /^[a-z0-9_-]{1,32}$/;
+const DISCORD_SLASH_COMMAND_DESCRIPTION_MAX = 100;
+
 function appendPluginCommandSpecs(params: {
   commandSpecs: NativeCommandSpec[];
   runtime: RuntimeEnv;
@@ -154,7 +157,27 @@ function appendPluginCommandSpecs(params: {
   );
   for (const pluginCommand of getPluginCommandSpecs()) {
     const normalizedName = pluginCommand.name.trim().toLowerCase();
+    const normalizedDescription = pluginCommand.description.trim();
     if (!normalizedName) {
+      continue;
+    }
+    if (!DISCORD_SLASH_COMMAND_NAME_RE.test(normalizedName)) {
+      params.runtime.error?.(
+        danger(
+          `discord: plugin command "${pluginCommand.name}" is invalid for slash deploy. Skipping.`,
+        ),
+      );
+      continue;
+    }
+    if (
+      normalizedDescription.length < 1 ||
+      normalizedDescription.length > DISCORD_SLASH_COMMAND_DESCRIPTION_MAX
+    ) {
+      params.runtime.error?.(
+        danger(
+          `discord: plugin command "/${normalizedName}" has an invalid description length for slash deploy. Skipping.`,
+        ),
+      );
       continue;
     }
     if (existingNames.has(normalizedName)) {
@@ -167,9 +190,9 @@ function appendPluginCommandSpecs(params: {
     }
     existingNames.add(normalizedName);
     merged.push({
-      name: pluginCommand.name,
-      description: pluginCommand.description,
-      acceptsArgs: pluginCommand.acceptsArgs,
+      name: normalizedName,
+      description: normalizedDescription,
+      acceptsArgs: Boolean(pluginCommand.acceptsArgs),
     });
   }
   return merged;
