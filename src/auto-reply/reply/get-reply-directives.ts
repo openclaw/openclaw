@@ -88,7 +88,11 @@ export function shouldAutoEscalateToQwen7b(text: string): boolean {
   if (/\b(?:ticker|symbol)\s*[:=]?\s*\$?[a-z]{1,5}\b/i.test(normalized)) {
     return true;
   }
-  if (/\b(?:analyse|analyze|assess|chart|price|setup|backtest|scan)\s+\$?[a-z]{1,5}\b/i.test(normalized)) {
+  if (
+    /\b(?:analyse|analyze|assess|chart|price|setup|backtest|scan)\s+\$?[a-z]{1,5}\b/i.test(
+      normalized,
+    )
+  ) {
     return true;
   }
 
@@ -118,7 +122,10 @@ function hasOllamaModelFallback(cfg: OpenClawConfig, modelRef: string): boolean 
 function resolveOllamaAutoEscalationTarget(cfg: OpenClawConfig): string | null {
   const preferredTargets = ["qwen3:14b", "qwen2.5:7b"] as const;
   for (const modelId of preferredTargets) {
-    if (hasOllamaModelConfigured(cfg, modelId) || hasOllamaModelFallback(cfg, `ollama/${modelId}`)) {
+    if (
+      hasOllamaModelConfigured(cfg, modelId) ||
+      hasOllamaModelFallback(cfg, `ollama/${modelId}`)
+    ) {
       return modelId;
     }
   }

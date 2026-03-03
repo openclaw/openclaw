@@ -18,4 +18,3 @@ Use this skill for the **research layer** only.
 
 - `python3 /home/node/.openclaw/workspace/skills/trading-trinity-safe/scripts/run_trinity_backtest.py --csv <csv> --symbol <symbol> --out-dir <dir>`
 - Read `signals.csv` from the generated artifacts as research output.
-

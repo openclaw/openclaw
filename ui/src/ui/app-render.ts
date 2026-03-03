@@ -83,9 +83,9 @@ import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderInstances } from "./views/instances.ts";
 import { renderLogs } from "./views/logs.ts";
+import { renderMissionControl } from "./views/mission-control.ts";
 import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
-import { renderMissionControl } from "./views/mission-control.ts";
 import { renderSessions } from "./views/sessions.ts";
 import { renderSkills } from "./views/skills.ts";
 
@@ -229,7 +229,7 @@ export function renderApp(state: AppViewState) {
   const missionModeEnabled = state.tab === "overview" && state.settings.overviewMissionMode;
 
   const refreshMissionControl = async () => {
-    await loadOverview(state);
+    await state.loadOverview();
     await Promise.all([
       loadPresence(state),
       loadSessions(state),

@@ -467,13 +467,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       const sourceDevice = (envelope as Record<string, unknown>).sourceDevice;
       if (sourceDevice !== 1) return null;
       const sm = (
-        envelope.syncMessage as {
-          sentMessage?: {
-            message?: string | null;
-            destination?: string | null;
-            destinationNumber?: string | null;
-          };
-        } | null | undefined
+        envelope.syncMessage as
+          | {
+              sentMessage?: {
+                message?: string | null;
+                destination?: string | null;
+                destinationNumber?: string | null;
+              };
+            }
+          | null
+          | undefined
       )?.sentMessage;
       if (!sm?.message) return null;
       const dest = sm.destinationNumber ?? sm.destination;

@@ -27,4 +27,3 @@ This blueprint models execution controls inspired by LEAN-style architecture.
 - Explicit max turnover per bar.
 - Hard block for NaN/inf values.
 - Text and CSV artifacts for auditability.
-

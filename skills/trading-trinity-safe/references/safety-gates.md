@@ -36,4 +36,3 @@ Live mode remains blocked until:
 - explicit operator approval,
 - sentinel approval flag,
 - separate deployment checklist completion.
-

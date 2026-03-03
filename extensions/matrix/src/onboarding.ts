@@ -3,8 +3,11 @@ import {
   addWildcardAllowFrom,
   formatResolvedUnresolvedNote,
   formatDocsLink,
+  hasConfiguredSecretInput,
   mergeAllowFromEntries,
+  promptSingleChannelSecretInput,
   promptChannelAccessConfig,
+  type SecretInput,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
@@ -266,22 +269,24 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
     ).trim();
 
     let accessToken = existing.accessToken ?? "";
-    let password = existing.password ?? "";
+    let password: SecretInput | undefined = existing.password;
     let userId = existing.userId ?? "";
+    const existingPasswordConfigured = hasConfiguredSecretInput(existing.password);
+    const passwordConfigured = () => hasConfiguredSecretInput(password);
 
-    if (accessToken || password) {
+    if (accessToken || passwordConfigured()) {
       const keep = await prompter.confirm({
         message: "Matrix credentials already configured. Keep them?",
         initialValue: true,
       });
       if (!keep) {
         accessToken = "";
-        password = "";
+        password = undefined;
         userId = "";
       }
     }
 
-    if (!accessToken && !password) {
+    if (!accessToken && !passwordConfigured()) {
       // Ask auth method FIRST before asking for user ID
       const authMode = await prompter.select({
         message: "Matrix auth method",
@@ -322,12 +327,25 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
             },
           }),
         ).trim();
-        password = String(
-          await prompter.text({
-            message: "Matrix password",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
+        const passwordResult = await promptSingleChannelSecretInput({
+          cfg: next,
+          prompter,
+          providerHint: "matrix",
+          credentialLabel: "password",
+          accountConfigured: Boolean(existingPasswordConfigured),
+          canUseEnv: Boolean(envPassword?.trim()) && !existingPasswordConfigured,
+          hasConfigToken: existingPasswordConfigured,
+          envPrompt: "MATRIX_PASSWORD detected. Use env var?",
+          keepPrompt: "Matrix password already configured. Keep it?",
+          inputPrompt: "Matrix password",
+          preferredEnvVar: "MATRIX_PASSWORD",
+        });
+        if (passwordResult.action === "set") {
+          password = passwordResult.value;
+        }
+        if (passwordResult.action === "use-env") {
+          password = undefined;
+        }
       }
     }
 
@@ -354,7 +372,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
           homeserver,
           userId: userId || undefined,
           accessToken: accessToken || undefined,
-          password: password || undefined,
+          password: password,
           deviceName: deviceName || undefined,
           encryption: enableEncryption || undefined,
         },

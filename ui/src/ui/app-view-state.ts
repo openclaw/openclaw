@@ -1,11 +1,6 @@
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { VoiceboxProfile } from "./chat/voicebox.ts";
-import type {
-  CronFieldErrors,
-  CronJobsLastStatusFilter,
-  CronJobsScheduleKindFilter,
-} from "./controllers/cron.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
@@ -202,39 +197,6 @@ export type AppViewState = {
   usageLogFilterTools: string[];
   usageLogFilterHasTools: boolean;
   usageLogFilterQuery: string;
-  cronLoading: boolean;
-  cronJobsLoadingMore: boolean;
-  cronJobs: CronJob[];
-  cronJobsTotal: number;
-  cronJobsHasMore: boolean;
-  cronJobsNextOffset: number | null;
-  cronJobsLimit: number;
-  cronJobsQuery: string;
-  cronJobsEnabledFilter: CronJobsEnabledFilter;
-  cronJobsScheduleKindFilter: CronJobsScheduleKindFilter;
-  cronJobsLastStatusFilter: CronJobsLastStatusFilter;
-  cronJobsSortBy: CronJobsSortBy;
-  cronJobsSortDir: CronSortDir;
-  cronStatus: CronStatus | null;
-  cronError: string | null;
-  cronForm: CronFormState;
-  cronFieldErrors: CronFieldErrors;
-  cronEditingJobId: string | null;
-  cronRunsJobId: string | null;
-  cronRunsLoadingMore: boolean;
-  cronRuns: CronRunLogEntry[];
-  cronRunsTotal: number;
-  cronRunsHasMore: boolean;
-  cronRunsNextOffset: number | null;
-  cronRunsLimit: number;
-  cronRunsScope: CronRunScope;
-  cronRunsStatuses: CronRunsStatusValue[];
-  cronRunsDeliveryStatuses: CronDeliveryStatus[];
-  cronRunsStatusFilter: CronRunsStatusFilter;
-  cronRunsQuery: string;
-  cronRunsSortDir: CronSortDir;
-  cronModelSuggestions: string[];
-  cronBusy: boolean;
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
   skillsError: string | null;
@@ -331,7 +293,6 @@ export type AppViewState = {
   handleOpenSidebar: (content: string) => void;
   handleCloseSidebar: () => void;
   handleSplitRatioChange: (ratio: number) => void;
-};
 } & Pick<
   CronState,
   | "cronLoading"

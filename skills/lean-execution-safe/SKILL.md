@@ -20,4 +20,3 @@ Use this skill for the **execution simulation layer** only.
   - `trades.csv`
   - `equity.csv`
   - `metrics.json`
-

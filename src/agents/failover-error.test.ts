@@ -48,6 +48,22 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("timeout");
   });
 
+  it("infers timeout from connection/network error messages", () => {
+    expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "Network error: ECONNREFUSED" })).toBe(
+      "timeout",
+    );
+    expect(
+      resolveFailoverReasonFromError({
+        message: "dial tcp: lookup api.example.com: no such host (ENOTFOUND)",
+      }),
+    ).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "temporary dns failure EAI_AGAIN" })).toBe(
+      "timeout",
+    );
+  });
+
   it("treats AbortError reason=abort as timeout", () => {
     const err = Object.assign(new Error("aborted"), {
       name: "AbortError",

@@ -8,9 +8,21 @@
   overflow: hidden;
   border-color: color-mix(in srgb, var(--accent) 24%, transparent);
   background:
-    radial-gradient(circle at 86% 4%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 52%),
-    radial-gradient(circle at 6% 100%, color-mix(in srgb, var(--ok) 14%, transparent), transparent 46%),
-    linear-gradient(140deg, color-mix(in srgb, var(--card) 86%, #031524), color-mix(in srgb, var(--card) 92%, #081f2f));
+    radial-gradient(
+      circle at 86% 4%,
+      color-mix(in srgb, var(--accent) 18%, transparent),
+      transparent 52%
+    ),
+    radial-gradient(
+      circle at 6% 100%,
+      color-mix(in srgb, var(--ok) 14%, transparent),
+      transparent 46%
+    ),
+    linear-gradient(
+      140deg,
+      color-mix(in srgb, var(--card) 86%, #031524),
+      color-mix(in srgb, var(--card) 92%, #081f2f)
+    );
 }
 
 .mission-hero__glow {
@@ -140,18 +152,10 @@
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
   border-radius: 16px;
   background:
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--accent) 8%, transparent) 1px,
-      transparent 1px
-    )
-    0 0 / 26px 26px,
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--accent) 8%, transparent) 1px,
-      transparent 1px
-    )
-    0 0 / 26px 26px,
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 8%, transparent) 1px, transparent 1px) 0
+      0 / 26px 26px,
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, transparent) 1px, transparent 1px)
+      0 0 / 26px 26px,
     color-mix(in srgb, var(--bg-elevated) 92%, #050f19);
 }
 

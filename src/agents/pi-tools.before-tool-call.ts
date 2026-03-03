@@ -14,14 +14,23 @@ import type { AnyAgentTool } from "./tools/common.js";
 export type HookContext = {
   agentId?: string;
   sessionKey?: string;
+  sessionId?: string;
   messageProvider?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  runId?: string;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
 
 const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
+
+function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
+  if (params.runId && params.runId.trim()) {
+    return `${params.runId}:${params.toolCallId}`;
+  }
+  return params.toolCallId;
+}
 
 // ── Lockdown helpers ──────────────────────────────────────────────────────────
 
@@ -300,7 +309,10 @@ export function wrapToolWithBeforeToolCallHook(
         throw new Error(outcome.reason);
       }
       if (toolCallId) {
-        adjustedParamsByToolCallId.set(toolCallId, outcome.params);
+        adjustedParamsByToolCallId.set(
+          buildAdjustedParamsKey({ runId: ctx?.runId, toolCallId }),
+          outcome.params,
+        );
         if (adjustedParamsByToolCallId.size > MAX_TRACKED_ADJUSTED_PARAMS) {
           const oldest = adjustedParamsByToolCallId.keys().next().value;
           if (oldest) {
@@ -343,14 +355,16 @@ export function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean
   return taggedTool[BEFORE_TOOL_CALL_WRAPPED] === true;
 }
 
-export function consumeAdjustedParamsForToolCall(toolCallId: string): unknown {
-  const params = adjustedParamsByToolCallId.get(toolCallId);
-  adjustedParamsByToolCallId.delete(toolCallId);
+export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  const params = adjustedParamsByToolCallId.get(key);
+  adjustedParamsByToolCallId.delete(key);
   return params;
 }
 
 export const __testing = {
   BEFORE_TOOL_CALL_WRAPPED,
+  buildAdjustedParamsKey,
   adjustedParamsByToolCallId,
   runBeforeToolCallHook,
   isPlainObject,

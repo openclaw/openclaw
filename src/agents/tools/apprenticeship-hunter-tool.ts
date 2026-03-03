@@ -325,7 +325,7 @@ function buildQueries(params: { area: string; radiusKm: number; sectors: string[
   const areaTargets = splitAreaTargets(normalizedArea);
   const broadUkArea = areaTargets.some((target) => isBroadUkArea(target));
   const warwickshireArea = areaTargets.some((target) => isWarwickshireArea(target));
-  const areaQuery = broadUkArea ? "UK" : areaTargets[0] ?? normalizedArea;
+  const areaQuery = broadUkArea ? "UK" : (areaTargets[0] ?? normalizedArea);
   const queries = new Set<string>();
   const sectors = expandSectorQueries(params.sectors);
   const areaTokens = broadUkArea

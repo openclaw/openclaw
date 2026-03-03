@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.3.2",
+  "version": "2026.3.3",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -173,7 +173,6 @@
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.5",
-    "@larksuiteoapi/node-sdk": "^1.59.0",
     "@line/bot-sdk": "^10.6.0",
     "@lydell/node-pty": "1.2.0-beta.3",
     "@mariozechner/pi-agent-core": "0.55.3",
@@ -197,7 +196,6 @@
     "express": "^5.2.1",
     "file-type": "^21.3.0",
     "gaxios": "7.1.3",
-    "google-auth-library": "10.6.1",
     "grammy": "^1.41.0",
     "https-proxy-agent": "^7.0.6",
     "ipaddr.js": "^2.3.0",
@@ -248,9 +246,6 @@
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.16.2"
-  },
-  "optionalDependencies": {
-    "@discordjs/opus": "^0.10.0"
   },
   "engines": {
     "node": ">=22.12.0"

@@ -1,7 +1,7 @@
 import { html } from "lit";
-import { formatDurationHuman, formatRelativeTimestamp } from "../format.ts";
-import { normalizeMessage } from "../chat/message-normalizer.ts";
 import type { EventLogEntry } from "../app-events.ts";
+import { normalizeMessage } from "../chat/message-normalizer.ts";
+import { formatDurationHuman, formatRelativeTimestamp } from "../format.ts";
 import type {
   AgentsListResult,
   ChannelsStatusSnapshot,
@@ -14,7 +14,7 @@ import type {
 
 export type MissionControlProps = {
   connected: boolean;
-  hello: { snapshot?: Record<string, unknown> } | null;
+  hello: { snapshot?: unknown } | null;
   lastError: string | null;
   presenceEntries: PresenceEntry[];
   sessionsResult: SessionsListResult | null;
@@ -195,9 +195,11 @@ function stateLabel(raw: string): string {
   return state;
 }
 
-function buildToolTraceRows(
-  toolMessages: unknown[],
-): { rows: TraceRow[]; activeTools: number; spawns: SpawnEdge[] } {
+function buildToolTraceRows(toolMessages: unknown[]): {
+  rows: TraceRow[];
+  activeTools: number;
+  spawns: SpawnEdge[];
+} {
   const rows: TraceRow[] = [];
   let activeTools = 0;
   const spawns: SpawnEdge[] = [];
@@ -507,7 +509,7 @@ function buildSubagentTree(
     });
   }
 
-  const reportCount = props.chatMessages.reduce((count, raw) => {
+  const reportCount = props.chatMessages.reduce<number>((count, raw) => {
     const msg = normalizeMessage(raw);
     const text = collectTextContent(msg.content);
     if (!text) {
@@ -746,7 +748,9 @@ export function renderMissionControl(props: MissionControlProps) {
           ${
             props.lastError
               ? html`<div class="callout danger mission-callout">${props.lastError}</div>`
-              : html`<div class="mission-note">No blocking gateway errors in the latest snapshot.</div>`
+              : html`
+                  <div class="mission-note">No blocking gateway errors in the latest snapshot.</div>
+                `
           }
         </section>
 
@@ -782,7 +786,9 @@ export function renderMissionControl(props: MissionControlProps) {
                       </article>
                     `,
                   )
-                : html`<div class="mission-note">No recent execution events yet. Run a task to see live flow.</div>`
+                : html`
+                    <div class="mission-note">No recent execution events yet. Run a task to see live flow.</div>
+                  `
             }
           </div>
         </section>
@@ -809,7 +815,9 @@ export function renderMissionControl(props: MissionControlProps) {
                       </article>
                     `,
                   )
-                : html`<div class="mission-note">No spawned subagents yet in this run.</div>`
+                : html`
+                    <div class="mission-note">No spawned subagents yet in this run.</div>
+                  `
             }
           </div>
           <div class="mission-note">Subagent reports delivered: ${subagentTree.reportCount}</div>
@@ -846,7 +854,9 @@ export function renderMissionControl(props: MissionControlProps) {
             ${
               agents.length > 0
                 ? agents.slice(0, 12).map((agent) => renderAgentChip(agent, defaultAgentId))
-                : html`<div class="muted">No agents reported.</div>`
+                : html`
+                    <div class="muted">No agents reported.</div>
+                  `
             }
           </div>
         </section>

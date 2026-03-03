@@ -33,6 +33,7 @@ import { sendMessageMatrix } from "./matrix/send.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import { matrixOutbound } from "./outbound.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import type { CoreConfig } from "./types.js";
 
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
@@ -326,7 +327,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         return "Matrix requires --homeserver";
       }
       const accessToken = input.accessToken?.trim();
-      const password = input.password?.trim();
+      const password = normalizeSecretInputString(input.password);
       const userId = input.userId?.trim();
       if (!accessToken && !password) {
         return "Matrix requires --access-token or --password";
@@ -364,7 +365,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         homeserver: input.homeserver?.trim(),
         userId: input.userId?.trim(),
         accessToken: input.accessToken?.trim(),
-        password: input.password?.trim(),
+        password: normalizeSecretInputString(input.password),
         deviceName: input.deviceName?.trim(),
         initialSyncLimit: input.initialSyncLimit,
       });

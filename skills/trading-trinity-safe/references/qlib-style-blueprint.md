@@ -24,4 +24,3 @@ This blueprint extracts reusable design patterns from Qlib-style quant research 
 - Deterministic feature engineering in pure Python.
 - Explicit clipping and finite-value checks for all factors.
 - No network calls inside research runtime.
-

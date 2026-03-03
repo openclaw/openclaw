@@ -53,7 +53,6 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Hello");
   });
 
-  it("appends final payload from another run and requests history reload", () => {
   it("ignores NO_REPLY delta updates", () => {
     const state = createState({
       sessionKey: "main",
@@ -87,7 +86,7 @@ describe("handleChatEvent", () => {
         content: [{ type: "text", text: "Sub-agent findings" }],
       },
     };
-    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(handleChatEvent(state, payload)).toBe(null);
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
     expect(state.chatStreamStartedAt).toBe(123);

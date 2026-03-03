@@ -206,7 +206,10 @@ function resolveActiveErrorContext(params: {
   };
 }
 
-function resolveBillingMaxTokensRetry(rawError: string, currentMaxTokens?: number): number | undefined {
+function resolveBillingMaxTokensRetry(
+  rawError: string,
+  currentMaxTokens?: number,
+): number | undefined {
   const hint = parseBillingAffordableMaxTokens(rawError);
   if (!hint) {
     if (!isBillingErrorMessage(rawError)) {
@@ -1355,7 +1358,11 @@ export async function runEmbeddedPiAgent(
               aborted,
               systemPromptReport: attempt.systemPromptReport,
               // Handle client tool calls (OpenResponses hosted tools)
-              stopReason: attempt.clientToolCall ? "tool_calls" : undefined,
+              // Propagate the LLM stop reason so callers (lifecycle events,
+              // ACP bridge) can distinguish end_turn from max_tokens.
+              stopReason: attempt.clientToolCall
+                ? "tool_calls"
+                : (lastAssistant?.stopReason as string | undefined),
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {

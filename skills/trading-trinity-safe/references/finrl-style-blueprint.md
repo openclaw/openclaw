@@ -25,4 +25,3 @@ This blueprint captures policy-layer patterns inspired by FinRL workflows.
 - Throttles are hard constraints, not soft suggestions.
 - Policy cannot bypass max-position cap.
 - Trade suppression band reduces churn from low-confidence signal noise.
-

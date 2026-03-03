@@ -312,7 +312,7 @@ export function handleControlUiHttpRequest(
   if (!basePath) {
     if (pathname === "/ui" || pathname.startsWith("/ui/")) {
       applyControlUiSecurityHeaders(res, req);
-      respondNotFound(res);
+      respondControlUiNotFound(res);
       return true;
     }
     if (pathname === "/api" || pathname.startsWith("/api/")) {
