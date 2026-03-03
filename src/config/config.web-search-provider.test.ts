@@ -75,6 +75,19 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("rejects exa config with invalid search type", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "exa",
+        providerConfig: {
+          type: "nueral",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(false);
+  });
 });
 
 describe("web search provider auto-detection", () => {

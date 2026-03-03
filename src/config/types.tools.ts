@@ -492,7 +492,7 @@ export type ToolsConfig = {
         /** Default number of results from Exa (clamped to 1-10 by the tool schema). */
         numResults?: number;
         /** Exa search type: "auto" (default), "neural", or "keyword". */
-        type?: string;
+        type?: "auto" | "neural" | "keyword";
         /** Include text content snippets in results (default: false). */
         contents?: boolean;
       };
