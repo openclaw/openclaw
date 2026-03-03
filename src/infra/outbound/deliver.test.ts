@@ -918,7 +918,57 @@ describe("deliverOutboundPayloads", () => {
         text: "caption",
       }),
     );
+    expect(logMocks.warn).toHaveBeenCalledWith(
+      "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
+      expect.objectContaining({
+        channel: "matrix",
+        mediaCount: 1,
+      }),
+    );
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
+  });
+
+  it("falls back to one sendText call for multi-media payloads when sendMedia is omitted", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-2" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [
+        {
+          text: "caption",
+          mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+        },
+      ],
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "caption",
+      }),
+    );
+    expect(logMocks.warn).toHaveBeenCalledWith(
+      "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
+      expect.objectContaining({
+        channel: "matrix",
+        mediaCount: 2,
+      }),
+    );
+    expect(results).toEqual([{ channel: "matrix", messageId: "mx-2" }]);
   });
 
   it("emits message_sent failure when delivery errors", async () => {
