@@ -1,42 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { createTestDraftStream } from "./draft-stream.test-helpers.js";
 import { createLaneTextDeliverer, type DraftLaneState, type LaneName } from "./lane-delivery.js";
-
-type MockStreamState = {
-  stream: NonNullable<DraftLaneState["stream"]>;
-  setMessageId: (value: number | undefined) => void;
-};
-
-function createMockStream(initialMessageId?: number): MockStreamState {
-  let messageId = initialMessageId;
-  const stream = {
-    update: vi.fn(),
-    flush: vi.fn().mockResolvedValue(undefined),
-    messageId: vi.fn().mockImplementation(() => messageId),
-    clear: vi.fn().mockResolvedValue(undefined),
-    stop: vi.fn().mockResolvedValue(undefined),
-    forceNewMessage: vi.fn(),
-    previewMode: vi.fn().mockReturnValue("message"),
-    previewRevision: vi.fn().mockReturnValue(0),
-  } as unknown as NonNullable<DraftLaneState["stream"]>;
-  return {
-    stream,
-    setMessageId: (value) => {
-      messageId = value;
-    },
-  };
-}
 
 function createHarness(params?: {
   answerMessageId?: number;
   draftMaxChars?: number;
   answerMessageIdAfterStop?: number;
 }) {
-  const answer = createMockStream(params?.answerMessageId);
-  const reasoning = createMockStream();
+  const answer = createTestDraftStream({ messageId: params?.answerMessageId });
+  const reasoning = createTestDraftStream();
   const lanes: Record<LaneName, DraftLaneState> = {
-    answer: { stream: answer.stream, lastPartialText: "", hasStreamedMessage: false },
-    reasoning: { stream: reasoning.stream, lastPartialText: "", hasStreamedMessage: false },
+    answer: {
+      stream: answer as DraftLaneState["stream"],
+      lastPartialText: "",
+      hasStreamedMessage: false,
+    },
+    reasoning: {
+      stream: reasoning as DraftLaneState["stream"],
+      lastPartialText: "",
+      hasStreamedMessage: false,
+    },
   };
   const sendPayload = vi.fn().mockResolvedValue(true);
   const flushDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
@@ -73,7 +57,10 @@ function createHarness(params?: {
   return {
     deliverLaneText,
     lanes,
-    answer,
+    answer: {
+      stream: answer,
+      setMessageId: answer.setMessageId,
+    },
     sendPayload,
     flushDraftLane,
     stopDraftLane,
