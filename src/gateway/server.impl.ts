@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -55,6 +56,7 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
+  type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
@@ -324,6 +326,12 @@ export async function startGatewayServer(
         throw err;
       }
     });
+  const isSameSecretsSnapshot = (
+    left: PreparedSecretsRuntimeSnapshot,
+    right: PreparedSecretsRuntimeSnapshot,
+  ): boolean =>
+    isDeepStrictEqual(left.sourceConfig, right.sourceConfig) &&
+    isDeepStrictEqual(left.config, right.config);
 
   // Fail fast before startup if required refs are unresolved.
   let cfgAtStart: OpenClawConfig;
@@ -884,11 +892,20 @@ export async function startGatewayServer(
             try {
               await applyHotReload(plan, prepared.config);
             } catch (err) {
-              if (previousSnapshot) {
-                activateSecretsRuntimeSnapshot(previousSnapshot);
-              } else {
-                clearSecretsRuntimeSnapshot();
-              }
+              await runWithSecretsActivationLock(async () => {
+                const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+                if (activeSnapshot && !isSameSecretsSnapshot(activeSnapshot, prepared)) {
+                  logReload.warn(
+                    "gateway: skipping hot-reload snapshot rollback because runtime snapshot advanced",
+                  );
+                  return;
+                }
+                if (previousSnapshot) {
+                  activateSecretsRuntimeSnapshot(previousSnapshot);
+                } else {
+                  clearSecretsRuntimeSnapshot();
+                }
+              });
               throw err;
             }
           },
