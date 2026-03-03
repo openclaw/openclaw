@@ -74,9 +74,15 @@ export async function inspectGatewayRestart(params: {
       : [];
   const running = runtime.status === "running";
   const runtimePid = runtime.pid;
+  // When the port is busy but no listeners are available (e.g. lsof not installed),
+  // optimistically assume the running service owns the port since we cannot
+  // distinguish ownership without process enumeration tools.
   const ownsPort =
     runtimePid != null
-      ? portUsage.listeners.some((listener) => listenerOwnedByRuntimePid({ listener, runtimePid }))
+      ? portUsage.listeners.some((listener) =>
+          listenerOwnedByRuntimePid({ listener, runtimePid }),
+        ) ||
+        (portUsage.status === "busy" && portUsage.listeners.length === 0)
       : gatewayListeners.length > 0 ||
         (portUsage.status === "busy" && portUsage.listeners.length === 0);
   const healthy = running && ownsPort;

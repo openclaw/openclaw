@@ -123,6 +123,26 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.staleGatewayPids).toEqual([]);
   });
 
+  it("treats port as owned when runtime pid is known but listeners are empty (e.g. lsof missing)", async () => {
+    const service = {
+      readRuntime: vi.fn(async () => ({ status: "running", pid: 40977 })),
+    } as unknown as GatewayService;
+
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [],
+      hints: [],
+      errors: ["Error: spawn lsof ENOENT"],
+    });
+
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const snapshot = await inspectGatewayRestart({ service, port: 18789 });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.staleGatewayPids).toEqual([]);
+  });
+
   it("does not treat known non-gateway listeners as stale in fallback mode", async () => {
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     classifyPortListener.mockReturnValue("ssh");
