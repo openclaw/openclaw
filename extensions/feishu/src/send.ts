@@ -216,7 +216,8 @@ function parseInteractiveCardContent(parsed: unknown): string {
 
   // Legacy format: top-level "title" string (not inside a header object)
   if (typeof card.title === "string" && card.title) {
-    texts.push(sanitizeCardText(card.title));
+    const t = sanitizeCardText(card.title);
+    if (t) texts.push(t.slice(0, CARD_MAX_OUTPUT_CHARS));
   }
 
   // Extract header title + subtitle if present (sit outside the elements array)
@@ -226,7 +227,10 @@ function parseInteractiveCardContent(parsed: unknown): string {
     // subtitle: same shape as title — {tag: "plain_text"|"lark_md", content: "..."}
     if (h.subtitle && typeof h.subtitle === "object") {
       const c = (h.subtitle as Record<string, unknown>).content;
-      if (typeof c === "string" && c.trim()) texts.push(sanitizeCardText(c.trim()));
+      if (typeof c === "string" && c.trim()) {
+        const t = sanitizeCardText(c.trim());
+        if (t) texts.push(t.slice(0, CARD_MAX_OUTPUT_CHARS));
+      }
     }
   }
 
