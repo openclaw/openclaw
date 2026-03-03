@@ -91,11 +91,18 @@ function getExistingFirecrawlKey(cfg: OpenClawConfig): string | undefined {
   return undefined;
 }
 
+const FIRECRAWL_TOOL_NAMES = ["firecrawl_search", "firecrawl_scrape", "browser"];
+
 function applyFirecrawlKey(cfg: OpenClawConfig, apiKey: string): OpenClawConfig {
+  // Merge firecrawl tools into the existing alsoAllow list (deduped)
+  const existing = cfg.tools?.alsoAllow ?? [];
+  const merged = [...new Set([...existing, ...FIRECRAWL_TOOL_NAMES])];
+
   return {
     ...cfg,
     tools: {
       ...cfg.tools,
+      alsoAllow: merged,
       web: {
         ...cfg.tools?.web,
         fetch: {
@@ -213,7 +220,7 @@ async function handleBrowserAuth(
     const codeVerifier = generateCodeVerifier();
     const codeChallenge = await generateCodeChallenge(codeVerifier);
 
-    const authUrl = `${FIRECRAWL_AUTH_URL_BASE}?code_challenge=${codeChallenge}#session_id=${sessionId}`;
+    const authUrl = `${FIRECRAWL_AUTH_URL_BASE}?code_challenge=${codeChallenge}&source=openclaw#session_id=${sessionId}`;
 
     const isRemote = isRemoteEnvironment();
     if (isRemote) {
