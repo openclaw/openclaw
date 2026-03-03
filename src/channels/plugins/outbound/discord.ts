@@ -83,7 +83,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
   resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
   sendPayload: async (ctx) =>
     await sendTextMediaPayload({ channel: "discord", ctx, adapter: discordOutbound }),
-  sendText: async ({ to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
+  sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
     if (!silent) {
       const webhookResult = await maybeSendDiscordWebhookText({
         text,
@@ -103,10 +103,12 @@ export const discordOutbound: ChannelOutboundAdapter = {
       replyTo: replyToId ?? undefined,
       accountId: accountId ?? undefined,
       silent: silent ?? undefined,
+      cfg,
     });
     return { channel: "discord", ...result };
   },
   sendMedia: async ({
+    cfg,
     to,
     text,
     mediaUrl,
@@ -126,14 +128,16 @@ export const discordOutbound: ChannelOutboundAdapter = {
       replyTo: replyToId ?? undefined,
       accountId: accountId ?? undefined,
       silent: silent ?? undefined,
+      cfg,
     });
     return { channel: "discord", ...result };
   },
-  sendPoll: async ({ to, poll, accountId, threadId, silent }) => {
+  sendPoll: async ({ cfg, to, poll, accountId, threadId, silent }) => {
     const target = resolveDiscordOutboundTarget({ to, threadId });
     return await sendPollDiscord(target, poll, {
       accountId: accountId ?? undefined,
       silent: silent ?? undefined,
+      cfg,
     });
   },
 };

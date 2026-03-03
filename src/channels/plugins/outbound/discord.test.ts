@@ -126,6 +126,43 @@ describe("discordOutbound", () => {
     hoisted.getThreadBindingManagerMock.mockClear().mockReturnValue(null);
   });
 
+  it("passes cfg from context to sendMessageDiscord in sendText", async () => {
+    const cfg = {} as Record<string, unknown>;
+    await discordOutbound.sendText?.({
+      cfg,
+      to: "channel:123",
+      text: "hello",
+    });
+
+    const opts = hoisted.sendMessageDiscordMock.mock.calls[0][2];
+    expect(opts.cfg).toBe(cfg);
+  });
+
+  it("passes cfg from context to sendMessageDiscord in sendMedia", async () => {
+    const cfg = {} as Record<string, unknown>;
+    await discordOutbound.sendMedia?.({
+      cfg,
+      to: "channel:123",
+      text: "cap",
+      mediaUrl: "https://example.com/a.jpg",
+    });
+
+    const opts = hoisted.sendMessageDiscordMock.mock.calls[0][2];
+    expect(opts.cfg).toBe(cfg);
+  });
+
+  it("passes cfg from context to sendPollDiscord in sendPoll", async () => {
+    const cfg = {} as Record<string, unknown>;
+    await discordOutbound.sendPoll?.({
+      cfg,
+      to: "channel:123",
+      poll: { question: "Q?", options: ["a", "b"] },
+    });
+
+    const opts = hoisted.sendPollDiscordMock.mock.calls[0][2];
+    expect(opts.cfg).toBe(cfg);
+  });
+
   it("routes text sends to thread target when threadId is provided", async () => {
     const result = await discordOutbound.sendText?.({
       cfg: {},
