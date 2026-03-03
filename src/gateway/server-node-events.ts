@@ -10,7 +10,7 @@ import { buildOutboundSessionContext } from "../infra/outbound/session-context.j
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { registerApnsToken } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { normalizeMainKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseMessageWithAttachments } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
@@ -577,11 +577,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
       // keys should keep legacy unscoped behavior so enabled non-main heartbeat
       // agents still run when no explicit agent session is provided.
-      requestHeartbeatNow(
-        parseAgentSessionKey(sessionKey)
-          ? { reason: "exec-event", sessionKey }
-          : { reason: "exec-event" },
-      );
+      requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
       return;
     }
     case "push.apns.register": {

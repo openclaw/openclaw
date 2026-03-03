@@ -6,7 +6,7 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -241,9 +241,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   enqueueSystemEvent(summary, { sessionKey });
   requestHeartbeatNow(
-    parseAgentSessionKey(sessionKey)
-      ? { reason: `exec:${session.id}:exit`, sessionKey }
-      : { reason: `exec:${session.id}:exit` },
+    scopedHeartbeatWakeOptions(sessionKey, { reason: `exec:${session.id}:exit` }),
   );
 }
 
@@ -270,11 +268,7 @@ export function emitExecSystemEvent(
     return;
   }
   enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
-  requestHeartbeatNow(
-    parseAgentSessionKey(sessionKey)
-      ? { reason: "exec-event", sessionKey }
-      : { reason: "exec-event" },
-  );
+  requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
 }
 
 export async function runExecProcess(opts: {
