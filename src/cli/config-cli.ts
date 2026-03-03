@@ -1,9 +1,11 @@
+import fs from "node:fs";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
+import { CONFIG_BACKUP_COUNT } from "../config/backup-rotation.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
-import { danger, info } from "../globals.js";
+import { danger, info, success } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -324,6 +326,104 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
   }
 }
 
+
+export async function runConfigRestore(opts: {
+  backup?: string;
+  list?: boolean;
+  json?: boolean;
+  runtime?: RuntimeEnv;
+} = {}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    const snapshot = await readConfigFileSnapshot();
+    const configPath = snapshot.path;
+    const backupBase = `${configPath}.bak`;
+
+    // Collect available backups from the rotation ring
+    const backups: Array<{ label: string; path: string }> = [];
+    if (fs.existsSync(backupBase)) {
+      backups.push({ label: ".bak (latest)", path: backupBase });
+    }
+    for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
+      const bPath = `${backupBase}.${i}`;
+      if (fs.existsSync(bPath)) {
+        backups.push({ label: `.bak.${i}`, path: bPath });
+      }
+    }
+
+    if (opts.list) {
+      if (opts.json) {
+        runtime.log(
+          JSON.stringify({
+            backups: backups.map((b) => ({ label: b.label, path: b.path })),
+          }),
+        );
+      } else if (backups.length === 0) {
+        runtime.log(info("No config backups found."));
+      } else {
+        runtime.log(info("Available config backups:"));
+        for (const b of backups) {
+          runtime.log(`  ${b.label}  ${shortenHomePath(b.path)}`);
+        }
+      }
+      return;
+    }
+
+    // Resolve which backup to restore
+    let restorePath: string;
+    if (opts.backup) {
+      restorePath = opts.backup;
+      if (!fs.existsSync(restorePath)) {
+        runtime.error(danger(`Backup not found: ${restorePath}`));
+        runtime.exit(1);
+        return;
+      }
+    } else {
+      if (backups.length === 0) {
+        runtime.error(
+          danger(
+            "No config backups found. Nothing to restore.\n" +
+              "If you have a manual backup, pass it with: openclaw config restore --backup <path>",
+          ),
+        );
+        runtime.exit(1);
+        return;
+      }
+      restorePath = backups[0].path;
+    }
+
+    // Validate backup is parseable before overwriting anything
+    let backupContent: string;
+    try {
+      backupContent = fs.readFileSync(restorePath, "utf8");
+      JSON5.parse(backupContent);
+    } catch (e) {
+      runtime.error(danger(`Backup file is not valid JSON5 and cannot be restored: ${restorePath}`));
+      runtime.exit(1);
+      return;
+    }
+
+    // Preserve the current (possibly broken) config as a safety copy
+    if (snapshot.exists) {
+      const safetyPath = `${configPath}.bak.broken`;
+      try {
+        fs.copyFileSync(configPath, safetyPath);
+        runtime.log(info(`Current config saved to ${shortenHomePath(safetyPath)}`));
+      } catch {
+        // best-effort
+      }
+    }
+
+    // Restore
+    fs.copyFileSync(restorePath, configPath);
+    runtime.log(success(`Config restored from ${shortenHomePath(restorePath)}`));
+    runtime.log(info("Run \`openclaw gateway restart\` to apply."));
+  } catch (err) {
+    runtime.error(danger(`Restore failed: ${String(err)}`));
+    runtime.exit(1);
+  }
+}
+
 export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
@@ -389,5 +489,21 @@ export function registerConfigCli(program: Command) {
     .argument("<path>", "Config path (dot or bracket notation)")
     .action(async (path: string) => {
       await runConfigUnset({ path });
+    });
+
+  cmd
+    .command("restore")
+    .description(
+      "Restore config from an automatic backup. Useful when a bad config prevents the gateway from starting.",
+    )
+    .option("--list", "List available backups without restoring", false)
+    .option("--backup <path>", "Path to a specific backup file to restore")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts) => {
+      await runConfigRestore({
+        backup: opts.backup as string | undefined,
+        list: Boolean(opts.list),
+        json: Boolean(opts.json),
+      });
     });
 }
