@@ -61,6 +61,14 @@ function isAnthropicApi(modelApi?: string | null, provider?: string | null): boo
   return normalized === "anthropic";
 }
 
+function isBedrockClaude(params: { modelApi?: string | null; provider?: string | null; modelId?: string | null }): boolean {
+  const normalized = normalizeProviderId(params.provider ?? "");
+  if (normalized !== "amazon-bedrock" && params.modelApi !== "bedrock-converse-stream") {
+    return false;
+  }
+  return (params.modelId ?? "").toLowerCase().includes("claude");
+}
+
 function isMistralModel(params: { provider?: string | null; modelId?: string | null }): boolean {
   const provider = normalizeProviderId(params.provider ?? "");
   if (provider === "mistral") {
@@ -92,6 +100,7 @@ export function resolveTranscriptPolicy(params: {
     provider,
     modelId,
   });
+  const isBedrockClaudeModel = isBedrockClaude(params);
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
@@ -112,7 +121,7 @@ export function resolveTranscriptPolicy(params: {
     sanitizeToolCallIds,
     toolCallIdMode,
     repairToolUseResultPairing: !isOpenAi && repairToolUseResultPairing,
-    preserveSignatures: isAntigravityClaudeModel,
+    preserveSignatures: isAnthropic || isBedrockClaudeModel || isAntigravityClaudeModel,
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     normalizeAntigravityThinkingBlocks,
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
