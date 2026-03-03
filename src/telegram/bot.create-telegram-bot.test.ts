@@ -2259,4 +2259,44 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
+
+  it("registers setStatus middleware that reports lastEventAt on each update", async () => {
+    const setStatus = vi.fn();
+    createTelegramBot({ token: "tok", setStatus });
+
+    type Middleware = (
+      ctx: Record<string, unknown>,
+      next: () => Promise<void>,
+    ) => Promise<void> | void;
+
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter((fn): fn is Middleware => typeof fn === "function");
+
+    const nextSpy = vi.fn(async () => {});
+    // Run all middleware in sequence; the setStatus middleware will fire.
+    for (const mw of middlewares) {
+      await mw({ update: { update_id: 999 } }, nextSpy);
+    }
+
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastEventAt: expect.any(Number),
+        lastInboundAt: expect.any(Number),
+      }),
+    );
+  });
+
+  it("does not register setStatus middleware when setStatus is not provided", () => {
+    const beforeCount = middlewareUseSpy.mock.calls.length;
+    createTelegramBot({ token: "tok" });
+    const afterCount = middlewareUseSpy.mock.calls.length;
+
+    middlewareUseSpy.mockClear();
+    createTelegramBot({ token: "tok", setStatus: vi.fn() });
+    const withStatusCount = middlewareUseSpy.mock.calls.length;
+
+    // When setStatus is provided, one additional middleware is registered.
+    expect(withStatusCount).toBe(afterCount - beforeCount + 1);
+  });
 });

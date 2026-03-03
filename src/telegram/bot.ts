@@ -56,6 +56,7 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  setStatus?: (patch: Record<string, unknown>) => void;
 };
 
 export { getTelegramSequentialKey };
@@ -163,6 +164,21 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
     }
   });
+
+  // Track inbound events for health monitoring so the gateway doesn't
+  // restart a healthy provider after the stale-event threshold.
+  if (opts.setStatus) {
+    const statusSink = opts.setStatus;
+    bot.use(async (ctx, next) => {
+      try {
+        const now = Date.now();
+        statusSink({ lastEventAt: now, lastInboundAt: now });
+      } catch {
+        // Status tracking must never break message processing.
+      }
+      await next();
+    });
+  }
 
   bot.use(sequentialize(getTelegramSequentialKey));
 

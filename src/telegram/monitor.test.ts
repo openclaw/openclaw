@@ -59,8 +59,9 @@ const { createTelegramBotErrors } = vi.hoisted(() => ({
   createTelegramBotErrors: [] as unknown[],
 }));
 
-const { createdBotStops } = vi.hoisted(() => ({
+const { createdBotStops, createTelegramBotCalls } = vi.hoisted(() => ({
   createdBotStops: [] as Array<ReturnType<typeof vi.fn<() => void>>>,
+  createTelegramBotCalls: [] as Array<Record<string, unknown>>,
 }));
 
 const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
@@ -135,7 +136,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("./bot.js", () => ({
-  createTelegramBot: () => {
+  createTelegramBot: (opts?: Record<string, unknown>) => {
+    if (opts) {
+      createTelegramBotCalls.push(opts);
+    }
     const nextError = createTelegramBotErrors.shift();
     if (nextError) {
       throw nextError;
@@ -211,6 +215,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     resetUnhandledRejection();
     createTelegramBotErrors.length = 0;
     createdBotStops.length = 0;
+    createTelegramBotCalls.length = 0;
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -466,6 +471,27 @@ describe("monitorTelegramProvider (grammY)", () => {
     abort.abort();
     await monitor;
     expect(settled).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes setStatus through to createTelegramBot in polling mode", async () => {
+    const setStatus = vi.fn();
+    await monitorWithAutoAbort({ setStatus });
+
+    expect(createTelegramBotCalls.length).toBe(1);
+    expect(createTelegramBotCalls[0].setStatus).toBe(setStatus);
+  });
+
+  it("passes setStatus through to webhook mode", async () => {
+    const setStatus = vi.fn();
+    await monitorTelegramProvider({
+      token: "tok",
+      useWebhook: true,
+      webhookUrl: "https://example.test/telegram",
+      webhookSecret: "secret",
+      setStatus,
+    });
+
+    expect(startTelegramWebhookSpy).toHaveBeenCalledWith(expect.objectContaining({ setStatus }));
   });
 
   it("falls back to configured webhookSecret when not passed explicitly", async () => {
