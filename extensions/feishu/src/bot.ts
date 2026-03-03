@@ -1337,7 +1337,9 @@ export async function handleFeishuMessage(params: {
     const messageCreateTimeMs = event.message.create_time
       ? parseInt(event.message.create_time, 10)
       : undefined;
-    const replyTargetMessageId = ctx.rootId ?? ctx.messageId;
+    // Always reply to the triggering message so quoted-reply mention chains
+    // don't snap replies back to the thread root.
+    const replyTargetMessageId = ctx.messageId;
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
     if (broadcastAgents) {

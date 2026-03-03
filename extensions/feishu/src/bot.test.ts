@@ -1479,7 +1479,7 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
-  it("replies to the topic root when handling a message inside an existing topic", async () => {
+  it("replies to the triggering message while preserving topic root context", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
     const cfg: ClawdbotConfig = {
@@ -1511,7 +1511,7 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
-        replyToMessageId: "om_root_topic",
+        replyToMessageId: "om_child_message",
         rootId: "om_root_topic",
       }),
     );
