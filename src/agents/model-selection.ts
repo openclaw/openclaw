@@ -215,6 +215,55 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   return providers.values().next().value;
 }
 
+function inferUniqueProviderFromExplicitProviderModels(params: {
+  cfg: OpenClawConfig;
+  model: string;
+}): string | undefined {
+  const model = params.model.trim();
+  if (!model) {
+    return undefined;
+  }
+  const providersCfg = params.cfg.models?.providers;
+  if (!providersCfg || typeof providersCfg !== "object") {
+    return undefined;
+  }
+  const normalized = model.toLowerCase();
+  const providers = new Set<string>();
+  for (const [providerId, providerRaw] of Object.entries(providersCfg)) {
+    if (!providerRaw || typeof providerRaw !== "object") {
+      continue;
+    }
+    const modelsRaw = (providerRaw as { models?: unknown }).models;
+    if (!Array.isArray(modelsRaw) || modelsRaw.length === 0) {
+      continue;
+    }
+    const provider = normalizeProviderId(providerId);
+    for (const entry of modelsRaw) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const idValue = (entry as { id?: unknown }).id;
+      if (typeof idValue !== "string") {
+        continue;
+      }
+      const id = idValue.trim();
+      if (!id) {
+        continue;
+      }
+      if (id === model || id.toLowerCase() === normalized) {
+        providers.add(provider);
+        if (providers.size > 1) {
+          return undefined;
+        }
+      }
+    }
+  }
+  if (providers.size !== 1) {
+    return undefined;
+  }
+  return providers.values().next().value;
+}
+
 export function resolveAllowlistModelKey(raw: string, defaultProvider: string): string | null {
   const parsed = parseModelRef(raw, defaultProvider);
   if (!parsed) {
