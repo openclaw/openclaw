@@ -206,9 +206,13 @@ export async function handleSlackAction(
           to,
           context,
         );
+        const mediaLocalRoots = Array.isArray(params.mediaLocalRoots)
+          ? (params.mediaLocalRoots as string[])
+          : undefined;
         const result = await sendSlackMessage(to, content ?? "", {
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
+          mediaLocalRoots,
           threadTs: threadTs ?? undefined,
           blocks,
         });

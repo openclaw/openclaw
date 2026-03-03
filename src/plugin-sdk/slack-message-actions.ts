@@ -52,6 +52,7 @@ export async function handleSlackMessageAction(params: {
         to,
         content: content ?? "",
         mediaUrl: mediaUrl ?? undefined,
+        mediaLocalRoots: ctx.mediaLocalRoots,
         blocks,
         accountId,
         threadTs: threadId ?? replyTo ?? undefined,

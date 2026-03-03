@@ -5,8 +5,8 @@ import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
-import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
+import { resolveSlackMedia } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -159,6 +159,7 @@ export async function sendSlackMessage(
   content: string,
   opts: SlackActionClientOpts & {
     mediaUrl?: string;
+    mediaLocalRoots?: readonly string[];
     threadTs?: string;
     blocks?: (Block | KnownBlock)[];
   } = {},
@@ -167,6 +168,7 @@ export async function sendSlackMessage(
     accountId: opts.accountId,
     token: opts.token,
     mediaUrl: opts.mediaUrl,
+    mediaLocalRoots: opts.mediaLocalRoots,
     client: opts.client,
     threadTs: opts.threadTs,
     blocks: opts.blocks,
