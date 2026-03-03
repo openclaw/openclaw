@@ -4,6 +4,7 @@ import { generateNextcloudTalkSignature } from "./signature.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
 type NextcloudTalkSendOpts = {
+  cfg?: CoreConfig;
   baseUrl?: string;
   secret?: string;
   accountId?: string;
@@ -60,7 +61,7 @@ export async function sendMessageNextcloudTalk(
   text: string,
   opts: NextcloudTalkSendOpts = {},
 ): Promise<NextcloudTalkSendResult> {
-  const cfg = getNextcloudTalkRuntime().config.loadConfig() as CoreConfig;
+  const cfg = (opts.cfg ?? getNextcloudTalkRuntime().config.loadConfig()) as CoreConfig;
   const account = resolveNextcloudTalkAccount({
     cfg,
     accountId: opts.accountId,
