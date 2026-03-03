@@ -32,7 +32,18 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
 
-  const cfg = loadConfig();
+  let cfg = loadConfig();
+  if (cfg.gateway?.mode !== "local") {
+    const nextConfig = {
+      ...cfg,
+      gateway: {
+        ...cfg.gateway,
+        mode: "local" as const,
+      },
+    };
+    await writeConfigFile(nextConfig);
+    cfg = nextConfig;
+  }
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     fail("Invalid port");
