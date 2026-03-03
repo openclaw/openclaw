@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gemini schema sanitization: coerce malformed JSON Schema `properties` values (`null`, arrays, primitives) to `{}` before provider validation, preventing downstream strict-validator crashes on invalid plugin/tool schemas. (#32332) Thanks @webdevtodayjason.
 - OpenAI/Responses WebSocket tool-call id hygiene: normalize blank/whitespace streamed tool-call ids before persistence, and block empty `function_call_output.call_id` payloads in the WS conversion path to avoid OpenAI 400 errors (`Invalid 'input[n].call_id': empty string`), with regression coverage for both inbound stream normalization and outbound payload guards.
 - Gateway/Control UI basePath webhook passthrough: let non-read methods under configured `controlUiBasePath` fall through to plugin routes (instead of returning Control UI 405), restoring webhook handlers behind basePath mounts. (#32311) Thanks @ademczuk.
 - CLI/Config validation and routing hardening: dedupe `openclaw config validate` failures to a single authoritative report, expose allowed-values metadata/hints across core Zod and plugin AJV validation (including `--json` fields), sanitize terminal-rendered validation text, and make command-path parsing root-option-aware across preaction/route/lazy registration (including routed `config get/unset` with split root options). Thanks @gumadeiras.
