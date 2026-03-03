@@ -274,6 +274,27 @@ describe("resolveTelegramFetch", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  it("recovers via safe fallback path when dispatcher retries still fail", async () => {
+    const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
+      code: "ETIMEDOUT",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: timeoutErr,
+    });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(fetchError)
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const resolved = resolveTelegramFetchOrThrow();
+    const response = await resolved("https://api.telegram.org/file/botx/photos/file_4.jpg");
+
+    expect(response).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("does not retry when fetch fails without fallback network error codes", async () => {
     const fetchError = Object.assign(new TypeError("fetch failed"), {
       cause: Object.assign(new Error("connect ECONNRESET"), {
