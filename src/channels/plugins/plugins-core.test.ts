@@ -75,6 +75,29 @@ describe("channel plugin registry", () => {
     const pluginIds = listChannelPlugins().map((plugin) => plugin.id);
     expect(pluginIds).toEqual(["telegram", "slack", "signal"]);
   });
+
+  it("refreshes cached channel lookups when the same registry instance is re-activated", () => {
+    const registry = createTestRegistry([
+      {
+        pluginId: "slack",
+        plugin: createPlugin("slack"),
+        source: "test",
+      },
+    ]);
+    setActivePluginRegistry(registry, "registry-test");
+    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["slack"]);
+
+    registry.channels = [
+      {
+        pluginId: "telegram",
+        plugin: createPlugin("telegram"),
+        source: "test",
+      },
+    ] as typeof registry.channels;
+    setActivePluginRegistry(registry, "registry-test");
+
+    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["telegram"]);
+  });
 });
 
 describe("channel plugin catalog", () => {

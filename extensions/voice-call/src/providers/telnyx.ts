@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import type { TelnyxConfig } from "../config.js";
 import type {
   EndReason,
+  GetCallStatusInput,
+  GetCallStatusResult,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
@@ -11,10 +13,12 @@ import type {
   StartListeningInput,
   StopListeningInput,
   WebhookContext,
+  WebhookParseOptions,
   WebhookVerificationResult,
 } from "../types.js";
 import { verifyTelnyxWebhook } from "../webhook-security.js";
 import type { VoiceCallProvider } from "./base.js";
+import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 
 /**
  * Telnyx Voice API provider implementation.
@@ -35,6 +39,7 @@ export class TelnyxProvider implements VoiceCallProvider {
   private readonly publicKey: string | undefined;
   private readonly options: TelnyxProviderOptions;
   private readonly baseUrl = "https://api.telnyx.com/v2";
+  private readonly apiHost = "api.telnyx.com";
 
   constructor(config: TelnyxConfig, options: TelnyxProviderOptions = {}) {
     if (!config.apiKey) {
@@ -58,25 +63,19 @@ export class TelnyxProvider implements VoiceCallProvider {
     body: Record<string, unknown>,
     options?: { allowNotFound?: boolean },
   ): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+    return await guardedJsonApiRequest<T>({
+      url: `${this.baseUrl}${endpoint}`,
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(body),
+      body,
+      allowNotFound: options?.allowNotFound,
+      allowedHostnames: [this.apiHost],
+      auditContext: "voice-call.telnyx.api",
+      errorPrefix: "Telnyx API error",
     });
-
-    if (!response.ok) {
-      if (options?.allowNotFound && response.status === 404) {
-        return undefined as T;
-      }
-      const errorText = await response.text();
-      throw new Error(`Telnyx API error: ${response.status} ${errorText}`);
-    }
-
-    const text = await response.text();
-    return text ? (JSON.parse(text) as T) : (undefined as T);
   }
 
   /**
@@ -87,13 +86,21 @@ export class TelnyxProvider implements VoiceCallProvider {
       skipVerification: this.options.skipVerification,
     });
 
-    return { ok: result.ok, reason: result.reason, isReplay: result.isReplay };
+    return {
+      ok: result.ok,
+      reason: result.reason,
+      isReplay: result.isReplay,
+      verifiedRequestKey: result.verifiedRequestKey,
+    };
   }
 
   /**
    * Parse Telnyx webhook event into normalized format.
    */
-  parseWebhookEvent(ctx: WebhookContext): ProviderWebhookParseResult {
+  parseWebhookEvent(
+    ctx: WebhookContext,
+    options?: WebhookParseOptions,
+  ): ProviderWebhookParseResult {
     try {
       const payload = JSON.parse(ctx.rawBody);
       const data = payload.data;
@@ -102,7 +109,7 @@ export class TelnyxProvider implements VoiceCallProvider {
         return { events: [], statusCode: 200 };
       }
 
-      const event = this.normalizeEvent(data);
+      const event = this.normalizeEvent(data, options?.verifiedRequestKey);
       return {
         events: event ? [event] : [],
         statusCode: 200,
@@ -115,7 +122,7 @@ export class TelnyxProvider implements VoiceCallProvider {
   /**
    * Convert Telnyx event to normalized event format.
    */
-  private normalizeEvent(data: TelnyxEvent): NormalizedEvent | null {
+  private normalizeEvent(data: TelnyxEvent, dedupeKey?: string): NormalizedEvent | null {
     // Decode client_state from Base64 (we encode it in initiateCall)
     let callId = "";
     if (data.payload?.client_state) {
@@ -132,6 +139,7 @@ export class TelnyxProvider implements VoiceCallProvider {
 
     const baseEvent = {
       id: data.id || crypto.randomUUID(),
+      dedupeKey,
       callId,
       providerCallId: data.payload?.call_control_id,
       timestamp: Date.now(),
@@ -284,6 +292,37 @@ export class TelnyxProvider implements VoiceCallProvider {
       { command_id: crypto.randomUUID() },
       { allowNotFound: true },
     );
+  }
+
+  async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
+    try {
+      const data = await guardedJsonApiRequest<{ data?: { state?: string; is_alive?: boolean } }>({
+        url: `${this.baseUrl}/calls/${input.providerCallId}`,
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        allowNotFound: true,
+        allowedHostnames: [this.apiHost],
+        auditContext: "telnyx-get-call-status",
+        errorPrefix: "Telnyx get call status error",
+      });
+
+      if (!data) {
+        return { status: "not-found", isTerminal: true };
+      }
+
+      const state = data.data?.state ?? "unknown";
+      const isAlive = data.data?.is_alive;
+      // If is_alive is missing, treat as unknown rather than terminal (P1 fix)
+      if (isAlive === undefined) {
+        return { status: state, isTerminal: false, isUnknown: true };
+      }
+      return { status: state, isTerminal: !isAlive };
+    } catch {
+      return { status: "error", isTerminal: false, isUnknown: true };
+    }
   }
 }
 

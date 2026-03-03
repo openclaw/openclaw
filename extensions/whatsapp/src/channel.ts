@@ -13,7 +13,7 @@ import {
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   normalizeE164,
-  normalizeWhatsAppAllowFromEntries,
+  formatWhatsAppConfigAllowFromEntries,
   normalizeWhatsAppMessagingTarget,
   readStringParam,
   resolveDefaultWhatsAppAccountId,
@@ -21,6 +21,8 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveWhatsAppAccount,
+  resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigDefaultTo,
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupIntroHint,
   resolveWhatsAppGroupToolPolicy,
@@ -113,15 +115,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       dmPolicy: account.dmPolicy,
       allowFrom: account.allowFrom,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      resolveWhatsAppAccount({ cfg, accountId }).allowFrom ?? [],
-    formatAllowFrom: ({ allowFrom }) => normalizeWhatsAppAllowFromEntries(allowFrom),
-    resolveDefaultTo: ({ cfg, accountId }) => {
-      const root = cfg.channels?.whatsapp;
-      const normalized = normalizeAccountId(accountId);
-      const account = root?.accounts?.[normalized];
-      return (account?.defaultTo ?? root?.defaultTo)?.trim() || undefined;
-    },
+    resolveAllowFrom: ({ cfg, accountId }) => resolveWhatsAppConfigAllowFrom({ cfg, accountId }),
+    formatAllowFrom: ({ allowFrom }) => formatWhatsAppConfigAllowFromEntries(allowFrom),
+    resolveDefaultTo: ({ cfg, accountId }) => resolveWhatsAppConfigDefaultTo({ cfg, accountId }),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
