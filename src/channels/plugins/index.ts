@@ -1,4 +1,7 @@
-import { getActivePluginRegistryKey, requireActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  getActivePluginRegistryVersion,
+  requireActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeAnyChannelId } from "../registry.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
 
@@ -23,15 +26,13 @@ function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
 }
 
 type CachedChannelPlugins = {
-  registry: ReturnType<typeof requireActivePluginRegistry> | null;
-  registryKey: string | null;
+  registryVersion: number;
   sorted: ChannelPlugin[];
   byId: Map<string, ChannelPlugin>;
 };
 
 const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
-  registry: null,
-  registryKey: null,
+  registryVersion: -1,
   sorted: [],
   byId: new Map(),
 };
@@ -40,9 +41,9 @@ let cachedChannelPlugins = EMPTY_CHANNEL_PLUGIN_CACHE;
 
 function resolveCachedChannelPlugins(): CachedChannelPlugins {
   const registry = requireActivePluginRegistry();
-  const registryKey = getActivePluginRegistryKey();
+  const registryVersion = getActivePluginRegistryVersion();
   const cached = cachedChannelPlugins;
-  if (cached.registry === registry && cached.registryKey === registryKey) {
+  if (cached.registryVersion === registryVersion) {
     return cached;
   }
 
@@ -62,8 +63,7 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
   }
 
   const next: CachedChannelPlugins = {
-    registry,
-    registryKey,
+    registryVersion,
     sorted,
     byId,
   };
