@@ -116,21 +116,16 @@ describe("createTelegramDraftStream", () => {
     await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined));
   });
 
-  it("uses sendMessageDraft for dm threads and does not create a preview message", async () => {
+  it("defaults to message transport for dm threads when previewTransport is auto", async () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
 
     stream.update("Hello");
-    await vi.waitFor(() =>
-      expect(api.sendMessageDraft).toHaveBeenCalledWith(123, expect.any(Number), "Hello", {
-        message_thread_id: 42,
-      }),
-    );
-    expect(api.sendMessage).not.toHaveBeenCalled();
-    expect(api.editMessageText).not.toHaveBeenCalled();
-    await stream.clear();
+    await stream.flush();
 
-    expect(api.deleteMessage).not.toHaveBeenCalled();
+    expectDmMessagePreviewViaSendMessage(api);
+    expect(api.sendMessageDraft).not.toHaveBeenCalled();
+    expect(stream.previewMode?.()).toBe("message");
   });
 
   it("supports forcing message transport in dm threads", async () => {
@@ -220,7 +215,10 @@ describe("createTelegramDraftStream", () => {
 
   it("does not edit or delete messages after DM draft stream finalization", async () => {
     const api = createMockDraftApi();
-    const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+    });
 
     stream.update("Hello");
     await stream.flush();
@@ -245,10 +243,10 @@ describe("createTelegramDraftStream", () => {
       editMessageText: vi.fn().mockResolvedValue(true),
       deleteMessage: vi.fn().mockResolvedValue(true),
     };
-    const stream = createThreadedDraftStream(
-      api as unknown as ReturnType<typeof createMockDraftApi>,
-      { id: 42, scope: "dm" },
-    );
+    const stream = createDraftStream(api as unknown as ReturnType<typeof createMockDraftApi>, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+    });
 
     stream.update("Message A");
     await vi.waitFor(() => expect(api.sendMessageDraft).toHaveBeenCalledTimes(1));
@@ -281,10 +279,10 @@ describe("createTelegramDraftStream", () => {
       editMessageText: vi.fn().mockResolvedValue(true),
       deleteMessage: vi.fn().mockResolvedValue(true),
     };
-    const stream = createThreadedDraftStream(
-      api as unknown as ReturnType<typeof createMockDraftApi>,
-      { id: 42, scope: "dm" },
-    );
+    const stream = createDraftStream(api as unknown as ReturnType<typeof createMockDraftApi>, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+    });
 
     stream.update("Message A");
     await vi.waitFor(() => expect(api.sendMessageDraft).toHaveBeenCalledTimes(1));
