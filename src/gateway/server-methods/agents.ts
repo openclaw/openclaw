@@ -25,7 +25,12 @@ import {
   listAgentEntries,
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
-import { clearConfigCache, loadConfig, writeConfigFile } from "../../config/config.js";
+import {
+  clearConfigCache,
+  loadConfig,
+  readConfigFileSnapshot,
+  writeConfigFile,
+} from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
@@ -622,7 +627,16 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const refreshRuntimeConfigForCreate =
       typeof context.refreshRuntimeConfigFromDisk === "function"
         ? async () => {
-            await context.refreshRuntimeConfigFromDisk?.(nextConfig);
+            const snapshot = await readConfigFileSnapshot();
+            if (!snapshot.exists || !snapshot.valid) {
+              return;
+            }
+            const snapshotHasAgent =
+              findAgentEntryIndex(listAgentEntries(snapshot.config), agentId) >= 0;
+            if (!snapshotHasAgent) {
+              return;
+            }
+            await context.refreshRuntimeConfigFromDisk?.(snapshot.config);
           }
         : undefined;
     const ready = await waitForAgentReady({
@@ -830,10 +844,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const content = String(params.content ?? "");
+    const relativeIoPath = path.relative(workspaceDir, resolvedPath.ioPath);
     try {
       await writeFileWithinRoot({
         rootDir: workspaceDir,
-        relativePath: name,
+        relativePath: relativeIoPath,
         data: content,
         encoding: "utf8",
       });

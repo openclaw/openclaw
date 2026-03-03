@@ -95,6 +95,7 @@ const mocks = vi.hoisted(() => {
       state.runtimeSnapshotActive = true;
       state.runtimeConfig = snapshot.config;
     }),
+    writeFileWithinRoot: vi.fn(async () => {}),
     refreshRuntimeConfigFromDisk: vi.fn(async () => {
       if (!state.runtimeSnapshotActive) {
         return;
@@ -176,6 +177,15 @@ vi.mock("../../secrets/runtime.js", () => ({
   prepareSecretsRuntimeSnapshot: mocks.prepareSecretsRuntimeSnapshot,
   activateSecretsRuntimeSnapshot: mocks.activateSecretsRuntimeSnapshot,
 }));
+
+vi.mock("../../infra/fs-safe.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../infra/fs-safe.js")>("../../infra/fs-safe.js");
+  return {
+    ...actual,
+    writeFileWithinRoot: mocks.writeFileWithinRoot,
+  };
+});
 
 // Mock node:fs/promises – agents.ts uses `import fs from "node:fs/promises"`
 // which resolves to the module namespace default, so we spread actual and
@@ -321,6 +331,12 @@ beforeEach(() => {
   mocks.state.writtenConfig = null;
   mocks.state.runtimeSnapshotActive = true;
   mocks.state.runtimeConfig = null;
+  mocks.refreshRuntimeConfigFromDisk.mockImplementation(async () => {
+    if (!mocks.state.runtimeSnapshotActive) {
+      return;
+    }
+    mocks.state.runtimeConfig = mocks.state.writtenConfig ? { ...mocks.state.writtenConfig } : null;
+  });
   mocks.writeConfigFile.mockImplementation(async (cfg: unknown) => {
     if (cfg && typeof cfg === "object") {
       mocks.state.writtenConfig = { ...(cfg as Record<string, unknown>) };
@@ -470,6 +486,45 @@ describe("agents.create", () => {
         process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS = previousPoll;
       }
     }
+  });
+
+  it("refreshes readiness from latest disk snapshot to avoid stale runtime re-activation", async () => {
+    mocks.state.runtimeConfig = null;
+    let refreshAttempts = 0;
+    const refreshPayloads: Array<Record<string, unknown> | undefined> = [];
+    mocks.refreshRuntimeConfigFromDisk.mockImplementation(async (cfg?: Record<string, unknown>) => {
+      refreshAttempts += 1;
+      refreshPayloads.push(cfg ? { ...cfg } : undefined);
+      if (refreshAttempts === 1) {
+        // Simulate a concurrent config write landing after agents.create wrote its initial config.
+        mocks.state.writtenConfig = {
+          ...mocks.state.writtenConfig,
+          __agentIds: ["stale-safe-agent", "newer-agent"],
+        };
+        return;
+      }
+      mocks.state.runtimeConfig = cfg ? { ...cfg } : null;
+    });
+
+    const { respond, promise } = makeCall("agents.create", {
+      name: "Stale Safe Agent",
+      workspace: "/home/user/agents/stale-safe",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+        agentId: "stale-safe-agent",
+      }),
+      undefined,
+    );
+    expect(refreshAttempts).toBeGreaterThan(1);
+    const lastRefresh = refreshPayloads.at(-1);
+    expect(lastRefresh?.__agentIds).toEqual(
+      expect.arrayContaining(["stale-safe-agent", "newer-agent"]),
+    );
   });
 
   it("ensures workspace is set up before writing config", async () => {
