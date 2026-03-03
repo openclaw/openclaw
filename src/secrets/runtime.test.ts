@@ -10,6 +10,39 @@ import {
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
 
+const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
+
+function createOpenAiEnvModelsConfig(): NonNullable<OpenClawConfig["models"]> {
+  return {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: OPENAI_ENV_KEY_REF,
+        models: [],
+      },
+    },
+  };
+}
+
+function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
+  return {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+        models: [],
+      },
+    },
+  };
+}
+
+function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
+  return {
+    version: 1,
+    profiles,
+  };
+}
+
 describe("secrets runtime snapshot", () => {
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
@@ -17,15 +50,7 @@ describe("secrets runtime snapshot", () => {
 
   it("resolves env refs for config and auth profiles", async () => {
     const config: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            models: [],
-          },
-        },
-      },
+      models: createOpenAiEnvModelsConfig(),
       skills: {
         entries: {
           "review-pr": {
@@ -44,14 +69,13 @@ describe("secrets runtime snapshot", () => {
         REVIEW_SKILL_API_KEY: "sk-skill-ref",
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({
-        version: 1,
-        profiles: {
+      loadAuthStore: () =>
+        loadAuthStoreWithProfiles({
           "openai:default": {
             type: "api_key",
             provider: "openai",
             key: "old-openai",
-            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            keyRef: OPENAI_ENV_KEY_REF,
           },
           "github-copilot:default": {
             type: "token",
@@ -64,8 +88,7 @@ describe("secrets runtime snapshot", () => {
             provider: "openai",
             key: "${OPENAI_API_KEY}",
           },
-        },
-      }),
+        }),
     });
 
     expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("sk-env-openai");
@@ -95,17 +118,14 @@ describe("secrets runtime snapshot", () => {
       config,
       env: { MY_TOKEN: "resolved-token-value" },
       agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: ((_agentDir?: string) =>
-        ({
-          version: 1,
-          profiles: {
-            "custom:inline-token": {
-              type: "token",
-              provider: "custom",
-              token: { source: "env", provider: "default", id: "MY_TOKEN" },
-            },
+      loadAuthStore: () =>
+        loadAuthStoreWithProfiles({
+          "custom:inline-token": {
+            type: "token",
+            provider: "custom",
+            token: { source: "env", provider: "default", id: "MY_TOKEN" } as unknown as string,
           },
-        }) as unknown as AuthProfileStore) as (agentDir?: string) => AuthProfileStore,
+        }),
     });
 
     const profile = snapshot.authStores[0]?.store.profiles["custom:inline-token"] as Record<
@@ -125,17 +145,14 @@ describe("secrets runtime snapshot", () => {
       config,
       env: { MY_KEY: "resolved-key-value" },
       agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: ((_agentDir?: string) =>
-        ({
-          version: 1,
-          profiles: {
-            "custom:inline-key": {
-              type: "api_key",
-              provider: "custom",
-              key: { source: "env", provider: "default", id: "MY_KEY" },
-            },
+      loadAuthStore: () =>
+        loadAuthStoreWithProfiles({
+          "custom:inline-key": {
+            type: "api_key",
+            provider: "custom",
+            key: { source: "env", provider: "default", id: "MY_KEY" } as unknown as string,
           },
-        }) as unknown as AuthProfileStore) as (agentDir?: string) => AuthProfileStore,
+        }),
     });
 
     const profile = snapshot.authStores[0]?.store.profiles["custom:inline-key"] as Record<
@@ -159,17 +176,14 @@ describe("secrets runtime snapshot", () => {
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () =>
-        ({
-          version: 1,
-          profiles: {
-            "custom:explicit-keyref": {
-              type: "api_key",
-              provider: "custom",
-              keyRef: { source: "env", provider: "default", id: "PRIMARY_KEY" },
-              key: { source: "env", provider: "default", id: "SHADOW_KEY" },
-            },
+        loadAuthStoreWithProfiles({
+          "custom:explicit-keyref": {
+            type: "api_key",
+            provider: "custom",
+            keyRef: { source: "env", provider: "default", id: "PRIMARY_KEY" },
+            key: { source: "env", provider: "default", id: "SHADOW_KEY" } as unknown as string,
           },
-        }) as unknown as AuthProfileStore,
+        }),
     });
 
     const profile = snapshot.authStores[0]?.store.profiles["custom:explicit-keyref"] as Record<
@@ -264,13 +278,7 @@ describe("secrets runtime snapshot", () => {
               },
             },
             models: {
-              providers: {
-                openai: {
-                  baseUrl: "https://api.openai.com/v1",
-                  apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
-                  models: [],
-                },
-              },
+              ...createOpenAiFileModelsConfig(),
             },
           },
           agentDirs: ["/tmp/openclaw-agent-main"],
@@ -285,28 +293,18 @@ describe("secrets runtime snapshot", () => {
   it("activates runtime snapshots for loadConfig and ensureAuthProfileStore", async () => {
     const prepared = await prepareSecretsRuntimeSnapshot({
       config: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              models: [],
-            },
-          },
-        },
+        models: createOpenAiEnvModelsConfig(),
       },
       env: { OPENAI_API_KEY: "sk-runtime" },
       agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({
-        version: 1,
-        profiles: {
+      loadAuthStore: () =>
+        loadAuthStoreWithProfiles({
           "openai:default": {
             type: "api_key",
             provider: "openai",
-            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            keyRef: OPENAI_ENV_KEY_REF,
           },
-        },
-      }),
+        }),
     });
 
     activateSecretsRuntimeSnapshot(prepared);
@@ -331,14 +329,13 @@ describe("secrets runtime snapshot", () => {
       await fs.writeFile(
         path.join(mainAgentDir, "auth-profiles.json"),
         JSON.stringify({
-          version: 1,
-          profiles: {
+          ...loadAuthStoreWithProfiles({
             "openai:default": {
               type: "api_key",
               provider: "openai",
-              keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              keyRef: OPENAI_ENV_KEY_REF,
             },
-          },
+          }),
         }),
         "utf8",
       );

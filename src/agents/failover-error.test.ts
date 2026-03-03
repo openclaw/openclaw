@@ -35,12 +35,17 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
   });
 
-  it("infers timeout from abort stop-reason messages", () => {
+  it("infers timeout from abort/error stop-reason messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: abort" })).toBe(
       "timeout",
     );
+    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: error" })).toBe(
+      "timeout",
+    );
     expect(resolveFailoverReasonFromError({ message: "stop reason: abort" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("timeout");
   });
 
   it("treats AbortError reason=abort as timeout", () => {

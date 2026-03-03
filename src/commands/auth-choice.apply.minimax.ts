@@ -112,7 +112,7 @@ export async function applyAuthChoiceMiniMax(
       promptMessage: "Enter MiniMax API key",
       modelRefPrefix: "minimax",
       modelId:
-        params.authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-Lightning" : "MiniMax-M2.5",
+        params.authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-highspeed" : "MiniMax-M2.5",
       applyDefaultConfig: applyMinimaxApiConfig,
       applyProviderConfig: applyMinimaxApiProviderConfig,
     });
@@ -132,7 +132,7 @@ export async function applyAuthChoiceMiniMax(
 
   if (params.authChoice === "minimax") {
     await applyProviderDefaultModel({
-      defaultModel: "lmstudio/minimax-m2.1-gs32",
+      defaultModel: "lmstudio/minimax-m2.5-gs32",
       applyDefaultConfig: applyMinimaxConfig,
       applyProviderConfig: applyMinimaxProviderConfig,
     });
