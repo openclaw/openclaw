@@ -331,7 +331,7 @@ Then verify backend health:
 
 ### acpx command and version configuration
 
-By default, `@openclaw/acpx` uses the plugin-local pinned binary:
+By default, the acpx plugin (published as `@openclaw/acpx`) uses the plugin-local pinned binary:
 
 1. Command defaults to `extensions/acpx/node_modules/.bin/acpx`.
 2. Expected version defaults to the extension pin.
