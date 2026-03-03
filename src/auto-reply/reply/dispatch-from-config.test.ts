@@ -1659,7 +1659,8 @@ describe("dispatchReplyFromConfig", () => {
       Surface: "whatsapp",
       OriginatingChannel: "whatsapp",
       ChatType: "group",
-      Body: "Hello from the group",
+      Body: "[history context]\nHello from the group",
+      RawBody: "Hello from the group",
       SessionKey: "agent:main:whatsapp:group:120363001234567890",
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);

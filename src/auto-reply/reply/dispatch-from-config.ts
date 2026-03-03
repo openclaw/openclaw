@@ -362,10 +362,10 @@ export async function dispatchReplyFromConfig(params: {
       if (persistSessionKey) {
         const agentId = resolveSessionAgentId({ sessionKey: persistSessionKey, config: cfg });
         const inboundText =
-          typeof ctx.Body === "string"
-            ? ctx.Body
-            : typeof ctx.RawBody === "string"
-              ? ctx.RawBody
+          typeof ctx.RawBody === "string"
+            ? ctx.RawBody
+            : typeof ctx.Body === "string"
+              ? ctx.Body
               : "";
         if (inboundText.trim()) {
           const result = await appendUserMessageToSessionTranscript({
