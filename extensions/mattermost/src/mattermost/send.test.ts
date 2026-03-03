@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sendMessageMattermost } from "./send.js";
 
@@ -10,6 +11,8 @@ const mockState = vi.hoisted(() => ({
   fetchMattermostUserByUsername: vi.fn(),
   normalizeMattermostBaseUrl: vi.fn((input: string | undefined) => input?.trim() ?? ""),
   uploadMattermostFile: vi.fn(),
+  resolveMattermostAccount: vi.fn(),
+  loadConfig: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk", () => ({
@@ -17,11 +20,7 @@ vi.mock("openclaw/plugin-sdk", () => ({
 }));
 
 vi.mock("./accounts.js", () => ({
-  resolveMattermostAccount: () => ({
-    accountId: "default",
-    botToken: "bot-token",
-    baseUrl: "https://mattermost.example.com",
-  }),
+  resolveMattermostAccount: mockState.resolveMattermostAccount,
 }));
 
 vi.mock("./client.js", () => ({
@@ -37,7 +36,7 @@ vi.mock("./client.js", () => ({
 vi.mock("../runtime.js", () => ({
   getMattermostRuntime: () => ({
     config: {
-      loadConfig: () => ({}),
+      loadConfig: mockState.loadConfig,
     },
     logging: {
       shouldLogVerbose: () => false,
@@ -64,9 +63,17 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostMe.mockReset();
     mockState.fetchMattermostUserByUsername.mockReset();
     mockState.uploadMattermostFile.mockReset();
+    mockState.resolveMattermostAccount.mockReset();
+    mockState.loadConfig.mockReset();
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostPost.mockResolvedValue({ id: "post-1" });
     mockState.uploadMattermostFile.mockResolvedValue({ id: "file-1" });
+    mockState.loadConfig.mockReturnValue({});
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "bot-token",
+      baseUrl: "https://mattermost.example.com",
+    });
   });
 
   it("loads outbound media with trusted local roots before upload", async () => {
@@ -96,5 +103,25 @@ describe("sendMessageMattermost", () => {
         contentType: "image/png",
       }),
     );
+  });
+
+  it("prefers opts.cfg over runtime loadConfig when resolving account", async () => {
+    const resolvedCfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          botToken: "resolved-token",
+          baseUrl: "https://mattermost.example.com",
+        },
+      },
+    };
+
+    await sendMessageMattermost("channel:town-square", "hello", { cfg: resolvedCfg });
+
+    expect(mockState.loadConfig).not.toHaveBeenCalled();
+    expect(mockState.resolveMattermostAccount).toHaveBeenCalledWith({
+      cfg: resolvedCfg,
+      accountId: undefined,
+    });
   });
 });

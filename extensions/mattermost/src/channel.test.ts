@@ -216,13 +216,57 @@ describe("mattermostPlugin", () => {
   });
 
   describe("outbound", () => {
+    it("forwards cfg on sendText", async () => {
+      const sendText = mattermostPlugin.outbound?.sendText;
+      if (!sendText) {
+        return;
+      }
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            botToken: "resolved-token",
+            baseUrl: "https://chat.example.com",
+          },
+        },
+      };
+
+      await sendText({
+        cfg,
+        to: "channel:CHAN1",
+        text: "hello",
+        accountId: "default",
+        replyToId: "post-root",
+      });
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          cfg,
+          accountId: "default",
+          replyToId: "post-root",
+        }),
+      );
+    });
+
     it("forwards mediaLocalRoots on sendMedia", async () => {
       const sendMedia = mattermostPlugin.outbound?.sendMedia;
       if (!sendMedia) {
         return;
       }
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            botToken: "resolved-token",
+            baseUrl: "https://chat.example.com",
+          },
+        },
+      };
 
       await sendMedia({
+        cfg,
         to: "channel:CHAN1",
         text: "hello",
         mediaUrl: "/tmp/workspace/image.png",
@@ -235,6 +279,7 @@ describe("mattermostPlugin", () => {
         "channel:CHAN1",
         "hello",
         expect.objectContaining({
+          cfg,
           mediaUrl: "/tmp/workspace/image.png",
           mediaLocalRoots: ["/tmp/workspace"],
         }),
