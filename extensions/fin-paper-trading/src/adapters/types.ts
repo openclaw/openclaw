@@ -7,7 +7,7 @@
 export interface MarketAdapter {
   readonly id: string;
   readonly name: string;
-  readonly market: "us-equity" | "hk-equity" | "cn-a-share";
+  readonly market: "crypto" | "us-equity" | "hk-equity" | "cn-a-share";
 
   init(config: Record<string, unknown>): Promise<void>;
   getPrice(symbol: string): Promise<PriceQuote>;
