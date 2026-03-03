@@ -97,7 +97,10 @@ describe("kudositySmsPlugin", () => {
       process.env.KUDOSITY_SENDER = "+61411111111";
 
       try {
-        const account = kudositySmsPlugin.config.resolveAccount({ channels: {} } as any, "default");
+        const account = kudositySmsPlugin.config.resolveAccount(
+          { channels: {} } as any,
+          "default",
+        );
         expect(account.apiKey).toBe("env-api-key");
         expect(account.sender).toBe("+61411111111");
       } finally {
@@ -135,7 +138,10 @@ describe("kudositySmsPlugin", () => {
       delete process.env.KUDOSITY_SENDER;
 
       try {
-        const account = kudositySmsPlugin.config.resolveAccount({ channels: {} } as any, "default");
+        const account = kudositySmsPlugin.config.resolveAccount(
+          { channels: {} } as any,
+          "default",
+        );
         expect(account.apiKey).toBe("");
         expect(account.sender).toBe("");
       } finally {
@@ -155,7 +161,9 @@ describe("kudositySmsPlugin", () => {
         apiKey: "my-key",
         sender: "+61400000000",
       };
-      expect(kudositySmsPlugin.config.isConfigured!(account, {} as any)).toBe(true);
+      expect(
+        kudositySmsPlugin.config.isConfigured!(account, {} as any),
+      ).toBe(true);
     });
 
     it("should report not configured when apiKey is missing", () => {
@@ -164,7 +172,9 @@ describe("kudositySmsPlugin", () => {
         apiKey: "",
         sender: "+61400000000",
       };
-      expect(kudositySmsPlugin.config.isConfigured!(account, {} as any)).toBe(false);
+      expect(
+        kudositySmsPlugin.config.isConfigured!(account, {} as any),
+      ).toBe(false);
     });
 
     it("should report not configured when sender is missing", () => {
@@ -173,7 +183,9 @@ describe("kudositySmsPlugin", () => {
         apiKey: "my-key",
         sender: "",
       };
-      expect(kudositySmsPlugin.config.isConfigured!(account, {} as any)).toBe(false);
+      expect(
+        kudositySmsPlugin.config.isConfigured!(account, {} as any),
+      ).toBe(false);
     });
 
     it("should give reason when apiKey is missing", () => {
@@ -182,9 +194,9 @@ describe("kudositySmsPlugin", () => {
         apiKey: "",
         sender: "+61400000000",
       };
-      expect(kudositySmsPlugin.config.unconfiguredReason!(account, {} as any)).toBe(
-        "Missing Kudosity API key",
-      );
+      expect(
+        kudositySmsPlugin.config.unconfiguredReason!(account, {} as any),
+      ).toBe("Missing Kudosity API key");
     });
 
     it("should give reason when sender is missing", () => {
@@ -193,9 +205,9 @@ describe("kudositySmsPlugin", () => {
         apiKey: "my-key",
         sender: "",
       };
-      expect(kudositySmsPlugin.config.unconfiguredReason!(account, {} as any)).toBe(
-        "Missing sender number",
-      );
+      expect(
+        kudositySmsPlugin.config.unconfiguredReason!(account, {} as any),
+      ).toBe("Missing sender number");
     });
   });
 
@@ -374,7 +386,7 @@ describe("kudositySmsPlugin", () => {
         expect(mockSendSMS).toHaveBeenCalledWith(
           expect.anything(),
           expect.objectContaining({
-            message: "(media attachment — not supported via SMS)",
+            message: "The assistant sent a file that can't be delivered via SMS.",
           }),
         );
       });
@@ -434,7 +446,9 @@ describe("kudositySmsPlugin", () => {
 
   describe("reload", () => {
     it("should watch kudosity-sms config prefix", () => {
-      expect(kudositySmsPlugin.reload?.configPrefixes).toEqual(["kudosity-sms."]);
+      expect(kudositySmsPlugin.reload?.configPrefixes).toEqual([
+        "channels.kudosity-sms",
+      ]);
     });
   });
 });

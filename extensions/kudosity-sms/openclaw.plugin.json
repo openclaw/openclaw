@@ -5,18 +5,8 @@
   "description": "Cloud SMS channel powered by Kudosity — send and receive SMS via the Kudosity API",
   "configSchema": {
     "type": "object",
-    "required": ["apiKey", "sender"],
     "additionalProperties": false,
-    "properties": {
-      "apiKey": {
-        "type": "string",
-        "description": "Kudosity API key for authenticating requests"
-      },
-      "sender": {
-        "type": "string",
-        "description": "Default sender number (E.164 format, e.g. +61400000000)"
-      }
-    }
+    "properties": {}
   },
   "uiHints": {
     "apiKey": {
