@@ -79,6 +79,14 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
   }
+  // Warn when falling back to the first configured account in multi-account setups
+  // to help users detect missing default configuration.
+  const configuredAccounts = cfg.channels?.telegram?.accounts;
+  if (configuredAccounts && Object.keys(configuredAccounts).length > 1 && ids[0]) {
+    log.warn(
+      `channels.telegram: accounts.default is missing; falling back to "${ids[0]}". Set channels.telegram.defaultAccount or add an accounts.default entry to avoid routing surprises in multi-account setups.`,
+    );
+  }
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
 

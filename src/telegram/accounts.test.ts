@@ -105,6 +105,10 @@ describe("resolveTelegramAccount", () => {
 });
 
 describe("resolveDefaultTelegramAccountId", () => {
+  afterEach(() => {
+    warnMock.mockClear();
+  });
+
   it("prefers channels.telegram.defaultAccount when it matches a configured account", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -142,6 +146,76 @@ describe("resolveDefaultTelegramAccountId", () => {
     };
 
     expect(resolveDefaultTelegramAccountId(cfg)).toBe("default");
+  });
+
+  it("warns when accounts.default is missing in multi-account setup", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: { work: { botToken: "tok-work" }, alerts: { botToken: "tok-alerts" } },
+        },
+      },
+    };
+
+    const result = resolveDefaultTelegramAccountId(cfg);
+    // Falls back to first account alphabetically
+    expect(result).toBe("alerts");
+    expect(warnMock).toHaveBeenCalledWith(
+      expect.stringContaining('accounts.default is missing; falling back to "alerts"'),
+    );
+  });
+
+  it("does not warn when accounts.default exists in multi-account setup", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: {
+            default: { botToken: "tok-default" },
+            work: { botToken: "tok-work" },
+            alerts: { botToken: "tok-alerts" },
+          },
+        },
+      },
+    };
+
+    const result = resolveDefaultTelegramAccountId(cfg);
+    expect(result).toBe("default");
+    expect(warnMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("accounts.default is missing"),
+    );
+  });
+
+  it("does not warn in single-account setup without accounts.default", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: { work: { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    const result = resolveDefaultTelegramAccountId(cfg);
+    expect(result).toBe("work");
+    expect(warnMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("accounts.default is missing"),
+    );
+  });
+
+  it("does not warn when defaultAccount is explicitly set", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "work",
+          accounts: { work: { botToken: "tok-work" }, alerts: { botToken: "tok-alerts" } },
+        },
+      },
+    };
+
+    const result = resolveDefaultTelegramAccountId(cfg);
+    expect(result).toBe("work");
+    expect(warnMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("accounts.default is missing"),
+    );
   });
 });
 
