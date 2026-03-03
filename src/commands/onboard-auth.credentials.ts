@@ -383,9 +383,10 @@ export async function setFalOpenrouterApiKey(
   agentDir?: string,
   options?: ApiKeyStorageOptions,
 ) {
+  const safeKey = typeof key === "string" && key === "undefined" ? "" : key;
   upsertAuthProfile({
     profileId: "fal-openrouter:default",
-    credential: buildApiKeyCredential("fal-openrouter", key, undefined, options),
+    credential: buildApiKeyCredential("fal-openrouter", safeKey, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
