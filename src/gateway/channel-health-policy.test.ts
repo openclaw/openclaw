@@ -36,7 +36,7 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "startup-connect-grace" });
   });
 
-  it("flags stale sockets when no events arrive beyond threshold", () => {
+  it("treats idle channels with no events as healthy", () => {
     const evaluation = evaluateChannelHealth(
       {
         running: true,
@@ -45,6 +45,25 @@ describe("evaluateChannelHealth", () => {
         configured: true,
         lastStartAt: 0,
         lastEventAt: null,
+      },
+      {
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("flags stale sockets when last event exceeds threshold", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: 50_000,
       },
       {
         now: 100_000,
