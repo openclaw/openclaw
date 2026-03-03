@@ -50,7 +50,7 @@ function makeAssistantText(text: string): AgentMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
-    stopReason: "end_turn",
+    stopReason: "stop",
     timestamp: Date.now(),
   };
 }
