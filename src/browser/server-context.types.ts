@@ -6,11 +6,23 @@ import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js"
 export type { BrowserTab };
 
 /**
+ * Firecrawl cloud browser session state.
+ */
+export type FirecrawlSessionState = {
+  sessionId: string;
+  cdpWebSocketUrl: string;
+  liveViewUrl: string;
+  expiresAt?: string;
+};
+
+/**
  * Runtime state for a single profile's Chrome instance.
  */
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
   running: RunningChrome | null;
+  /** Active Firecrawl cloud browser session (firecrawl driver only). */
+  firecrawlSession?: FirecrawlSessionState | null;
   /** Sticky tab selection when callers omit targetId (keeps snapshot+act consistent). */
   lastTargetId?: string | null;
 };
@@ -62,4 +74,8 @@ export type ContextOptions = {
   getState: () => BrowserServerState | null;
   onEnsureAttachTarget?: (profile: ResolvedBrowserProfile) => Promise<void>;
   refreshConfigFromDisk?: boolean;
+  /** Firecrawl API key for cloud browser sessions (resolved from config or env). */
+  firecrawlApiKey?: string;
+  /** Firecrawl base URL (default: https://api.firecrawl.dev). */
+  firecrawlBaseUrl?: string;
 };
