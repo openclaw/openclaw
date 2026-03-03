@@ -11,7 +11,7 @@ import { normalizeHooksPath } from "./gmail.js";
 export const DEFAULT_IMAP_FOLDER = "INBOX";
 export const DEFAULT_IMAP_POLL_INTERVAL_SECONDS = 20;
 export const DEFAULT_IMAP_MAX_BYTES = 20_000;
-export const DEFAULT_IMAP_QUERY = "flag unseen";
+export const DEFAULT_IMAP_QUERY = "not flag Seen";
 export const MIN_IMAP_POLL_INTERVAL_SECONDS = 5;
 
 export type ImapHookOverrides = {

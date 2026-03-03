@@ -60,10 +60,15 @@ export async function listEnvelopes(params: {
   // Append query tokens (e.g. "flag unseen" → ["flag", "unseen"])
   const queryTokens = params.query.trim().split(/\s+/).filter(Boolean);
   if (queryTokens.length > 0) {
-    args.push("--", ...queryTokens);
+    args.push(...queryTokens);
   }
 
+  const cmdStr = args.join(" ");
+  console.error(`[imap-himalaya] executing: ${cmdStr}`);
   const result = await runCommandWithTimeout(args, { timeoutMs: 30_000 });
+  console.error(
+    `[imap-himalaya] exit code: ${result.code}, stdout length: ${result.stdout.length}, stderr: ${result.stderr?.slice(0, 200) || "(none)"}`,
+  );
   if (result.code !== 0) {
     const msg = result.stderr?.trim() || result.stdout?.trim() || "himalaya envelope list failed";
     throw new Error(msg);
