@@ -10,6 +10,7 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.preserveSignatures).toBe(true);
   });
 
   it("enables sanitizeToolCallIds for Google provider", () => {
@@ -42,6 +43,7 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.sanitizeToolCallIds).toBe(false);
     expect(policy.toolCallIdMode).toBeUndefined();
+    expect(policy.preserveSignatures).toBe(false);
   });
 
   it("enables strict tool call id sanitization for openai-completions APIs", () => {
@@ -74,6 +76,7 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.allowSyntheticToolResults).toBe(true);
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.sanitizeMode).toBe("full");
+    expect(policy.preserveSignatures).toBe(true);
   });
 
   it("keeps OpenRouter on its existing turn-validation path", () => {
