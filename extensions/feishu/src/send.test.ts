@@ -209,6 +209,42 @@ describe("getMessageFeishu", () => {
     );
   });
 
+  it("extracts text from legacy post-format interactive card (array-of-arrays elements)", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_legacy",
+            chat_id: "oc_legacy",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                title: "[critical] Alert Title",
+                elements: [
+                  [
+                    { tag: "text", text: "PSM:" },
+                    { tag: "text", text: " my-service" },
+                  ],
+                  [
+                    { tag: "text", text: "Cluster:" },
+                    { tag: "text", text: " Singapore" },
+                  ],
+                ],
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_legacy" });
+    expect(result?.content).toContain("[critical] Alert Title");
+    expect(result?.content).toContain("PSM:");
+    expect(result?.content).toContain("my-service");
+    expect(result?.content).toContain("Singapore");
+  });
+
   it("returns [Interactive Card] placeholder when no text can be extracted", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
