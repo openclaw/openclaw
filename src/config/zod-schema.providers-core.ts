@@ -529,7 +529,7 @@ export const DiscordAccountSchema = z
     activityUrl: z.string().url().optional(),
     eventQueue: z
       .object({
-        listenerTimeout: z.number().int().positive().optional(),
+        listenerTimeout: z.number().int().min(0).optional(),
         maxQueueSize: z.number().int().positive().optional(),
         maxConcurrency: z.number().int().positive().optional(),
       })

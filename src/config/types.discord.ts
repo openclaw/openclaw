@@ -332,12 +332,13 @@ export type DiscordAccountConfig = {
   activityUrl?: string;
   /**
    * Carbon EventQueue configuration. Controls how Discord gateway events are processed.
-   * The most important option is `listenerTimeout` which defaults to 30s in Carbon --
-   * too short for LLM calls with extended thinking. Set a higher value (e.g. 120000)
-   * to prevent the event queue from killing long-running message handlers.
+   * `listenerTimeout` defaults to 0 (disabled) in OpenClaw because
+   * DiscordMessageListener.handle() is fire-and-forget and returns immediately —
+   * a timeout only causes false kills and health-monitor stuck cycles on long agent runs.
+   * Set to a positive value (ms) to re-enable Carbon's built-in timeout if needed.
    */
   eventQueue?: {
-    /** Max time (ms) a single listener can run before being killed. Default: 120000. */
+    /** Max time (ms) a single listener can run before being killed. Default: 0 (disabled). */
     listenerTimeout?: number;
     /** Max events queued before backpressure is applied. Default: 10000. */
     maxQueueSize?: number;

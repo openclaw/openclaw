@@ -1420,7 +1420,7 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.retry.jitter": "Jitter factor (0-1) applied to Discord retry delays.",
   "channels.discord.maxLinesPerMessage": "Soft max line count per Discord message (default: 17).",
   "channels.discord.eventQueue.listenerTimeout":
-    "Canonical Discord listener timeout control in ms for gateway event handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
+    "Canonical Discord listener timeout control in ms for gateway event handlers. Default is 0 (disabled) in OpenClaw — DiscordMessageListener.handle() is fire-and-forget so no timeout is needed. Set to a positive ms value to re-enable Carbon's built-in timeout. Configure per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
   "channels.discord.eventQueue.maxQueueSize":
     "Optional Discord EventQueue capacity override (max queued events before backpressure). Set per account via channels.discord.accounts.<id>.eventQueue.maxQueueSize.",
   "channels.discord.eventQueue.maxConcurrency":
