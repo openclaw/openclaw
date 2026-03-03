@@ -22,6 +22,7 @@ import {
   isWebchatClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveGatewayAgentModelState } from "../agent-model-blocking.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -956,6 +957,27 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const agentId = resolveSessionAgentId({
+      sessionKey,
+      config: cfg,
+    });
+    const modelState = await resolveGatewayAgentModelState({
+      cfg,
+      agentId,
+      loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+    });
+    if (modelState.status === "blocked") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `agent "${agentId}" is blocked: ${modelState.reason}`,
+        ),
+      );
+      return;
+    }
+
     try {
       const abortController = new AbortController();
       context.chatAbortControllers.set(clientRunId, {
@@ -1019,10 +1041,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         GatewayClientScopes: client?.connect?.scopes,
       };
 
-      const agentId = resolveSessionAgentId({
-        sessionKey,
-        config: cfg,
-      });
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
         agentId,

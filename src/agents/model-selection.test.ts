@@ -12,6 +12,7 @@ import {
   modelKey,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
+  resolveAgentModelResolutionState,
   resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
@@ -643,5 +644,150 @@ describe("normalizeModelSelection", () => {
     expect(normalizeModelSelection(undefined)).toBeUndefined();
     expect(normalizeModelSelection(null)).toBeUndefined();
     expect(normalizeModelSelection(42)).toBeUndefined();
+  });
+});
+
+describe("strict model resolution", () => {
+  const strictTestModelDefinition = (id: string) => ({
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"] as Array<"text" | "image">,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 2048,
+  });
+
+  it("preserves implicit fallback when strictModelResolution is disabled", () => {
+    const cfg = {
+      agents: {
+        strictModelResolution: false,
+        defaults: {
+          model: {
+            primary: "missing-model",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: false,
+    });
+
+    expect(state).toEqual({
+      status: "ready",
+      ref: { provider: "anthropic", model: "missing-model" },
+    });
+  });
+
+  it("blocks when strictModelResolution is enabled and model ref is invalid", () => {
+    const cfg = {
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "missing-model",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [],
+    });
+
+    expect(state.status).toBe("blocked");
+    if (state.status === "blocked") {
+      expect(state.code).toBe("provider_missing");
+    }
+  });
+
+  it("marks agent ready in strict mode when configured model is valid", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            models: [strictTestModelDefinition("llama3.2:3b")],
+          },
+        },
+      },
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "ollama/llama3.2:3b",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "main",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog: [{ provider: "ollama", id: "llama3.2:3b", name: "llama3.2:3b" }],
+    });
+
+    expect(state).toEqual({
+      status: "ready",
+      ref: { provider: "ollama", model: "llama3.2:3b" },
+    });
+  });
+
+  it("keeps resolution isolated across multiple agents", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            models: [strictTestModelDefinition("llama3.2:3b")],
+          },
+        },
+      },
+      agents: {
+        strictModelResolution: true,
+        defaults: {
+          model: {
+            primary: "ollama/llama3.2:3b",
+          },
+        },
+        list: [
+          { id: "alpha", model: { primary: "ollama/llama3.2:3b" } },
+          { id: "beta", model: { primary: "ollama/not-installed" } },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const catalog = [{ provider: "ollama", id: "llama3.2:3b", name: "llama3.2:3b" }];
+
+    const alpha = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "alpha",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog,
+    });
+    const beta = resolveAgentModelResolutionState({
+      cfg,
+      agentId: "beta",
+      defaultProvider: "anthropic",
+      strictModelResolution: true,
+      catalog,
+    });
+
+    expect(alpha.status).toBe("ready");
+    expect(beta.status).toBe("blocked");
+    if (beta.status === "blocked") {
+      expect(beta.code).toBe("model_not_found");
+    }
   });
 });

@@ -92,4 +92,10 @@ export type AgentConfig = {
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
   list?: AgentConfig[];
+  /**
+   * Opt-in strict model resolution.
+   * When enabled, agents are blocked if their configured primary model cannot be
+   * resolved without implicit fallback.
+   */
+  strictModelResolution?: boolean;
 };

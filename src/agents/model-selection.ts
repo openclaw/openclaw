@@ -14,6 +14,17 @@ export type ModelRef = {
   model: string;
 };
 
+export type AgentModelStatus = "ready" | "blocked";
+export type AgentModelBlockCode =
+  | "primary_model_undefined"
+  | "provider_missing"
+  | "provider_offline"
+  | "model_not_found";
+
+export type AgentModelResolutionState =
+  | { status: "ready"; ref: ModelRef }
+  | { status: "blocked"; code: AgentModelBlockCode; reason: string };
+
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 
 export type ModelAliasIndex = {
@@ -340,6 +351,145 @@ export function resolveConfiguredModelRef(params: {
     }
   }
   return { provider: params.defaultProvider, model: params.defaultModel };
+}
+
+export function resolveConfiguredModelRefWithoutImplicitFallback(params: {
+  cfg: OpenClawConfig;
+  defaultProvider: string;
+  rawModel: string;
+}): ModelRef | null {
+  const trimmed = params.rawModel.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  if (!trimmed.includes("/")) {
+    const aliasKey = normalizeAliasKey(trimmed);
+    const aliasMatch = aliasIndex.byAlias.get(aliasKey);
+    if (aliasMatch) {
+      return aliasMatch.ref;
+    }
+    const inferredProvider =
+      inferUniqueProviderFromConfiguredModels({
+        cfg: params.cfg,
+        model: trimmed,
+      }) ??
+      inferUniqueProviderFromExplicitProviderModels({
+        cfg: params.cfg,
+        model: trimmed,
+      });
+    if (!inferredProvider) {
+      return null;
+    }
+    return parseModelRef(trimmed, inferredProvider);
+  }
+  const resolved = resolveModelRefFromString({
+    raw: trimmed,
+    defaultProvider: params.defaultProvider,
+    aliasIndex,
+  });
+  return resolved?.ref ?? null;
+}
+
+function collectConfiguredProviderIds(cfg: OpenClawConfig): Set<string> {
+  const out = new Set<string>();
+  for (const key of Object.keys(cfg.models?.providers ?? {})) {
+    const normalized = normalizeProviderId(key);
+    if (normalized) {
+      out.add(normalized);
+    }
+  }
+  for (const key of Object.keys(cfg.agents?.defaults?.models ?? {})) {
+    const parsed = parseModelRef(key, DEFAULT_PROVIDER);
+    if (parsed?.provider) {
+      out.add(parsed.provider);
+    }
+  }
+  return out;
+}
+
+export function resolveAgentModelResolutionState(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  defaultProvider: string;
+  strictModelResolution: boolean;
+  catalog?: ModelCatalogEntry[];
+}): AgentModelResolutionState {
+  if (!params.strictModelResolution) {
+    return {
+      status: "ready",
+      ref: resolveDefaultModelForAgent({
+        cfg: params.cfg,
+        agentId: params.agentId,
+      }),
+    };
+  }
+
+  const configuredPrimary = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)?.trim();
+  if (!configuredPrimary) {
+    return {
+      status: "blocked",
+      code: "primary_model_undefined",
+      reason: `Agent "${params.agentId}" has no primary model configured.`,
+    };
+  }
+
+  const resolved = resolveConfiguredModelRefWithoutImplicitFallback({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+    rawModel: configuredPrimary,
+  });
+  if (!resolved) {
+    return {
+      status: "blocked",
+      code: "provider_missing",
+      reason: `Model "${configuredPrimary}" does not resolve to a configured provider.`,
+    };
+  }
+
+  const configuredProviders = collectConfiguredProviderIds(params.cfg);
+  const providerKnownByConfig = configuredProviders.has(resolved.provider);
+  const catalogProviders = new Set(
+    (params.catalog ?? []).map((entry) => normalizeProviderId(entry.provider)),
+  );
+  const providerKnownByCatalog = catalogProviders.has(resolved.provider);
+  if (!providerKnownByConfig && !providerKnownByCatalog) {
+    return {
+      status: "blocked",
+      code: "provider_missing",
+      reason: `Provider "${resolved.provider}" is not configured.`,
+    };
+  }
+
+  if (params.catalog) {
+    if (!providerKnownByCatalog) {
+      return {
+        status: "blocked",
+        code: "provider_offline",
+        reason: `Provider "${resolved.provider}" is unavailable/offline.`,
+      };
+    }
+    const modelExistsInCatalog = params.catalog.some(
+      (entry) =>
+        normalizeProviderId(entry.provider) === resolved.provider &&
+        entry.id.toLowerCase().trim() === resolved.model.toLowerCase().trim(),
+    );
+    if (!modelExistsInCatalog) {
+      return {
+        status: "blocked",
+        code: "model_not_found",
+        reason: `Model "${resolved.provider}/${resolved.model}" was not found.`,
+      };
+    }
+  }
+
+  return {
+    status: "ready",
+    ref: resolved,
+  };
 }
 
 export function resolveDefaultModelForAgent(params: {

@@ -33,6 +33,7 @@ import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
 import { isNotFoundPathError } from "../../infra/path-guards.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
+import { resolveGatewayAgentModelState } from "../agent-model-blocking.js";
 import {
   ErrorCodes,
   errorShape,
@@ -456,7 +457,7 @@ function respondWorkspaceFileMissing(params: {
 }
 
 export const agentsHandlers: GatewayRequestHandlers = {
-  "agents.list": ({ params, respond }) => {
+  "agents.list": async ({ params, respond, context }) => {
     if (!validateAgentsListParams(params)) {
       respond(
         false,
@@ -471,7 +472,21 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const cfg = loadConfig();
     const result = listAgentsForGateway(cfg);
-    respond(true, result, undefined);
+    const agents = await Promise.all(
+      result.agents.map(async (agent) => {
+        const state = await resolveGatewayAgentModelState({
+          cfg,
+          agentId: agent.id,
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        });
+        return {
+          ...agent,
+          status: state.status,
+          reason: state.status === "blocked" ? state.reason : undefined,
+        };
+      }),
+    );
+    respond(true, { ...result, agents }, undefined);
   },
   "agents.create": async ({ params, respond }) => {
     if (!validateAgentsCreateParams(params)) {
