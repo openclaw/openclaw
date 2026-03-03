@@ -490,7 +490,7 @@ describe("classifyFailoverReason", () => {
       classifyFailoverReason(
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       ),
-    ).toBe("rate_limit");
+    ).toBe("overloaded");
     expect(classifyFailoverReason("invalid request format")).toBe("format");
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
@@ -526,13 +526,13 @@ describe("classifyFailoverReason", () => {
       classifyFailoverReason(
         "This model is currently experiencing high demand. Please try again later.",
       ),
-    ).toBe("rate_limit");
-    expect(classifyFailoverReason("LLM error: service unavailable")).toBe("rate_limit");
+    ).toBe("overloaded");
+    expect(classifyFailoverReason("LLM error: service unavailable")).toBe("overloaded");
     expect(
       classifyFailoverReason(
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
       ),
-    ).toBe("rate_limit");
+    ).toBe("overloaded");
   });
   it("classifies permanent auth errors as auth_permanent", () => {
     expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");

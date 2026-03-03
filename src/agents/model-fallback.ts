@@ -402,7 +402,8 @@ function resolveCooldownDecision(params: {
   const isPersistentIssue =
     inferredReason === "auth" ||
     inferredReason === "auth_permanent" ||
-    inferredReason === "billing";
+    inferredReason === "billing" ||
+    inferredReason === "overloaded";
   if (isPersistentIssue) {
     return {
       type: "skip",
