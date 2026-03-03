@@ -382,7 +382,7 @@ export async function readSystemdServiceRuntime(
     "ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode",
   ]);
   if (res.code !== 0) {
-    const detail = (res.stderr || res.stdout).trim();
+    const detail = `${res.stderr} ${res.stdout}`.trim();
     const missing = detail.toLowerCase().includes("not found");
     return {
       status: missing ? "stopped" : "unknown",
