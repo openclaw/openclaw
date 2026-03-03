@@ -3,6 +3,12 @@ import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../a
 import { createMemoryGetTool, createMemorySearchTool } from "../../agents/tools/memory-tool.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
 import {
+  createMemoryCollectionsTool,
+  createMemoryDeleteTool,
+  createMemoryQueryTool,
+  createMemoryStoreTool,
+} from "../../agents/tools/structured-memory-tool.js";
+import {
   chunkByNewline,
   chunkMarkdownText,
   chunkMarkdownTextWithMode,
@@ -283,6 +289,10 @@ function createRuntimeTools(): PluginRuntime["tools"] {
   return {
     createMemoryGetTool,
     createMemorySearchTool,
+    createMemoryStoreTool,
+    createMemoryQueryTool,
+    createMemoryDeleteTool,
+    createMemoryCollectionsTool,
     registerMemoryCli,
   };
 }
