@@ -57,6 +57,7 @@ export interface KudositySmsAccount {
   accountId: string;
   apiKey: string;
   sender: string;
+  enabled?: boolean;
 }
 
 // ─── Config Adapter ──────────────────────────────────────────────────────────
@@ -95,7 +96,8 @@ const configAdapter: ChannelConfigAdapter<KudositySmsAccount> = {
       (section?.sender as string) ||
       process.env.KUDOSITY_SENDER ||
       "";
-    return { accountId: DEFAULT_ACCOUNT_ID, apiKey, sender };
+    const enabled = section?.enabled as boolean | undefined;
+    return { accountId: DEFAULT_ACCOUNT_ID, apiKey, sender, enabled };
   },
 
   /**
