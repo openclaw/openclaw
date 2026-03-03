@@ -82,15 +82,6 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
         authProfileIdSource?: string;
       };
 
-      console.log(`authProfileId passed to runEmbeddedPiAgent: ${callArgs?.authProfileId}`);
-      console.log(`authProfileIdSource passed: ${callArgs?.authProfileIdSource}`);
-
-      if (!callArgs?.authProfileId) {
-        console.log("❌ BUG CONFIRMED: isolated cron session does NOT pass authProfileId");
-        console.log("   This causes 401 errors when using providers that require auth profiles");
-      }
-
-      // This assertion will FAIL on main — proving the bug
       expect(callArgs?.authProfileId).toBe("openrouter:default");
     });
   });

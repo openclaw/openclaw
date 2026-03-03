@@ -124,6 +124,10 @@ async function writeCronJobs(storePath: string, jobs: CronJob[]) {
   await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }), "utf-8");
 }
 
+async function writeCronStoreSnapshot(storePath: string, jobs: unknown[]) {
+  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }), "utf-8");
+}
+
 async function startCronForStore(params: {
   storePath: string;
   cronEnabled?: boolean;
@@ -214,26 +218,20 @@ describe("Cron issue regressions", () => {
 
   it("repairs isolated every jobs missing createdAtMs and sets nextWakeAtMs", async () => {
     const store = makeStorePath();
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({
-        version: 1,
-        jobs: [
-          {
-            id: "legacy-isolated",
-            agentId: "feature-dev_planner",
-            sessionKey: "agent:main:main",
-            name: "legacy isolated",
-            enabled: true,
-            schedule: { kind: "every", everyMs: 300_000 },
-            sessionTarget: "isolated",
-            wakeMode: "now",
-            payload: { kind: "agentTurn", message: "poll workflow queue" },
-            state: {},
-          },
-        ],
-      }),
-    );
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "legacy-isolated",
+        agentId: "feature-dev_planner",
+        sessionKey: "agent:main:main",
+        name: "legacy isolated",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 300_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "poll workflow queue" },
+        state: {},
+      },
+    ]);
 
     const cron = new CronService({
       cronEnabled: true,
@@ -330,30 +328,19 @@ describe("Cron issue regressions", () => {
   it("treats persisted jobs with missing enabled as enabled during update()", async () => {
     const store = makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [
-            {
-              id: "missing-enabled-update",
-              name: "legacy missing enabled",
-              createdAtMs: now - 60_000,
-              updatedAtMs: now - 60_000,
-              schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
-              sessionTarget: "main",
-              wakeMode: "next-heartbeat",
-              payload: { kind: "systemEvent", text: "legacy" },
-              state: {},
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "missing-enabled-update",
+        name: "legacy missing enabled",
+        createdAtMs: now - 60_000,
+        updatedAtMs: now - 60_000,
+        schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "legacy" },
+        state: {},
+      },
+    ]);
 
     const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
 
@@ -374,30 +361,19 @@ describe("Cron issue regressions", () => {
     const store = makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     const dueAt = now - 30_000;
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [
-            {
-              id: "missing-enabled-due",
-              name: "legacy due job",
-              createdAtMs: dueAt - 60_000,
-              updatedAtMs: dueAt,
-              schedule: { kind: "at", at: new Date(dueAt).toISOString() },
-              sessionTarget: "main",
-              wakeMode: "now",
-              payload: { kind: "systemEvent", text: "missing-enabled-due" },
-              state: { nextRunAtMs: dueAt },
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "missing-enabled-due",
+        name: "legacy due job",
+        createdAtMs: dueAt - 60_000,
+        updatedAtMs: dueAt,
+        schedule: { kind: "at", at: new Date(dueAt).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "missing-enabled-due" },
+        state: { nextRunAtMs: dueAt },
+      },
+    ]);
 
     const enqueueSystemEvent = vi.fn();
     const cron = await startCronForStore({
@@ -1402,36 +1378,25 @@ describe("Cron issue regressions", () => {
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     const staleRunningAtMs = now - 2 * 60 * 60 * 1000 - 1;
 
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [
-            {
-              id: "stale-running",
-              name: "stale-running",
-              enabled: true,
-              createdAtMs: now - 3_600_000,
-              updatedAtMs: now - 3_600_000,
-              schedule: { kind: "at", at: new Date(now - 60_000).toISOString() },
-              sessionTarget: "main",
-              wakeMode: "now",
-              payload: { kind: "systemEvent", text: "stale-running" },
-              state: {
-                runningAtMs: staleRunningAtMs,
-                lastRunAtMs: now - 3_600_000,
-                lastStatus: "ok",
-                nextRunAtMs: now - 60_000,
-              },
-            },
-          ],
+    await writeCronStoreSnapshot(store.storePath, [
+      {
+        id: "stale-running",
+        name: "stale-running",
+        enabled: true,
+        createdAtMs: now - 3_600_000,
+        updatedAtMs: now - 3_600_000,
+        schedule: { kind: "at", at: new Date(now - 60_000).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "stale-running" },
+        state: {
+          runningAtMs: staleRunningAtMs,
+          lastRunAtMs: now - 3_600_000,
+          lastStatus: "ok",
+          nextRunAtMs: now - 60_000,
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    ]);
 
     const enqueueSystemEvent = vi.fn();
     const state = createCronServiceState({
