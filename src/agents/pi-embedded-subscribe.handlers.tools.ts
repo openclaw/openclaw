@@ -408,12 +408,7 @@ export async function handleToolExecutionEnd(
   //   directives are still delivered via onToolResult and must be tracked.
   const willFenceOutput =
     ctx.shouldEmitToolOutput() && (ctx.params.toolResultFormat ?? "markdown") !== "plain";
-  if (
-    !isToolError &&
-    !isMessagingSend &&
-    ctx.params.onToolResult &&
-    !willFenceOutput
-  ) {
+  if (!isToolError && !isMessagingSend && ctx.params.onToolResult && !willFenceOutput) {
     const emittedMediaUrls = filterToolResultMediaUrls(
       toolName,
       extractToolResultMediaPaths(result),
