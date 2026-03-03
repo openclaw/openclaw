@@ -23,6 +23,7 @@ type GuardableAgent = object;
 type GuardableAgentRecord = {
   transformContext?: GuardableTransformContext;
 };
+type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
 function isTextBlock(block: unknown): block is { type: "text"; text: string } {
   return !!block && typeof block === "object" && (block as { type?: unknown }).type === "text";
@@ -155,8 +156,18 @@ function estimateMessageChars(msg: AgentMessage): number {
   return 256;
 }
 
-function estimateContextChars(messages: AgentMessage[]): number {
-  return messages.reduce((sum, msg) => sum + estimateMessageChars(msg), 0);
+function estimateMessageCharsCached(msg: AgentMessage, cache: MessageCharEstimateCache): number {
+  const hit = cache.get(msg);
+  if (hit !== undefined) {
+    return hit;
+  }
+  const estimated = estimateMessageChars(msg);
+  cache.set(msg, estimated);
+  return estimated;
+}
+
+function estimateContextChars(messages: AgentMessage[], cache: MessageCharEstimateCache): number {
+  return messages.reduce((sum, msg) => sum + estimateMessageCharsCached(msg, cache), 0);
 }
 
 function truncateTextToBudget(text: string, maxChars: number): string {
@@ -195,12 +206,16 @@ function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
   } as AgentMessage;
 }
 
-function truncateToolResultToChars(msg: AgentMessage, maxChars: number): AgentMessage {
+function truncateToolResultToChars(
+  msg: AgentMessage,
+  maxChars: number,
+  cache: MessageCharEstimateCache,
+): AgentMessage {
   if (!isToolResultMessage(msg)) {
     return msg;
   }
 
-  const estimatedChars = estimateMessageChars(msg);
+  const estimatedChars = estimateMessageCharsCached(msg, cache);
   if (estimatedChars <= maxChars) {
     return msg;
   }
@@ -217,8 +232,9 @@ function truncateToolResultToChars(msg: AgentMessage, maxChars: number): AgentMe
 function compactExistingToolResultsInPlace(params: {
   messages: AgentMessage[];
   charsNeeded: number;
+  cache: MessageCharEstimateCache;
 }): number {
-  const { messages, charsNeeded } = params;
+  const { messages, charsNeeded, cache } = params;
   if (charsNeeded <= 0) {
     return 0;
   }
@@ -230,14 +246,14 @@ function compactExistingToolResultsInPlace(params: {
       continue;
     }
 
-    const before = estimateMessageChars(msg);
+    const before = estimateMessageCharsCached(msg, cache);
     if (before <= PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER.length) {
       continue;
     }
 
     const compacted = replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    applyMessageMutationInPlace(msg, compacted);
-    const after = estimateMessageChars(msg);
+    applyMessageMutationInPlace(msg, compacted, cache);
+    const after = estimateMessageCharsCached(msg, cache);
     if (after >= before) {
       continue;
     }
@@ -251,7 +267,11 @@ function compactExistingToolResultsInPlace(params: {
   return reduced;
 }
 
-function applyMessageMutationInPlace(target: AgentMessage, source: AgentMessage): void {
+function applyMessageMutationInPlace(
+  target: AgentMessage,
+  source: AgentMessage,
+  cache?: MessageCharEstimateCache,
+): void {
   if (target === source) {
     return;
   }
@@ -264,6 +284,7 @@ function applyMessageMutationInPlace(target: AgentMessage, source: AgentMessage)
     }
   }
   Object.assign(targetRecord, sourceRecord);
+  cache?.delete(target);
 }
 
 function enforceToolResultContextBudgetInPlace(params: {
@@ -272,17 +293,18 @@ function enforceToolResultContextBudgetInPlace(params: {
   maxSingleToolResultChars: number;
 }): void {
   const { messages, contextBudgetChars, maxSingleToolResultChars } = params;
+  const estimateCache: MessageCharEstimateCache = new WeakMap();
 
   // Ensure each tool result has an upper bound before considering total context usage.
   for (const message of messages) {
     if (!isToolResultMessage(message)) {
       continue;
     }
-    const truncated = truncateToolResultToChars(message, maxSingleToolResultChars);
-    applyMessageMutationInPlace(message, truncated);
+    const truncated = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
+    applyMessageMutationInPlace(message, truncated, estimateCache);
   }
 
-  let currentChars = estimateContextChars(messages);
+  let currentChars = estimateContextChars(messages, estimateCache);
   if (currentChars <= contextBudgetChars) {
     return;
   }
@@ -291,6 +313,7 @@ function enforceToolResultContextBudgetInPlace(params: {
   compactExistingToolResultsInPlace({
     messages,
     charsNeeded: currentChars - contextBudgetChars,
+    cache: estimateCache,
   });
 }
 
