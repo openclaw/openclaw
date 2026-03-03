@@ -1,6 +1,8 @@
+import { execFile } from "child_process";
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
+import { promisify } from "util";
 import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -8,6 +10,41 @@ import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Get audio duration in milliseconds using ffprobe.
+ * Returns undefined if ffprobe is unavailable or the file cannot be probed.
+ */
+async function getAudioDurationMs(buffer: Buffer): Promise<number | undefined> {
+  const tmpDir = fs.mkdtempSync(
+    path.join(fs.realpathSync(require("os").tmpdir()), "feishu-audio-"),
+  );
+  const tmpFile = path.join(tmpDir, "probe.opus");
+  try {
+    fs.writeFileSync(tmpFile, buffer);
+    const { stdout } = await execFileAsync(
+      "ffprobe",
+      ["-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", tmpFile],
+      { timeout: 10_000 },
+    );
+    const seconds = parseFloat(stdout.trim());
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return Math.round(seconds * 1000);
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  } finally {
+    try {
+      fs.unlinkSync(tmpFile);
+      fs.rmdirSync(tmpDir);
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+}
 
 export type DownloadImageResult = {
   buffer: Buffer;
@@ -460,11 +497,17 @@ export async function sendMediaFeishu(params: {
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
   } else {
     const fileType = detectFileType(name);
+    // For audio files, compute duration so Feishu displays playback time and enables STT
+    let duration: number | undefined;
+    if (fileType === "opus") {
+      duration = await getAudioDurationMs(buffer);
+    }
     const { fileKey } = await uploadFileFeishu({
       cfg,
       file: buffer,
       fileName: name,
       fileType,
+      duration,
       accountId,
     });
     // Feishu API: opus -> "audio", everything else (including video) -> "file"
