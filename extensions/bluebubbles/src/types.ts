@@ -31,6 +31,8 @@ export type BlueBubblesAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   /** Group message handling policy. */
   groupPolicy?: GroupPolicy;
+  /** Include pairing store in group auth (default: true for backward compatibility). */
+  groupAuthIncludesPairingStore?: boolean;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */

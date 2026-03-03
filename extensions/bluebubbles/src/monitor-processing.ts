@@ -523,6 +523,7 @@ export async function processMessage(
     allowFrom: configuredAllowFrom,
     groupAllowFrom: account.config.groupAllowFrom,
     storeAllowFrom,
+    groupAuthIncludesPairingStore: account.config.groupAuthIncludesPairingStore,
     isSenderAllowed: (allowFrom) =>
       isAllowedBlueBubblesSender({
         allowFrom,
@@ -1413,6 +1414,7 @@ export async function processReaction(
     allowFrom: account.config.allowFrom,
     groupAllowFrom: account.config.groupAllowFrom,
     storeAllowFrom,
+    groupAuthIncludesPairingStore: account.config.groupAuthIncludesPairingStore,
     isSenderAllowed: (allowFrom) =>
       isAllowedBlueBubblesSender({
         allowFrom,
