@@ -115,6 +115,47 @@ describe("discord auto presence", () => {
     expect(updatePresence.mock.calls[1]?.[0]?.status).toBe("online");
   });
 
+  it("re-applies auto presence after external manual presence change", () => {
+    let now = Date.now();
+    const store = createStore();
+    const sendPresence = vi.fn();
+    const gateway = {
+      isConnected: true,
+      updatePresence: sendPresence,
+    };
+
+    const controller = createDiscordAutoPresenceController({
+      accountId: "default",
+      discordConfig: {
+        autoPresence: {
+          enabled: true,
+          intervalMs: 60_000,
+          minUpdateIntervalMs: 60_000,
+        },
+      },
+      gateway,
+      loadAuthStore: () => store,
+      now: () => now,
+    });
+
+    controller.runNow();
+
+    gateway.updatePresence({
+      since: null,
+      activities: [{ type: 4, name: "Custom Status", state: "manual override" }],
+      status: "dnd",
+      afk: false,
+    });
+
+    now += 1_000;
+    controller.runNow();
+
+    expect(sendPresence).toHaveBeenCalledTimes(3);
+    expect(sendPresence.mock.calls[0]?.[0]?.status).toBe("online");
+    expect(sendPresence.mock.calls[1]?.[0]?.status).toBe("dnd");
+    expect(sendPresence.mock.calls[2]?.[0]?.status).toBe("online");
+  });
+
   it("does nothing when auto presence is disabled", () => {
     const updatePresence = vi.fn();
     const controller = createDiscordAutoPresenceController({

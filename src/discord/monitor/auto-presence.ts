@@ -252,6 +252,54 @@ function stablePresenceSignature(payload: UpdatePresenceData): string {
   });
 }
 
+type PresenceObserver = (signature: string) => void;
+type ObservablePresenceGateway = PresenceGateway & {
+  __openclawPresenceObservers?: Set<PresenceObserver>;
+  __openclawOriginalUpdatePresence?: PresenceGateway["updatePresence"];
+};
+
+function observeGatewayPresenceUpdates(
+  gateway: PresenceGateway,
+  observer: PresenceObserver,
+): () => void {
+  const target = gateway as ObservablePresenceGateway;
+  if (!target.__openclawPresenceObservers) {
+    target.__openclawPresenceObservers = new Set();
+    const originalUpdatePresence = gateway.updatePresence.bind(gateway);
+    target.__openclawOriginalUpdatePresence = originalUpdatePresence;
+    gateway.updatePresence = (payload: UpdatePresenceData) => {
+      originalUpdatePresence(payload);
+      const signature = stablePresenceSignature(payload);
+      for (const callback of target.__openclawPresenceObservers ?? []) {
+        try {
+          callback(signature);
+        } catch {
+          // Ignore observer failures; they are best-effort metadata hooks.
+        }
+      }
+    };
+  }
+
+  target.__openclawPresenceObservers.add(observer);
+
+  return () => {
+    const observers = target.__openclawPresenceObservers;
+    if (!observers) {
+      return;
+    }
+    observers.delete(observer);
+    if (observers.size > 0) {
+      return;
+    }
+
+    if (target.__openclawOriginalUpdatePresence) {
+      gateway.updatePresence = target.__openclawOriginalUpdatePresence;
+    }
+    delete target.__openclawOriginalUpdatePresence;
+    delete target.__openclawPresenceObservers;
+  };
+}
+
 export type DiscordAutoPresenceController = {
   start: () => void;
   stop: () => void;
@@ -291,7 +339,15 @@ export function createDiscordAutoPresenceController(params: {
 
   let timer: ReturnType<typeof setInterval> | undefined;
   let lastAppliedSignature: string | null = null;
+  let lastObservedGatewaySignature: string | null = null;
   let lastAppliedAt = 0;
+
+  const removeGatewayPresenceObserver = observeGatewayPresenceUpdates(
+    params.gateway,
+    (signature) => {
+      lastObservedGatewaySignature = signature;
+    },
+  );
 
   const runEvaluation = (options?: { force?: boolean }) => {
     let decision: DiscordAutoPresenceDecision | null = null;
@@ -318,10 +374,16 @@ export function createDiscordAutoPresenceController(params: {
     const forceApply = options?.force === true;
     const ts = now();
     const signature = stablePresenceSignature(decision.presence);
-    if (!forceApply && signature === lastAppliedSignature) {
+    const gatewayInSync = lastObservedGatewaySignature === signature;
+    if (!forceApply && signature === lastAppliedSignature && gatewayInSync) {
       return;
     }
-    if (!forceApply && lastAppliedAt > 0 && ts - lastAppliedAt < autoCfg.minUpdateIntervalMs) {
+    if (
+      !forceApply &&
+      gatewayInSync &&
+      lastAppliedAt > 0 &&
+      ts - lastAppliedAt < autoCfg.minUpdateIntervalMs
+    ) {
       return;
     }
 
@@ -342,11 +404,11 @@ export function createDiscordAutoPresenceController(params: {
       timer = setIntervalFn(() => runEvaluation(), autoCfg.intervalMs);
     },
     stop: () => {
-      if (!timer) {
-        return;
+      if (timer) {
+        clearIntervalFn(timer);
+        timer = undefined;
       }
-      clearIntervalFn(timer);
-      timer = undefined;
+      removeGatewayPresenceObserver();
     },
   };
 }
