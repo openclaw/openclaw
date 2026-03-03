@@ -794,6 +794,19 @@ function isOperationAbortedError(error: unknown): boolean {
   return error instanceof Error && error.message.trim() === "Operation aborted";
 }
 
+function hasFileChanged(
+  before: { size: number; mtimeMs: number } | undefined,
+  after: { size: number; mtimeMs: number } | undefined,
+): boolean {
+  if (!before && after) {
+    return true;
+  }
+  if (!before || !after) {
+    return false;
+  }
+  return before.size !== after.size || before.mtimeMs !== after.mtimeMs;
+}
+
 function wrapAbortAfterCommitRecovery(
   tool: AnyAgentTool,
   options: { kind: "write" | "edit"; cwd: string },
@@ -801,21 +814,36 @@ function wrapAbortAfterCommitRecovery(
   return {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
+      const normalized = normalizeToolParams(params);
+      const record =
+        normalized ??
+        (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
+      const rawPath = typeof record?.path === "string" ? record.path.trim() : "";
+      const resolvedPath = rawPath
+        ? resolveToolPathForVerification(rawPath, options.cwd)
+        : undefined;
+      const beforeStat = resolvedPath
+        ? await fs
+            .stat(resolvedPath)
+            .then((stat) => ({ size: stat.size, mtimeMs: stat.mtimeMs }))
+            .catch(() => undefined)
+        : undefined;
+
       try {
         return await tool.execute(toolCallId, params, signal, onUpdate);
       } catch (error) {
-        if (!isOperationAbortedError(error)) {
+        if (!isOperationAbortedError(error) || !resolvedPath || !rawPath) {
           throw error;
         }
-        const normalized = normalizeToolParams(params);
-        const record =
-          normalized ??
-          (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
-        const rawPath = typeof record?.path === "string" ? record.path.trim() : "";
-        if (!rawPath) {
+
+        const afterStat = await fs
+          .stat(resolvedPath)
+          .then((stat) => ({ size: stat.size, mtimeMs: stat.mtimeMs }))
+          .catch(() => undefined);
+        if (!hasFileChanged(beforeStat, afterStat)) {
           throw error;
         }
-        const resolvedPath = resolveToolPathForVerification(rawPath, options.cwd);
+
         let current = "";
         try {
           current = await fs.readFile(resolvedPath, "utf8");
