@@ -121,17 +121,31 @@ describe("createLineWebhookMiddleware", () => {
     expect(onEvents).not.toHaveBeenCalled();
   });
 
-  it("returns 200 immediately when onEvents fails", async () => {
-    const { res, onEvents } = await invokeWebhook({
-      body: JSON.stringify({ events: [{ type: "message" }] }),
-      onEvents: vi.fn(async () => {
-        throw new Error("transient failure");
-      }),
+  it("returns 500 when event processing fails and does not acknowledge with 200", async () => {
+    const onEvents = vi.fn(async () => {
+      throw new Error("boom");
     });
-    await Promise.resolve();
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const middleware = createLineWebhookMiddleware({
+      channelSecret: SECRET,
+      onEvents,
+      runtime,
+    });
 
-    expect(onEvents).toHaveBeenCalledTimes(1);
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ status: "ok" });
+    const req = {
+      headers: { "x-line-signature": sign(rawBody, SECRET) },
+      body: rawBody,
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+    const res = createRes();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await middleware(req, res, {} as any);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.status).not.toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ error: "Internal server error" });
+    expect(runtime.error).toHaveBeenCalled();
   });
 });
