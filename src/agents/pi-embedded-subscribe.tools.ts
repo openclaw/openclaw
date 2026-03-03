@@ -351,3 +351,119 @@ export function extractMessagingToolSend(
       }
     : undefined;
 }
+
+function readTrimmedString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readThreadId(value: unknown): string | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(Math.trunc(value)) : undefined;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function extractMessagingToolSendFromObject(
+  toolName: string,
+  value: unknown,
+): MessagingToolSend | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const accountId = readTrimmedString(record, "accountId");
+  const threadId = readThreadId(record.threadId);
+
+  if (toolName === "message") {
+    const toRaw = readTrimmedString(record, "to") ?? readTrimmedString(record, "target");
+    if (!toRaw) {
+      return undefined;
+    }
+    const providerHint =
+      readTrimmedString(record, "provider") ?? readTrimmedString(record, "channel");
+    const providerId = providerHint ? normalizeChannelId(providerHint) : null;
+    const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : undefined);
+    const to = provider ? normalizeTargetForProvider(provider, toRaw) : toRaw;
+    return to
+      ? {
+          tool: toolName,
+          ...(provider ? { provider } : {}),
+          ...(accountId ? { accountId } : {}),
+          to,
+          ...(threadId ? { threadId } : {}),
+        }
+      : undefined;
+  }
+
+  const providerId = normalizeChannelId(toolName);
+  if (!providerId) {
+    return undefined;
+  }
+  const toRaw =
+    readTrimmedString(record, "to") ??
+    readTrimmedString(record, "target") ??
+    readTrimmedString(record, "channelId");
+  if (!toRaw) {
+    return undefined;
+  }
+  const to = normalizeTargetForProvider(providerId, toRaw);
+  return to
+    ? {
+        tool: toolName,
+        provider: providerId,
+        ...(accountId ? { accountId } : {}),
+        to,
+        ...(threadId ? { threadId } : {}),
+      }
+    : undefined;
+}
+
+export function extractMessagingToolSendFromResult(
+  toolName: string,
+  result: unknown,
+): MessagingToolSend | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const root = result as Record<string, unknown>;
+  const parsedText = (() => {
+    const text = extractToolResultText(result);
+    if (!text) {
+      return undefined;
+    }
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+
+  const candidates: unknown[] = [
+    parsedText,
+    parsedText?.payload,
+    parsedText?.result,
+    parsedText?.details,
+    root.details,
+    root.payload,
+    root.result,
+    root,
+  ];
+
+  for (const candidate of candidates) {
+    const extracted = extractMessagingToolSendFromObject(toolName, candidate);
+    if (extracted?.to) {
+      return extracted;
+    }
+  }
+  return undefined;
+}

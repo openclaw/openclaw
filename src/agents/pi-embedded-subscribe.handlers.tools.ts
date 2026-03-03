@@ -3,13 +3,18 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
-import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
+import {
+  isMessagingTool,
+  isMessagingToolSendAction,
+  type MessagingToolSend,
+} from "./pi-embedded-messaging.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
 import {
   extractMessagingToolSend,
+  extractMessagingToolSendFromResult,
   extractToolErrorMessage,
   extractToolResultMediaPaths,
   extractToolResultText,
@@ -137,6 +142,22 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
   }
 
   return urls;
+}
+
+function mergeMessagingTarget(
+  base: MessagingToolSend,
+  resolved?: MessagingToolSend,
+): MessagingToolSend {
+  if (!resolved) {
+    return base;
+  }
+  return {
+    ...base,
+    ...(resolved.provider ? { provider: resolved.provider } : {}),
+    ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
+    ...(resolved.to ? { to: resolved.to } : {}),
+    ...(resolved.threadId ? { threadId: resolved.threadId } : {}),
+  };
 }
 
 function emitToolResultOutput(params: {
@@ -351,29 +372,6 @@ export async function handleToolExecutionEnd(
     }
   }
 
-  // Commit messaging tool text on success, discard on error.
-  const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
-  const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
-  if (pendingText) {
-    ctx.state.pendingMessagingTexts.delete(toolCallId);
-    if (!isToolError) {
-      ctx.state.messagingToolSentTexts.push(pendingText);
-      const normalizedPendingText = normalizeTextForComparison(pendingText);
-      ctx.state.messagingToolSentTextsNormalized.push(normalizedPendingText);
-      ctx.state.messagingToolSentTextsHadExplicitTarget.push(Boolean(pendingTarget));
-      ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
-      ctx.trimMessagingToolSent();
-    }
-  }
-  if (pendingTarget) {
-    ctx.state.pendingMessagingTargets.delete(toolCallId);
-    if (!isToolError) {
-      ctx.state.messagingToolSentTargets.push(pendingTarget);
-      ctx.trimMessagingToolSent();
-    }
-  }
-  const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
-  ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
   const startArgs =
     startData?.args && typeof startData.args === "object"
       ? (startData.args as Record<string, unknown>)
@@ -383,6 +381,38 @@ export async function handleToolExecutionEnd(
     adjustedArgs && typeof adjustedArgs === "object"
       ? (adjustedArgs as Record<string, unknown>)
       : startArgs;
+
+  // Commit messaging tool text on success, discard on error.
+  const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
+  const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
+  const committedTarget =
+    pendingTarget && !isToolError && isMessagingTool(toolName)
+      ? mergeMessagingTarget(
+          pendingTarget,
+          extractMessagingToolSendFromResult(toolName, result) ??
+            extractMessagingToolSend(toolName, afterToolCallArgs),
+        )
+      : pendingTarget;
+  if (pendingText) {
+    ctx.state.pendingMessagingTexts.delete(toolCallId);
+    if (!isToolError) {
+      ctx.state.messagingToolSentTexts.push(pendingText);
+      const normalizedPendingText = normalizeTextForComparison(pendingText);
+      ctx.state.messagingToolSentTextsNormalized.push(normalizedPendingText);
+      ctx.state.messagingToolSentTextsHadExplicitTarget.push(Boolean(committedTarget));
+      ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
+      ctx.trimMessagingToolSent();
+    }
+  }
+  if (pendingTarget) {
+    ctx.state.pendingMessagingTargets.delete(toolCallId);
+    if (!isToolError) {
+      ctx.state.messagingToolSentTargets.push(committedTarget ?? pendingTarget);
+      ctx.trimMessagingToolSent();
+    }
+  }
+  const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
+  ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
   const isMessagingSend =
     pendingMediaUrls.length > 0 ||
     (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));

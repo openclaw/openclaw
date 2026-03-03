@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { extractMessagingToolSend } from "./pi-embedded-subscribe.tools.js";
+import {
+  extractMessagingToolSend,
+  extractMessagingToolSendFromResult,
+} from "./pi-embedded-subscribe.tools.js";
 
 describe("extractMessagingToolSend", () => {
   beforeEach(() => {
@@ -107,5 +110,43 @@ describe("extractMessagingToolSend", () => {
     expect(result?.provider).toBe("telegram");
     expect(result?.to).toBe("-100123");
     expect(result?.threadId).toBe("88");
+  });
+});
+
+describe("extractMessagingToolSendFromResult", () => {
+  it("extracts a normalized message-tool target from JSON tool output", () => {
+    const result = extractMessagingToolSendFromResult("message", {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            channel: "telegram",
+            to: "123",
+          }),
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      tool: "message",
+      provider: "telegram",
+      to: "123",
+    });
+  });
+
+  it("extracts provider channel-tool target from details payload", () => {
+    const result = extractMessagingToolSendFromResult("telegram", {
+      details: {
+        to: "-100123",
+        threadId: "88",
+      },
+    });
+
+    expect(result).toEqual({
+      tool: "telegram",
+      provider: "telegram",
+      to: "-100123",
+      threadId: "88",
+    });
   });
 });

@@ -295,6 +295,48 @@ describe("messaging tool media URL tracking", () => {
     ]);
   });
 
+  it("updates pending messaging target from resolved tool result payload", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-resolved-target",
+      args: {
+        action: "send",
+        channel: "telegram",
+        to: "@alias",
+        content: "hi",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-resolved-target",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              channel: "telegram",
+              to: "123",
+            }),
+          },
+        ],
+      },
+    });
+
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "123",
+      }),
+    ]);
+  });
+
   it("trims messagingToolSentMediaUrls to 200 on commit (FIFO)", async () => {
     const { ctx } = createTestContext();
 
