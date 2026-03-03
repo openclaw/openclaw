@@ -20,7 +20,7 @@ Scope intent:
 
 ### `openclaw.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
 
-<!-- secretref-supported-list-start -->
+{/_ secretref-supported-list-start _/}
 
 - `models.providers.*.apiKey`
 - `skills.entries.*.apiKey`
@@ -89,7 +89,7 @@ Scope intent:
 
 - `profiles.*.keyRef` (`type: "api_key"`)
 - `profiles.*.tokenRef` (`type: "token"`)
-<!-- secretref-supported-list-end -->
+  {/_ secretref-supported-list-end _/}
 
 Notes:
 
@@ -104,7 +104,7 @@ Notes:
 
 Out-of-scope credentials include:
 
-<!-- secretref-unsupported-list-start -->
+{/_ secretref-unsupported-list-start _/}
 
 - `gateway.auth.token`
 - `commands.ownerDisplaySecret`
@@ -116,7 +116,7 @@ Out-of-scope credentials include:
 - `auth-profiles.oauth.*`
 - `discord.threadBindings.*.webhookToken`
 - `whatsapp.creds.json`
-<!-- secretref-unsupported-list-end -->
+  {/_ secretref-unsupported-list-end _/}
 
 Rationale:
 
