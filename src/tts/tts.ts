@@ -128,6 +128,11 @@ export type ResolvedTtsConfig = {
     proxy?: string;
     timeoutMs?: number;
   };
+  piper: {
+    command: string;
+    voiceModel?: string;
+    format: "mp3" | "wav" | "ogg";
+  };
   prefsPath?: string;
   maxTextLength: number;
   timeoutMs: number;
@@ -302,6 +307,11 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    piper: {
+      command: raw.piper?.command?.trim() || "piper",
+      voiceModel: raw.piper?.voiceModel?.trim() || undefined,
+      format: raw.piper?.format ?? "mp3",
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -511,7 +521,7 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "piper"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -520,6 +530,9 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") {
     return config.edge.enabled;
+  }
+  if (provider === "piper") {
+    return Boolean(config.piper.command);
   }
   return Boolean(resolveTtsApiKey(config, provider));
 }
@@ -561,6 +574,46 @@ export async function textToSpeech(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
+      if (provider === "piper") {
+        const piperCmd = config.piper.command;
+        if (!piperCmd) {
+          errors.push("piper: no command configured");
+          continue;
+        }
+
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+        const extension =
+          config.piper.format === "wav" ? ".wav" : config.piper.format === "ogg" ? ".ogg" : ".mp3";
+        const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
+
+        const args: string[] = [];
+        if (config.piper.voiceModel) {
+          args.push("--model", config.piper.voiceModel);
+        }
+        args.push("--output_file", audioPath);
+
+        const { execFileSync } = await import("node:child_process");
+        execFileSync(piperCmd, args, {
+          input: params.text,
+          timeout: config.timeoutMs,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+
+        scheduleCleanup(tempDir);
+        const voiceCompatible = isVoiceCompatibleAudio({ fileName: audioPath });
+
+        return {
+          success: true,
+          audioPath,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: config.piper.format,
+          voiceCompatible,
+        };
+      }
+
       if (provider === "edge") {
         if (!config.edge.enabled) {
           errors.push("edge: disabled");
@@ -727,6 +780,11 @@ export async function textToSpeechTelephony(params: {
     try {
       if (provider === "edge") {
         errors.push("edge: unsupported for telephony");
+        continue;
+      }
+
+      if (provider === "piper") {
+        errors.push("piper: unsupported for telephony");
         continue;
       }
 

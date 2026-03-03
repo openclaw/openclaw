@@ -78,9 +78,13 @@ export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
   if (!id) {
     return { ok: false, error: "plugin manifest requires id", manifestPath };
   }
-  const configSchema = isRecord(raw.configSchema) ? raw.configSchema : null;
+  const configSchema = isRecord(raw.configSchema)
+    ? raw.configSchema
+    : typeof raw.configSchemaPath === "string"
+      ? { type: "object", additionalProperties: true, properties: {} }
+      : null;
   if (!configSchema) {
-    return { ok: false, error: "plugin manifest requires configSchema", manifestPath };
+    return { ok: false, error: `plugin ${id}: manifest requires configSchema`, manifestPath };
   }
 
   const kind = typeof raw.kind === "string" ? (raw.kind as PluginKind) : undefined;

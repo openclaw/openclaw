@@ -2,6 +2,11 @@
   "id": "simplex",
   "channels": ["simplex"],
   "configSchemaPath": "./src/config-schema.ts",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
   "meta": {
     "label": "SimpleX",
     "selectionLabel": "SimpleX Chat (encrypted DMs)",

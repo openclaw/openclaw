@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "piper";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,15 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Piper (local command) configuration. */
+  piper?: {
+    /** Path to the piper TTS command. */
+    command?: string;
+    /** Path to the voice model (.onnx). */
+    voiceModel?: string;
+    /** Output format. */
+    format?: "mp3" | "wav" | "ogg";
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
