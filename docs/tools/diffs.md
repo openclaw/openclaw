@@ -10,7 +10,7 @@ read_when:
 
 # Diffs
 
-`diffs` is an optional plugin tool that turns change content into a read-only diff artifact for agents.
+`diffs` is an optional plugin tool and companion skill that turns change content into a read-only diff artifact for agents.
 
 It accepts either:
 
