@@ -229,6 +229,20 @@ Check the server logs
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
   });
 
+  it("returns true for horizontal rules (effectively structural, not actionable)", () => {
+    expect(isHeartbeatContentEffectivelyEmpty("---")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("***")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("___")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("- - -")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("* * *")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("_ _ _")).toBe(true);
+  });
+
+  it("returns true for headers + horizontal rules only", () => {
+    const content = "# HEARTBEAT.md\n\n---\n\n## Tasks\n\n---\n";
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+
   it("treats markdown headers as comments (effectively empty)", () => {
     const content = `# HEARTBEAT.md
 ## Section 1

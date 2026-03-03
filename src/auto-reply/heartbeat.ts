@@ -45,6 +45,10 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     if (/^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed)) {
       continue;
     }
+    // Skip horizontal rules: ---, ***, ___ (with optional spaces between)
+    if (/^[-*_][\s]*[-*_][\s]*[-*_]+$/.test(trimmed)) {
+      continue;
+    }
     // Found a non-empty, non-comment line - there's actionable content
     return false;
   }
