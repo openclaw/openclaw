@@ -43,15 +43,29 @@ export function createAccountListHelpers(
     if (ids.length === 0) {
       return [DEFAULT_ACCOUNT_ID];
     }
+    // Check whether any existing named account already normalizes to "default".
+    const normalizedIds = ids.map(normalizeAccountId);
+    if (normalizedIds.includes(DEFAULT_ACCOUNT_ID)) {
+      return ids.toSorted((a, b) => a.localeCompare(b));
+    }
     // If the base channel config has its own tokens (botToken/appToken/token),
-    // include the default account alongside named accounts so both providers start.
-    if (!ids.includes(DEFAULT_ACCOUNT_ID)) {
-      const channel = cfg.channels?.[channelKey];
-      const base = channel as Record<string, unknown> | undefined;
-      const hasBaseTokens = Boolean(base?.botToken || base?.appToken || base?.token);
-      if (hasBaseTokens) {
+    // only inject a default account when at least one named account carries its
+    // own per-account auth.  When every named account inherits the base tokens
+    // (i.e. has no per-account botToken/appToken/token override), injecting
+    // default would start a duplicate provider on the same credentials.
+    const channel = cfg.channels?.[channelKey];
+    const base = channel as Record<string, unknown> | undefined;
+    const hasBaseTokens = Boolean(base?.botToken || base?.appToken || base?.token);
+    if (hasBaseTokens) {
+      const accounts = (base?.accounts ?? {}) as Record<string, Record<string, unknown>>;
+      const someAccountHasOwnTokens = ids.some((id) => {
+        const acct = accounts[id];
+        return acct && Boolean(acct.botToken || acct.appToken || acct.token);
+      });
+      if (someAccountHasOwnTokens) {
         return [DEFAULT_ACCOUNT_ID, ...ids].toSorted((a, b) => a.localeCompare(b));
       }
+      // All named accounts inherit base tokens — don't inject default.
     }
     return ids.toSorted((a, b) => a.localeCompare(b));
   }

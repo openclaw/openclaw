@@ -82,7 +82,20 @@ describe("createAccountListHelpers", () => {
       expect(listAccountIds(cfg({ z: {}, a: {}, m: {} }))).toEqual(["a", "m", "z"]);
     });
 
-    it("includes default when base config has botToken and named accounts exist", () => {
+    it("includes default when base has tokens AND a named account has its own tokens", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            appToken: "xapp-base",
+            accounts: { tank: { botToken: "xoxb-tank" } },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      expect(listAccountIds(config)).toEqual(["default", "tank"]);
+    });
+
+    it("does NOT inject default when named accounts inherit base tokens (avoids duplicates)", () => {
       const config = {
         channels: {
           testchannel: {
@@ -92,7 +105,31 @@ describe("createAccountListHelpers", () => {
           },
         },
       } as unknown as OpenClawConfig;
-      expect(listAccountIds(config)).toEqual(["default", "tank"]);
+      expect(listAccountIds(config)).toEqual(["tank"]);
+    });
+
+    it("does NOT inject default when Discord named accounts inherit base token", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            token: "discord-bot-token",
+            accounts: { teamA: {} },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      expect(listAccountIds(config)).toEqual(["teamA"]);
+    });
+
+    it("does not duplicate default when already in accounts (case-insensitive)", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            accounts: { Default: {}, tank: {} },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      expect(listAccountIds(config)).toEqual(["Default", "tank"]);
     });
 
     it("does not duplicate default when already in accounts", () => {
