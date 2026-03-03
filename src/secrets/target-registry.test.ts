@@ -57,13 +57,42 @@ describe("secret target registry", () => {
       return credentials;
     };
 
+    const markerVariants = {
+      supported: {
+        start: [
+          "[//]: # (secretref-supported-list-start)",
+          '[//]: # "secretref-supported-list-start"',
+        ],
+        end: ["[//]: # (secretref-supported-list-end)", '[//]: # "secretref-supported-list-end"'],
+      },
+      unsupported: {
+        start: [
+          "[//]: # (secretref-unsupported-list-start)",
+          '[//]: # "secretref-unsupported-list-start"',
+        ],
+        end: [
+          "[//]: # (secretref-unsupported-list-end)",
+          '[//]: # "secretref-unsupported-list-end"',
+        ],
+      },
+    };
+
+    const pickMarker = (candidates: string[]): string => {
+      for (const candidate of candidates) {
+        if (surface.includes(candidate)) {
+          return candidate;
+        }
+      }
+      throw new Error(`Missing marker. Tried: ${candidates.join(", ")}`);
+    };
+
     const supportedFromDocs = readMarkedCredentialList({
-      start: '[//]: # "secretref-supported-list-start"',
-      end: '[//]: # "secretref-supported-list-end"',
+      start: pickMarker(markerVariants.supported.start),
+      end: pickMarker(markerVariants.supported.end),
     });
     const unsupportedFromDocs = readMarkedCredentialList({
-      start: '[//]: # "secretref-unsupported-list-start"',
-      end: '[//]: # "secretref-unsupported-list-end"',
+      start: pickMarker(markerVariants.unsupported.start),
+      end: pickMarker(markerVariants.unsupported.end),
     });
 
     const supportedFromMatrix = new Set(
