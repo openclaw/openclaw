@@ -42,6 +42,7 @@ export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
+const TRANSCRIPT_ERROR_MAX_CHARS = 220;
 
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
@@ -669,6 +670,43 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   }
 
   return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+}
+
+export function formatAssistantErrorForTranscript(raw?: string): string {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) {
+    return "LLM request failed with an unknown error.";
+  }
+
+  if (isContextOverflowError(trimmed)) {
+    return "Context overflow: prompt too large for the model.";
+  }
+
+  if (isReasoningConstraintErrorMessage(trimmed)) {
+    return "Reasoning is required for this model endpoint.";
+  }
+
+  const transientCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
+  if (transientCopy) {
+    return transientCopy;
+  }
+
+  if (isTimeoutErrorMessage(trimmed)) {
+    return "LLM request timed out.";
+  }
+
+  if (isBillingErrorMessage(trimmed)) {
+    return BILLING_ERROR_USER_MESSAGE;
+  }
+
+  const uiText =
+    isLikelyHttpErrorText(trimmed) || isRawApiErrorPayload(trimmed)
+      ? formatRawAssistantErrorForUi(trimmed)
+      : trimmed;
+
+  return uiText.length > TRANSCRIPT_ERROR_MAX_CHARS
+    ? `${uiText.slice(0, TRANSCRIPT_ERROR_MAX_CHARS)}…`
+    : uiText;
 }
 
 export function formatAssistantErrorText(
