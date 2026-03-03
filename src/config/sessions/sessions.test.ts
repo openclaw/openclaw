@@ -18,7 +18,10 @@ import {
   validateSessionId,
 } from "./paths.js";
 import { resolveSessionResetPolicy } from "./reset.js";
-import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  appendUserMessageToSessionTranscript,
+} from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
 function useTempSessionsFixture(prefix: string) {
@@ -303,6 +306,84 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.role).toBe("assistant");
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
+    }
+  });
+});
+
+describe("appendUserMessageToSessionTranscript", () => {
+  const fixture = useTempSessionsFixture("user-transcript-test-");
+
+  it("creates transcript file and appends user message for valid session", async () => {
+    const sessionId = "user-test-session-id";
+    const sessionKey = "agent:main:whatsapp:group:120363001234567890";
+    const store = {
+      [sessionKey]: {
+        sessionId,
+        chatType: "group",
+        channel: "whatsapp",
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+
+    const result = await appendUserMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from the group chat",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(fs.existsSync(result.sessionFile)).toBe(true);
+
+      const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
+      expect(lines.length).toBe(2);
+
+      const header = JSON.parse(lines[0]);
+      expect(header.type).toBe("session");
+      expect(header.id).toBe(sessionId);
+
+      const messageLine = JSON.parse(lines[1]);
+      expect(messageLine.type).toBe("message");
+      expect(messageLine.message.role).toBe("user");
+      expect(messageLine.message.content[0].type).toBe("text");
+      expect(messageLine.message.content[0].text).toBe("Hello from the group chat");
+    }
+  });
+
+  it("returns error for missing sessionKey", async () => {
+    const result = await appendUserMessageToSessionTranscript({
+      sessionKey: "",
+      text: "test",
+      storePath: fixture.storePath(),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("missing sessionKey");
+    }
+  });
+
+  it("returns error for empty text", async () => {
+    const result = await appendUserMessageToSessionTranscript({
+      sessionKey: "agent:main:main",
+      text: "   ",
+      storePath: fixture.storePath(),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("empty text");
+    }
+  });
+
+  it("returns error for unknown session key", async () => {
+    fs.writeFileSync(fixture.storePath(), JSON.stringify({}), "utf-8");
+    const result = await appendUserMessageToSessionTranscript({
+      sessionKey: "agent:main:nonexistent",
+      text: "test",
+      storePath: fixture.storePath(),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain("unknown sessionKey");
     }
   });
 });

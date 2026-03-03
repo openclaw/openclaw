@@ -79,6 +79,71 @@ async function ensureSessionHeader(params: {
   });
 }
 
+export async function appendUserMessageToSessionTranscript(params: {
+  agentId?: string;
+  sessionKey: string;
+  text: string;
+  storePath?: string;
+}): Promise<{ ok: true; sessionFile: string } | { ok: false; reason: string }> {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return { ok: false, reason: "missing sessionKey" };
+  }
+
+  const text = params.text.trim();
+  if (!text) {
+    return { ok: false, reason: "empty text" };
+  }
+
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  const entry = store[sessionKey] as SessionEntry | undefined;
+  if (!entry?.sessionId) {
+    return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
+  }
+
+  let sessionFile: string;
+  try {
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: entry.sessionId,
+      sessionKey,
+      sessionStore: store,
+      storePath,
+      sessionEntry: entry,
+      agentId: params.agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+    sessionFile = resolvedSessionFile.sessionFile;
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+
+  // SessionManager only flushes user messages when paired with an assistant reply.
+  // For ingest-only persistence (sendPolicy deny), write the entry directly.
+  const sm = SessionManager.open(sessionFile);
+  const leafId = sm.getLeafId();
+  const messageEntry = {
+    type: "message" as const,
+    id: Math.random().toString(36).slice(2, 10),
+    parentId: leafId,
+    timestamp: new Date().toISOString(),
+    message: {
+      role: "user" as const,
+      content: [{ type: "text" as const, text }],
+      timestamp: Date.now(),
+    },
+  };
+  await fs.promises.appendFile(sessionFile, `${JSON.stringify(messageEntry)}\n`, "utf-8");
+
+  emitSessionTranscriptUpdate(sessionFile);
+  return { ok: true, sessionFile };
+}
+
 export async function appendAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;

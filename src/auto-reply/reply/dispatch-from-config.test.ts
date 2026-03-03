@@ -41,6 +41,12 @@ const acpMocks = vi.hoisted(() => ({
 const sessionBindingMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(targetSessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
+const transcriptMocks = vi.hoisted(() => ({
+  appendUserMessageToSessionTranscript: vi.fn(async () => ({
+    ok: true,
+    sessionFile: "/tmp/mock.jsonl",
+  })),
+}));
 const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
@@ -139,6 +145,9 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
     }),
   };
 });
+vi.mock("../../config/sessions/transcript.js", () => ({
+  appendUserMessageToSessionTranscript: transcriptMocks.appendUserMessageToSessionTranscript,
+}));
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
@@ -228,6 +237,11 @@ describe("dispatchReplyFromConfig", () => {
     acpMocks.requireAcpRuntimeBackend.mockReset();
     sessionBindingMocks.listBySession.mockReset();
     sessionBindingMocks.listBySession.mockReturnValue([]);
+    transcriptMocks.appendUserMessageToSessionTranscript.mockReset();
+    transcriptMocks.appendUserMessageToSessionTranscript.mockResolvedValue({
+      ok: true,
+      sessionFile: "/tmp/mock.jsonl",
+    });
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
@@ -1620,5 +1634,88 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+
+  it("persists inbound message to session transcript when sendPolicy is deny", async () => {
+    setNoAbort();
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "allow",
+          rules: [
+            {
+              action: "deny",
+              match: { channel: "whatsapp", chatType: "group" },
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      ChatType: "group",
+      Body: "Hello from the group",
+      SessionKey: "agent:main:whatsapp:group:120363001234567890",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+    // Wait for the fire-and-forget persistence to settle
+    await vi.waitFor(() => {
+      expect(transcriptMocks.appendUserMessageToSessionTranscript).toHaveBeenCalledTimes(1);
+    });
+    expect(transcriptMocks.appendUserMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:whatsapp:group:120363001234567890",
+        text: "Hello from the group",
+      }),
+    );
+  });
+
+  it("does not persist empty inbound message on sendPolicy deny", async () => {
+    setNoAbort();
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "deny",
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      Body: "",
+      RawBody: "",
+      SessionKey: "agent:main:main",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+
+    expect(transcriptMocks.appendUserMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not persist inbound message when sendPolicy is allow", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      Body: "Normal message",
+      SessionKey: "agent:main:main",
+    });
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(transcriptMocks.appendUserMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 });
