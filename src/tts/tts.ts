@@ -349,7 +349,10 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       instructions: raw.openai?.instructions?.trim() || undefined,
     },
     minimax: {
-      apiKey: raw.minimax?.apiKey,
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.minimax?.apiKey,
+        path: "messages.tts.minimax.apiKey",
+      }),
       baseUrl: raw.minimax?.baseUrl?.trim() || DEFAULT_MINIMAX_BASE_URL,
       model: raw.minimax?.model ?? DEFAULT_MINIMAX_MODEL,
       voiceId: raw.minimax?.voiceId ?? DEFAULT_MINIMAX_VOICE_ID,
