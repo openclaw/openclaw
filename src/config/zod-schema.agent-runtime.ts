@@ -335,6 +335,12 @@ export const ToolProfileSchema = z
   .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
   .optional();
 
+const ToolEntrySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
 type AllowlistPolicy = {
   allow?: string[];
   alsoAllow?: string[];
@@ -508,6 +514,7 @@ const CommonToolPolicyFields = {
   alsoAllow: z.array(z.string()).optional(),
   deny: z.array(z.string()).optional(),
   byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
+  byModel: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
 };
 
 export const AgentToolsSchema = z
@@ -797,6 +804,7 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
+    entries: z.record(z.string(), ToolEntrySchema).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

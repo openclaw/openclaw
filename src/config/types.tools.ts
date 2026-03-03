@@ -140,6 +140,15 @@ export type MediaToolsConfig = {
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
+/**
+ * Per-tool configuration entry.
+ * Allows enabling/disabling individual tools to reduce prompt token usage.
+ */
+export type ToolEntryConfig = {
+  /** Enable or disable this tool (default: true when entry exists). */
+  enabled?: boolean;
+};
+
 export type ToolLoopDetectionDetectorConfig = {
   /** Enable warning/blocking for repeated identical calls to the same tool/params. */
   genericRepeat?: boolean;
@@ -290,6 +299,17 @@ export type AgentToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /**
+   * Per-model tool policy overrides keyed by model id.
+   * Keys can be:
+   * - Full model id: "openai/gpt-4o", "anthropic/claude-3-opus"
+   * - Model id only: "gpt-4o" (matches any provider with this model)
+   * - Pattern: "gpt-*" (glob pattern matching)
+   *
+   * Useful for restricting dangerous tools when using less capable models,
+   * or enabling specific tools only for certain models.
+   */
+  byModel?: Record<string, ToolPolicyConfig>;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -436,6 +456,17 @@ export type ToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /**
+   * Per-model tool policy overrides keyed by model id.
+   * Keys can be:
+   * - Full model id: "openai/gpt-4o", "anthropic/claude-3-opus"
+   * - Model id only: "gpt-4o" (matches any provider with this model)
+   * - Pattern: "gpt-*" (glob pattern matching)
+   *
+   * Useful for restricting dangerous tools when using less capable models,
+   * or enabling specific tools only for certain models.
+   */
+  byModel?: Record<string, ToolPolicyConfig>;
   web?: {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
@@ -599,4 +630,10 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
+  /**
+   * Per-tool configuration entries.
+   * Allows enabling/disabling individual tools by name.
+   * Example: { "web_fetch": { "enabled": false }, "browser": { "enabled": false } }
+   */
+  entries?: Record<string, ToolEntryConfig>;
 };

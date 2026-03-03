@@ -19,16 +19,21 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
   profile?: string;
   providerProfilePolicy?: ToolPolicyLike;
   providerProfile?: string;
+  modelProfilePolicy?: ToolPolicyLike;
+  modelProfile?: string;
   globalPolicy?: ToolPolicyLike;
   globalProviderPolicy?: ToolPolicyLike;
+  globalModelPolicy?: ToolPolicyLike;
   agentPolicy?: ToolPolicyLike;
   agentProviderPolicy?: ToolPolicyLike;
+  agentModelPolicy?: ToolPolicyLike;
   groupPolicy?: ToolPolicyLike;
   agentId?: string;
 }): ToolPolicyPipelineStep[] {
   const agentId = params.agentId?.trim();
   const profile = params.profile?.trim();
   const providerProfile = params.providerProfile?.trim();
+  const modelProfile = params.modelProfile?.trim();
   return [
     {
       policy: params.profilePolicy,
@@ -42,10 +47,20 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
         : "tools.byProvider.profile",
       stripPluginOnlyAllowlist: true,
     },
+    {
+      policy: params.modelProfilePolicy,
+      label: modelProfile ? `tools.byModel.profile (${modelProfile})` : "tools.byModel.profile",
+      stripPluginOnlyAllowlist: true,
+    },
     { policy: params.globalPolicy, label: "tools.allow", stripPluginOnlyAllowlist: true },
     {
       policy: params.globalProviderPolicy,
       label: "tools.byProvider.allow",
+      stripPluginOnlyAllowlist: true,
+    },
+    {
+      policy: params.globalModelPolicy,
+      label: "tools.byModel.allow",
       stripPluginOnlyAllowlist: true,
     },
     {
@@ -56,6 +71,11 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
     {
       policy: params.agentProviderPolicy,
       label: agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
+      stripPluginOnlyAllowlist: true,
+    },
+    {
+      policy: params.agentModelPolicy,
+      label: agentId ? `agents.${agentId}.tools.byModel.allow` : "agent tools.byModel.allow",
       stripPluginOnlyAllowlist: true,
     },
     { policy: params.groupPolicy, label: "group tools.allow", stripPluginOnlyAllowlist: true },
