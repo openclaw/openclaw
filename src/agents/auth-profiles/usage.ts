@@ -226,6 +226,47 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
 }
 
 /**
+ * Record that a profile was selected for a new session.
+ * Bumps `lastUsed` immediately so rapid /new sequences rotate correctly
+ * without waiting for markAuthProfileUsed (called after run completion).
+ * Does NOT reset error counts or cooldowns.
+ */
+export async function recordAuthProfileSelected(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  agentDir?: string;
+}): Promise<void> {
+  const { store, profileId, agentDir } = params;
+  const updated = await updateAuthProfileStoreWithLock({
+    agentDir,
+    updater: (freshStore) => {
+      if (!freshStore.profiles[profileId]) {
+        return false;
+      }
+      freshStore.usageStats = freshStore.usageStats ?? {};
+      freshStore.usageStats[profileId] = {
+        ...freshStore.usageStats[profileId],
+        lastUsed: Date.now(),
+      };
+      return true;
+    },
+  });
+  if (updated) {
+    store.usageStats = updated.usageStats;
+    return;
+  }
+  if (!store.profiles[profileId]) {
+    return;
+  }
+  store.usageStats = store.usageStats ?? {};
+  store.usageStats[profileId] = {
+    ...store.usageStats[profileId],
+    lastUsed: Date.now(),
+  };
+  saveAuthProfileStore(store, agentDir);
+}
+
+/**
  * Mark a profile as successfully used. Resets error count and updates lastUsed.
  * Uses store lock to avoid overwriting concurrent usage updates.
  */
