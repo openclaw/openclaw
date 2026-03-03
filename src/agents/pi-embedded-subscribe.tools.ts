@@ -312,11 +312,20 @@ export function extractMessagingToolSend(
     }
     const providerRaw = typeof args.provider === "string" ? args.provider.trim() : "";
     const channelRaw = typeof args.channel === "string" ? args.channel.trim() : "";
+    const threadIdRaw = typeof args.threadId === "string" ? args.threadId.trim() : "";
     const providerHint = providerRaw || channelRaw;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : undefined);
     const to = provider ? normalizeTargetForProvider(provider, toRaw) : toRaw.trim() || undefined;
-    return to ? { tool: toolName, ...(provider ? { provider } : {}), accountId, to } : undefined;
+    return to
+      ? {
+          tool: toolName,
+          ...(provider ? { provider } : {}),
+          accountId,
+          to,
+          ...(threadIdRaw ? { threadId: threadIdRaw } : {}),
+        }
+      : undefined;
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {

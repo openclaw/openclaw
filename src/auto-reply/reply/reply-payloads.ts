@@ -179,21 +179,35 @@ function targetsMatchForSuppression(params: {
   provider: string;
   originTarget: string;
   targetKey: string;
+  targetThreadId?: string;
 }): boolean {
-  if (params.targetKey === params.originTarget) {
-    return true;
-  }
-  // Telegram auto-threading can route chat-level sends into the active topic.
-  // In that case `targetKey` may omit `:topic:` while `originTarget` includes it.
   if (params.provider !== "telegram") {
-    return false;
+    return params.targetKey === params.originTarget;
   }
   const origin = parseTelegramTarget(params.originTarget);
   const target = parseTelegramTarget(params.targetKey);
-  if (!origin.messageThreadId || target.messageThreadId) {
+  const explicitTargetThreadId =
+    typeof params.targetThreadId === "string" && /^\d+$/.test(params.targetThreadId.trim())
+      ? Number.parseInt(params.targetThreadId, 10)
+      : undefined;
+  const targetThreadId = explicitTargetThreadId ?? target.messageThreadId;
+  if (origin.chatId.trim().toLowerCase() !== target.chatId.trim().toLowerCase()) {
     return false;
   }
-  return origin.chatId.trim().toLowerCase() === target.chatId.trim().toLowerCase();
+  // Exact thread match is always in-scope.
+  if (origin.messageThreadId && targetThreadId) {
+    return origin.messageThreadId === targetThreadId;
+  }
+  // Telegram auto-threading can route chat-level sends into the active topic.
+  // In that case the send target omits topic metadata and inherits the origin topic.
+  if (origin.messageThreadId && !targetThreadId) {
+    return true;
+  }
+  // Origin is non-topic; explicit topic sends are a different destination.
+  if (!origin.messageThreadId && targetThreadId) {
+    return false;
+  }
+  return params.targetKey === params.originTarget;
 }
 
 export function shouldSuppressMessagingToolReplies(params: {
@@ -231,6 +245,11 @@ export function shouldSuppressMessagingToolReplies(params: {
     if (originAccount && targetAccount && originAccount !== targetAccount) {
       return false;
     }
-    return targetsMatchForSuppression({ provider, originTarget, targetKey });
+    return targetsMatchForSuppression({
+      provider,
+      originTarget,
+      targetKey,
+      targetThreadId: target.threadId,
+    });
   });
 }

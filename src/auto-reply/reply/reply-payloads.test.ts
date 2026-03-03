@@ -124,4 +124,26 @@ describe("shouldSuppressMessagingToolReplies", () => {
     });
     expect(suppressed).toBe(true);
   });
+
+  it("suppresses telegram topic-origin replies when explicit threadId matches origin topic", () => {
+    const suppressed = shouldSuppressMessagingToolReplies({
+      messageProvider: "telegram",
+      originatingTo: "telegram:group:-100123:topic:77",
+      messagingToolSentTargets: [
+        { tool: "message", provider: "telegram", to: "-100123", threadId: "77" },
+      ],
+    });
+    expect(suppressed).toBe(true);
+  });
+
+  it("does not suppress telegram topic-origin replies when explicit threadId targets another topic", () => {
+    const suppressed = shouldSuppressMessagingToolReplies({
+      messageProvider: "telegram",
+      originatingTo: "telegram:group:-100123:topic:77",
+      messagingToolSentTargets: [
+        { tool: "message", provider: "telegram", to: "-100123", threadId: "88" },
+      ],
+    });
+    expect(suppressed).toBe(false);
+  });
 });

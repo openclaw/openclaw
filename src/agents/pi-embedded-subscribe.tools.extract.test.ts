@@ -58,4 +58,18 @@ describe("extractMessagingToolSend", () => {
     expect(result?.provider).toBeUndefined();
     expect(result?.to).toBe("268300329");
   });
+
+  it("captures explicit threadId for message sends", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      channel: "telegram",
+      to: "-100123",
+      threadId: "77",
+    });
+
+    expect(result?.tool).toBe("message");
+    expect(result?.provider).toBe("telegram");
+    expect(result?.to).toBe("telegram:-100123");
+    expect(result?.threadId).toBe("77");
+  });
 });
