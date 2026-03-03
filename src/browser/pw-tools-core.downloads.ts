@@ -4,11 +4,7 @@ import path from "node:path";
 import type { Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { writeViaSiblingTempPath } from "./output-atomic.js";
-import {
-  DEFAULT_DOWNLOAD_DIR,
-  DEFAULT_UPLOAD_DIR,
-  resolveStrictExistingPathsWithinRoot,
-} from "./paths.js";
+import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {
   ensurePageState,
   getPageForTargetId,
@@ -95,8 +91,11 @@ async function saveDownloadPayload(download: DownloadPayload, outPath: string) {
   if (!requestedPath) {
     await download.saveAs?.(resolvedOutPath);
   } else {
+    // Use the target's parent directory as root so explicit user-specified
+    // download paths are not constrained to DEFAULT_DOWNLOAD_DIR. The atomic
+    // write (temp sibling → rename) still protects against hardlink overwrites.
     await writeViaSiblingTempPath({
-      rootDir: DEFAULT_DOWNLOAD_DIR,
+      rootDir: path.dirname(resolvedOutPath),
       targetPath: resolvedOutPath,
       writeTemp: async (tempPath) => {
         await download.saveAs?.(tempPath);
