@@ -218,6 +218,26 @@ describe("maybeApplyApiKeyFromOption", () => {
 });
 
 describe("ensureApiKeyFromEnvOrPrompt", () => {
+  it("prefers provider API key env vars over oauth env vars for reuse", async () => {
+    process.env.MINIMAX_OAUTH_TOKEN = "oauth-token";
+    process.env.MINIMAX_API_KEY = "api-key";
+
+    const { confirm, text, setCredential } = createPromptAndCredentialSpies({
+      confirmResult: true,
+      textResult: "prompt-key",
+    });
+
+    const result = await ensureMinimaxApiKey({
+      confirm,
+      text,
+      setCredential,
+    });
+
+    expect(result).toBe("api-key");
+    expect(setCredential).toHaveBeenCalledWith("api-key", "plaintext");
+    expect(text).not.toHaveBeenCalled();
+  });
+
   it("uses env credential when user confirms", async () => {
     const { result, setCredential, text } = await runEnsureMinimaxApiKeyFlow({
       confirmResult: true,

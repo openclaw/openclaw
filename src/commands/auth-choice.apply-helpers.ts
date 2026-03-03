@@ -1,7 +1,7 @@
 import {
   ensureAuthProfileStore,
+  getCustomProviderApiKey,
   resolveAuthProfileOrder,
-  resolveApiKeyForProvider,
   resolveEnvApiKey,
 } from "../agents/model-auth.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles.js";
@@ -100,66 +100,72 @@ async function resolveExistingProviderApiKey(params: {
   agentDir?: string;
 }): Promise<{ apiKey: string; source: string; credential: SecretInput } | null> {
   try {
-    const resolved = await resolveApiKeyForProvider({
-      provider: params.provider,
-      cfg: params.config,
-      agentDir: params.agentDir,
-    });
-    if (resolved.profileId && resolved.mode !== "api-key") {
-      return null;
-    }
-    if (typeof resolved.apiKey !== "string" || resolved.apiKey.trim().length === 0) {
-      return null;
-    }
-
-    let credential: SecretInput = resolved.apiKey;
-    let source = resolved.source;
     const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
-    if (resolved.profileId && resolved.mode === "api-key") {
-      const profile = store.profiles[resolved.profileId];
-      if (profile?.type === "api_key" && profile.keyRef) {
-        credential = profile.keyRef;
+    const orderedProfiles = resolveAuthProfileOrder({
+      cfg: params.config,
+      store,
+      provider: params.provider,
+    });
+    const candidateProfileIds = new Set<string>(orderedProfiles);
+    for (const [profileId, profile] of Object.entries(store.profiles)) {
+      if (profile?.type === "api_key" && profile.provider === params.provider) {
+        candidateProfileIds.add(profileId);
       }
-    } else if (resolved.mode === "api-key") {
-      // If resolution fell back to env/models, preserve an existing api_key keyRef when it
-      // resolves to the same effective value to avoid silently downgrading ref storage.
-      const orderedProfiles = resolveAuthProfileOrder({
-        cfg: params.config,
-        store,
-        provider: params.provider,
-      });
-      const candidateProfileIds = new Set<string>(orderedProfiles);
-      for (const [profileId, profile] of Object.entries(store.profiles)) {
-        if (profile?.type === "api_key" && profile.provider === params.provider) {
-          candidateProfileIds.add(profileId);
-        }
+    }
+    for (const profileId of candidateProfileIds) {
+      const profile = store.profiles[profileId];
+      if (profile?.type !== "api_key") {
+        continue;
       }
-      for (const profileId of candidateProfileIds) {
-        const profile = store.profiles[profileId];
-        if (profile?.type !== "api_key" || !profile.keyRef) {
+      try {
+        const profileResolved = await resolveApiKeyForProfile({
+          cfg: params.config,
+          store,
+          profileId,
+          agentDir: params.agentDir,
+        });
+        if (!profileResolved?.apiKey) {
           continue;
         }
-        try {
-          const profileResolved = await resolveApiKeyForProfile({
-            cfg: params.config,
-            store,
-            profileId,
-            agentDir: params.agentDir,
-          });
-          if (profileResolved?.apiKey === resolved.apiKey) {
-            credential = profile.keyRef;
-            source = `profile:${profileId}`;
-            break;
-          }
-        } catch {}
+        return {
+          apiKey: profileResolved.apiKey,
+          source: `profile:${profileId}`,
+          credential: profile.keyRef ?? profileResolved.apiKey,
+        };
+      } catch {}
+    }
+
+    const envKey = resolveEnvApiKey(params.provider);
+    if (envKey && !envKey.source.includes("OAUTH_TOKEN")) {
+      return {
+        apiKey: envKey.apiKey,
+        source: envKey.source,
+        credential: envKey.apiKey,
+      };
+    }
+
+    const apiEnvVars = PROVIDER_ENV_VARS[params.provider] ?? [];
+    for (const envVar of apiEnvVars) {
+      const value = process.env[envVar]?.trim();
+      if (value) {
+        return {
+          apiKey: value,
+          source: `env: ${envVar}`,
+          credential: value,
+        };
       }
     }
 
-    return {
-      apiKey: resolved.apiKey,
-      source,
-      credential,
-    };
+    const configApiKey = getCustomProviderApiKey(params.config, params.provider);
+    if (configApiKey) {
+      return {
+        apiKey: configApiKey,
+        source: "models.json",
+        credential: configApiKey,
+      };
+    }
+
+    return null;
   } catch {
     return null;
   }
