@@ -102,6 +102,37 @@ export type ChatProps = {
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
+const BASE64_CHUNK_SIZE = 8192;
+
+export function encodeBytesToBase64(bytes: Uint8Array): string {
+  const binaryChunks: string[] = [];
+  for (let i = 0; i < bytes.length; i += BASE64_CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, i + BASE64_CHUNK_SIZE);
+    let binary = "";
+    for (let j = 0; j < chunk.length; j += 1) {
+      binary += String.fromCharCode(chunk[j]);
+    }
+    binaryChunks.push(binary);
+  }
+  return btoa(binaryChunks.join(""));
+}
+
+function arrayBufferToDataUrl(buffer: ArrayBuffer, mimeType: string): string {
+  const base64 = encodeBytesToBase64(new Uint8Array(buffer));
+  return `data:${mimeType};base64,${base64}`;
+}
+
+function readFileAsDataUrl(file: File, onLoad: (dataUrl: string) => void): void {
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    const result = reader.result;
+    if (!(result instanceof ArrayBuffer)) {
+      return;
+    }
+    onLoad(arrayBufferToDataUrl(result, file.type || "application/octet-stream"));
+  });
+  reader.readAsArrayBuffer(file);
+}
 
 // Persistent instances keyed by session
 const inputHistories = new Map<string, InputHistory>();
@@ -381,9 +412,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     if (!file) {
       continue;
     }
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
+    readFileAsDataUrl(file, (dataUrl) => {
       const newAttachment: ChatAttachment = {
         id: generateAttachmentId(),
         dataUrl,
@@ -392,7 +421,6 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
       const current = props.attachments ?? [];
       props.onAttachmentsChange?.([...current, newAttachment]);
     });
-    reader.readAsDataURL(file);
   }
 }
 
@@ -409,11 +437,10 @@ function handleFileSelect(e: Event, props: ChatProps) {
       continue;
     }
     pending++;
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
+    readFileAsDataUrl(file, (dataUrl) => {
       additions.push({
         id: generateAttachmentId(),
-        dataUrl: reader.result as string,
+        dataUrl,
         mimeType: file.type,
       });
       pending--;
@@ -421,7 +448,6 @@ function handleFileSelect(e: Event, props: ChatProps) {
         props.onAttachmentsChange?.([...current, ...additions]);
       }
     });
-    reader.readAsDataURL(file);
   }
   input.value = "";
 }
@@ -440,11 +466,10 @@ function handleDrop(e: DragEvent, props: ChatProps) {
       continue;
     }
     pending++;
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
+    readFileAsDataUrl(file, (dataUrl) => {
       additions.push({
         id: generateAttachmentId(),
-        dataUrl: reader.result as string,
+        dataUrl,
         mimeType: file.type,
       });
       pending--;
@@ -452,7 +477,6 @@ function handleDrop(e: DragEvent, props: ChatProps) {
         props.onAttachmentsChange?.([...current, ...additions]);
       }
     });
-    reader.readAsDataURL(file);
   }
 }
 
