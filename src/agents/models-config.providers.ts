@@ -948,7 +948,14 @@ export async function resolveImplicitProviders(params: {
     resolveEnvApiKeyVarName("moonshot") ??
     resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
   if (moonshotKey) {
-    providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
+    const explicitMoonshotBaseUrl = params.explicitProviders?.moonshot?.baseUrl;
+    providers.moonshot = {
+      ...buildMoonshotProvider(),
+      ...(typeof explicitMoonshotBaseUrl === "string" && explicitMoonshotBaseUrl
+        ? { baseUrl: explicitMoonshotBaseUrl }
+        : {}),
+      apiKey: moonshotKey,
+    };
   }
 
   const kimiCodingKey =
