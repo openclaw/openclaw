@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
+import type WebSocket from "ws";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import {
   connectOk,
@@ -138,7 +139,7 @@ function expectCronJobIdFromResponse(response: { ok?: unknown; payload?: unknown
   return id;
 }
 
-async function addMainSystemEventCronJob(params: { ws: unknown; name: string; text?: string }) {
+async function addMainSystemEventCronJob(params: { ws: WebSocket; name: string; text?: string }) {
   const response = await rpcReq(params.ws, "cron.add", {
     name: params.name,
     enabled: true,

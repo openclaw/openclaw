@@ -120,7 +120,7 @@ function expectErrorResultMessage(result: { details: unknown }, pattern: RegExp)
 }
 
 function expectThreadBindFailureCleanup(
-  details: { childSessionKey?: string },
+  details: { childSessionKey?: string; error?: string },
   pattern: RegExp,
 ): void {
   expect(details.error).toMatch(pattern);
