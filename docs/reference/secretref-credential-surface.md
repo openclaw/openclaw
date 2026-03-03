@@ -89,8 +89,7 @@ Scope intent:
 
 - `profiles.*.keyRef` (`type: "api_key"`)
 - `profiles.*.tokenRef` (`type: "token"`)
-
-[//]: # "secretref-supported-list-end"
+  [//]: # (secretref-supported-list-end)
 
 Notes:
 
@@ -117,8 +116,7 @@ Out-of-scope credentials include:
 - `auth-profiles.oauth.*`
 - `discord.threadBindings.*.webhookToken`
 - `whatsapp.creds.json`
-
-[//]: # "secretref-unsupported-list-end"
+  [//]: # (secretref-unsupported-list-end)
 
 Rationale:
 
