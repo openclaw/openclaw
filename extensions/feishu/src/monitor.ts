@@ -41,11 +41,20 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     if (!account.enabled || !account.configured) {
       throw new Error(`Feishu account "${opts.accountId}" not configured or disabled`);
     }
+    // Prefetch bot open_id so monitorSingleAccount does not re-fetch.
+    const botOpenId = await fetchBotOpenIdForMonitor(account, {
+      runtime: opts.runtime,
+      abortSignal: opts.abortSignal,
+    });
+    if (opts.abortSignal?.aborted) {
+      return;
+    }
     return monitorSingleAccount({
       cfg,
       account,
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
+      botOpenIdSource: { kind: "prefetched", botOpenId },
     });
   }
 
