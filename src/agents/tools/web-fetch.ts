@@ -348,6 +348,10 @@ function normalizeContentType(value: string | null | undefined): string | undefi
   return trimmed || undefined;
 }
 
+function isFetchFailedTypeError(error: unknown): boolean {
+  return error instanceof TypeError && error.message === "fetch failed";
+}
+
 export async function fetchFirecrawlContent(params: {
   url: string;
   extractMode: ExtractMode;
@@ -523,7 +527,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
-    const result = await fetchWithWebToolsNetworkGuard({
+    const requestParams = {
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
@@ -534,7 +538,18 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           "Accept-Language": "en-US,en;q=0.9",
         },
       },
-    });
+    };
+
+    let result;
+    try {
+      result = await fetchWithWebToolsNetworkGuard(requestParams);
+    } catch (error) {
+      if (!isFetchFailedTypeError(error)) {
+        throw error;
+      }
+      result = await fetchWithWebToolsNetworkGuard({ ...requestParams, useEnvProxy: true });
+    }
+
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
