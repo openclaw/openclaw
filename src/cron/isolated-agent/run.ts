@@ -236,13 +236,17 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
   const now = Date.now();
+  const forceNewSession =
+    params.job.sessionTarget === "isolated" && baseSessionKey.startsWith("cron:");
   const cronSession = resolveCronSession({
     cfg: params.cfg,
     sessionKey: agentSessionKey,
     agentId,
     nowMs: now,
-    // Isolated cron runs must not carry prior turn context across executions.
-    forceNew: params.job.sessionTarget === "isolated",
+    // Scheduled cron jobs remain stateless by default, but webhook-triggered
+    // isolated runs (sessionKey starts with hook:) should reuse sessionKey
+    // continuity when configured/allowed.
+    forceNew: forceNewSession,
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   const runSessionKey = baseSessionKey.startsWith("cron:")
