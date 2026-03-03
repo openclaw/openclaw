@@ -143,6 +143,12 @@ async function execSystemctl(
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
+  // When systemctl returns exit code 4 with "not-found", execFileUtf8 may replace
+  // empty stderr with error.message, causing stderr to contain " ..."
+  // while stdout contains theCommand failed: actual output "not-found". Prefer stdout in this case.
+  if (result.stderr.toLowerCase().includes("command failed")) {
+    return (result.stdout || result.stderr || "").trim();
+  }
   return (result.stderr || result.stdout || "").trim();
 }
 
