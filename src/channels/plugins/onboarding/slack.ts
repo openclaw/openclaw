@@ -97,23 +97,27 @@ function buildSlackManifest(botName: string) {
   return JSON.stringify(manifest, null, 2);
 }
 
-async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Promise<void> {
+export async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Promise<void> {
   const manifest = buildSlackManifest(botName);
-  await prompter.note(
-    [
-      "1) Slack API → Create App → From scratch or From manifest (with the JSON below)",
-      "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
-      "3) Install App to workspace to get the xoxb- bot token",
-      "4) Enable Event Subscriptions (socket) for message events",
-      "5) App Home → enable the Messages tab for DMs",
-      "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
-      `Docs: ${formatDocsLink("/slack", "slack")}`,
-      "",
-      "Manifest (JSON):",
-      manifest,
-    ].join("\n"),
-    "Slack socket mode tokens",
-  );
+  const setupLines = [
+    "1) Slack API → Create App → From scratch or From manifest (use the JSON block shown after this note)",
+    "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
+    "3) Install App to workspace to get the xoxb- bot token",
+    "4) Enable Event Subscriptions (socket) for message events",
+    "5) App Home → enable the Messages tab for DMs",
+    "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
+    `Docs: ${formatDocsLink("/slack", "slack")}`,
+  ];
+  await prompter.note(setupLines.join("\n"), "Slack socket mode tokens");
+  if (prompter.codeBlock) {
+    await prompter.codeBlock({
+      title: "Manifest (JSON)",
+      language: "json",
+      code: manifest,
+    });
+    return;
+  }
+  await prompter.note(`Manifest (JSON):\n${manifest}`, "Slack socket mode tokens");
 }
 
 function setSlackChannelAllowlist(

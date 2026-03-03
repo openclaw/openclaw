@@ -62,6 +62,13 @@ export function createClackPrompter(): WizardPrompter {
     note: async (message, title) => {
       emitNote(message, title);
     },
+    codeBlock: async (params) => {
+      if (params.title?.trim()) {
+        emitNote("Copy/paste the block below exactly as shown.", params.title);
+      }
+      const code = String(params.code ?? "");
+      process.stdout.write(`${code}\n`);
+    },
     select: async (params) =>
       guardCancel(
         await select({
