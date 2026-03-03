@@ -205,7 +205,24 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
   res.end(body);
 }
 
-function serveResolvedIndexHtml(res: ServerResponse, body: string) {
+function serveResolvedIndexHtml(
+  res: ServerResponse,
+  body: string,
+  opts?: { injectAuthToken?: string },
+) {
+  if (opts?.injectAuthToken) {
+    // Escape for safe embedding in a JS string literal inside an inline <script>.
+    const safeToken = opts.injectAuthToken.replace(/[\\'"<>&]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    const snippet = [
+      "<script>",
+      "try{",
+      `var k="openclaw.control.settings.v1",s=JSON.parse(localStorage.getItem(k)||"{}");`,
+      `if(!s.token){s.token="${safeToken}";localStorage.setItem(k,JSON.stringify(s))}`,
+      "}catch(e){}",
+      "</script>",
+    ].join("");
+    body = body.replace("</head>", `${snippet}</head>`);
+  }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.end(body);
@@ -264,6 +281,29 @@ function isSafeRelativePath(relPath: string) {
     return false;
   }
   return true;
+}
+
+/**
+ * When the gateway runs in local mode with allowInsecureAuth enabled,
+ * return the configured auth token so it can be injected into the
+ * served index.html — letting the Control UI auto-connect without
+ * the user manually entering the token.
+ */
+function resolveInjectableAuthToken(config?: OpenClawConfig): string | undefined {
+  if (!config) {
+    return undefined;
+  }
+  const gwCfg = config.gateway;
+  const isLocal = gwCfg?.mode === "local";
+  const allowInsecure = gwCfg?.controlUi?.allowInsecureAuth === true;
+  if (!isLocal && !allowInsecure) {
+    return undefined;
+  }
+  const auth = gwCfg?.auth;
+  if (auth?.mode === "token" && typeof auth.token === "string" && auth.token) {
+    return auth.token;
+  }
+  return undefined;
 }
 
 export function handleControlUiHttpRequest(
@@ -417,6 +457,10 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
+  // In local dev mode with allowInsecureAuth, inject the auth token into the
+  // served index.html so the Control UI can auto-connect without manual entry.
+  const injectAuthToken = resolveInjectableAuthToken(opts?.config);
+
   const safeFile = resolveSafeControlUiFile(rootReal, filePath);
   if (safeFile) {
     try {
@@ -427,7 +471,7 @@ export function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"));
+        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"), { injectAuthToken });
         return true;
       }
       serveResolvedFile(res, safeFile.path, fs.readFileSync(safeFile.fd));
@@ -458,7 +502,7 @@ export function handleControlUiHttpRequest(
         res.end();
         return true;
       }
-      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
+      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"), { injectAuthToken });
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);
