@@ -66,6 +66,26 @@ describe("resolveDefaultFeishuAccountId", () => {
 });
 
 describe("resolveFeishuAccount", () => {
+  it("uses top-level credentials with configured default account id even without account map entry", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          defaultAccount: "router-d",
+          appId: "top_level_app",
+          appSecret: "top_level_secret",
+          accounts: {
+            default: { appId: "cli_default", appSecret: "secret_default" },
+          },
+        },
+      },
+    };
+
+    const account = resolveFeishuAccount({ cfg: cfg as never, accountId: undefined });
+    expect(account.accountId).toBe("router-d");
+    expect(account.configured).toBe(true);
+    expect(account.appId).toBe("top_level_app");
+  });
+
   it("uses configured default account when accountId is omitted", () => {
     const cfg = {
       channels: {
