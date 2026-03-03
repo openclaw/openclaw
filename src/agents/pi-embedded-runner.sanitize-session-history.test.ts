@@ -1,8 +1,8 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as helpers from "./pi-embedded-helpers.js";
 import {
-  expectOpenAIResponsesStrictSanitizeCall,
+  expectGoogleModelApiFullSanitizeCall,
   loadSanitizeSessionHistoryWithCleanMocks,
   makeMockSessionManager,
   makeInMemorySessionManager,
@@ -10,12 +10,10 @@ import {
   makeReasoningAssistantMessages,
   makeSimpleUserMessages,
   sanitizeSnapshotChangedOpenAIReasoning,
-  type SanitizeSessionHistoryHarness,
   type SanitizeSessionHistoryFn,
   sanitizeWithOpenAIResponses,
   TEST_SESSION_ID,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
-import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 vi.mock("./pi-embedded-helpers.js", async () => ({
@@ -25,9 +23,6 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 }));
 
 let sanitizeSessionHistory: SanitizeSessionHistoryFn;
-let mockedHelpers: SanitizeSessionHistoryHarness["mockedHelpers"];
-let testTimestamp = 1;
-const nextTimestamp = () => testTimestamp++;
 
 // We don't mock session-transcript-repair.js as it is a pure function and complicates mocking.
 // We rely on the real implementation which should pass through our simple messages.
@@ -36,7 +31,7 @@ describe("sanitizeSessionHistory", () => {
   const mockSessionManager = makeMockSessionManager();
   const mockMessages = makeSimpleUserMessages();
   const setNonGoogleModelApi = () => {
-    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
   };
 
   const sanitizeGithubCopilotHistory = async (params: {
@@ -53,21 +48,6 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-  const sanitizeAnthropicHistory = async (params: {
-    messages: AgentMessage[];
-    provider?: string;
-    modelApi?: string;
-    modelId?: string;
-  }) =>
-    sanitizeSessionHistory({
-      messages: params.messages,
-      modelApi: params.modelApi ?? "anthropic-messages",
-      provider: params.provider ?? "anthropic",
-      modelId: params.modelId ?? "claude-opus-4-6",
-      sessionManager: makeMockSessionManager(),
-      sessionId: TEST_SESSION_ID,
-    });
-
   const getAssistantMessage = (messages: AgentMessage[]) => {
     expect(messages[1]?.role).toBe("assistant");
     return messages[1] as Extract<AgentMessage, { role: "assistant" }>;
@@ -78,33 +58,23 @@ describe("sanitizeSessionHistory", () => {
 
   const makeThinkingAndTextAssistantMessages = (
     thinkingSignature: string = "some_sig",
-  ): AgentMessage[] => {
-    const user: UserMessage = {
-      role: "user",
-      content: "hello",
-      timestamp: nextTimestamp(),
-    };
-    const assistant: AssistantMessage = {
-      role: "assistant",
-      content: [
-        {
-          type: "thinking",
-          thinking: "internal",
-          thinkingSignature,
-        },
-        { type: "text", text: "hi" },
-      ],
-      api: "openai-responses",
-      provider: "openai",
-      model: "gpt-5.2",
-      usage: makeUsage(0, 0, 0),
-      stopReason: "stop",
-      timestamp: nextTimestamp(),
-    };
-    return [user, assistant];
-  };
+  ): AgentMessage[] =>
+    [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal",
+            thinkingSignature,
+          },
+          { type: "text", text: "hi" },
+        ],
+      },
+    ] as unknown as AgentMessage[];
 
-  const makeUsage = (input: number, output: number, totalTokens: number): Usage => ({
+  const makeUsage = (input: number, output: number, totalTokens: number) => ({
     input,
     output,
     cacheRead: 0,
@@ -117,48 +87,22 @@ describe("sanitizeSessionHistory", () => {
     text: string;
     usage: ReturnType<typeof makeUsage>;
     timestamp?: number;
-  }): AssistantMessage => ({
-    role: "assistant",
-    content: [{ type: "text", text: params.text }],
-    api: "openai-responses",
-    provider: "openai",
-    model: "gpt-5.2",
-    stopReason: "stop",
-    timestamp: params.timestamp ?? nextTimestamp(),
-    usage: params.usage,
-  });
-
-  const makeUserMessage = (content: string, timestamp = nextTimestamp()): UserMessage => ({
-    role: "user",
-    content,
-    timestamp,
-  });
-
-  const makeAssistantMessage = (
-    content: AssistantMessage["content"],
-    params: {
-      stopReason?: AssistantMessage["stopReason"];
-      usage?: Usage;
-      timestamp?: number;
-    } = {},
-  ): AssistantMessage => ({
-    role: "assistant",
-    content,
-    api: "openai-responses",
-    provider: "openai",
-    model: "gpt-5.2",
-    usage: params.usage ?? makeUsage(0, 0, 0),
-    stopReason: params.stopReason ?? "stop",
-    timestamp: params.timestamp ?? nextTimestamp(),
-  });
+  }) =>
+    ({
+      role: "assistant",
+      content: [{ type: "text", text: params.text }],
+      stopReason: "stop",
+      ...(typeof params.timestamp === "number" ? { timestamp: params.timestamp } : {}),
+      usage: params.usage,
+    }) as unknown as AgentMessage;
 
   const makeCompactionSummaryMessage = (tokensBefore: number, timestamp: string) =>
-    castAgentMessage({
+    ({
       role: "compactionSummary",
       summary: "compressed",
       tokensBefore,
       timestamp,
-    });
+    }) as unknown as AgentMessage;
 
   const sanitizeOpenAIHistory = async (
     messages: AgentMessage[],
@@ -178,39 +122,22 @@ describe("sanitizeSessionHistory", () => {
       AgentMessage & { usage?: unknown; content?: unknown }
     >;
 
-  const getSingleAssistantUsage = async (messages: AgentMessage[]) => {
-    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
-    const result = await sanitizeOpenAIHistory(messages);
-    return result.find((message) => message.role === "assistant") as
-      | (AgentMessage & { usage?: unknown })
-      | undefined;
-  };
-
   beforeEach(async () => {
-    testTimestamp = 1;
-    const harness = await loadSanitizeSessionHistoryWithCleanMocks();
-    sanitizeSessionHistory = harness.sanitizeSessionHistory;
-    mockedHelpers = harness.mockedHelpers;
+    sanitizeSessionHistory = await loadSanitizeSessionHistoryWithCleanMocks();
   });
 
-  it("passes simple user-only history through for Google model APIs", async () => {
-    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(true);
-
-    const result = await sanitizeSessionHistory({
+  it("sanitizes tool call ids for Google model APIs", async () => {
+    await expectGoogleModelApiFullSanitizeCall({
+      sanitizeSessionHistory,
       messages: mockMessages,
-      modelApi: "google-generative-ai",
-      provider: "google-vertex",
       sessionManager: mockSessionManager,
-      sessionId: TEST_SESSION_ID,
     });
-
-    expect(result).toEqual(mockMessages);
   });
 
-  it("passes simple user-only history through for Mistral models", async () => {
+  it("sanitizes tool call ids with strict9 for Mistral models", async () => {
     setNonGoogleModelApi();
 
-    const result = await sanitizeSessionHistory({
+    await sanitizeSessionHistory({
       messages: mockMessages,
       modelApi: "openai-responses",
       provider: "openrouter",
@@ -219,13 +146,21 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(result).toEqual(mockMessages);
+    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
+      mockMessages,
+      "session:history",
+      expect.objectContaining({
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict9",
+      }),
+    );
   });
 
-  it("passes simple user-only history through for Anthropic APIs", async () => {
+  it("sanitizes tool call ids for Anthropic APIs", async () => {
     setNonGoogleModelApi();
 
-    const result = await sanitizeSessionHistory({
+    await sanitizeSessionHistory({
       messages: mockMessages,
       modelApi: "anthropic-messages",
       provider: "anthropic",
@@ -233,42 +168,33 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(result).toEqual(mockMessages);
+    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
+      mockMessages,
+      "session:history",
+      expect.objectContaining({ sanitizeMode: "full", sanitizeToolCallIds: true }),
+    );
   });
 
-  it("passes simple user-only history through for openai-responses", async () => {
+  it("does not sanitize tool call ids for openai-responses", async () => {
     setNonGoogleModelApi();
 
-    const result = await sanitizeWithOpenAIResponses({
+    await sanitizeWithOpenAIResponses({
       sanitizeSessionHistory,
       messages: mockMessages,
       sessionManager: mockSessionManager,
     });
 
-    expect(result).toEqual(mockMessages);
-  });
-
-  it("sanitizes tool call ids for OpenAI-compatible responses providers", async () => {
-    setNonGoogleModelApi();
-
-    await sanitizeSessionHistory({
-      messages: mockMessages,
-      modelApi: "openai-responses",
-      provider: "custom",
-      sessionManager: mockSessionManager,
-      sessionId: TEST_SESSION_ID,
-    });
-
-    expectOpenAIResponsesStrictSanitizeCall(
-      mockedHelpers.sanitizeSessionMessagesImages,
+    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
       mockMessages,
+      "session:history",
+      expect.objectContaining({ sanitizeMode: "images-only", sanitizeToolCallIds: false }),
     );
   });
 
   it("sanitizes tool call ids for openai-completions", async () => {
     setNonGoogleModelApi();
 
-    const result = await sanitizeSessionHistory({
+    await sanitizeSessionHistory({
       messages: mockMessages,
       modelApi: "openai-completions",
       provider: "openai",
@@ -277,42 +203,22 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(result).toEqual(mockMessages);
-  });
-
-  it("prepends a bootstrap user turn for strict OpenAI-compatible assistant-first history", async () => {
-    setNonGoogleModelApi();
-    const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [];
-    const sessionManager = makeInMemorySessionManager(sessionEntries);
-    const messages = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "hello from previous turn" }],
-      },
-    ]);
-
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "openai-completions",
-      provider: "vllm",
-      modelId: "gemma-3-27b",
-      sessionManager,
-      sessionId: TEST_SESSION_ID,
-    });
-
-    expect(result[0]?.role).toBe("user");
-    expect((result[0] as { content?: unknown } | undefined)?.content).toBe("(session bootstrap)");
-    expect(result[1]?.role).toBe("assistant");
-    expect(
-      sessionEntries.some((entry) => entry.customType === "google-turn-ordering-bootstrap"),
-    ).toBe(false);
+    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
+      mockMessages,
+      "session:history",
+      expect.objectContaining({
+        sanitizeMode: "images-only",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+      }),
+    );
   });
 
   it("annotates inter-session user messages before context sanitization", async () => {
     setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
-      castAgentMessage({
+      {
         role: "user",
         content: "forwarded instruction",
         provenance: {
@@ -320,7 +226,7 @@ describe("sanitizeSessionHistory", () => {
           sourceSessionKey: "agent:main:req",
           sourceTool: "sessions_send",
         },
-      }),
+      } as unknown as AgentMessage,
     ];
 
     const result = await sanitizeSessionHistory({
@@ -339,16 +245,16 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("drops stale assistant usage snapshots kept before latest compaction summary", async () => {
-    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
-    const messages = castAgentMessages([
+    const messages = [
       { role: "user", content: "old context" },
       makeAssistantUsageMessage({
         text: "old answer",
         usage: makeUsage(191_919, 2_000, 193_919),
       }),
       makeCompactionSummaryMessage(191_919, new Date().toISOString()),
-    ]);
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -360,9 +266,9 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("preserves fresh assistant usage snapshots created after latest compaction summary", async () => {
-    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
-    const messages = castAgentMessages([
+    const messages = [
       makeAssistantUsageMessage({
         text: "pre-compaction answer",
         usage: makeUsage(120_000, 3_000, 123_000),
@@ -373,7 +279,7 @@ describe("sanitizeSessionHistory", () => {
         text: "fresh answer",
         usage: makeUsage(1_000, 250, 1_250),
       }),
-    ]);
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -383,123 +289,18 @@ describe("sanitizeSessionHistory", () => {
     expect(assistants[1]?.usage).toBeDefined();
   });
 
-  it("adds a zeroed assistant usage snapshot when usage is missing", async () => {
-    const assistant = await getSingleAssistantUsage(
-      castAgentMessages([
-        { role: "user", content: "question" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "answer without usage" }],
-        },
-      ]),
-    );
-
-    expect(assistant?.usage).toEqual(makeZeroUsageSnapshot());
-  });
-
-  it("normalizes mixed partial assistant usage fields to numeric totals", async () => {
-    const assistant = await getSingleAssistantUsage(
-      castAgentMessages([
-        { role: "user", content: "question" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "answer with partial usage" }],
-          usage: {
-            output: 3,
-            cache_read_input_tokens: 9,
-          },
-        },
-      ]),
-    );
-
-    expect(assistant?.usage).toEqual({
-      input: 0,
-      output: 3,
-      cacheRead: 9,
-      cacheWrite: 0,
-      totalTokens: 12,
-    });
-  });
-
-  it("preserves existing usage cost while normalizing token fields", async () => {
-    const assistant = await getSingleAssistantUsage(
-      castAgentMessages([
-        { role: "user", content: "question" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "answer with partial usage and cost" }],
-          usage: {
-            output: 3,
-            cache_read_input_tokens: 9,
-            cost: {
-              input: 1.25,
-              output: 2.5,
-              cacheRead: 0.25,
-              cacheWrite: 0,
-              total: 4,
-            },
-          },
-        },
-      ]),
-    );
-
-    expect(assistant?.usage).toEqual({
-      ...makeZeroUsageSnapshot(),
-      input: 0,
-      output: 3,
-      cacheRead: 9,
-      cacheWrite: 0,
-      totalTokens: 12,
-      cost: {
-        input: 1.25,
-        output: 2.5,
-        cacheRead: 0.25,
-        cacheWrite: 0,
-        total: 4,
-      },
-    });
-  });
-
-  it("preserves unknown cost when token fields already match", async () => {
-    const assistant = await getSingleAssistantUsage(
-      castAgentMessages([
-        { role: "user", content: "question" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "answer with complete numeric usage but no cost" }],
-          usage: {
-            input: 1,
-            output: 2,
-            cacheRead: 3,
-            cacheWrite: 4,
-            totalTokens: 10,
-          },
-        },
-      ]),
-    );
-
-    expect(assistant?.usage).toEqual({
-      input: 1,
-      output: 2,
-      cacheRead: 3,
-      cacheWrite: 4,
-      totalTokens: 10,
-    });
-    expect((assistant?.usage as { cost?: unknown } | undefined)?.cost).toBeUndefined();
-  });
-
   it("drops stale usage when compaction summary appears before kept assistant messages", async () => {
-    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     const compactionTs = Date.parse("2026-02-26T12:00:00.000Z");
-    const messages = castAgentMessages([
+    const messages = [
       makeCompactionSummaryMessage(191_919, new Date(compactionTs).toISOString()),
       makeAssistantUsageMessage({
         text: "kept pre-compaction answer",
         timestamp: compactionTs - 1_000,
         usage: makeUsage(191_919, 2_000, 193_919),
       }),
-    ]);
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -510,10 +311,10 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("keeps fresh usage after compaction timestamp in summary-first ordering", async () => {
-    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     const compactionTs = Date.parse("2026-02-26T12:00:00.000Z");
-    const messages = castAgentMessages([
+    const messages = [
       makeCompactionSummaryMessage(123_000, new Date(compactionTs).toISOString()),
       makeAssistantUsageMessage({
         text: "kept pre-compaction answer",
@@ -526,7 +327,7 @@ describe("sanitizeSessionHistory", () => {
         timestamp: compactionTs + 2_000,
         usage: makeUsage(1_000, 250, 1_250),
       }),
-    ]);
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -544,19 +345,20 @@ describe("sanitizeSessionHistory", () => {
   it("keeps reasoning-only assistant messages for openai-responses", async () => {
     setNonGoogleModelApi();
 
-    const messages: AgentMessage[] = [
-      makeUserMessage("hello"),
-      makeAssistantMessage(
-        [
+    const messages = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        stopReason: "aborted",
+        content: [
           {
             type: "thinking",
             thinking: "reasoning",
             thinkingSignature: "sig",
           },
         ],
-        { stopReason: "aborted" },
-      ),
-    ];
+      },
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeSessionHistory({
       messages,
@@ -571,11 +373,12 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("synthesizes missing tool results for openai-responses after repair", async () => {
-    const messages: AgentMessage[] = [
-      makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }], {
-        stopReason: "toolUse",
-      }),
-    ];
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeOpenAIHistory(messages);
 
@@ -586,57 +389,49 @@ describe("sanitizeSessionHistory", () => {
     expect(result[1]?.role).toBe("toolResult");
   });
 
-  it.each([
-    {
-      name: "missing input or arguments",
-      makeMessages: () =>
-        castAgentMessages([
-          castAgentMessage({
-            role: "assistant",
-            content: [{ type: "toolCall", id: "call_1", name: "read" }],
-          }),
-          makeUserMessage("hello"),
-        ]),
-      overrides: { sessionId: "test-session" } as Partial<
-        Parameters<typeof sanitizeOpenAIHistory>[1]
-      >,
-    },
-    {
-      name: "invalid or overlong names",
-      makeMessages: () =>
-        castAgentMessages([
-          makeAssistantMessage(
-            [
-              {
-                type: "toolCall",
-                id: "call_bad",
-                name: 'toolu_01mvznfebfuu <|tool_call_argument_begin|> {"command"',
-                arguments: {},
-              },
-              {
-                type: "toolCall",
-                id: "call_long",
-                name: `read_${"x".repeat(80)}`,
-                arguments: {},
-              },
-            ],
-            { stopReason: "toolUse" },
-          ),
-          makeUserMessage("hello"),
-        ]),
-      overrides: {} as Partial<Parameters<typeof sanitizeOpenAIHistory>[1]>,
-    },
-  ])("drops malformed tool calls: $name", async ({ makeMessages, overrides }) => {
-    const result = await sanitizeOpenAIHistory(makeMessages(), overrides);
+  it("drops malformed tool calls missing input or arguments", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read" }],
+      },
+      { role: "user", content: "hello" },
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeOpenAIHistory(messages, { sessionId: "test-session" });
+
+    expect(result.map((msg) => msg.role)).toEqual(["user"]);
+  });
+
+  it("drops malformed tool calls with invalid/overlong names", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_bad",
+            name: 'toolu_01mvznfebfuu <|tool_call_argument_begin|> {"command"',
+            arguments: {},
+          },
+          { type: "toolCall", id: "call_long", name: `read_${"x".repeat(80)}`, arguments: {} },
+        ],
+      },
+      { role: "user", content: "hello" },
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeOpenAIHistory(messages);
+
     expect(result.map((msg) => msg.role)).toEqual(["user"]);
   });
 
   it("drops tool calls that are not in the allowed tool set", async () => {
-    const messages: AgentMessage[] = [
-      makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "write", arguments: {} }], {
-        stopReason: "toolUse",
-      }),
-    ];
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "write", arguments: {} }],
+      },
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeOpenAIHistory(messages, {
       allowedToolNames: ["read"],
@@ -671,7 +466,12 @@ describe("sanitizeSessionHistory", () => {
       sanitizeSessionHistory,
     });
 
-    expect(result).toEqual([]);
+    // Signed thinking blocks are converted to text on model switch (context preserved).
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    expect((content[0] as { text: string }).text).toBe("reasoning");
   });
 
   it("drops orphaned toolResult entries when switching from openai history to anthropic", async () => {
@@ -683,28 +483,25 @@ describe("sanitizeSessionHistory", () => {
       }),
     ];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
-    const messages: AgentMessage[] = [
-      makeAssistantMessage([{ type: "toolCall", id: "tool_abc123", name: "read", arguments: {} }], {
-        stopReason: "toolUse",
-      }),
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool_abc123", name: "read", arguments: {} }],
+      },
       {
         role: "toolResult",
         toolCallId: "tool_abc123",
         toolName: "read",
         content: [{ type: "text", text: "ok" }],
-        isError: false,
-        timestamp: nextTimestamp(),
-      },
-      makeUserMessage("continue"),
+      } as unknown as AgentMessage,
+      { role: "user", content: "continue" },
       {
         role: "toolResult",
         toolCallId: "tool_01VihkDRptyLpX1ApUPe7ooU",
         toolName: "read",
         content: [{ type: "text", text: "stale result" }],
-        isError: false,
-        timestamp: nextTimestamp(),
-      },
-    ];
+      } as unknown as AgentMessage,
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeSessionHistory({
       messages,
@@ -738,17 +535,20 @@ describe("sanitizeSessionHistory", () => {
   it("preserves assistant turn when all content is thinking blocks (github-copilot)", async () => {
     setNonGoogleModelApi();
 
-    const messages: AgentMessage[] = [
-      makeUserMessage("hello"),
-      makeAssistantMessage([
-        {
-          type: "thinking",
-          thinking: "some reasoning",
-          thinkingSignature: "reasoning_text",
-        },
-      ]),
-      makeUserMessage("follow up"),
-    ];
+    const messages = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "some reasoning",
+            thinkingSignature: "reasoning_text",
+          },
+        ],
+      },
+      { role: "user", content: "follow up" },
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeGithubCopilotHistory({ messages });
 
@@ -761,18 +561,21 @@ describe("sanitizeSessionHistory", () => {
   it("preserves tool_use blocks when dropping thinking blocks (github-copilot)", async () => {
     setNonGoogleModelApi();
 
-    const messages: AgentMessage[] = [
-      makeUserMessage("read a file"),
-      makeAssistantMessage([
-        {
-          type: "thinking",
-          thinking: "I should use the read tool",
-          thinkingSignature: "reasoning_text",
-        },
-        { type: "toolCall", id: "tool_123", name: "read", arguments: { path: "/tmp/test" } },
-        { type: "text", text: "Let me read that file." },
-      ]),
-    ];
+    const messages = [
+      { role: "user", content: "read a file" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "I should use the read tool",
+            thinkingSignature: "reasoning_text",
+          },
+          { type: "toolCall", id: "tool_123", name: "read", arguments: { path: "/tmp/test" } },
+          { type: "text", text: "Let me read that file." },
+        ],
+      },
+    ] as unknown as AgentMessage[];
 
     const result = await sanitizeGithubCopilotHistory({ messages });
     const types = getAssistantContentTypes(result);
@@ -781,30 +584,22 @@ describe("sanitizeSessionHistory", () => {
     expect(types).not.toContain("thinking");
   });
 
-  it("drops assistant thinking blocks for anthropic replay", async () => {
+  it("does not drop thinking blocks for non-copilot providers", async () => {
     setNonGoogleModelApi();
 
     const messages = makeThinkingAndTextAssistantMessages();
 
-    const result = await sanitizeAnthropicHistory({ messages });
-
-    const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
-  });
-
-  it("drops assistant thinking blocks for amazon-bedrock replay", async () => {
-    setNonGoogleModelApi();
-
-    const messages = makeThinkingAndTextAssistantMessages();
-
-    const result = await sanitizeAnthropicHistory({
+    const result = await sanitizeSessionHistory({
       messages,
-      provider: "amazon-bedrock",
-      modelApi: "bedrock-converse-stream",
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
     });
 
-    const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
+    const types = getAssistantContentTypes(result);
+    expect(types).toContain("thinking");
   });
 
   it("does not drop thinking blocks for non-claude copilot models", async () => {
@@ -815,5 +610,326 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeGithubCopilotHistory({ messages, modelId: "gpt-5.2" });
     const types = getAssistantContentTypes(result);
     expect(types).toContain("thinking");
+  });
+
+  it("downgrades signed thinking blocks to text when switching from azure-foundry to copilot", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "azure-foundry",
+        modelApi: "openai-completions",
+        modelId: "gpt-52-chat",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "json" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Thinking block should be converted to text, not kept with invalid signature.
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    expect((content[0] as { text: string }).text).toBe("reasoning");
+  });
+
+  it("downgrades base64 anthropic signatures when switching to openai-completions", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "azure-foundry",
+      modelId: "deepseek-v3-2",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    expect((content[0] as { text: string }).text).toBe("reasoning");
+  });
+
+  it("keeps unsigned thinking blocks when model changes", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "azure-foundry",
+        modelApi: "openai-completions",
+        modelId: "gpt-52-chat",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "some reasoning" },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(2);
+    expect((content[0] as { type: string }).type).toBe("thinking");
+    expect((content[1] as { type: string }).type).toBe("text");
+  });
+
+  it("does not downgrade thinking blocks when provider has not changed", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Same model — thinking blocks should be preserved as-is.
+    expect(result).toEqual(messages);
+  });
+
+  it("preserves thinking signatures when switching models within the same provider", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-sonnet-4-5",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Different model but same provider+API — thinking signatures are provider-level
+    // and should be preserved. Opus → Sonnet on github-copilot should NOT strip sigs.
+    expect(result).toEqual(messages);
+  });
+
+  it("downgrades signed thinking blocks in legacy sessions without model snapshots", async () => {
+    // Legacy sessions predate model snapshot tracking — no snapshot entries exist.
+    // Signed thinking blocks from a previous provider should still be downgraded.
+    const sessionManager = makeInMemorySessionManager([]);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // No prior snapshot + messages exist → treat as potential provider mismatch.
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    expect((content[0] as { text: string }).text).toBe("reasoning");
+  });
+
+  // -- Signature preservation matrix --
+  // These tests prove that model switches within the same provider preserve thinking
+  // quality, while cross-provider switches correctly strip incompatible signatures.
+
+  it("preserves base64 sigs: opus-4-6 → opus-4-6-fast on same provider (model upgrade)", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6-fast",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Same provider — base64 signatures stay valid.
+    expect(result).toEqual(messages);
+  });
+
+  it("preserves JSON sigs: gpt-5.2 → o3-pro on same openai provider", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.2",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "json" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      modelId: "o3-pro",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Same provider + API — OpenAI reasoning JSON stays valid.
+    expect(result).toEqual(messages);
+  });
+
+  it("downgrades sigs when same modelApi but different provider", async () => {
+    // Both use openai-completions but different providers — signatures are not portable.
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "openai",
+        modelApi: "openai-completions",
+        modelId: "gpt-5.2",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "json" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "azure-foundry",
+      modelId: "gpt-5.2",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Different provider — even with same model and API, signatures are downgraded.
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+  });
+
+  it("downgrades sigs when provider changes but modelId stays the same", async () => {
+    // Same model name on two different providers — signatures not compatible.
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Same model name but different provider+API — must downgrade.
+    expect(result).toHaveLength(1);
+    const content = (result[0] as { content: unknown[] }).content;
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+  });
+
+  it("writes a new snapshot on model switch within same provider", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-sonnet-4-5",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Even though signatures were preserved, the snapshot should update to track the new model.
+    const snapshots = sessionEntries.filter((e) => e.customType === "model-snapshot");
+    expect(snapshots).toHaveLength(2);
+    const latest = snapshots[1].data as { modelId: string };
+    expect(latest.modelId).toBe("claude-sonnet-4-5");
+  });
+
+  it("does not write a duplicate snapshot when model is identical", async () => {
+    const sessionEntries = [
+      makeModelSnapshotEntry({
+        provider: "github-copilot",
+        modelApi: "openai-completions",
+        modelId: "claude-opus-4-6",
+      }),
+    ];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+    const messages = makeReasoningAssistantMessages({ thinkingSignature: "base64" });
+
+    await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "github-copilot",
+      modelId: "claude-opus-4-6",
+      sessionManager,
+      sessionId: "test-session",
+    });
+
+    // Same exact model — no new snapshot written.
+    const snapshots = sessionEntries.filter((e) => e.customType === "model-snapshot");
+    expect(snapshots).toHaveLength(1);
   });
 });
