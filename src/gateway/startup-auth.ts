@@ -200,6 +200,7 @@ export async function ensureGatewayStartupAuth(params: {
   auth: ReturnType<typeof resolveGatewayAuth>;
   generatedToken?: string;
   persistedGeneratedToken: boolean;
+  persistConflictPath?: string;
 }> {
   const env = params.env ?? process.env;
   const persistRequested = params.persist === true;
@@ -232,6 +233,7 @@ export async function ensureGatewayStartupAuth(params: {
     resolvedAuth: resolved,
   });
   let persistedGeneratedToken = false;
+  let persistConflictPath: string | undefined;
   if (persist) {
     const persistConfig = params.writeConfig ?? writeConfigFile;
     try {
@@ -241,6 +243,7 @@ export async function ensureGatewayStartupAuth(params: {
       if (!(err instanceof ConfigWriteConflictError)) {
         throw err;
       }
+      persistConflictPath = err.configPath;
     }
   }
 
@@ -256,6 +259,7 @@ export async function ensureGatewayStartupAuth(params: {
     auth: nextAuth,
     generatedToken,
     persistedGeneratedToken,
+    persistConflictPath,
   };
 }
 

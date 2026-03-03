@@ -89,6 +89,7 @@ describe("ensureGatewayStartupAuth", () => {
 
     expect(result.generatedToken).toMatch(/^[0-9a-f]{48}$/);
     expect(result.persistedGeneratedToken).toBe(false);
+    expect(result.persistConflictPath).toBe("/tmp/openclaw.json");
     expect(result.auth.mode).toBe("token");
     expect(result.auth.token).toBe(result.generatedToken);
     expect(writeConfig).toHaveBeenCalledTimes(1);
