@@ -5,7 +5,7 @@
  *   POST   /v2/browser         → create session
  *   DELETE  /v2/browser/{id}    → delete session
  *
- * Response fields: { success, id, cdpUrl, liveViewUrl, expiresAt }
+ * Response fields: { success, id, cdpUrl, liveViewUrl, interactiveLiveViewUrl, expiresAt }
  */
 import { openCdpWebSocket } from "./cdp.helpers.js";
 
@@ -13,6 +13,7 @@ export type FirecrawlBrowserSession = {
   sessionId: string;
   cdpWebSocketUrl: string;
   liveViewUrl: string;
+  interactiveLiveViewUrl: string;
   expiresAt?: string;
 };
 
@@ -70,6 +71,7 @@ export async function createFirecrawlBrowserSession(
     id?: string;
     cdpUrl?: string;
     liveViewUrl?: string;
+    interactiveLiveViewUrl?: string;
     expiresAt?: string;
   };
 
@@ -80,7 +82,8 @@ export async function createFirecrawlBrowserSession(
   return {
     sessionId: data.id,
     cdpWebSocketUrl: data.cdpUrl,
-    liveViewUrl: data.liveViewUrl ?? "",
+    liveViewUrl: data.liveViewUrl || "",
+    interactiveLiveViewUrl: data.interactiveLiveViewUrl || "",
     expiresAt: data.expiresAt,
   };
 }

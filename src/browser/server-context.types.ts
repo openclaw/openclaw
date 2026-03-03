@@ -12,6 +12,7 @@ export type FirecrawlSessionState = {
   sessionId: string;
   cdpWebSocketUrl: string;
   liveViewUrl: string;
+  interactiveLiveViewUrl: string;
   expiresAt?: string;
 };
 

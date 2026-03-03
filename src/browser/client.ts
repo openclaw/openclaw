@@ -19,8 +19,8 @@ export type BrowserStatus = {
   noSandbox?: boolean;
   executablePath?: string | null;
   attachOnly: boolean;
-  /** Firecrawl live view URL (for human-in-the-loop preview). */
   liveViewUrl?: string;
+  interactiveLiveViewUrl?: string;
   /** Firecrawl session ID (for lifecycle management). */
   firecrawlSessionId?: string;
 };

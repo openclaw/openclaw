@@ -91,6 +91,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       ...(firecrawlSession
         ? {
             liveViewUrl: firecrawlSession.liveViewUrl,
+            interactiveLiveViewUrl: firecrawlSession.interactiveLiveViewUrl,
             firecrawlSessionId: firecrawlSession.sessionId,
           }
         : {}),

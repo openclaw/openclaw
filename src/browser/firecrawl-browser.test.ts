@@ -47,6 +47,7 @@ describe("firecrawl-browser", () => {
       expect(session.sessionId).toBe("sess-123");
       expect(session.cdpWebSocketUrl).toBe("wss://connect.firecrawl.dev/sess-123");
       expect(session.liveViewUrl).toBe("https://connect.firecrawl.dev/v/sess-123");
+      expect(session.interactiveLiveViewUrl).toBe("");
       expect(session.expiresAt).toBe("2026-03-02T12:00:00Z");
     });
 
@@ -247,26 +248,23 @@ describe("firecrawl-browser", () => {
     });
 
     it("maps API response fields to internal names", async () => {
-      // The v2 API returns { id, cdpUrl, liveViewUrl } but our internal type
-      // uses { sessionId, cdpWebSocketUrl, liveViewUrl } for clarity.
       (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
         ok: true,
         json: async () => ({
           success: true,
           id: "api-id-field",
           cdpUrl: "wss://api-cdp-field",
-          liveViewUrl: "https://api-liveview-field",
+          liveViewUrl: "https://readonly-view",
+          interactiveLiveViewUrl: "https://interactive-view",
           expiresAt: "2026-12-31T00:00:00Z",
         }),
       });
 
       const session = await createFirecrawlBrowserSession(baseParams);
-      // id → sessionId
       expect(session.sessionId).toBe("api-id-field");
-      // cdpUrl → cdpWebSocketUrl
       expect(session.cdpWebSocketUrl).toBe("wss://api-cdp-field");
-      // liveViewUrl → liveViewUrl (same)
-      expect(session.liveViewUrl).toBe("https://api-liveview-field");
+      expect(session.liveViewUrl).toBe("https://readonly-view");
+      expect(session.interactiveLiveViewUrl).toBe("https://interactive-view");
     });
   });
 

@@ -69,6 +69,7 @@ describe("firecrawl browser availability", () => {
     sessionId: "sess-test-1",
     cdpWebSocketUrl: "wss://connect.firecrawl.dev/sess-test-1",
     liveViewUrl: "https://connect.firecrawl.dev/v/sess-test-1",
+    interactiveLiveViewUrl: "https://connect.firecrawl.dev/v/sess-test-1",
     expiresAt: "2026-03-02T12:00:00Z",
   };
 
@@ -118,6 +119,7 @@ describe("firecrawl browser availability", () => {
           sessionId: "sess-existing",
           cdpWebSocketUrl: "wss://connect.firecrawl.dev/sess-existing",
           liveViewUrl: "https://connect.firecrawl.dev/v/sess-existing",
+          interactiveLiveViewUrl: "https://connect.firecrawl.dev/v/sess-existing",
         },
       });
 
@@ -142,6 +144,7 @@ describe("firecrawl browser availability", () => {
         sessionId: "sess-new",
         cdpWebSocketUrl: "wss://connect.firecrawl.dev/sess-new",
         liveViewUrl: "https://connect.firecrawl.dev/v/sess-new",
+        interactiveLiveViewUrl: "https://connect.firecrawl.dev/v/sess-new",
       });
 
       const state = makeFirecrawlState();
@@ -162,6 +165,7 @@ describe("firecrawl browser availability", () => {
           sessionId: "sess-stale",
           cdpWebSocketUrl: "wss://connect.firecrawl.dev/sess-stale",
           liveViewUrl: "https://connect.firecrawl.dev/v/sess-stale",
+          interactiveLiveViewUrl: "https://connect.firecrawl.dev/v/sess-stale",
         },
       });
 
@@ -202,6 +206,7 @@ describe("firecrawl browser availability", () => {
           sessionId: "sess-old",
           cdpWebSocketUrl: "wss://connect.firecrawl.dev/sess-old",
           liveViewUrl: "",
+          interactiveLiveViewUrl: "",
         },
       });
 
@@ -337,6 +342,7 @@ describe("firecrawl browser availability", () => {
           sessionId: "sess-r",
           cdpWebSocketUrl: "wss://connect.firecrawl.dev/sess-r",
           liveViewUrl: "",
+          interactiveLiveViewUrl: "",
         },
       });
 
@@ -383,6 +389,7 @@ describe("firecrawl browser availability", () => {
           sessionId: "sess-h",
           cdpWebSocketUrl: "wss://connect.firecrawl.dev/sess-h",
           liveViewUrl: "",
+          interactiveLiveViewUrl: "",
         },
       });
 
@@ -421,6 +428,7 @@ describe("firecrawl browser availability", () => {
           sessionId: "sess-ht",
           cdpWebSocketUrl: "wss://connect.firecrawl.dev/sess-ht",
           liveViewUrl: "",
+          interactiveLiveViewUrl: "",
         },
       });
 
@@ -472,6 +480,7 @@ describe("firecrawl browser availability", () => {
           sessionId: "sess-stop",
           cdpWebSocketUrl: "wss://connect.firecrawl.dev/sess-stop",
           liveViewUrl: "",
+          interactiveLiveViewUrl: "",
         },
       });
 
@@ -527,6 +536,7 @@ describe("firecrawl browser availability", () => {
           sessionId: "sess-fail",
           cdpWebSocketUrl: "wss://connect.firecrawl.dev/sess-fail",
           liveViewUrl: "",
+          interactiveLiveViewUrl: "",
         },
       });
 
@@ -560,6 +570,7 @@ describe("firecrawl browser availability", () => {
           sessionId: "sess-nokey",
           cdpWebSocketUrl: "wss://connect.firecrawl.dev/sess-nokey",
           liveViewUrl: "",
+          interactiveLiveViewUrl: "",
         },
       });
 
@@ -593,6 +604,7 @@ describe("firecrawl browser availability", () => {
           sessionId: "sess-default-url",
           cdpWebSocketUrl: "wss://connect.firecrawl.dev/sess-default-url",
           liveViewUrl: "",
+          interactiveLiveViewUrl: "",
         },
       });
 
