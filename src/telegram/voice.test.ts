@@ -52,6 +52,8 @@ describe("resolveTelegramVoiceSend", () => {
       logFallback,
     });
     expect(result.useVoice).toBe(false);
-    expect(logFallback).toHaveBeenCalled();
+    expect(logFallback).toHaveBeenCalledWith(
+      `Telegram voice requested but media is ${contentType} (${fileName}); sending as audio file instead.`,
+    );
   });
 });

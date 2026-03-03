@@ -22,11 +22,16 @@ describe("isVoiceCompatibleAudio", () => {
     { contentType: "audio/flac", fileName: null },
     { contentType: "audio/aac", fileName: null },
     { contentType: "video/mp4", fileName: null },
+    { contentType: "audio/mpeg", fileName: null },
+    { contentType: "audio/mp3", fileName: null },
+    { contentType: "audio/mp4", fileName: null },
+    { contentType: "audio/x-m4a", fileName: null },
+    { contentType: "audio/m4a", fileName: null },
   ])("returns false for unsupported MIME $contentType", (opts) => {
     expect(isVoiceCompatibleAudio(opts)).toBe(false);
   });
 
-  it.each([".wav", ".flac", ".webm"])("returns false for extension %s", (ext) => {
+  it.each([".wav", ".flac", ".webm", ".mp3", ".m4a"])("returns false for extension %s", (ext) => {
     expect(isVoiceCompatibleAudio({ fileName: `audio${ext}` })).toBe(false);
   });
 
