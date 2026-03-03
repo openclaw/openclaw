@@ -169,10 +169,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setSpeakerEnabled(enabled)
   }
 
-  fun setSpeakerEnabled(enabled: Boolean) {
-    runtime.setSpeakerEnabled(enabled)
-  }
-
   fun refreshGatewayConnection() {
     runtime.refreshGatewayConnection()
   }

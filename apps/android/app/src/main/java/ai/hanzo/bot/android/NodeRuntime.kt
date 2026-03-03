@@ -721,18 +721,6 @@ class NodeRuntime(context: Context) {
     talkMode.setPlaybackEnabled(value)
   }
 
-  val speakerEnabled: StateFlow<Boolean>
-    get() = prefs.speakerEnabled
-
-  fun setSpeakerEnabled(value: Boolean) {
-    prefs.setSpeakerEnabled(value)
-    if (voiceReplySpeakerLazy.isInitialized()) {
-      voiceReplySpeaker.setPlaybackEnabled(value)
-    }
-    // Keep TalkMode in sync so speaker mute works when ttsOnAllResponses is active.
-    talkMode.setPlaybackEnabled(value)
-  }
-
   fun refreshGatewayConnection() {
     val endpoint = connectedEndpoint ?: return
     val token = prefs.loadGatewayToken()

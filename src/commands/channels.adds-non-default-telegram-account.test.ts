@@ -350,9 +350,8 @@ describe("channels command", () => {
     expect(telegramIndex).toBeLessThan(whatsappIndex);
   });
 
-  it.each([
-    {
-      name: "surfaces Discord privileged intent issues in channels status output",
+  it("surfaces Discord privileged intent issues in channels status output", () => {
+    const lines = formatGatewayChannelsStatusLines({
       channelAccounts: {
         discord: [
           {

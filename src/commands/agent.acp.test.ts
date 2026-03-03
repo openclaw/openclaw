@@ -42,7 +42,7 @@ function createAcpEnabledConfig(home: string, storePath: string): BotConfig {
       },
     },
     session: { store: storePath, mainKey: "main" },
-  } satisfies BotConfig);
+  } satisfies BotConfig;
 }
 
 function mockConfigWithAcpOverrides(

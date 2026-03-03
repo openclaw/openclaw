@@ -211,16 +211,6 @@ export const CronDeliveryPatchSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const CronFailureAlertSchema = Type.Object(
-  {
-    after: Type.Optional(Type.Integer({ minimum: 1 })),
-    channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
-    to: Type.Optional(Type.String()),
-    cooldownMs: Type.Optional(Type.Integer({ minimum: 0 })),
-  },
-  { additionalProperties: false },
-);
-
 export const CronJobStateSchema = Type.Object(
   {
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
