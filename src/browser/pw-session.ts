@@ -1,56 +1,391 @@
-import type { Browser, Page } from "playwright-core";
-import { connectOverCDP } from "playwright-core";
-import { getBrowserCdpAuthHeaders } from "../config/config.js";
-import { withBrowserNavigationPolicy } from "../infra/ssrf-policy.browser.js";
-import { SsrFPolicy } from "../infra/ssrf-policy.js";
-import { assertBrowserNavigationAllowed } from "../security/browser-navigation-allowlist.js";
-import { assertBrowserNavigationResultAllowed } from "../security/browser-navigation-result-allowlist.js";
-import { appendCdpPath, fetchJson, normalizeCdpWsUrl, withCdpSocket } from "./cdp.helpers.js";
-import { normalizeCdpUrl } from "./cdp.js";
-import { getHeadersWithAuth } from "./client-fetch.js";
+import type {
+  Browser,
+  BrowserContext,
+  ConsoleMessage,
+  Page,
+  Request,
+  Response,
+} from "playwright-core";
+import { chromium } from "playwright-core";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
+import { appendCdpPath, fetchJson, getHeadersWithAuth, withCdpSocket } from "./cdp.helpers.js";
+import { normalizeCdpWsUrl } from "./cdp.js";
+import { getChromeWebSocketUrl } from "./chrome.js";
+import {
+  assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed,
+  withBrowserNavigationPolicy,
+} from "./navigation-guard.js";
 
-let cached: { browser: Browser; cdpUrl: string; onDisconnected: () => void } | null = null;
-let connecting: Promise<{ browser: Browser; cdpUrl: string }> | null = null;
+export type BrowserConsoleMessage = {
+  type: string;
+  text: string;
+  timestamp: string;
+  location?: { url?: string; lineNumber?: number; columnNumber?: number };
+};
 
-async function connectBrowser(cdpUrl: string): Promise<{ browser: Browser; cdpUrl: string }> {
+export type BrowserPageError = {
+  message: string;
+  name?: string;
+  stack?: string;
+  timestamp: string;
+};
+
+export type BrowserNetworkRequest = {
+  id: string;
+  timestamp: string;
+  method: string;
+  url: string;
+  resourceType?: string;
+  status?: number;
+  ok?: boolean;
+  failureText?: string;
+};
+
+type SnapshotForAIResult = { full: string; incremental?: string };
+type SnapshotForAIOptions = { timeout?: number; track?: string };
+
+export type WithSnapshotForAI = {
+  _snapshotForAI?: (options?: SnapshotForAIOptions) => Promise<SnapshotForAIResult>;
+};
+
+type TargetInfoResponse = {
+  targetInfo?: {
+    targetId?: string;
+  };
+};
+
+type ConnectedBrowser = {
+  browser: Browser;
+  cdpUrl: string;
+  onDisconnected?: () => void;
+};
+
+type PageState = {
+  console: BrowserConsoleMessage[];
+  errors: BrowserPageError[];
+  requests: BrowserNetworkRequest[];
+  requestIds: WeakMap<Request, string>;
+  nextRequestId: number;
+  armIdUpload: number;
+  armIdDialog: number;
+  armIdDownload: number;
+  /**
+   * Role-based refs from the last role snapshot (e.g. e1/e2).
+   * Mode "role" refs are generated from ariaSnapshot and resolved via getByRole.
+   * Mode "aria" refs are Playwright aria-ref ids and resolved via `aria-ref=...`.
+   */
+  roleRefs?: Record<string, { role: string; name?: string; nth?: number }>;
+  roleRefsMode?: "role" | "aria";
+  roleRefsFrameSelector?: string;
+};
+
+type RoleRefs = NonNullable<PageState["roleRefs"]>;
+type RoleRefsCacheEntry = {
+  refs: RoleRefs;
+  frameSelector?: string;
+  mode?: NonNullable<PageState["roleRefsMode"]>;
+};
+
+type ContextState = {
+  traceActive: boolean;
+};
+
+const pageStates = new WeakMap<Page, PageState>();
+const contextStates = new WeakMap<BrowserContext, ContextState>();
+const observedContexts = new WeakSet<BrowserContext>();
+const observedPages = new WeakSet<Page>();
+
+// Best-effort cache to make role refs stable even if Playwright returns a different Page object
+// for the same CDP target across requests.
+const roleRefsByTarget = new Map<string, RoleRefsCacheEntry>();
+const MAX_ROLE_REFS_CACHE = 50;
+
+const MAX_CONSOLE_MESSAGES = 500;
+const MAX_PAGE_ERRORS = 200;
+const MAX_NETWORK_REQUESTS = 500;
+
+let cached: ConnectedBrowser | null = null;
+let connecting: Promise<ConnectedBrowser> | null = null;
+
+function normalizeCdpUrl(raw: string) {
+  return raw.replace(/\/$/, "");
+}
+
+function findNetworkRequestById(state: PageState, id: string): BrowserNetworkRequest | undefined {
+  for (let i = state.requests.length - 1; i >= 0; i -= 1) {
+    const candidate = state.requests[i];
+    if (candidate && candidate.id === id) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function roleRefsKey(cdpUrl: string, targetId: string) {
+  return `${normalizeCdpUrl(cdpUrl)}::${targetId}`;
+}
+
+export function rememberRoleRefsForTarget(opts: {
+  cdpUrl: string;
+  targetId: string;
+  refs: RoleRefs;
+  frameSelector?: string;
+  mode?: NonNullable<PageState["roleRefsMode"]>;
+}): void {
+  const targetId = opts.targetId.trim();
+  if (!targetId) {
+    return;
+  }
+  roleRefsByTarget.set(roleRefsKey(opts.cdpUrl, targetId), {
+    refs: opts.refs,
+    ...(opts.frameSelector ? { frameSelector: opts.frameSelector } : {}),
+    ...(opts.mode ? { mode: opts.mode } : {}),
+  });
+  while (roleRefsByTarget.size > MAX_ROLE_REFS_CACHE) {
+    const first = roleRefsByTarget.keys().next();
+    if (first.done) {
+      break;
+    }
+    roleRefsByTarget.delete(first.value);
+  }
+}
+
+export function storeRoleRefsForTarget(opts: {
+  page: Page;
+  cdpUrl: string;
+  targetId?: string;
+  refs: RoleRefs;
+  frameSelector?: string;
+  mode: NonNullable<PageState["roleRefsMode"]>;
+}): void {
+  const state = ensurePageState(opts.page);
+  state.roleRefs = opts.refs;
+  state.roleRefsFrameSelector = opts.frameSelector;
+  state.roleRefsMode = opts.mode;
+  if (!opts.targetId?.trim()) {
+    return;
+  }
+  rememberRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    refs: opts.refs,
+    frameSelector: opts.frameSelector,
+    mode: opts.mode,
+  });
+}
+
+export function restoreRoleRefsForTarget(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  page: Page;
+}): void {
+  const targetId = opts.targetId?.trim() || "";
+  if (!targetId) {
+    return;
+  }
+  const cached = roleRefsByTarget.get(roleRefsKey(opts.cdpUrl, targetId));
+  if (!cached) {
+    return;
+  }
+  const state = ensurePageState(opts.page);
+  if (state.roleRefs) {
+    return;
+  }
+  state.roleRefs = cached.refs;
+  state.roleRefsFrameSelector = cached.frameSelector;
+  state.roleRefsMode = cached.mode;
+}
+
+export function ensurePageState(page: Page): PageState {
+  const existing = pageStates.get(page);
+  if (existing) {
+    return existing;
+  }
+
+  const state: PageState = {
+    console: [],
+    errors: [],
+    requests: [],
+    requestIds: new WeakMap(),
+    nextRequestId: 0,
+    armIdUpload: 0,
+    armIdDialog: 0,
+    armIdDownload: 0,
+  };
+  pageStates.set(page, state);
+
+  if (!observedPages.has(page)) {
+    observedPages.add(page);
+    page.on("console", (msg: ConsoleMessage) => {
+      const entry: BrowserConsoleMessage = {
+        type: msg.type(),
+        text: msg.text(),
+        timestamp: new Date().toISOString(),
+        location: msg.location(),
+      };
+      state.console.push(entry);
+      if (state.console.length > MAX_CONSOLE_MESSAGES) {
+        state.console.shift();
+      }
+    });
+    page.on("pageerror", (err: Error) => {
+      state.errors.push({
+        message: err?.message ? String(err.message) : String(err),
+        name: err?.name ? String(err.name) : undefined,
+        stack: err?.stack ? String(err.stack) : undefined,
+        timestamp: new Date().toISOString(),
+      });
+      if (state.errors.length > MAX_PAGE_ERRORS) {
+        state.errors.shift();
+      }
+    });
+    page.on("request", (req: Request) => {
+      state.nextRequestId += 1;
+      const id = `r${state.nextRequestId}`;
+      state.requestIds.set(req, id);
+      state.requests.push({
+        id,
+        timestamp: new Date().toISOString(),
+        method: req.method(),
+        url: req.url(),
+        resourceType: req.resourceType(),
+      });
+      if (state.requests.length > MAX_NETWORK_REQUESTS) {
+        state.requests.shift();
+      }
+    });
+    page.on("response", (resp: Response) => {
+      const req = resp.request();
+      const id = state.requestIds.get(req);
+      if (!id) {
+        return;
+      }
+      const rec = findNetworkRequestById(state, id);
+      if (!rec) {
+        return;
+      }
+      rec.status = resp.status();
+      rec.ok = resp.ok();
+    });
+    page.on("requestfailed", (req: Request) => {
+      const id = state.requestIds.get(req);
+      if (!id) {
+        return;
+      }
+      const rec = findNetworkRequestById(state, id);
+      if (!rec) {
+        return;
+      }
+      rec.failureText = req.failure()?.errorText;
+      rec.ok = false;
+    });
+    page.on("close", () => {
+      pageStates.delete(page);
+      observedPages.delete(page);
+    });
+  }
+
+  return state;
+}
+
+function observeContext(context: BrowserContext) {
+  if (observedContexts.has(context)) {
+    return;
+  }
+  observedContexts.add(context);
+  ensureContextState(context);
+
+  for (const page of context.pages()) {
+    ensurePageState(page);
+  }
+  context.on("page", (page) => ensurePageState(page));
+}
+
+export function ensureContextState(context: BrowserContext): ContextState {
+  const existing = contextStates.get(context);
+  if (existing) {
+    return existing;
+  }
+  const state: ContextState = { traceActive: false };
+  contextStates.set(context, state);
+  return state;
+}
+
+function observeBrowser(browser: Browser) {
+  for (const context of browser.contexts()) {
+    observeContext(context);
+  }
+}
+
+async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   if (cached?.cdpUrl === normalized) {
-    return { browser: cached.browser, cdpUrl: normalized };
+    return cached;
   }
   if (connecting) {
-    return connecting;
+    return await connecting;
   }
-  connecting = (async () => {
-    try {
-      const headers = getBrowserCdpAuthHeaders();
-      const browser = await connectOverCDP(normalized, {
-        headers,
-        // Playwright's default is 30s, but we want to fail fast for unresponsive CDP endpoints.
-        // This also aligns with the gateway's default exec timeout.
-        timeout: 10_000,
-      });
-      const onDisconnected = () => {
-        if (cached?.browser === browser) {
-          cached = null;
-        }
-      };
-      browser.on("disconnected", onDisconnected);
-      cached = { browser, cdpUrl: normalized, onDisconnected };
-      return { browser, cdpUrl: normalized };
-    } finally {
-      connecting = null;
+
+  const connectWithRetry = async (): Promise<ConnectedBrowser> => {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const timeout = 5000 + attempt * 2000;
+        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
+        const endpoint = wsUrl ?? normalized;
+        const headers = getHeadersWithAuth(endpoint);
+        // Bypass proxy for loopback CDP connections (#31219)
+        const browser = await withNoProxyForCdpUrl(endpoint, () =>
+          chromium.connectOverCDP(endpoint, { timeout, headers }),
+        );
+        const onDisconnected = () => {
+          if (cached?.browser === browser) {
+            cached = null;
+          }
+        };
+        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
+        cached = connected;
+        browser.on("disconnected", onDisconnected);
+        observeBrowser(browser);
+        return connected;
+      } catch (err) {
+        lastErr = err;
+        const delay = 250 + attempt * 250;
+        await new Promise((r) => setTimeout(r, delay));
+      }
     }
-  })();
-  return connecting;
+    if (lastErr instanceof Error) {
+      throw lastErr;
+    }
+    const message = lastErr ? formatErrorMessage(lastErr) : "CDP connect failed";
+    throw new Error(message);
+  };
+
+  connecting = connectWithRetry().finally(() => {
+    connecting = null;
+  });
+
+  return await connecting;
 }
 
 async function getAllPages(browser: Browser): Promise<Page[]> {
   const contexts = browser.contexts();
-  if (contexts.length === 0) {
-    return [];
+  const pages = contexts.flatMap((c) => c.pages());
+  return pages;
+}
+
+async function pageTargetId(page: Page): Promise<string | null> {
+  const session = await page.context().newCDPSession(page);
+  try {
+    const info = (await session.send("Target.getTargetInfo")) as TargetInfoResponse;
+    const targetId = String(info?.targetInfo?.targetId ?? "").trim();
+    return targetId || null;
+  } finally {
+    await session.detach().catch(() => {});
   }
-  const pages = await Promise.all(contexts.map((ctx) => ctx.pages()));
-  return pages.flat();
 }
 
 async function findPageByTargetId(
@@ -102,17 +437,35 @@ async function findPageByTargetId(
             return urlMatch[0];
           }
           // If multiple URL matches, use index-based matching as fallback
-          const index = targets.findIndex((t) => t.id === targetId);
-          if (index >= 0 && index < pages.length) {
-            return pages[index];
+          // This works when Playwright and the relay enumerate tabs in the same order
+          if (urlMatch.length > 1) {
+            const sameUrlTargets = targets.filter((t) => t.url === target.url);
+            if (sameUrlTargets.length === urlMatch.length) {
+              const idx = sameUrlTargets.findIndex((t) => t.id === targetId);
+              if (idx >= 0 && idx < urlMatch.length) {
+                return urlMatch[idx];
+              }
+            }
           }
         }
       }
     } catch {
-      // Best-effort; ignore fetch errors
+      // Ignore fetch errors and fall through to return null
     }
   }
   return null;
+}
+
+async function resolvePageByTargetIdOrThrow(opts: {
+  cdpUrl: string;
+  targetId: string;
+}): Promise<Page> {
+  const { browser } = await connectBrowser(opts.cdpUrl);
+  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+  if (!page) {
+    throw new Error("tab not found");
+  }
+  return page;
 }
 
 export async function getPageForTargetId(opts: {
@@ -136,80 +489,9 @@ export async function getPageForTargetId(opts: {
     if (pages.length === 1) {
       return first;
     }
-
-    // For extension relay scenarios, try to recover from "tab not found"
-    // by resetting the cached Playwright connection and retrying once.
-    // This handles cases where navigation invalidates the cached connection
-    // but the CDP target still exists in /json/list.
-    const isExtensionRelay = isExtensionRelayCdpUrl(opts.cdpUrl);
-
-    if (isExtensionRelay) {
-      const retryResult = await getPageForTargetIdWithRetry({
-        cdpUrl: opts.cdpUrl,
-        targetId: opts.targetId,
-        connectBrowser,
-        getAllPages,
-        findPageByTargetId,
-        forceDisconnectPlaywrightForTarget,
-      });
-      if (retryResult) {
-        return retryResult;
-      }
-    }
-
     throw new Error("tab not found");
   }
   return found;
-}
-
-// Helper function to detect extension relay CDP URLs
-function isExtensionRelayCdpUrl(cdpUrl: string): boolean {
-  // Extension relay uses specific local ports (18791, 18792) on localhost/127.0.0.1
-  return (
-    (cdpUrl.includes("127.0.0.1") || cdpUrl.includes("localhost")) &&
-    (cdpUrl.includes(":18791") || cdpUrl.includes(":18792"))
-  );
-}
-
-// Extracted retry logic as a separate helper for testability
-async function getPageForTargetIdWithRetry(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  connectBrowser: (cdpUrl: string) => Promise<{ browser: Browser; cdpUrl: string }>;
-  getAllPages: (browser: Browser) => Promise<Page[]>;
-  findPageByTargetId: (browser: Browser, targetId: string, cdpUrl?: string) => Promise<Page | null>;
-  forceDisconnectPlaywrightForTarget: (opts: {
-    cdpUrl: string;
-    targetId?: string;
-    reason?: string;
-  }) => Promise<void>;
-}): Promise<Page | null> {
-  try {
-    // Force disconnect the cached Playwright connection
-    await opts.forceDisconnectPlaywrightForTarget({
-      cdpUrl: opts.cdpUrl,
-      targetId: opts.targetId,
-      reason: "recovering from tab not found after navigation",
-    });
-
-    // Retry with fresh connection
-    const { browser: retryBrowser } = await opts.connectBrowser(opts.cdpUrl);
-    const retryPages = await opts.getAllPages(retryBrowser);
-    if (retryPages.length > 0) {
-      const retryFound = await opts.findPageByTargetId(retryBrowser, opts.targetId, opts.cdpUrl);
-      if (retryFound) {
-        return retryFound;
-      }
-      // If still only one page, use it as fallback
-      if (retryPages.length === 1) {
-        return retryPages[0];
-      }
-    }
-  } catch (retryError) {
-    // If retry fails, return null to fall through to original error
-    console.warn("Extension relay retry failed:", retryError);
-  }
-  return null;
 }
 
 export function refLocator(page: Page, ref: string) {
