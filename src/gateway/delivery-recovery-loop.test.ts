@@ -50,11 +50,46 @@ describe("startDeliveryRecoveryLoop", () => {
     scheduled?.();
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
 
-    loop.stop();
+    await loop.stop();
     expect(clearIntervalFn).toHaveBeenCalledWith(intervalHandle);
   });
 
-  it("does not schedule anything when disabled", () => {
+  it("waits for in-flight recovery before stopping", async () => {
+    const deferredRun = createDeferred();
+    const run = vi
+      .fn<() => Promise<void>>()
+      .mockImplementation(async () => await deferredRun.promise);
+    const setIntervalFn =
+      vi.fn<NonNullable<Parameters<typeof startDeliveryRecoveryLoop>[0]["setIntervalFn"]>>();
+    const clearIntervalFn =
+      vi.fn<NonNullable<Parameters<typeof startDeliveryRecoveryLoop>[0]["clearIntervalFn"]>>();
+    const intervalHandle = {} as ReturnType<typeof setInterval>;
+    setIntervalFn.mockImplementation(() => intervalHandle);
+
+    const loop = startDeliveryRecoveryLoop({
+      enabled: true,
+      run,
+      onError: () => {},
+      setIntervalFn,
+      clearIntervalFn,
+      intervalMs: 1000,
+    });
+
+    let stopped = false;
+    const stopPromise = loop.stop().then(() => {
+      stopped = true;
+    });
+
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    deferredRun.resolve();
+    await stopPromise;
+    expect(stopped).toBe(true);
+    expect(clearIntervalFn).toHaveBeenCalledWith(intervalHandle);
+  });
+
+  it("does not schedule anything when disabled", async () => {
     const setIntervalFn =
       vi.fn<NonNullable<Parameters<typeof startDeliveryRecoveryLoop>[0]["setIntervalFn"]>>();
 
@@ -66,6 +101,6 @@ describe("startDeliveryRecoveryLoop", () => {
     });
 
     expect(setIntervalFn).not.toHaveBeenCalled();
-    loop.stop();
+    await loop.stop();
   });
 });

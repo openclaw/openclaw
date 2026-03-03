@@ -14,7 +14,7 @@ type DeliveryRecoveryLoopParams = {
 };
 
 export type DeliveryRecoveryLoop = {
-  stop: () => void;
+  stop: () => Promise<void>;
 };
 
 export function startDeliveryRecoveryLoop(
@@ -27,16 +27,19 @@ export function startDeliveryRecoveryLoop(
   const intervalMs = params.intervalMs ?? DELIVERY_RECOVERY_INTERVAL_MS;
   let interval: IntervalHandle | null = null;
   let recoveryInFlight = false;
+  let inFlightPromise: Promise<void> | null = null;
 
   const runRecovery = async () => {
     if (recoveryInFlight) {
       return;
     }
     recoveryInFlight = true;
+    inFlightPromise = params.run();
     try {
-      await params.run();
+      await inFlightPromise;
     } finally {
       recoveryInFlight = false;
+      inFlightPromise = null;
     }
   };
 
@@ -50,12 +53,14 @@ export function startDeliveryRecoveryLoop(
   }
 
   return {
-    stop: () => {
-      if (!interval) {
-        return;
+    stop: async () => {
+      if (interval) {
+        clearIntervalFn(interval);
+        interval = null;
       }
-      clearIntervalFn(interval);
-      interval = null;
+      if (inFlightPromise) {
+        await inFlightPromise.catch(() => undefined);
+      }
     },
   };
 }

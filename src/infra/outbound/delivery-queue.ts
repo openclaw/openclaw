@@ -272,7 +272,7 @@ export interface RecoveryLogger {
 }
 
 /**
- * On gateway startup, scan the delivery queue and retry any pending entries.
+ * Scan the delivery queue and retry any pending entries.
  * Uses exponential backoff and moves entries that exceed MAX_RETRIES to failed/.
  */
 export async function recoverPendingDeliveries(opts: {
@@ -280,7 +280,7 @@ export async function recoverPendingDeliveries(opts: {
   log: RecoveryLogger;
   cfg: OpenClawConfig;
   stateDir?: string;
-  /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next restart. Default: 60 000. */
+  /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to the next recovery pass. Default: 60 000. */
   maxRecoveryMs?: number;
 }): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
@@ -304,7 +304,9 @@ export async function recoverPendingDeliveries(opts: {
     const now = Date.now();
     if (now >= deadline) {
       const deferred = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
-      opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
+      opts.log.warn(
+        `Recovery time budget exceeded — ${deferred} entries deferred to the next recovery pass`,
+      );
       break;
     }
     if (entry.retryCount >= MAX_RETRIES) {

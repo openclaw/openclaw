@@ -673,10 +673,11 @@ export async function startGatewayServer(
       const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
       const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
       const logRecovery = log.child("delivery-recovery");
+      const recoveryConfig = getActiveSecretsRuntimeSnapshot()?.config ?? cfgAtStart;
       await recoverPendingDeliveries({
         deliver: deliverOutboundPayloads,
         log: logRecovery,
-        cfg: cfgAtStart,
+        cfg: recoveryConfig,
       });
     },
     onError: (err) => log.error(`Delivery recovery failed: ${String(err)}`),
@@ -938,7 +939,7 @@ export async function startGatewayServer(
         clearTimeout(skillsRefreshTimer);
         skillsRefreshTimer = null;
       }
-      deliveryRecoveryLoop.stop();
+      await deliveryRecoveryLoop.stop();
       skillsChangeUnsub();
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
