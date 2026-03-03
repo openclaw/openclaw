@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
+  NODE_LAUNCH_AGENT_LABEL,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
@@ -23,6 +24,7 @@ export type FindExtraGatewayServicesOptions = {
 };
 
 const EXTRA_MARKERS = ["openclaw", "clawdbot", "moltbot"] as const;
+const IGNORED_NON_GATEWAY_LAUNCHD_LABELS = new Set(["ai.openclaw.mac", NODE_LAUNCH_AGENT_LABEL]);
 
 export function renderGatewayServiceCleanupHints(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -124,7 +126,9 @@ function tryExtractPlistLabel(contents: string): string | null {
 }
 
 function isIgnoredLaunchdLabel(label: string): boolean {
-  return label === resolveGatewayLaunchAgentLabel();
+  return (
+    label === resolveGatewayLaunchAgentLabel() || IGNORED_NON_GATEWAY_LAUNCHD_LABELS.has(label)
+  );
 }
 
 function isIgnoredSystemdName(name: string): boolean {
