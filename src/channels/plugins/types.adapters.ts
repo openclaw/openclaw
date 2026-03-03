@@ -235,6 +235,12 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
    * @see {@link https://docs.openclaw.ai/plugins/developing-plugins | Plugin SDK documentation}
    */
   channelRuntime?: PluginRuntime["channel"];
+  /**
+   * Legacy dispatcher alias for external plugins built before `channelRuntime` landed.
+   *
+   * @deprecated Prefer `channelRuntime.reply.dispatchReplyWithBufferedBlockDispatcher`.
+   */
+  dispatchReplyWithBufferedBlockDispatcher?: PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"];
 };
 
 export type ChannelLogoutResult = {

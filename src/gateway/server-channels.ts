@@ -231,6 +231,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           getStatus: () => getRuntime(channelId, id),
           setStatus: (next) => setRuntime(channelId, id, next),
           ...(channelRuntime ? { channelRuntime } : {}),
+          ...(channelRuntime?.reply?.dispatchReplyWithBufferedBlockDispatcher
+            ? {
+                dispatchReplyWithBufferedBlockDispatcher:
+                  channelRuntime.reply.dispatchReplyWithBufferedBlockDispatcher,
+              }
+            : {}),
         });
         const trackedPromise = Promise.resolve(task)
           .catch((err) => {

@@ -180,4 +180,22 @@ describe("server-channels auto restart", () => {
     await manager.startChannels();
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
+
+  it("provides legacy dispatcher alias when channelRuntime reply dispatcher exists", async () => {
+    const dispatcher = vi.fn(async () => ({ queuedFinal: false }));
+    const channelRuntime = {
+      reply: {
+        dispatchReplyWithBufferedBlockDispatcher: dispatcher,
+      },
+    } as unknown as PluginRuntime["channel"];
+    const startAccount = vi.fn(async (ctx) => {
+      expect(ctx.dispatchReplyWithBufferedBlockDispatcher).toBe(dispatcher);
+    });
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ channelRuntime });
+
+    await manager.startChannels();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+  });
 });
