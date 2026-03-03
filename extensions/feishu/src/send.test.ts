@@ -165,4 +165,78 @@ describe("getMessageFeishu", () => {
       }),
     );
   });
+
+  it("extracts content from interactive card with body.elements structure", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_card_body",
+            chat_id: "oc_1",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                header: { title: { content: "Card Header" } },
+                body: {
+                  elements: [
+                    { tag: "markdown", content: "Body content" },
+                    { tag: "div", text: { content: "Div content" } },
+                  ],
+                },
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_card_body",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_card_body",
+        chatId: "oc_1",
+        contentType: "interactive",
+        content: "Card Header\nBody content\nDiv content",
+      }),
+    );
+  });
+
+  it("extracts header title when elements are missing", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_card_header_only",
+            chat_id: "oc_1",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                header: { title: { content: "Only Header Title" } },
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_card_header_only",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_card_header_only",
+        chatId: "oc_1",
+        contentType: "interactive",
+        content: "Only Header Title",
+      }),
+    );
+  });
 });

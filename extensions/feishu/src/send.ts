@@ -35,13 +35,32 @@ function parseInteractiveCardContent(parsed: unknown): string {
     return "[Interactive Card]";
   }
 
-  const candidate = parsed as { elements?: unknown };
-  if (!Array.isArray(candidate.elements)) {
+  const candidate = parsed as {
+    header?: { title?: { content?: string } };
+    body?: { elements?: unknown };
+    elements?: unknown;
+  };
+
+  // Handle both structures: direct elements or body.elements
+  const elements = candidate.body?.elements ?? candidate.elements;
+  if (!Array.isArray(elements)) {
+    // Try to extract at least the header title if elements are not available
+    const headerTitle = candidate.header?.title?.content;
+    if (typeof headerTitle === "string" && headerTitle.trim()) {
+      return headerTitle.trim();
+    }
     return "[Interactive Card]";
   }
 
   const texts: string[] = [];
-  for (const element of candidate.elements) {
+
+  // Include header title if present
+  const headerTitle = candidate.header?.title?.content;
+  if (typeof headerTitle === "string" && headerTitle.trim()) {
+    texts.push(headerTitle.trim());
+  }
+
+  for (const element of elements) {
     if (!element || typeof element !== "object") {
       continue;
     }
@@ -49,6 +68,7 @@ function parseInteractiveCardContent(parsed: unknown): string {
       tag?: string;
       content?: string;
       text?: { content?: string };
+      title?: { content?: string };
     };
     if (item.tag === "div" && typeof item.text?.content === "string") {
       texts.push(item.text.content);
@@ -56,6 +76,11 @@ function parseInteractiveCardContent(parsed: unknown): string {
     }
     if (item.tag === "markdown" && typeof item.content === "string") {
       texts.push(item.content);
+      continue;
+    }
+    // Handle header tag within elements (some card formats use this)
+    if (item.tag === "header" && typeof item.title?.content === "string") {
+      texts.push(item.title.content);
     }
   }
   return texts.join("\n").trim() || "[Interactive Card]";
