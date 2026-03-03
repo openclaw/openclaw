@@ -3,7 +3,7 @@ import { isLoopbackHost, normalizeHostHeader } from "./net.js";
 type OriginCheckResult =
   | {
       ok: true;
-      matchedBy: "allowlist" | "host-header-fallback" | "local-loopback";
+      matchedBy: "allowlist" | "host-header-fallback" | "local-loopback" | "chrome-extension";
     }
   | { ok: false; reason: string };
 
@@ -69,8 +69,8 @@ export function checkBrowserOrigin(params: {
   // "chrome-extension://<id>" which is not loopback, but the connection
   // itself originates from the local machine, so treat it as trusted when
   // the request host resolves to loopback.
-  if (isChromeExtensionOrigin(params.origin) && isLoopbackHost(requestHostname)) {
-    return { ok: true };
+  if (isChromeExtensionOrigin(params.origin) && isLoopbackHost(requestHost)) {
+    return { ok: true, matchedBy: "chrome-extension" };
   }
 
   return { ok: false, reason: "origin not allowed" };
