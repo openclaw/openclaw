@@ -270,7 +270,6 @@ export const ToolsWebSearchSchema = z
         z.literal("gemini"),
         z.literal("duckduckgo"),
         z.literal("kimi"),
-        z.literal("duckduckgo"),
       ])
       .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),

@@ -108,6 +108,15 @@ export function extractNameMentions(text: string): string[] {
   );
   const names = new Set<string>();
   for (const match of text.matchAll(namePattern)) {
+    const token = match[0];
+    const start = match.index ?? -1;
+    if (start < 0) {
+      continue;
+    }
+    const end = start + token.length;
+    if (!hasMentionBoundary(text, start, end)) {
+      continue;
+    }
     const name = match[1]?.trim();
     if (name && name.length >= 2) {
       names.add(name);
@@ -173,6 +182,25 @@ function resolveNameToJid(name: string, participants: ParticipantMentionInfo[]):
   return null;
 }
 
+function selfAliasMentionMatchesToken(token: string, alias: string): boolean {
+  const normalizedToken = normalizeAliasForMatch(token);
+  const normalizedAlias = normalizeAliasForMatch(alias);
+  if (!normalizedToken || !normalizedAlias) {
+    return false;
+  }
+  if (normalizedToken === normalizedAlias) {
+    return true;
+  }
+
+  const tokenParts = new Set(normalizedToken.split(" ").filter((part) => part.length >= 3));
+  const aliasParts = new Set(normalizedAlias.split(" ").filter((part) => part.length >= 3));
+  for (const part of tokenParts) {
+    if (aliasParts.has(part)) {
+      return true;
+    }
+  }
+  return false;
+}
 function collectNameAliases(value: string | undefined): string[] {
   const trimmed = (value ?? "").trim();
   if (!trimmed) {
@@ -439,21 +467,6 @@ export async function resolveMentionJids(
       nextJid = participantPreferredJid;
     }
 
-    if (!participantPreferredJid && nextJid.endsWith("@lid") && options?.lidLookup?.getPNForLID) {
-      try {
-        const pnJid = await options.lidLookup.getPNForLID(nextJid);
-        if (pnJid) {
-          const normalizedPnJid = normalizeMentionJid(pnJid);
-          const mappedParticipantJid = preferredParticipantJidByUser.get(
-            mentionUserPart(normalizedPnJid),
-          );
-          nextJid = mappedParticipantJid ?? normalizedPnJid;
-        }
-      } catch {
-        // Best-effort lookup only.
-      }
-    }
-
     // Bare @<digits> tokens may actually be LIDs (without @lid suffix).
     // Try a fallback LID lookup for long IDs when no participant mapping matched.
     if (
@@ -498,13 +511,7 @@ export async function resolveMentionJids(
   const nameMentions = extractNameMentions(text);
   if (selfMentionJid && selfMentionAliases.length > 0 && nameMentions.length > 0) {
     const hasSelfAliasMention = nameMentions.some((token) => {
-      const normalizedToken = normalizeTextForMatch(token);
-      return selfMentionAliases.some(
-        (alias) =>
-          normalizedToken === alias ||
-          normalizedToken.includes(alias) ||
-          alias.includes(normalizedToken),
-      );
+      return selfMentionAliases.some((alias) => selfAliasMentionMatchesToken(token, alias));
     });
     if (hasSelfAliasMention) {
       resolved.add(selfMentionJid);
