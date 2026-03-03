@@ -15,8 +15,15 @@ const mergeOrigin = (
     return undefined;
   }
   const merged: SessionOrigin = existing ? { ...existing } : {};
+  const existingProvider = existing?.provider?.trim().toLowerCase();
+  const nextProvider = next?.provider?.trim().toLowerCase();
+  const nextIsInternal = nextProvider === "internal";
+  const existingIsExternal = Boolean(existingProvider && existingProvider !== "internal");
   if (next?.label) {
-    merged.label = next.label;
+    // Keep channel/user labels when an internal transport reconnects (e.g. TUI).
+    if (!(nextIsInternal && existingIsExternal && existing?.label)) {
+      merged.label = next.label;
+    }
   }
   if (next?.provider) {
     merged.provider = next.provider;
