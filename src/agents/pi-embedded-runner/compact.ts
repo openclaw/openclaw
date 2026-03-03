@@ -842,6 +842,8 @@ export async function compactEmbeddedPiSessionDirect(
           hookRunner
             .runAfterCompaction(
               {
+                // Plugin-provided summary uses appendCompaction() without pruning
+                // in-memory messages; report a summary placeholder count until reload.
                 messageCount: pluginSummary ? 1 : session.messages.length,
                 tokenCount: tokensAfter,
                 compactedCount,

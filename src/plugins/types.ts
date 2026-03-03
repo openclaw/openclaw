@@ -348,7 +348,7 @@ export type PluginHookAgentContext = {
   /** Request compaction of the current session. The compaction is deferred and
    *  runs after the current agent run completes (to avoid lane deadlocks).
    *  Returns false if compaction was already requested or is in progress.
-   *  Only available on agent-scoped hooks (agent_end, after_tool_call). */
+   *  Only available on the agent_end hook context. */
   requestCompaction?: (customInstructions?: string) => Promise<boolean>;
 };
 
@@ -446,6 +446,9 @@ export type PluginHookBeforeResetEvent = {
 };
 
 export type PluginHookAfterCompactionEvent = {
+  /** Remaining in-memory message count after compaction.
+   *  Note: for plugin-provided summaries, in-memory pruning does not happen
+   *  until next session load, so this is reported as 1 (summary placeholder). */
   messageCount: number;
   tokenCount?: number;
   compactedCount: number;

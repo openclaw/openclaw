@@ -1636,6 +1636,8 @@ export async function runEmbeddedAttempt(
                   model: params.modelId,
                   customInstructions: compactionCustomInstructions,
                   trigger: "plugin" as const,
+                }).catch((deferredErr) => {
+                  log.warn(`deferred plugin compaction failed: ${String(deferredErr)}`);
                 });
               }
             })
