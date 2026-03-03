@@ -302,6 +302,12 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    serper: z
+      .object({
+        apiKey: z.string().optional().register(sensitive),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

@@ -474,6 +474,11 @@ export type ToolsConfig = {
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
       };
+      /** Serper-specific configuration (used when provider="serper"). */
+      serper?: {
+        /** Serper API key (defaults to SERPER_API_KEY env var). */
+        apiKey?: string;
+      };
     };
     fetch?: {
       /** Enable web fetch tool (default: true). */
