@@ -4,7 +4,7 @@ import { runWithModelFallback } from "./model-fallback.js";
 describe("runWithModelFallback (local context too small)", () => {
   it("falls back when local model fails with n_keep >= n_ctx startup error", async () => {
     const run = vi
-      .fn<Parameters<(provider: string, model: string) => Promise<string>>, Promise<string>>()
+      .fn<(provider: string, model: string) => Promise<string>>()
       .mockRejectedValueOnce(
         new Error("cannot truncate prompt with n_keep (13575) >= n_ctx (4096)"),
       )
