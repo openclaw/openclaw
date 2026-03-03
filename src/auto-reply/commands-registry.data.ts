@@ -189,6 +189,21 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "management",
     }),
     defineChatCommand({
+      key: "crons",
+      nativeName: "crons",
+      description: "List and bulk-manage cron jobs.",
+      textAlias: "/crons",
+      category: "management",
+      args: [
+        {
+          name: "action",
+          description: "all | delete | delete-inactive",
+          type: "string",
+          choices: ["all", "delete", "delete-inactive"],
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "context",
       nativeName: "context",
       description: "Explain how context is built and used.",
@@ -738,6 +753,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
   ];
 
   registerAlias(commands, "whoami", "/id");
+  registerAlias(commands, "crons", "/cron");
   registerAlias(commands, "think", "/thinking", "/t");
   registerAlias(commands, "verbose", "/v");
   registerAlias(commands, "reasoning", "/reason");
