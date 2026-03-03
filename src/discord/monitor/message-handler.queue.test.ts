@@ -1,0 +1,151 @@
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
+
+const preflightDiscordMessageMock = vi.hoisted(() => vi.fn());
+const processDiscordMessageMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./message-handler.preflight.js", () => ({
+  preflightDiscordMessage: preflightDiscordMessageMock,
+}));
+
+vi.mock("./message-handler.process.js", () => ({
+  processDiscordMessage: processDiscordMessageMock,
+}));
+
+const { createDiscordMessageHandler } = await import("./message-handler.js");
+
+function createDeferred<T = void>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => {};
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}
+
+function createHandlerParams(overrides?: {
+  setStatus?: (patch: Record<string, unknown>) => void;
+}) {
+  const cfg: OpenClawConfig = {
+    channels: {
+      discord: {
+        enabled: true,
+        token: "test-token",
+        groupPolicy: "allowlist",
+      },
+    },
+    messages: {
+      inbound: {
+        debounceMs: 0,
+      },
+    },
+  };
+  return {
+    cfg,
+    discordConfig: cfg.channels?.discord,
+    accountId: "default",
+    token: "test-token",
+    runtime: {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: (code: number): never => {
+        throw new Error(`exit ${code}`);
+      },
+    },
+    botUserId: "bot-123",
+    guildHistories: new Map(),
+    historyLimit: 0,
+    mediaMaxBytes: 10_000,
+    textLimit: 2_000,
+    replyToMode: "off" as const,
+    dmEnabled: true,
+    groupDmEnabled: false,
+    threadBindings: createNoopThreadBindingManager("default"),
+    setStatus: overrides?.setStatus,
+  };
+}
+
+function createMessageData(messageId: string, channelId = "ch-1") {
+  return {
+    channel_id: channelId,
+    author: { id: "user-1" },
+    message: {
+      id: messageId,
+      author: { id: "user-1", bot: false },
+      content: "hello",
+      channel_id: channelId,
+      attachments: [{ id: `att-${messageId}` }],
+    },
+  };
+}
+
+function createPreflightContext(channelId = "ch-1") {
+  return {
+    route: {
+      sessionKey: `agent:main:discord:channel:${channelId}`,
+    },
+    baseSessionKey: `agent:main:discord:channel:${channelId}`,
+    messageChannelId: channelId,
+  };
+}
+
+describe("createDiscordMessageHandler queue behavior", () => {
+  it("returns immediately and tracks busy status while queued runs execute", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const firstRun = createDeferred<void>();
+    const secondRun = createDeferred<void>();
+    processDiscordMessageMock
+      .mockImplementationOnce(async () => {
+        await firstRun.promise;
+      })
+      .mockImplementationOnce(async () => {
+        await secondRun.promise;
+      });
+    preflightDiscordMessageMock.mockImplementation(async (params: { data: { channel_id: string } }) =>
+      createPreflightContext(params.data.channel_id),
+    );
+
+    const setStatus = vi.fn();
+    const handler = createDiscordMessageHandler(createHandlerParams({ setStatus }));
+
+    await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    });
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeRuns: 1,
+        busy: true,
+      }),
+    );
+
+    await expect(handler(createMessageData("m-2") as never, {} as never)).resolves.toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(2);
+    });
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    firstRun.resolve();
+    await firstRun.promise;
+
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    });
+
+    secondRun.resolve();
+    await secondRun.promise;
+
+    await vi.waitFor(() => {
+      expect(setStatus).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          activeRuns: 0,
+          busy: false,
+        }),
+      );
+    });
+  });
+});

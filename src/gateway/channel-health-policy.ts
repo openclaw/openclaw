@@ -3,6 +3,8 @@ export type ChannelHealthSnapshot = {
   connected?: boolean;
   enabled?: boolean;
   configured?: boolean;
+  busy?: boolean;
+  activeRuns?: number;
   lastEventAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;
@@ -12,6 +14,7 @@ export type ChannelHealthEvaluationReason =
   | "healthy"
   | "unmanaged"
   | "not-running"
+  | "busy"
   | "startup-connect-grace"
   | "disconnected"
   | "stale-socket";
@@ -42,6 +45,13 @@ export function evaluateChannelHealth(
   }
   if (!snapshot.running) {
     return { healthy: false, reason: "not-running" };
+  }
+  const activeRuns =
+    typeof snapshot.activeRuns === "number" && Number.isFinite(snapshot.activeRuns)
+      ? Math.max(0, Math.trunc(snapshot.activeRuns))
+      : 0;
+  if (snapshot.busy === true || activeRuns > 0) {
+    return { healthy: true, reason: "busy" };
   }
   if (snapshot.lastStartAt != null) {
     const upDuration = policy.now - snapshot.lastStartAt;
