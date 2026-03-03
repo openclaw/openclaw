@@ -72,8 +72,14 @@ vi.mock("./response.js", () => ({
   },
 }));
 
+const runtimeLog = vi.fn();
+
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+  defaultRuntime: {
+    log: (...args: unknown[]) => runtimeLog(...args),
+    error: vi.fn(),
+    exit: vi.fn(),
+  },
 }));
 
 vi.mock("../command-format.js", () => ({
@@ -85,6 +91,7 @@ const { runDaemonInstall } = await import("./install.js");
 describe("runDaemonInstall", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    runtimeLog.mockClear();
     loadConfig.mockReturnValue({
       gateway: {
         mode: "remote",
@@ -113,6 +120,18 @@ describe("runDaemonInstall", () => {
         gateway: expect.objectContaining({ mode: "local" }),
       }),
     );
+    expect(runtimeLog).toHaveBeenCalledWith(
+      "Gateway install requires local mode; switching gateway.mode from remote to local.",
+    );
+    expect(serviceInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not rewrite mode when gateway.mode is unset", async () => {
+    loadConfig.mockReturnValueOnce({ gateway: {} });
+
+    await runDaemonInstall({});
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 });

@@ -33,7 +33,14 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   let cfg = loadConfig();
-  if (cfg.gateway?.mode !== "local") {
+  if (cfg.gateway?.mode === "remote") {
+    const warnMsg =
+      "Gateway install requires local mode; switching gateway.mode from remote to local.";
+    if (json) {
+      warnings.push(warnMsg);
+    } else {
+      defaultRuntime.log(warnMsg);
+    }
     const nextConfig = {
       ...cfg,
       gateway: {
