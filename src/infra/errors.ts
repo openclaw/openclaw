@@ -52,3 +52,10 @@ export function formatUncaughtError(err: unknown): string {
   }
   return formatErrorMessage(err);
 }
+
+export function readErrorName(err: unknown): string {
+  if (!err || typeof err !== "object") {
+    return "";
+  }
+  return "name" in err ? String(err.name) : "";
+}
