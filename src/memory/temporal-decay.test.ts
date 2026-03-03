@@ -153,6 +153,27 @@ describe("temporal decay", () => {
     expect(byPath.get("memory/2000-01-01.md")?.score ?? 1).toBeLessThan(0.001);
   });
 
+  it("parses dated memory filenames in nested folders and with basename suffixes", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [
+        { path: "memory/2026-02-09-daily.md", score: 1, source: "memory" },
+        { path: "memory/archive/2026-01-01.md", score: 1, source: "memory" },
+        { path: "memory/archive/morning-summary-2026-01-26.md", score: 1, source: "memory" },
+      ],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    const byPath = new Map(decayed.map((entry) => [entry.path, entry.score]));
+    const recent = byPath.get("memory/2026-02-09-daily.md") ?? 0;
+    const old = byPath.get("memory/archive/2026-01-01.md") ?? 0;
+    const middle = byPath.get("memory/archive/morning-summary-2026-01-26.md") ?? 0;
+
+    expect(recent).toBeGreaterThan(middle);
+    expect(middle).toBeGreaterThan(old);
+    expect(recent).toBeLessThan(1);
+  });
+
   it("uses file mtime fallback for non-memory sources", async () => {
     const dir = await makeTempDir();
     const sessionPath = path.join(dir, "sessions", "thread.jsonl");
