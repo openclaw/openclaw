@@ -173,6 +173,13 @@ export function renderApp(state: AppViewState) {
     }
     return plan.index;
   };
+  const resolveFreshAgentConfigEntry = (index: number) => {
+    const currentConfig = (state.configForm ?? configValue) as {
+      agents?: { list?: unknown[] };
+    } | null;
+    const list = currentConfig?.agents?.list;
+    return Array.isArray(list) ? (list[index] as Record<string, unknown> | undefined) : undefined;
+  };
   const basePath = normalizeBasePath(state.basePath ?? "");
   const resolvedAgentId =
     state.agentsSelectedId ??
@@ -725,10 +732,9 @@ export function renderApp(state: AppViewState) {
                   if (index == null) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  const entry = Array.isArray(list)
-                    ? (list[index] as { skills?: unknown })
-                    : undefined;
+                  const entry = resolveFreshAgentConfigEntry(index) as
+                    | { skills?: unknown }
+                    | undefined;
                   const normalizedSkill = skillName.trim();
                   if (!normalizedSkill) {
                     return;
@@ -773,10 +779,9 @@ export function renderApp(state: AppViewState) {
                     removeConfigFormValue(state, basePath);
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  const entry = Array.isArray(list)
-                    ? (list[index] as { model?: unknown })
-                    : undefined;
+                  const entry = resolveFreshAgentConfigEntry(index) as
+                    | { model?: unknown }
+                    | undefined;
                   const existing = entry?.model;
                   if (existing && typeof existing === "object" && !Array.isArray(existing)) {
                     const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
@@ -796,10 +801,9 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   const basePath = ["agents", "list", index, "model"];
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  const entry = Array.isArray(list)
-                    ? (list[index] as { model?: unknown })
-                    : undefined;
+                  const entry = resolveFreshAgentConfigEntry(index) as
+                    | { model?: unknown }
+                    | undefined;
                   const existing = entry?.model;
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
