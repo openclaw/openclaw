@@ -250,6 +250,35 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
     );
   });
 
+  it("allows native group plugin commands when commands.allowFrom uses telegram prefix", async () => {
+    const { handler, sendMessage } = registerPluginCommandHandler({
+      cfg: {
+        commands: {
+          allowFrom: {
+            "*": ["telegram:111"],
+          },
+        },
+      } as OpenClawConfig,
+      allowFrom: ["999"],
+    });
+
+    await handler?.({
+      message: {
+        chat: { id: -100124, type: "supergroup" },
+        from: { id: 111, username: "allowed" },
+        message_id: 14,
+        date: 123460,
+      },
+      match: "",
+    });
+
+    expect(executePluginCommand).toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalledWith(
+      -100124,
+      "You are not authorized to use this command.",
+    );
+  });
+
   it("allows native group plugin commands via commands.allowFrom provider-specific override", async () => {
     const { handler, sendMessage } = registerPluginCommandHandler({
       cfg: {

@@ -281,8 +281,9 @@ export function resolveCanonicalCommandSenderAuthorization(params: {
   senderCandidates: string[];
   fallbackAuthorized: boolean;
 }): boolean {
+  const dock = params.dock ?? (params.providerId ? getChannelDock(params.providerId) : undefined);
   const commandsAllowFromList = resolveCommandsAllowFromList({
-    dock: params.dock,
+    dock,
     cfg: params.cfg,
     accountId: params.accountId,
     providerId: params.providerId,
