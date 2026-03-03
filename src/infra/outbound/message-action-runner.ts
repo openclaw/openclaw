@@ -186,6 +186,10 @@ function readTrimmedTargetsParam(params: Record<string, unknown>): string[] {
   return targets;
 }
 
+function looksLikeChannelAliasToken(value: string): boolean {
+  return /^[a-z]{2}[a-z0-9_-]*$/.test(value);
+}
+
 function normalizeRoutingHandle(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -332,14 +336,24 @@ async function normalizeTargetsParamForAction(params: {
         `Conflicting destinations provided for ${params.action}. Use either targets or a single target destination.`,
       );
     }
-    const normalizedChannelHint =
-      typeof params.args.channel === "string"
-        ? normalizeMessageChannel(params.args.channel.trim())
-        : undefined;
+    const explicitChannelRaw =
+      typeof params.args.channel === "string" ? params.args.channel.trim() : "";
+    const normalizedChannelHint = explicitChannelRaw
+      ? normalizeMessageChannel(explicitChannelRaw)
+      : undefined;
     const explicitChannelHint =
       normalizedChannelHint && isDeliverableMessageChannel(normalizedChannelHint)
         ? normalizedChannelHint
         : undefined;
+    if (
+      explicitChannelRaw &&
+      !explicitChannelHint &&
+      looksLikeChannelAliasToken(explicitChannelRaw)
+    ) {
+      throw new Error(
+        `Unknown channel "${explicitChannelRaw}" for multi-target ${params.action}. Provide a configured channel or use target for one destination.`,
+      );
+    }
     let channelHint =
       explicitChannelHint ?? normalizeMessageChannel(params.toolContext?.currentChannelProvider);
     if (!channelHint) {
