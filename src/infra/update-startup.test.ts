@@ -182,7 +182,9 @@ describe("update-startup", () => {
   }
 
   async function runStableUpdateCheck(params: {
-    onUpdateAvailableChange?: ReturnType<typeof vi.fn>;
+    onUpdateAvailableChange?: Parameters<
+      typeof runGatewayUpdateCheck
+    >[0]["onUpdateAvailableChange"];
   }) {
     await runGatewayUpdateCheck({
       cfg: { update: { channel: "stable" } },

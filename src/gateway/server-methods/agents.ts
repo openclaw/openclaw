@@ -365,7 +365,11 @@ function resolveOptionalStringParam(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function respondInvalidMethodParams(respond: RespondFn, method: string, errors: unknown): void {
+function respondInvalidMethodParams(
+  respond: RespondFn,
+  method: string,
+  errors: Parameters<typeof formatValidationErrors>[0],
+): void {
   respond(
     false,
     undefined,
