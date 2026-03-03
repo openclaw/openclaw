@@ -92,12 +92,12 @@ block-beta
   columns 5
   space:1 TH["Task Hub"] GW["Gateway"] EA["실행 에이전트"] EV["평가 에이전트"]
 
-  P0["Phase 0\nBig Bang"]:1 p0th["████"]:1 p0gw["█"]:1 space:1 p0ev["████"]:1
-  P1["Phase 1\nPAL Router"]:1 p1th["█"]:1 p1gw["████"]:1 space:1 space:1
-  P2["Phase 2\nDouble Diamond"]:1 p2th["██"]:1 p2gw["████"]:1 p2ea["████"]:1 p2ev["██"]:1
-  P3["Phase 3\nResilience"]:1 p3th["█"]:1 p3gw["████"]:1 p3ea["█"]:1 space:1
-  P4["Phase 4\nEvaluation"]:1 p4th["███"]:1 p4gw["██"]:1 p4ea["█"]:1 p4ev["████"]:1
-  P5["Phase 5\nEvolution"]:1 p5th["████"]:1 p5gw["███"]:1 space:1 p5ev["████"]:1
+  P0["Phase 0<br/>Big Bang"]:1 p0th["████"]:1 p0gw["█"]:1 space:1 p0ev["████"]:1
+  P1["Phase 1<br/>PAL Router"]:1 p1th["█"]:1 p1gw["████"]:1 space:1 space:1
+  P2["Phase 2<br/>Double Diamond"]:1 p2th["██"]:1 p2gw["████"]:1 p2ea["████"]:1 p2ev["██"]:1
+  P3["Phase 3<br/>Resilience"]:1 p3th["█"]:1 p3gw["████"]:1 p3ea["█"]:1 space:1
+  P4["Phase 4<br/>Evaluation"]:1 p4th["███"]:1 p4gw["██"]:1 p4ea["█"]:1 p4ev["████"]:1
+  P5["Phase 5<br/>Evolution"]:1 p5th["████"]:1 p5gw["███"]:1 space:1 p5ev["████"]:1
 ```
 
 > 블록 너비 = 해당 계층의 책임 비중. 빈 칸 = 해당 Phase에 관여하지 않음.
@@ -136,10 +136,10 @@ harness_report_drift; // 공통: 드리프트 측정 결과 제출
 
 ```mermaid
 flowchart LR
-  A["Harness 생성 중\n(UI 입력)"] -->|위임| A2["모호성 점수 계산"]
+  A["Harness 생성 중<br/>(UI 입력)"] -->|위임| A2["모호성 점수 계산"]
   B["AC 분해 필요"] -->|위임| B2["원자성 판단 + 분해"]
-  C["실행 에이전트\n완료 감지"] -->|위임| C2["시맨틱 평가"]
-  D["평가 실패 +\n정체 감지"] -->|규칙 기반| D2["Gateway가 직접\n페르소나 프롬프트 선택"]
+  C["실행 에이전트<br/>완료 감지"] -->|위임| C2["시맨틱 평가"]
+  D["평가 실패 +<br/>정체 감지"] -->|규칙 기반| D2["Gateway가 직접<br/>페르소나 프롬프트 선택"]
   E["진화 조건 충족"] -->|위임| E2["Wonder/Reflect 수행"]
 
   subgraph GW["Gateway 감지"]
@@ -561,14 +561,14 @@ sequenceDiagram
 ```mermaid
 flowchart LR
   subgraph triggers["Stage 3 Consensus 트리거 (6개 조건 — OR)"]
-    T1["1. Seed modification\n(freeze된 spec 변경 시도)"]
-    T2["2. Ontology evolution\n(AC 구조 변경)"]
-    T3["3. Goal reinterpretation\n(goalAlignment < 0.6)"]
+    T1["1. Seed modification<br/>(freeze된 spec 변경 시도)"]
+    T2["2. Ontology evolution<br/>(AC 구조 변경)"]
+    T3["3. Goal reinterpretation<br/>(goalAlignment &lt; 0.6)"]
     T4["4. Drift > 0.3"]
     T5["5. Uncertainty > 0.3"]
-    T6["6. Lateral thinking adoption\n(Phase 3 페르소나 전환 후 결과)"]
+    T6["6. Lateral thinking adoption<br/>(Phase 3 페르소나 전환 후 결과)"]
   end
-  triggers -->|하나라도 해당| S3["Stage 3\nConsensus 실행"]
+  triggers -->|하나라도 해당| S3["Stage 3<br/>Consensus 실행"]
 ```
 
 트리거 판단은 **수치 비교**이므로 Gateway에서 규칙 기반으로 처리.
@@ -1581,7 +1581,7 @@ stateDiagram-v2
     Phase5 --> convergence_check
     state convergence_check <<choice>>
     convergence_check --> Phase1: 미수렴 (다음 세대)
-    convergence_check --> archived_converge: similarity ≥ 0.95\nOR gen ≥ 30\nOR 3연속 무변화
+    convergence_check --> archived_converge: similarity ≥ 0.95 OR gen ≥ 30 OR 3연속 무변화
   }
 
   state archived_ok <<join>>
