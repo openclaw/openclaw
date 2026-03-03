@@ -247,6 +247,33 @@ describe("TuiStreamAssembler", () => {
     expect(fullSnapshot).toBe("Before tool call\nAfter 1\nAfter 2");
   });
 
+  it("keeps continuation anchor across appended post-tool chunks", () => {
+    const assembler = new TuiStreamAssembler();
+
+    assembler.ingestDelta(
+      "run-post-tool-anchor",
+      messageWithContent([text("Before tool call")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-anchor",
+      messageWithContent([toolUse(), text("After 1")]),
+      false,
+    );
+    assembler.ingestDelta(
+      "run-post-tool-anchor",
+      messageWithContent([toolUse(), text("After 2")]),
+      false,
+    );
+
+    const fullSnapshot = assembler.ingestDelta(
+      "run-post-tool-anchor",
+      messageWithContent([toolUse(), text("After 1"), text("After 2"), text("After 3")]),
+      false,
+    );
+    expect(fullSnapshot).toBe("Before tool call\nAfter 1\nAfter 2\nAfter 3");
+  });
+
   for (const testCase of FINALIZE_BOUNDARY_CASES) {
     it(testCase.name, () => {
       const assembler = new TuiStreamAssembler();

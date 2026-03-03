@@ -252,7 +252,9 @@ export class TuiStreamAssembler {
             ...nextContentBlocks,
           ];
         } else {
-          state.postBoundaryContinuationStart = state.contentBlocks.length;
+          if (continuationStart == null) {
+            state.postBoundaryContinuationStart = state.contentBlocks.length;
+          }
           state.contentBlocks = [...state.contentBlocks, ...nextContentBlocks];
         }
         state.contentText = state.contentBlocks.join("\n");
