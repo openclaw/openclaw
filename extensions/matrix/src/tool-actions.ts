@@ -40,6 +40,7 @@ function readRoomId(params: Record<string, unknown>, required = true): string {
 export async function handleMatrixAction(
   params: Record<string, unknown>,
   cfg: CoreConfig,
+  opts?: { mediaLocalRoots?: readonly string[] },
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const isActionEnabled = createActionGate(cfg.channels?.matrix?.actions);
@@ -86,6 +87,7 @@ export async function handleMatrixAction(
           mediaUrl: mediaUrl ?? undefined,
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,
+          mediaLocalRoots: opts?.mediaLocalRoots,
         });
         return jsonResult({ ok: true, result });
       }

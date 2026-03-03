@@ -19,6 +19,7 @@ export async function sendMatrixMessage(
     mediaUrl?: string;
     replyToId?: string;
     threadId?: string;
+    mediaLocalRoots?: readonly string[];
   } = {},
 ) {
   return await sendMessageMatrix(to, content, {
@@ -27,6 +28,7 @@ export async function sendMatrixMessage(
     threadId: opts.threadId,
     client: opts.client,
     timeoutMs: opts.timeoutMs,
+    mediaLocalRoots: opts.mediaLocalRoots,
   });
 }
 
