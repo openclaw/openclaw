@@ -23,14 +23,11 @@ export function wrapHostEditToolWithPostWriteRecovery(
   base: AnyAgentTool,
   root: string,
 ): AnyAgentTool {
+  type ToolExecuteArgs = Parameters<AnyAgentTool["execute"]>;
   return {
     ...base,
-    execute: async (
-      toolCallId: string,
-      params: unknown,
-      signal: AbortSignal | undefined,
-      onUpdate?: (update: unknown) => void,
-    ) => {
+    execute: async (...args: ToolExecuteArgs) => {
+      const [toolCallId, params, signal, onUpdate] = args;
       try {
         return await base.execute(toolCallId, params, signal, onUpdate);
       } catch (err) {
