@@ -345,25 +345,15 @@ jobs:
       matrix:
         include:
           - runtime: node
-            task: lint
-            shard_index: 0
-            shard_count: 1
-            command: pnpm lint
-          - runtime: node
             task: test
             shard_index: 1
             shard_count: 2
-            command: pnpm canvas:a2ui:bundle && pnpm test
+            command: pnpm test
           - runtime: node
             task: test
             shard_index: 2
             shard_count: 2
-            command: pnpm canvas:a2ui:bundle && pnpm test
-          - runtime: node
-            task: protocol
-            shard_index: 0
-            shard_count: 1
-            command: pnpm protocol:check
+            command: pnpm test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -388,20 +378,6 @@ jobs:
           } catch {
             Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
           }
-
-      - name: Download dist artifact (lint lane)
-        if: matrix.task == 'lint'
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Verify dist artifact (lint lane)
-        if: matrix.task == 'lint'
-        run: |
-          set -euo pipefail
-          test -s dist/index.js
-          test -s dist/plugin-sdk/index.js
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -439,6 +415,10 @@ jobs:
         run: |
           echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
+
+      - name: Build A2UI bundle (Windows)
+        if: matrix.task == 'test'
+        run: pnpm canvas:a2ui:bundle
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
