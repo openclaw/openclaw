@@ -162,6 +162,44 @@ async function resolveFeishuSenderName(params: {
   }
 }
 
+// --- Group name resolution (so GroupSubject shows the human-readable group name) ---
+// Cache group names by chat_id to avoid an API call on every group message.
+const GROUP_NAME_TTL_MS = 10 * 60 * 1000;
+const groupNameCache = new Map<string, { name: string; expireAt: number }>();
+
+async function resolveFeishuGroupName(params: {
+  account: ResolvedFeishuAccount;
+  chatId: string;
+  log: (...args: any[]) => void;
+}): Promise<string | undefined> {
+  const { account, chatId, log } = params;
+  if (!account.configured) return undefined;
+
+  const normalizedChatId = chatId.trim();
+  if (!normalizedChatId) return undefined;
+
+  const cached = groupNameCache.get(normalizedChatId);
+  const now = Date.now();
+  if (cached && cached.expireAt > now) return cached.name;
+
+  try {
+    const client = createFeishuClient(account);
+    const res: any = await client.im.chat.get({ path: { chat_id: normalizedChatId } });
+
+    const name: string | undefined = res?.data?.name;
+    if (name && typeof name === "string") {
+      groupNameCache.set(normalizedChatId, { name, expireAt: now + GROUP_NAME_TTL_MS });
+      return name;
+    }
+
+    return undefined;
+  } catch (err) {
+    // Best-effort. Don't fail message handling if group name lookup fails.
+    log(`feishu: failed to resolve group name for ${normalizedChatId}: ${String(err)}`);
+    return undefined;
+  }
+}
+
 export type FeishuMessageEvent = {
   sender: {
     sender_id: {
@@ -895,6 +933,12 @@ export async function handleFeishuMessage(params: {
     }
   }
 
+  // Resolve group display name (best-effort) so GroupSubject shows a human-readable name.
+  let resolvedGroupName: string | undefined;
+  if (isGroup) {
+    resolvedGroupName = await resolveFeishuGroupName({ account, chatId: ctx.chatId, log });
+  }
+
   log(
     `feishu[${account.accountId}]: received message from ${ctx.senderOpenId} in ${ctx.chatId} (${ctx.chatType})`,
   );
@@ -1260,7 +1304,7 @@ export async function handleFeishuMessage(params: {
         SessionKey: agentSessionKey,
         AccountId: agentAccountId,
         ChatType: isGroup ? "group" : "direct",
-        GroupSubject: isGroup ? ctx.chatId : undefined,
+        GroupSubject: isGroup ? (resolvedGroupName ?? ctx.chatId) : undefined,
         SenderName: ctx.senderName ?? ctx.senderOpenId,
         SenderId: ctx.senderOpenId,
         Provider: "feishu" as const,
