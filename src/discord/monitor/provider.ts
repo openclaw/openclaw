@@ -54,6 +54,7 @@ import {
   createDiscordComponentStringSelect,
   createDiscordComponentUserSelect,
 } from "./agent-components.js";
+import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { attachEarlyGatewayErrorGuard } from "./gateway-error-guard.js";
@@ -356,6 +357,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
   let lifecycleStarted = false;
   let releaseEarlyGatewayErrorGuard = () => {};
+  let autoPresenceController: ReturnType<typeof createDiscordAutoPresenceController> | null = null;
   try {
     const commands: BaseCommand[] = commandSpecs.map((spec) =>
       createDiscordNativeCommand({
@@ -450,6 +452,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     class DiscordStatusReadyListener extends ReadyListener {
       async handle(_data: unknown, client: Client) {
+        if (autoPresenceController?.enabled) {
+          autoPresenceController.refresh();
+          return;
+        }
+
         const gateway = client.getPlugin<GatewayPlugin>("gateway");
         if (!gateway) {
           return;
@@ -496,6 +503,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     );
     const earlyGatewayErrorGuard = attachEarlyGatewayErrorGuard(client);
     releaseEarlyGatewayErrorGuard = earlyGatewayErrorGuard.release;
+
+    const lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
+    if (lifecycleGateway) {
+      autoPresenceController = createDiscordAutoPresenceController({
+        accountId: account.accountId,
+        discordConfig: discordCfg,
+        gateway: lifecycleGateway,
+        log: (message) => runtime.log?.(message),
+      });
+      autoPresenceController.start();
+    }
 
     await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
 
@@ -598,6 +616,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const botIdentity =
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
     runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
+    if (lifecycleGateway?.isConnected) {
+      opts.setStatus?.({ connected: true });
+    }
 
     lifecycleStarted = true;
     await runDiscordGatewayLifecycle({
@@ -615,6 +636,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       releaseEarlyGatewayErrorGuard,
     });
   } finally {
+    autoPresenceController?.stop();
+    opts.setStatus?.({ connected: false });
     releaseEarlyGatewayErrorGuard();
     if (!lifecycleStarted) {
       threadBindings.stop();
