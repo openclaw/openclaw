@@ -160,6 +160,34 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
     expect(refreshed).not.toContain("I am agent A");
   });
 
+  it("removes stale bridge CLAUDE.md when new agent has no persona files", async () => {
+    const { cfg, agentWorkspace, sessionCwd } = await setup({
+      "SOUL.md": "# Old Agent\nI am the old agent.",
+    });
+
+    // First bridge creates CLAUDE.md
+    await bridgeAgentPersonaToClaudeMd({
+      cfg: cfg as any,
+      agentId: "test-agent",
+      sessionCwd,
+    });
+    expect(await fs.readFile(path.join(sessionCwd, "CLAUDE.md"), "utf-8")).toContain("old agent");
+
+    // Remove persona files to simulate a new agent with no persona
+    await fs.unlink(path.join(agentWorkspace, "SOUL.md"));
+
+    const result = await bridgeAgentPersonaToClaudeMd({
+      cfg: cfg as any,
+      agentId: "test-agent",
+      sessionCwd,
+    });
+
+    expect(result.bridged).toBe(false);
+    expect(result.reason).toBe("no-persona-files");
+    // Stale bridge file should be cleaned up
+    await expect(fs.access(path.join(sessionCwd, "CLAUDE.md"))).rejects.toThrow();
+  });
+
   it("skips empty persona files", async () => {
     const { cfg, sessionCwd } = await setup({
       "SOUL.md": "   ",

@@ -45,6 +45,19 @@ export async function bridgeAgentPersonaToClaudeMd(params: {
   const agentsContent = await safeReadFile(path.join(workspaceDir, AGENTS_MD_FILENAME));
 
   if (!soulContent && !agentsContent) {
+    // Clean up stale bridge file if it exists — prevents previous agent's persona
+    // from leaking into a new agent that has no persona files.
+    try {
+      const existing = await fs.readFile(claudeMdPath, "utf-8").catch(() => null);
+      if (existing?.includes(BRIDGE_MARKER)) {
+        await fs.unlink(claudeMdPath);
+        logVerbose(
+          `acp-persona-bridge: removed stale bridge CLAUDE.md for agent "${agentId}" (no persona files)`,
+        );
+      }
+    } catch {
+      // Best effort cleanup
+    }
     return { bridged: false, reason: "no-persona-files" };
   }
 
