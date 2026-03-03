@@ -535,8 +535,8 @@ export async function runExecProcess(opts: {
           : "Command not executable (permission denied)"
         : exit.reason === "overall-timeout"
           ? typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
-            ? `Command timed out after ${opts.timeoutSec} seconds`
-            : "Command timed out"
+            ? `Command timed out after ${opts.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).`
+            : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300)."
           : exit.reason === "no-output-timeout"
             ? "Command timed out waiting for output"
             : exit.exitSignal != null
