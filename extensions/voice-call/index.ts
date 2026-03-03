@@ -181,8 +181,14 @@ const voiceCallPlugin = {
           logger: api.logger,
         });
       }
-      runtime = await runtimePromise;
-      return runtime;
+      try {
+        runtime = await runtimePromise;
+        return runtime;
+      } catch (err) {
+        // Clear the failed promise so next call retries cleanly
+        runtimePromise = null;
+        throw err;
+      }
     };
 
     const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
@@ -497,6 +503,9 @@ const voiceCallPlugin = {
               err instanceof Error ? err.message : String(err)
             }`,
           );
+          // Ensure cleanup on startup failure
+          runtimePromise = null;
+          runtime = null;
         }
       },
       stop: async () => {
@@ -506,6 +515,12 @@ const voiceCallPlugin = {
         try {
           const rt = await runtimePromise;
           await rt.stop();
+        } catch (err) {
+          api.logger.warn(
+            `[voice-call] Error during runtime stop: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
         } finally {
           runtimePromise = null;
           runtime = null;
