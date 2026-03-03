@@ -119,16 +119,33 @@ export async function runCronIsolatedAgentTurn(params: {
   const agentConfigOverride = normalizedRequested
     ? resolveAgentConfig(params.cfg, normalizedRequested)
     : undefined;
-  const { model: overrideModel, ...agentOverrideRest } = agentConfigOverride ?? {};
+  const {
+    model: overrideModel,
+    sandbox: overrideSandbox,
+    ...agentOverrideRest
+  } = agentConfigOverride ?? {};
   // Use the requested agentId even when there is no explicit agent config entry.
   // This ensures auth-profiles, workspace, and agentDir all resolve to the
   // correct per-agent paths (e.g. ~/.openclaw/agents/<agentId>/agent/).
   const agentId = normalizedRequested ?? defaultAgentId;
+  // Filter out undefined values so Object.assign doesn't clobber defaults with undefined.
+  const filteredOverride: Partial<AgentDefaultsConfig> = {};
+  for (const [k, v] of Object.entries(agentOverrideRest)) {
+    if (v !== undefined) {
+      (filteredOverride as Record<string, unknown>)[k] = v;
+    }
+  }
   const agentCfg: AgentDefaultsConfig = Object.assign(
     {},
     params.cfg.agents?.defaults,
-    agentOverrideRest as Partial<AgentDefaultsConfig>,
+    filteredOverride,
   );
+  // Deep-merge sandbox config so agent-specific overrides don't clobber global
+  // defaults (e.g. agents.defaults.sandbox.mode = "all" must survive when the
+  // agent entry only specifies sandbox.workspaceAccess).
+  if (overrideSandbox && typeof overrideSandbox === "object") {
+    agentCfg.sandbox = { ...agentCfg.sandbox, ...overrideSandbox };
+  }
   // Merge agent model override with defaults instead of replacing, so that
   // `fallbacks` from `agents.defaults.model` are preserved when the agent
   // (or its per-cron model pin) only specifies `primary`.
