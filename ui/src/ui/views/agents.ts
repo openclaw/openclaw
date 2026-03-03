@@ -457,7 +457,7 @@ function renderAgentOverview(params: {
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
             >
               ${
-                isDefault || hasExplicitModel
+                isDefault
                   ? nothing
                   : html`
                       <option value="">
