@@ -7,8 +7,8 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Node runtime guard - must run before any fast paths
-// This ensures --version fails on unsupported Node versions
+// Node runtime guard - must run before ANY execution
+// This ensures all invocations fail on unsupported Node versions
 const MIN_NODE_VERSION = [22, 12, 0];
 function checkNodeVersion() {
   const parts = process.versions.node.split(".").map(Number);
@@ -21,6 +21,11 @@ function checkNodeVersion() {
     }
   }
   return true;
+}
+
+if (!checkNodeVersion()) {
+  console.error(`openclaw requires Node >= ${MIN_NODE_VERSION.join(".")}`);
+  process.exit(1);
 }
 
 // Fast path for --version/-V: exit before loading heavy modules (~100x faster)
@@ -65,11 +70,6 @@ function isRootVersionInvocation(argv) {
 }
 
 if (isRootVersionInvocation(process.argv)) {
-  // Check Node version before returning version string
-  if (!checkNodeVersion()) {
-    console.error(`openclaw requires Node >= ${MIN_NODE_VERSION.join(".")}`);
-    process.exit(1);
-  }
   try {
     const pkg = JSON.parse(await fs.readFile(path.join(__dirname, "package.json"), "utf-8"));
     console.log(pkg.version);
