@@ -32,6 +32,7 @@ services:
     name: openclaw
     runtime: docker
     plan: starter
+    dockerCommand: node openclaw.mjs gateway run --allow-unconfigured --bind lan --port $PORT
     healthCheckPath: /health
     envVars:
       - key: PORT
@@ -55,10 +56,19 @@ Key Blueprint features used:
 | Feature               | Purpose                                                    |
 | --------------------- | ---------------------------------------------------------- |
 | `runtime: docker`     | Builds from the repo's Dockerfile                          |
+| `dockerCommand`       | Runs gateway on Render's `$PORT` with LAN binding          |
 | `healthCheckPath`     | Render monitors `/health` and restarts unhealthy instances |
 | `sync: false`         | Prompts for value during deploy (secrets)                  |
 | `generateValue: true` | Auto-generates a cryptographically secure value            |
 | `disk`                | Persistent storage that survives redeploys                 |
+
+The Blueprint sets `dockerCommand` to:
+
+```bash
+node openclaw.mjs gateway run --allow-unconfigured --bind lan --port $PORT
+```
+
+This is required on Render because binding to loopback (`127.0.0.1`) only exposes the port inside the container. Render's port scanner and ingress proxy cannot reach loopback listeners, which causes deploy failures like "No open ports detected."
 
 ## Choosing a plan
 
@@ -140,7 +150,8 @@ This downloads a portable backup you can restore on any OpenClaw host.
 Check the deploy logs in the Render Dashboard. Common issues:
 
 - Missing `SETUP_PASSWORD` — the Blueprint prompts for this, but verify it's set
-- Port mismatch — ensure `PORT=8080` matches the Dockerfile's exposed port
+- No open ports detected — ensure `dockerCommand` includes `--bind lan --port $PORT`; loopback binding is not reachable by Render ingress
+- Build OOM (`JavaScript heap out of memory`) — use the current Dockerfile, which sets `NODE_OPTIONS=--max-old-space-size=2048` for `pnpm build` and `pnpm ui:build`
 
 ### Slow cold starts (free tier)
 

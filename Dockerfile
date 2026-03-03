@@ -99,10 +99,10 @@ RUN for dir in /app/extensions /app/.agent /app/.agents; do \
         find "$dir" -type f -exec chmod 644 {} +; \
       fi; \
     done
-RUN pnpm build
+RUN NODE_OPTIONS=--max-old-space-size=2048 pnpm build
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
-RUN pnpm ui:build
+RUN NODE_OPTIONS=--max-old-space-size=2048 pnpm ui:build
 
 # Expose the CLI binary without requiring npm global writes as non-root.
 USER root
