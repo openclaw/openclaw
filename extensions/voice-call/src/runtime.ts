@@ -124,91 +124,133 @@ export async function createVoiceCallRuntime(params: {
   const manager = new CallManager(config);
   const webhookServer = new VoiceCallWebhookServer(config, manager, provider, coreConfig);
 
-  const localUrl = await webhookServer.start();
+  let localUrl: string;
+  try {
+    localUrl = await webhookServer.start();
+  } catch (err) {
+    log.error(
+      `[voice-call] Failed to start webhook server: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    throw err;
+  }
 
-  // Determine public URL - priority: config.publicUrl > tunnel > legacy tailscale
-  let publicUrl: string | null = config.publicUrl ?? null;
+  // Wrap remaining initialization in try/catch to clean up webhook server on failure
   let tunnelResult: TunnelResult | null = null;
+  try {
+    // Determine public URL - priority: config.publicUrl > tunnel > legacy tailscale
+    let publicUrl: string | null = config.publicUrl ?? null;
 
-  if (!publicUrl && config.tunnel?.provider && config.tunnel.provider !== "none") {
+    if (!publicUrl && config.tunnel?.provider && config.tunnel.provider !== "none") {
+      try {
+        tunnelResult = await startTunnel({
+          provider: config.tunnel.provider,
+          port: config.serve.port,
+          path: config.serve.path,
+          ngrokAuthToken: config.tunnel.ngrokAuthToken,
+          ngrokDomain: config.tunnel.ngrokDomain,
+        });
+        publicUrl = tunnelResult?.publicUrl ?? null;
+      } catch (err) {
+        log.error(
+          `[voice-call] Tunnel setup failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    if (!publicUrl && config.tailscale?.mode !== "off") {
+      publicUrl = await setupTailscaleExposure(config);
+    }
+
+    const webhookUrl = publicUrl ?? localUrl;
+
+    if (publicUrl && provider.name === "twilio") {
+      (provider as TwilioProvider).setPublicUrl(publicUrl);
+    }
+
+    if (provider.name === "twilio" && config.streaming?.enabled) {
+      const twilioProvider = provider as TwilioProvider;
+      if (ttsRuntime?.textToSpeechTelephony) {
+        try {
+          const ttsProvider = createTelephonyTtsProvider({
+            coreConfig,
+            ttsOverride: config.tts,
+            runtime: ttsRuntime,
+          });
+          twilioProvider.setTTSProvider(ttsProvider);
+          log.info("[voice-call] Telephony TTS provider configured");
+        } catch (err) {
+          log.warn(
+            `[voice-call] Failed to initialize telephony TTS: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      } else {
+        log.warn("[voice-call] Telephony TTS unavailable; streaming TTS disabled");
+      }
+
+      const mediaHandler = webhookServer.getMediaStreamHandler();
+      if (mediaHandler) {
+        twilioProvider.setMediaStreamHandler(mediaHandler);
+        log.info("[voice-call] Media stream handler wired to provider");
+      }
+    }
+
+    await manager.initialize(provider, webhookUrl);
+
+    const stop = async () => {
+      if (tunnelResult) {
+        await tunnelResult.stop();
+      }
+      await cleanupTailscaleExposure(config);
+      await webhookServer.stop();
+    };
+
+    log.info("[voice-call] Runtime initialized");
+    log.info(`[voice-call] Webhook URL: ${webhookUrl}`);
+    if (publicUrl) {
+      log.info(`[voice-call] Public URL: ${publicUrl}`);
+    }
+
+    return {
+      config,
+      provider,
+      manager,
+      webhookServer,
+      webhookUrl,
+      publicUrl,
+      stop,
+    };
+  } catch (err) {
+    // Clean up webhook server on initialization failure
+    log.error(
+      `[voice-call] Runtime initialization failed, cleaning up webhook server: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
     try {
-      tunnelResult = await startTunnel({
-        provider: config.tunnel.provider,
-        port: config.serve.port,
-        path: config.serve.path,
-        ngrokAuthToken: config.tunnel.ngrokAuthToken,
-        ngrokDomain: config.tunnel.ngrokDomain,
-      });
-      publicUrl = tunnelResult?.publicUrl ?? null;
-    } catch (err) {
-      log.error(
-        `[voice-call] Tunnel setup failed: ${err instanceof Error ? err.message : String(err)}`,
+      await webhookServer.stop();
+    } catch (stopErr) {
+      log.warn(
+        `[voice-call] Failed to stop webhook server during cleanup: ${
+          stopErr instanceof Error ? stopErr.message : String(stopErr)
+        }`,
       );
     }
-  }
-
-  if (!publicUrl && config.tailscale?.mode !== "off") {
-    publicUrl = await setupTailscaleExposure(config);
-  }
-
-  const webhookUrl = publicUrl ?? localUrl;
-
-  if (publicUrl && provider.name === "twilio") {
-    (provider as TwilioProvider).setPublicUrl(publicUrl);
-  }
-
-  if (provider.name === "twilio" && config.streaming?.enabled) {
-    const twilioProvider = provider as TwilioProvider;
-    if (ttsRuntime?.textToSpeechTelephony) {
+    // Clean up tunnel if started
+    if (tunnelResult) {
       try {
-        const ttsProvider = createTelephonyTtsProvider({
-          coreConfig,
-          ttsOverride: config.tts,
-          runtime: ttsRuntime,
-        });
-        twilioProvider.setTTSProvider(ttsProvider);
-        log.info("[voice-call] Telephony TTS provider configured");
-      } catch (err) {
+        await tunnelResult.stop();
+      } catch (tunnelErr) {
         log.warn(
-          `[voice-call] Failed to initialize telephony TTS: ${
-            err instanceof Error ? err.message : String(err)
+          `[voice-call] Failed to stop tunnel during cleanup: ${
+            tunnelErr instanceof Error ? tunnelErr.message : String(tunnelErr)
           }`,
         );
       }
-    } else {
-      log.warn("[voice-call] Telephony TTS unavailable; streaming TTS disabled");
     }
-
-    const mediaHandler = webhookServer.getMediaStreamHandler();
-    if (mediaHandler) {
-      twilioProvider.setMediaStreamHandler(mediaHandler);
-      log.info("[voice-call] Media stream handler wired to provider");
-    }
+    throw err;
   }
-
-  await manager.initialize(provider, webhookUrl);
-
-  const stop = async () => {
-    if (tunnelResult) {
-      await tunnelResult.stop();
-    }
-    await cleanupTailscaleExposure(config);
-    await webhookServer.stop();
-  };
-
-  log.info("[voice-call] Runtime initialized");
-  log.info(`[voice-call] Webhook URL: ${webhookUrl}`);
-  if (publicUrl) {
-    log.info(`[voice-call] Public URL: ${publicUrl}`);
-  }
-
-  return {
-    config,
-    provider,
-    manager,
-    webhookServer,
-    webhookUrl,
-    publicUrl,
-    stop,
-  };
 }
