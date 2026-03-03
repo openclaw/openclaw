@@ -48,6 +48,7 @@ export type TelegramBotOptions = {
   replyToMode?: ReplyToMode;
   proxyFetch?: typeof fetch;
   config?: OpenClawConfig;
+  setStatus?: (next: Record<string, unknown>) => void;
   updateOffset?: {
     lastUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;
@@ -163,6 +164,21 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
     }
   });
+
+  // Update health-monitoring timestamps on every inbound update so the gateway
+  // can distinguish a working-but-quiet channel from a dead one.
+  if (opts.setStatus) {
+    const setStatus = opts.setStatus;
+    bot.use(async (ctx, next) => {
+      try {
+        const now = Date.now();
+        setStatus({ lastEventAt: now, lastInboundAt: now });
+      } catch {
+        // Error isolation: never let status tracking break the update pipeline.
+      }
+      await next();
+    });
+  }
 
   bot.use(sequentialize(getTelegramSequentialKey));
 
