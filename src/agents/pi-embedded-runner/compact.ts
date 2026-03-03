@@ -39,6 +39,7 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../pi-embedded-helpers.js";
+import { getCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { resolveSandboxContext } from "../sandbox.js";
@@ -271,6 +272,9 @@ export async function compactEmbeddedPiSessionDirect(
       reason,
     };
   };
+  // Hoisted so the outer catch can read the safeguard's cancel reason.
+  let safeguardSessionManager: unknown;
+
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
   await ensureOpenClawModelsJson(params.config, agentDir);
   const { model, error, authStorage, modelRegistry } = resolveModel(
@@ -539,6 +543,7 @@ export async function compactEmbeddedPiSessionDirect(
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
         allowedToolNames,
       });
+      safeguardSessionManager = sessionManager;
       trackSessionManagerAccess(params.sessionFile);
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
         cwd: effectiveWorkspace,
@@ -738,7 +743,16 @@ export async function compactEmbeddedPiSessionDirect(
       await sessionLock.release();
     }
   } catch (err) {
-    const reason = describeUnknownError(err);
+    let reason = describeUnknownError(err);
+    // The Pi SDK emits a generic "Compaction cancelled" when the safeguard
+    // returns { cancel: true }. Surface the specific reason stored by the
+    // safeguard so the user understands why compaction was cancelled.
+    if (safeguardSessionManager && /\bcancelled\b/i.test(reason)) {
+      const runtime = getCompactionSafeguardRuntime(safeguardSessionManager);
+      if (runtime?.lastCancelReason) {
+        reason = runtime.lastCancelReason;
+      }
+    }
     return fail(reason);
   } finally {
     restoreSkillEnv?.();

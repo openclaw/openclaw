@@ -17,6 +17,30 @@ import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
+const COMPACT_COOLDOWN_MS = 15_000;
+const recentCompactions = new Map<string, number>();
+
+function isCompactionOnCooldown(sessionId: string): boolean {
+  const lastCompactedAt = recentCompactions.get(sessionId);
+  if (!lastCompactedAt) {
+    return false;
+  }
+  return Date.now() - lastCompactedAt < COMPACT_COOLDOWN_MS;
+}
+
+function recordCompaction(sessionId: string): void {
+  recentCompactions.set(sessionId, Date.now());
+  // Lazy cleanup to avoid unbounded growth.
+  if (recentCompactions.size > 200) {
+    const now = Date.now();
+    for (const [key, ts] of recentCompactions) {
+      if (now - ts > COMPACT_COOLDOWN_MS) {
+        recentCompactions.delete(key);
+      }
+    }
+  }
+}
+
 function extractCompactInstructions(params: {
   rawBody?: string;
   ctx: import("../templating.js").MsgContext;
@@ -64,6 +88,13 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     };
   }
   const sessionId = params.sessionEntry.sessionId;
+  if (isCompactionOnCooldown(sessionId)) {
+    logVerbose(`Ignoring /compact for ${sessionId} (cooldown)`);
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Compaction was already run recently. Please wait a moment." },
+    };
+  }
   if (isEmbeddedPiRunActive(sessionId)) {
     abortEmbeddedPiRun(sessionId);
     await waitForEmbeddedPiRunEnd(sessionId, 15_000);
@@ -108,6 +139,8 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     senderIsOwner: params.command.senderIsOwner,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
+
+  recordCompaction(sessionId);
 
   const compactLabel = result.ok
     ? result.compacted

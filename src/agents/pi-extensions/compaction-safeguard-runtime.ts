@@ -14,6 +14,11 @@ export type CompactionSafeguardRuntimeValue = {
    */
   model?: Model<Api>;
   recentTurnsPreserve?: number;
+  /**
+   * Set by the safeguard when it returns `{ cancel: true }` so the caller
+   * can surface a specific reason instead of the generic "Compaction cancelled".
+   */
+  lastCancelReason?: string;
 };
 
 const registry = createSessionManagerRuntimeRegistry<CompactionSafeguardRuntimeValue>();

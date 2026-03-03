@@ -20,7 +20,10 @@ import {
 import { collectTextContentBlocks } from "../content-blocks.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
-import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
+import {
+  getCompactionSafeguardRuntime,
+  setCompactionSafeguardRuntime,
+} from "./compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
 
@@ -434,11 +437,24 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
+
+    // Store a specific cancel reason in the runtime registry before returning
+    // { cancel: true }, so compact.ts can surface it to the user instead of
+    // the Pi SDK's generic "Compaction cancelled" message.
+    function cancelWithReason(reason: string): { cancel: true } {
+      const existing = getCompactionSafeguardRuntime(ctx.sessionManager);
+      setCompactionSafeguardRuntime(ctx.sessionManager, {
+        ...existing,
+        lastCancelReason: reason,
+      });
+      return { cancel: true };
+    }
+
     if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
       log.warn(
         "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
       );
-      return { cancel: true };
+      return cancelWithReason("No conversation history to compact");
     }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
@@ -457,8 +473,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     };
     const model = ctx.model ?? runtime?.model;
     if (!model) {
-      // Log warning once per session when both models are missing (diagnostic for future issues).
-      // Use a WeakSet to track which session managers have already logged the warning.
       if (!ctx.model && !runtime?.model && !missedModelWarningSessions.has(ctx.sessionManager)) {
         missedModelWarningSessions.add(ctx.sessionManager);
         console.warn(
@@ -467,7 +481,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "was not called and model was not passed through runtime registry.",
         );
       }
-      return { cancel: true };
+      return cancelWithReason("No model configured for compaction summarization");
     }
 
     const apiKey = await ctx.modelRegistry.getApiKey(model);
@@ -475,7 +489,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       console.warn(
         "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
       );
-      return { cancel: true };
+      return cancelWithReason("No API key available for compaction model");
     }
 
     try {
@@ -634,12 +648,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
+      const errorDetail = error instanceof Error ? error.message : String(error);
       log.warn(
-        `Compaction summarization failed; cancelling compaction to preserve history: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Compaction summarization failed; cancelling compaction to preserve history: ${errorDetail}`,
       );
-      return { cancel: true };
+      return cancelWithReason(`Summarization failed: ${errorDetail}`);
     }
   });
 }
