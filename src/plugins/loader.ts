@@ -184,6 +184,25 @@ function createPluginRecord(params: {
   };
 }
 
+function appendCoreSrcImportHint(errorText: string): string {
+  const normalized = errorText.replaceAll("\\", "/");
+  const failedToLoadModule =
+    normalized.includes("Cannot find module") || normalized.includes("ERR_MODULE_NOT_FOUND");
+  if (!failedToLoadModule) {
+    return errorText;
+  }
+  const referencesCoreSrc = normalized.includes("/src/") || normalized.includes("../src/");
+  if (!referencesCoreSrc) {
+    return errorText;
+  }
+  const hint =
+    "Hint: plugin runtime imports cannot reference OpenClaw core src/* paths. Use openclaw/plugin-sdk exports (or a dist-safe fallback for bundled-only extensions).";
+  if (errorText.includes(hint)) {
+    return errorText;
+  }
+  return `${errorText}\n${hint}`;
+}
+
 function recordPluginError(params: {
   logger: PluginLogger;
   registry: PluginRegistry;
@@ -195,7 +214,7 @@ function recordPluginError(params: {
   logPrefix: string;
   diagnosticMessagePrefix: string;
 }) {
-  const errorText = String(params.error);
+  const errorText = appendCoreSrcImportHint(String(params.error));
   params.logger.error(`${params.logPrefix}${errorText}`);
   params.record.status = "error";
   params.record.error = errorText;
