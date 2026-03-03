@@ -157,10 +157,15 @@ export function createFollowupRunner(params: {
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
               agentId: queued.run.agentId,
+              trigger: "user",
+              messageChannel: queued.originatingChannel ?? undefined,
               messageProvider: queued.run.messageProvider,
               agentAccountId: queued.run.agentAccountId,
               messageTo: queued.originatingTo,
               messageThreadId: queued.originatingThreadId,
+              currentChannelId: queued.originatingTo,
+              currentThreadTs:
+                queued.originatingThreadId != null ? String(queued.originatingThreadId) : undefined,
               groupId: queued.run.groupId,
               groupChannel: queued.run.groupChannel,
               groupSpace: queued.run.groupSpace,
@@ -314,7 +319,15 @@ export function createFollowupRunner(params: {
 
       await sendFollowupPayloads(finalPayloads, queued);
     } finally {
+      // Both signals are required for the typing controller to clean up.
+      // The main inbound dispatch path calls markDispatchIdle() from the
+      // buffered dispatcher's finally block, but followup turns bypass the
+      // dispatcher entirely — so we must fire both signals here.  Without
+      // this, NO_REPLY / empty-payload followups leave the typing indicator
+      // stuck (the keepalive loop keeps sending "typing" to Telegram
+      // indefinitely until the TTL expires).
       typing.markRunComplete();
+      typing.markDispatchIdle();
     }
   };
 }
