@@ -2,6 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodePairingSetupCode, resolvePairingSetupFromConfig } from "./setup-code.js";
 
 describe("pairing setup code", () => {
+  function createTailnetDnsRunner() {
+    return vi.fn(async () => ({
+      code: 0,
+      stdout: '{"Self":{"DNSName":"mb-server.tailnet.ts.net."}}',
+      stderr: "",
+    }));
+  }
+
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
@@ -83,11 +91,7 @@ describe("pairing setup code", () => {
   });
 
   it("uses tailscale serve DNS when available", async () => {
-    const runCommandWithTimeout = vi.fn(async () => ({
-      code: 0,
-      stdout: '{"Self":{"DNSName":"mb-server.tailnet.ts.net."}}',
-      stderr: "",
-    }));
+    const runCommandWithTimeout = createTailnetDnsRunner();
 
     const resolved = await resolvePairingSetupFromConfig(
       {
@@ -114,11 +118,7 @@ describe("pairing setup code", () => {
   });
 
   it("prefers gateway.remote.url over tailscale when requested", async () => {
-    const runCommandWithTimeout = vi.fn(async () => ({
-      code: 0,
-      stdout: '{"Self":{"DNSName":"mb-server.tailnet.ts.net."}}',
-      stderr: "",
-    }));
+    const runCommandWithTimeout = createTailnetDnsRunner();
 
     const resolved = await resolvePairingSetupFromConfig(
       {

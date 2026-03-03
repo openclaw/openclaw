@@ -22,29 +22,48 @@ const senderAllow = {
   invalidEntries: [],
 };
 
+type GroupAccessParams = Parameters<typeof evaluateTelegramGroupPolicyAccess>[0];
+
+const DEFAULT_GROUP_ACCESS_PARAMS: GroupAccessParams = {
+  isGroup: true,
+  chatId: "-100123456",
+  cfg: baseCfg,
+  telegramCfg: baseTelegramCfg,
+  effectiveGroupAllow: emptyAllow,
+  senderId: "999",
+  senderUsername: "user",
+  resolveGroupPolicy: () => ({
+    allowlistEnabled: true,
+    allowed: true,
+    groupConfig: { requireMention: false },
+  }),
+  enforcePolicy: true,
+  useTopicAndGroupOverrides: false,
+  enforceAllowlistAuthorization: true,
+  allowEmptyAllowlistEntries: false,
+  requireSenderForAllowlistAuthorization: true,
+  checkChatAllowlist: true,
+};
+
+function runAccess(overrides: Partial<GroupAccessParams>) {
+  return evaluateTelegramGroupPolicyAccess({
+    ...DEFAULT_GROUP_ACCESS_PARAMS,
+    ...overrides,
+    resolveGroupPolicy:
+      overrides.resolveGroupPolicy ?? DEFAULT_GROUP_ACCESS_PARAMS.resolveGroupPolicy,
+  });
+}
+
 describe("evaluateTelegramGroupPolicyAccess – chat allowlist vs sender allowlist ordering", () => {
   it("allows a group explicitly listed in groups config even when no allowFrom entries exist", () => {
     // Issue #30613: a group configured with a dedicated entry (groupConfig set)
     // should be allowed even without any allowFrom / groupAllowFrom entries.
-    const result = evaluateTelegramGroupPolicyAccess({
-      isGroup: true,
-      chatId: "-100123456",
-      cfg: baseCfg,
-      telegramCfg: baseTelegramCfg,
-      effectiveGroupAllow: emptyAllow,
-      senderId: "999",
-      senderUsername: "user",
+    const result = runAccess({
       resolveGroupPolicy: () => ({
         allowlistEnabled: true,
         allowed: true,
         groupConfig: { requireMention: false }, // dedicated entry — not just wildcard
       }),
-      enforcePolicy: true,
-      useTopicAndGroupOverrides: false,
-      enforceAllowlistAuthorization: true,
-      allowEmptyAllowlistEntries: false,
-      requireSenderForAllowlistAuthorization: true,
-      checkChatAllowlist: true,
     });
 
     expect(result).toEqual({ allowed: true, groupPolicy: "allowlist" });
@@ -52,25 +71,12 @@ describe("evaluateTelegramGroupPolicyAccess – chat allowlist vs sender allowli
 
   it("still blocks when only wildcard match and no allowFrom entries", () => {
     // groups: { "*": ... } with no allowFrom → wildcard does NOT bypass sender checks.
-    const result = evaluateTelegramGroupPolicyAccess({
-      isGroup: true,
-      chatId: "-100123456",
-      cfg: baseCfg,
-      telegramCfg: baseTelegramCfg,
-      effectiveGroupAllow: emptyAllow,
-      senderId: "999",
-      senderUsername: "user",
+    const result = runAccess({
       resolveGroupPolicy: () => ({
         allowlistEnabled: true,
         allowed: true,
         groupConfig: undefined, // wildcard match only — no dedicated entry
       }),
-      enforcePolicy: true,
-      useTopicAndGroupOverrides: false,
-      enforceAllowlistAuthorization: true,
-      allowEmptyAllowlistEntries: false,
-      requireSenderForAllowlistAuthorization: true,
-      checkChatAllowlist: true,
     });
 
     expect(result).toEqual({
@@ -81,24 +87,12 @@ describe("evaluateTelegramGroupPolicyAccess – chat allowlist vs sender allowli
   });
 
   it("rejects a group NOT in groups config", () => {
-    const result = evaluateTelegramGroupPolicyAccess({
-      isGroup: true,
+    const result = runAccess({
       chatId: "-100999999",
-      cfg: baseCfg,
-      telegramCfg: baseTelegramCfg,
-      effectiveGroupAllow: emptyAllow,
-      senderId: "999",
-      senderUsername: "user",
       resolveGroupPolicy: () => ({
         allowlistEnabled: true,
         allowed: false,
       }),
-      enforcePolicy: true,
-      useTopicAndGroupOverrides: false,
-      enforceAllowlistAuthorization: true,
-      allowEmptyAllowlistEntries: false,
-      requireSenderForAllowlistAuthorization: true,
-      checkChatAllowlist: true,
     });
 
     expect(result).toEqual({
@@ -109,24 +103,12 @@ describe("evaluateTelegramGroupPolicyAccess – chat allowlist vs sender allowli
   });
 
   it("still enforces sender allowlist when checkChatAllowlist is disabled", () => {
-    const result = evaluateTelegramGroupPolicyAccess({
-      isGroup: true,
-      chatId: "-100123456",
-      cfg: baseCfg,
-      telegramCfg: baseTelegramCfg,
-      effectiveGroupAllow: emptyAllow,
-      senderId: "999",
-      senderUsername: "user",
+    const result = runAccess({
       resolveGroupPolicy: () => ({
         allowlistEnabled: true,
         allowed: true,
         groupConfig: { requireMention: false },
       }),
-      enforcePolicy: true,
-      useTopicAndGroupOverrides: false,
-      enforceAllowlistAuthorization: true,
-      allowEmptyAllowlistEntries: false,
-      requireSenderForAllowlistAuthorization: true,
       checkChatAllowlist: false,
     });
 
@@ -138,11 +120,7 @@ describe("evaluateTelegramGroupPolicyAccess – chat allowlist vs sender allowli
   });
 
   it("blocks unauthorized sender even when chat is explicitly allowed and sender entries exist", () => {
-    const result = evaluateTelegramGroupPolicyAccess({
-      isGroup: true,
-      chatId: "-100123456",
-      cfg: baseCfg,
-      telegramCfg: baseTelegramCfg,
+    const result = runAccess({
       effectiveGroupAllow: senderAllow, // entries: ["111"]
       senderId: "222", // not in senderAllow.entries
       senderUsername: "other",
@@ -151,12 +129,6 @@ describe("evaluateTelegramGroupPolicyAccess – chat allowlist vs sender allowli
         allowed: true,
         groupConfig: { requireMention: false },
       }),
-      enforcePolicy: true,
-      useTopicAndGroupOverrides: false,
-      enforceAllowlistAuthorization: true,
-      allowEmptyAllowlistEntries: false,
-      requireSenderForAllowlistAuthorization: true,
-      checkChatAllowlist: true,
     });
 
     // Chat is explicitly allowed, but sender entries exist and sender is not in them.
@@ -168,48 +140,24 @@ describe("evaluateTelegramGroupPolicyAccess – chat allowlist vs sender allowli
   });
 
   it("allows when groupPolicy is open regardless of allowlist state", () => {
-    const result = evaluateTelegramGroupPolicyAccess({
-      isGroup: true,
-      chatId: "-100123456",
-      cfg: baseCfg,
+    const result = runAccess({
       telegramCfg: { groupPolicy: "open" } as unknown as TelegramAccountConfig,
-      effectiveGroupAllow: emptyAllow,
-      senderId: "999",
-      senderUsername: "user",
       resolveGroupPolicy: () => ({
         allowlistEnabled: false,
         allowed: false,
       }),
-      enforcePolicy: true,
-      useTopicAndGroupOverrides: false,
-      enforceAllowlistAuthorization: true,
-      allowEmptyAllowlistEntries: false,
-      requireSenderForAllowlistAuthorization: true,
-      checkChatAllowlist: true,
     });
 
     expect(result).toEqual({ allowed: true, groupPolicy: "open" });
   });
 
   it("rejects when groupPolicy is disabled", () => {
-    const result = evaluateTelegramGroupPolicyAccess({
-      isGroup: true,
-      chatId: "-100123456",
-      cfg: baseCfg,
+    const result = runAccess({
       telegramCfg: { groupPolicy: "disabled" } as unknown as TelegramAccountConfig,
-      effectiveGroupAllow: emptyAllow,
-      senderId: "999",
-      senderUsername: "user",
       resolveGroupPolicy: () => ({
         allowlistEnabled: false,
         allowed: false,
       }),
-      enforcePolicy: true,
-      useTopicAndGroupOverrides: false,
-      enforceAllowlistAuthorization: true,
-      allowEmptyAllowlistEntries: false,
-      requireSenderForAllowlistAuthorization: true,
-      checkChatAllowlist: true,
     });
 
     expect(result).toEqual({
@@ -220,49 +168,27 @@ describe("evaluateTelegramGroupPolicyAccess – chat allowlist vs sender allowli
   });
 
   it("allows non-group messages without any checks", () => {
-    const result = evaluateTelegramGroupPolicyAccess({
+    const result = runAccess({
       isGroup: false,
       chatId: "12345",
-      cfg: baseCfg,
-      telegramCfg: baseTelegramCfg,
-      effectiveGroupAllow: emptyAllow,
-      senderId: "999",
-      senderUsername: "user",
       resolveGroupPolicy: () => ({
         allowlistEnabled: true,
         allowed: false,
       }),
-      enforcePolicy: true,
-      useTopicAndGroupOverrides: false,
-      enforceAllowlistAuthorization: true,
-      allowEmptyAllowlistEntries: false,
-      requireSenderForAllowlistAuthorization: true,
-      checkChatAllowlist: true,
     });
 
     expect(result).toEqual({ allowed: true, groupPolicy: "allowlist" });
   });
 
   it("allows authorized sender in wildcard-matched group with sender entries", () => {
-    const result = evaluateTelegramGroupPolicyAccess({
-      isGroup: true,
-      chatId: "-100123456",
-      cfg: baseCfg,
-      telegramCfg: baseTelegramCfg,
+    const result = runAccess({
       effectiveGroupAllow: senderAllow, // entries: ["111"]
       senderId: "111", // IS in senderAllow.entries
-      senderUsername: "user",
       resolveGroupPolicy: () => ({
         allowlistEnabled: true,
         allowed: true,
         groupConfig: undefined, // wildcard only
       }),
-      enforcePolicy: true,
-      useTopicAndGroupOverrides: false,
-      enforceAllowlistAuthorization: true,
-      allowEmptyAllowlistEntries: false,
-      requireSenderForAllowlistAuthorization: true,
-      checkChatAllowlist: true,
     });
 
     expect(result).toEqual({ allowed: true, groupPolicy: "allowlist" });

@@ -763,6 +763,12 @@ function createSandboxEditOperations(params: SandboxToolParams) {
   } as const;
 }
 
+async function writeHostFile(absolutePath: string, content: string) {
+  const resolved = path.resolve(absolutePath);
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await fs.writeFile(resolved, content, "utf-8");
+}
+
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
@@ -773,12 +779,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         const resolved = path.resolve(dir);
         await fs.mkdir(resolved, { recursive: true });
       },
-      writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
-        const dir = path.dirname(resolved);
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(resolved, content, "utf-8");
-      },
+      writeFile: writeHostFile,
     } as const;
   }
 
@@ -812,12 +813,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         const resolved = path.resolve(absolutePath);
         return await fs.readFile(resolved);
       },
-      writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
-        const dir = path.dirname(resolved);
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(resolved, content, "utf-8");
-      },
+      writeFile: writeHostFile,
       access: async (absolutePath: string) => {
         const resolved = path.resolve(absolutePath);
         await fs.access(resolved);

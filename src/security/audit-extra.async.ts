@@ -52,6 +52,10 @@ type ExecDockerRawFn = (
   opts?: { allowFailure?: boolean; input?: Buffer | string; signal?: AbortSignal },
 ) => Promise<ExecDockerRawResult>;
 
+type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
+const MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE = 2_000;
+const MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS = 12;
+
 // --------------------------------------------------------------------------
 // Helpers
 // --------------------------------------------------------------------------
@@ -244,6 +248,93 @@ async function readInstalledPackageVersion(dir: string): Promise<string | undefi
   } catch {
     return undefined;
   }
+}
+
+function buildCodeSafetySummaryCacheKey(params: {
+  dirPath: string;
+  includeFiles?: string[];
+}): string {
+  const includeFiles = (params.includeFiles ?? []).map((entry) => entry.trim()).filter(Boolean);
+  const includeKey = includeFiles.length > 0 ? includeFiles.toSorted().join("\u0000") : "";
+  return `${params.dirPath}\u0000${includeKey}`;
+}
+
+async function getCodeSafetySummary(params: {
+  dirPath: string;
+  includeFiles?: string[];
+  summaryCache?: CodeSafetySummaryCache;
+}): Promise<Awaited<ReturnType<typeof skillScanner.scanDirectoryWithSummary>>> {
+  const cacheKey = buildCodeSafetySummaryCacheKey({
+    dirPath: params.dirPath,
+    includeFiles: params.includeFiles,
+  });
+  const cache = params.summaryCache;
+  if (cache) {
+    const hit = cache.get(cacheKey);
+    if (hit) {
+      return (await hit) as Awaited<ReturnType<typeof skillScanner.scanDirectoryWithSummary>>;
+    }
+    const pending = skillScanner.scanDirectoryWithSummary(params.dirPath, {
+      includeFiles: params.includeFiles,
+    });
+    cache.set(cacheKey, pending);
+    return await pending;
+  }
+  return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
+    includeFiles: params.includeFiles,
+  });
+}
+
+async function listWorkspaceSkillMarkdownFiles(workspaceDir: string): Promise<string[]> {
+  const skillsRoot = path.join(workspaceDir, "skills");
+  const rootStat = await safeStat(skillsRoot);
+  if (!rootStat.ok || !rootStat.isDir) {
+    return [];
+  }
+
+  const skillFiles: string[] = [];
+  const queue: string[] = [skillsRoot];
+  const visitedDirs = new Set<string>();
+
+  while (queue.length > 0 && skillFiles.length < MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE) {
+    const dir = queue.shift()!;
+    const dirRealPath = await fs.realpath(dir).catch(() => path.resolve(dir));
+    if (visitedDirs.has(dirRealPath)) {
+      continue;
+    }
+    visitedDirs.add(dirRealPath);
+
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (entry.name.startsWith(".") || entry.name === "node_modules") {
+        continue;
+      }
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(fullPath);
+        continue;
+      }
+      if (entry.isSymbolicLink()) {
+        const stat = await fs.stat(fullPath).catch(() => null);
+        if (!stat) {
+          continue;
+        }
+        if (stat.isDirectory()) {
+          queue.push(fullPath);
+          continue;
+        }
+        if (stat.isFile() && entry.name === "SKILL.md") {
+          skillFiles.push(fullPath);
+        }
+        continue;
+      }
+      if (entry.isFile() && entry.name === "SKILL.md") {
+        skillFiles.push(fullPath);
+      }
+    }
+  }
+
+  return skillFiles;
 }
 
 // --------------------------------------------------------------------------
@@ -719,6 +810,78 @@ export async function collectPluginsTrustFindings(params: {
   return findings;
 }
 
+export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
+  cfg: OpenClawConfig;
+}): Promise<SecurityAuditFinding[]> {
+  const findings: SecurityAuditFinding[] = [];
+  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
+  if (workspaceDirs.length === 0) {
+    return findings;
+  }
+
+  const escapedSkillFiles: Array<{
+    workspaceDir: string;
+    skillFilePath: string;
+    skillRealPath: string;
+  }> = [];
+  const seenSkillPaths = new Set<string>();
+
+  for (const workspaceDir of workspaceDirs) {
+    const workspacePath = path.resolve(workspaceDir);
+    const workspaceRealPath = await fs.realpath(workspacePath).catch(() => workspacePath);
+    const skillFilePaths = await listWorkspaceSkillMarkdownFiles(workspacePath);
+
+    for (const skillFilePath of skillFilePaths) {
+      const canonicalSkillPath = path.resolve(skillFilePath);
+      if (seenSkillPaths.has(canonicalSkillPath)) {
+        continue;
+      }
+      seenSkillPaths.add(canonicalSkillPath);
+
+      const skillRealPath = await fs.realpath(canonicalSkillPath).catch(() => null);
+      if (!skillRealPath) {
+        continue;
+      }
+      if (isPathInside(workspaceRealPath, skillRealPath)) {
+        continue;
+      }
+      escapedSkillFiles.push({
+        workspaceDir: workspacePath,
+        skillFilePath: canonicalSkillPath,
+        skillRealPath,
+      });
+    }
+  }
+
+  if (escapedSkillFiles.length === 0) {
+    return findings;
+  }
+
+  findings.push({
+    checkId: "skills.workspace.symlink_escape",
+    severity: "warn",
+    title: "Workspace skill files resolve outside the workspace root",
+    detail:
+      "Detected workspace `skills/**/SKILL.md` paths whose realpath escapes their workspace root:\n" +
+      escapedSkillFiles
+        .slice(0, MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS)
+        .map(
+          (entry) =>
+            `- workspace=${entry.workspaceDir}\n` +
+            `  skill=${entry.skillFilePath}\n` +
+            `  realpath=${entry.skillRealPath}`,
+        )
+        .join("\n") +
+      (escapedSkillFiles.length > MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS
+        ? `\n- +${escapedSkillFiles.length - MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS} more`
+        : ""),
+    remediation:
+      "Keep workspace skills inside the workspace root (replace symlinked escapes with real in-workspace files), or move trusted shared skills to managed/bundled skill locations.",
+  });
+
+  return findings;
+}
+
 export async function collectIncludeFilePermFindings(params: {
   configSnapshot: ConfigFileSnapshot;
   env?: NodeJS.ProcessEnv;
@@ -965,6 +1128,7 @@ export async function readConfigSnapshotForAudit(params: {
 
 export async function collectPluginsCodeSafetyFindings(params: {
   stateDir: string;
+  summaryCache?: CodeSafetySummaryCache;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const { extensionsDir, pluginDirs } = await listInstalledPluginDirs({
@@ -1016,21 +1180,21 @@ export async function collectPluginsCodeSafetyFindings(params: {
       });
     }
 
-    const summary = await skillScanner
-      .scanDirectoryWithSummary(pluginPath, {
-        includeFiles: forcedScanEntries,
-      })
-      .catch((err) => {
-        findings.push({
-          checkId: "plugins.code_safety.scan_failed",
-          severity: "warn",
-          title: `Plugin "${pluginName}" code scan failed`,
-          detail: `Static code scan could not complete: ${String(err)}`,
-          remediation:
-            "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
-        });
-        return null;
+    const summary = await getCodeSafetySummary({
+      dirPath: pluginPath,
+      includeFiles: forcedScanEntries,
+      summaryCache: params.summaryCache,
+    }).catch((err) => {
+      findings.push({
+        checkId: "plugins.code_safety.scan_failed",
+        severity: "warn",
+        title: `Plugin "${pluginName}" code scan failed`,
+        detail: `Static code scan could not complete: ${String(err)}`,
+        remediation:
+          "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
       });
+      return null;
+    });
     if (!summary) {
       continue;
     }
@@ -1067,6 +1231,7 @@ export async function collectPluginsCodeSafetyFindings(params: {
 export async function collectInstalledSkillsCodeSafetyFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
+  summaryCache?: CodeSafetySummaryCache;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
@@ -1091,7 +1256,10 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       scannedSkillDirs.add(skillDir);
 
       const skillName = entry.skill.name;
-      const summary = await skillScanner.scanDirectoryWithSummary(skillDir).catch((err) => {
+      const summary = await getCodeSafetySummary({
+        dirPath: skillDir,
+        summaryCache: params.summaryCache,
+      }).catch((err) => {
         findings.push({
           checkId: "skills.code_safety.scan_failed",
           severity: "warn",
