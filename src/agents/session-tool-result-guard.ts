@@ -169,7 +169,7 @@ export function installSessionToolResultGuard(
     if (role === "assistant") {
       const sanitized = sanitizeToolCallInputs([message]);
       if (sanitized.length === 0) {
-        if (allowSyntheticToolResults && pending.size > 0) {
+        if (pending.size > 0) {
           flushPendingToolResults();
         }
         return undefined;
@@ -201,15 +201,18 @@ export function installSessionToolResultGuard(
         ? extractAssistantToolCalls(nextMessage as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 
-    if (allowSyntheticToolResults) {
-      // If previous tool calls are still pending, flush before non-tool results.
-      if (pending.size > 0 && (toolCalls.length === 0 || nextRole !== "assistant")) {
-        flushPendingToolResults();
-      }
-      // If new tool calls arrive while older ones are pending, flush the old ones first.
-      if (pending.size > 0 && toolCalls.length > 0) {
-        flushPendingToolResults();
-      }
+    // Always clear pending tool call state before appending non-tool-result messages.
+    // flushPendingToolResults() only inserts synthetic results when allowSyntheticToolResults
+    // is true; it always clears the pending map. Without this, providers that disable
+    // synthetic results (e.g. OpenAI) accumulate stale pending state when a user message
+    // interrupts in-flight tool calls, leaving orphaned tool_use blocks in the transcript
+    // that cause API 400 errors on subsequent requests.
+    if (pending.size > 0 && (toolCalls.length === 0 || nextRole !== "assistant")) {
+      flushPendingToolResults();
+    }
+    // If new tool calls arrive while older ones are pending, flush the old ones first.
+    if (pending.size > 0 && toolCalls.length > 0) {
+      flushPendingToolResults();
     }
 
     const result = originalAppend(nextMessage as never);

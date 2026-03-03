@@ -43,7 +43,11 @@ import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-li
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
-import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
+import {
+  resolveSlackMedia,
+  resolveSlackThreadHistory,
+  resolveSlackThreadStarter,
+} from "../media.js";
 
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
@@ -201,6 +205,11 @@ export async function prepareSlackMessage(params: {
   // When replyToMode="all", the bot WILL create a thread using messageTs as thread_ts.
   // Create the thread session eagerly so agent work lands in the thread session, not the channel session.
   const willCreateThread = !isThreadReply && effectiveReplyToMode === "all";
+  // Only fork channel/group messages into thread-specific sessions when they are
+  // actual thread replies (thread_ts present, different from message ts).
+  // Top-level channel messages must stay on the per-channel session for continuity.
+  // Before this fix, every channel message used its own ts as threadId, creating
+  // isolated sessions per message (regression from #10686).
   const effectiveThreadId = isThreadReply
     ? threadTs
     : willCreateThread
@@ -341,8 +350,32 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
+  // When processing a thread reply, filter out files that belong to the thread
+  // starter (parent message). Slack's Events API includes the parent's `files`
+  // array in every thread reply payload, which causes ghost media attachments
+  // on text-only replies. We eagerly resolve the thread starter here (the result
+  // is cached) and exclude any file IDs that match the parent. (#32203)
+  let ownFiles = message.files;
+  if (isThreadReply && threadTs && message.files?.length) {
+    const starter = await resolveSlackThreadStarter({
+      channelId: message.channel,
+      threadTs,
+      client: ctx.app.client,
+    });
+    if (starter?.files?.length) {
+      const starterFileIds = new Set(starter.files.map((f) => f.id));
+      const filtered = message.files.filter((f) => !f.id || !starterFileIds.has(f.id));
+      if (filtered.length < message.files.length) {
+        logVerbose(
+          `slack: filtered ${message.files.length - filtered.length} inherited parent file(s) from thread reply`,
+        );
+      }
+      ownFiles = filtered.length > 0 ? filtered : undefined;
+    }
+  }
+
   const media = await resolveSlackMedia({
-    files: message.files,
+    files: ownFiles,
     token: ctx.botToken,
     maxBytes: ctx.mediaMaxBytes,
   });
@@ -465,6 +498,8 @@ export async function prepareSlackMessage(params: {
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
 
   let threadStarterBody: string | undefined;
+  let threadHistoryBody: string | undefined;
+  let threadSessionPreviousTimestamp: number | undefined;
   let threadLabel: string | undefined;
   let threadStarterMedia: Awaited<ReturnType<typeof resolveSlackMedia>> = null;
   if (isThreadReply && threadTs) {
@@ -494,6 +529,65 @@ export async function prepareSlackMessage(params: {
     } else {
       threadLabel = `Slack thread ${roomLabel}`;
     }
+
+    // Fetch full thread history for new thread sessions
+    // This provides context of previous messages (including bot replies) in the thread
+    // Use the thread session key (not base session key) to determine if this is a new session
+    const threadInitialHistoryLimit = account.config?.thread?.initialHistoryLimit ?? 20;
+    threadSessionPreviousTimestamp = readSessionUpdatedAt({
+      storePath,
+      sessionKey, // Thread-specific session key
+    });
+    // Only fetch thread history for NEW sessions (existing sessions already have this context in their transcript)
+    if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+      const threadHistory = await resolveSlackThreadHistory({
+        channelId: message.channel,
+        threadTs,
+        client: ctx.app.client,
+        currentMessageTs: message.ts,
+        limit: threadInitialHistoryLimit,
+      });
+
+      if (threadHistory.length > 0) {
+        // Batch resolve user names to avoid N sequential API calls
+        const uniqueUserIds = [
+          ...new Set(threadHistory.map((m) => m.userId).filter((id): id is string => Boolean(id))),
+        ];
+        const userMap = new Map<string, { name?: string }>();
+        await Promise.all(
+          uniqueUserIds.map(async (id) => {
+            const user = await ctx.resolveUserName(id);
+            if (user) {
+              userMap.set(id, user);
+            }
+          }),
+        );
+
+        const historyParts: string[] = [];
+        for (const historyMsg of threadHistory) {
+          const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
+          const msgSenderName =
+            msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown");
+          const isBot = Boolean(historyMsg.botId);
+          const role = isBot ? "assistant" : "user";
+          const msgWithId = `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${message.channel}]`;
+          historyParts.push(
+            formatInboundEnvelope({
+              channel: "Slack",
+              from: `${msgSenderName} (${role})`,
+              timestamp: historyMsg.ts ? Math.round(Number(historyMsg.ts) * 1000) : undefined,
+              body: msgWithId,
+              chatType: "channel",
+              envelope: envelopeOptions,
+            }),
+          );
+        }
+        threadHistoryBody = historyParts.join("\n\n");
+        logVerbose(
+          `slack: populated thread history with ${threadHistory.length} messages for new session`,
+        );
+      }
+    }
   }
 
   // Use thread starter media if current message has none
@@ -522,7 +616,11 @@ export async function prepareSlackMessage(params: {
     // Preserve thread context for routed tool notifications.
     MessageThreadId: threadContext.messageThreadId,
     ParentSessionKey: threadKeys.parentSessionKey,
-    ThreadStarterBody: threadStarterBody,
+    // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
+    ThreadStarterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
+    ThreadHistoryBody: threadHistoryBody,
+    IsFirstThreadTurn:
+      isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
     ThreadLabel: threadLabel,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,

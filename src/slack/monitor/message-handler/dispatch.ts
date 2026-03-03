@@ -18,6 +18,7 @@ import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
+import { markdownToSlackMrkdwn } from "../../format.js";
 import {
   applyAppendOnlyStreamUpdate,
   buildStatusFinalPreviewText,
@@ -336,7 +337,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             token: ctx.botToken,
             channel: draftChannelId,
             ts: draftMessageId,
-            text: finalText.trim(),
+            text: markdownToSlackMrkdwn(finalText.trim()),
           });
           return;
         } catch (err) {

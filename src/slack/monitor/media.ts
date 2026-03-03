@@ -206,3 +206,46 @@ export async function resolveSlackThreadStarter(params: {
     return null;
   }
 }
+
+export type SlackThreadMessage = {
+  text: string;
+  userId?: string;
+  botId?: string;
+  ts?: string;
+};
+
+export async function resolveSlackThreadHistory(params: {
+  channelId: string;
+  threadTs: string;
+  client: SlackWebClient;
+  currentMessageTs?: string;
+  limit: number;
+}): Promise<SlackThreadMessage[]> {
+  try {
+    const response = (await params.client.conversations.replies({
+      channel: params.channelId,
+      ts: params.threadTs,
+      limit: params.limit,
+      inclusive: true,
+    })) as {
+      messages?: Array<{
+        text?: string;
+        user?: string;
+        bot_id?: string;
+        ts?: string;
+      }>;
+    };
+    const messages = response?.messages ?? [];
+    // Filter out the current message and return messages with text
+    return messages
+      .filter((m) => (!params.currentMessageTs || m.ts !== params.currentMessageTs) && m.text)
+      .map((m) => ({
+        text: m.text ?? "",
+        userId: m.user,
+        botId: m.bot_id,
+        ts: m.ts,
+      }));
+  } catch {
+    return [];
+  }
+}
