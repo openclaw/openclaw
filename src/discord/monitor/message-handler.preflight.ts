@@ -139,7 +139,9 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  const allowBots = params.discordConfig?.allowBots ?? false;
+  const allowBotsSetting = params.discordConfig?.allowBots;
+  const allowBotsMode =
+    allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting === true ? "all" : "off";
   if (params.botUserId && author.id === params.botUserId) {
     // Always ignore own messages to prevent self-reply loops
     return null;
@@ -166,7 +168,7 @@ export async function preflightDiscordMessage(
   });
 
   if (author.bot) {
-    if (!allowBots && !sender.isPluralKit) {
+    if (allowBotsMode === "off" && !sender.isPluralKit) {
       logVerbose("discord: drop bot message (allowBots=false)");
       return null;
     }
@@ -263,6 +265,14 @@ export async function preflightDiscordMessage(
   const messageText = resolveDiscordMessageText(message, {
     includeForwarded: true,
   });
+
+  // Intercept text-only slash commands (e.g. user typing "/reset" instead of using Discord's slash command picker)
+  // These should not be forwarded to the agent; proper slash command interactions are handled elsewhere
+  if (!isDirectMessage && baseText && hasControlCommand(baseText, params.cfg)) {
+    logVerbose(`discord: drop text-based slash command ${message.id} (intercepted at gateway)`);
+    return null;
+  }
+
   recordChannelActivity({
     channel: "discord",
     accountId: params.accountId,
@@ -358,9 +368,13 @@ export async function preflightDiscordMessage(
   );
   const hasAnyMention = Boolean(
     !isDirectMessage &&
-    (message.mentionedEveryone ||
-      (message.mentionedUsers?.length ?? 0) > 0 ||
-      (message.mentionedRoles?.length ?? 0) > 0),
+    ((message.mentionedUsers?.length ?? 0) > 0 ||
+      (message.mentionedRoles?.length ?? 0) > 0 ||
+      (message.mentionedEveryone && (!author.bot || sender.isPluralKit))),
+  );
+  const hasUserOrRoleMention = Boolean(
+    !isDirectMessage &&
+    ((message.mentionedUsers?.length ?? 0) > 0 || (message.mentionedRoles?.length ?? 0) > 0),
   );
 
   if (
@@ -429,7 +443,7 @@ export async function preflightDiscordMessage(
   const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
   if (shouldLogVerbose()) {
     const channelConfigSummary = channelConfig
-      ? `allowed=${channelConfig.allowed} enabled=${channelConfig.enabled ?? "unset"} requireMention=${channelConfig.requireMention ?? "unset"} matchKey=${channelConfig.matchKey ?? "none"} matchSource=${channelConfig.matchSource ?? "none"} users=${channelConfig.users?.length ?? 0} roles=${channelConfig.roles?.length ?? 0} skills=${channelConfig.skills?.length ?? 0}`
+      ? `allowed=${channelConfig.allowed} enabled=${channelConfig.enabled ?? "unset"} requireMention=${channelConfig.requireMention ?? "unset"} ignoreOtherMentions=${channelConfig.ignoreOtherMentions ?? "unset"} matchKey=${channelConfig.matchKey ?? "none"} matchSource=${channelConfig.matchSource ?? "none"} users=${channelConfig.users?.length ?? 0} roles=${channelConfig.roles?.length ?? 0} skills=${channelConfig.skills?.length ?? 0}`
       : "none";
     logDebug(
       `[discord-preflight] channelConfig=${channelConfigSummary} channelMatchMeta=${channelMatchMeta} channelId=${messageChannelId}`,
@@ -642,6 +656,37 @@ export async function preflightDiscordMessage(
       });
       return null;
     }
+  }
+
+  if (author.bot && !sender.isPluralKit && allowBotsMode === "mentions") {
+    const botMentioned = isDirectMessage || wasMentioned || implicitMention;
+    if (!botMentioned) {
+      logDebug(`[discord-preflight] drop: bot message missing mention (allowBots=mentions)`);
+      logVerbose("discord: drop bot message (allowBots=mentions, missing mention)");
+      return null;
+    }
+  }
+
+  const ignoreOtherMentions =
+    channelConfig?.ignoreOtherMentions ?? guildInfo?.ignoreOtherMentions ?? false;
+  if (
+    isGuildMessage &&
+    ignoreOtherMentions &&
+    hasUserOrRoleMention &&
+    !wasMentioned &&
+    !implicitMention
+  ) {
+    logDebug(`[discord-preflight] drop: other-mention`);
+    logVerbose(
+      `discord: drop guild message (another user/role mentioned, ignoreOtherMentions=true, botId=${botId})`,
+    );
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: params.guildHistories,
+      historyKey: messageChannelId,
+      limit: params.historyLimit,
+      entry: historyEntry ?? null,
+    });
+    return null;
   }
 
   if (isGuildMessage && hasAccessRestrictions && !memberAllowed) {

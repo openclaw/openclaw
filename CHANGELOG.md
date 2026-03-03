@@ -6,16 +6,44 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Discord/allowBots mention gating: add `allowBots: "mentions"` to only accept bot-authored messages that mention the bot. Thanks @thewilloftheshadow.
 - Docs/Web search: remove outdated Brave free-tier wording and replace prescriptive AI ToS guidance with neutral compliance language in Brave setup docs. (#26860) Thanks @HenryLoenwind.
 - Tools/Diffs guidance loading: move diffs usage guidance from unconditional prompt-hook injection to the plugin companion skill path, reducing unrelated-turn prompt noise while keeping diffs tool behavior unchanged. (#32630) thanks @sircrumpet.
+- Agents/tool-result truncation: preserve important tail diagnostics by using head+tail truncation for oversized tool results while keeping configurable truncation options. (#20076) thanks @jlwestsr.
 
 ### Fixes
 
+- Docs/security hardening guidance: document Docker `DOCKER-USER` + UFW policy and add cross-linking from Docker install docs for VPS/public-host setups. (#27613) thanks @dorukardahan.
+- Docs/security threat-model links: replace relative `.md` links with Mintlify-compatible root-relative routes in security docs to prevent broken internal navigation. (#27698) thanks @clawdoo.
+- iOS/Voice timing safety: guard system speech start/finish callbacks to the active utterance to avoid misattributed start events during rapid stop/restart cycles. (#33304) thanks @mbelinky; original implementation direction by @ngutman.
+- iOS/Talk incremental speech pacing: allow long punctuation-free assistant chunks to start speaking at safe whitespace boundaries so voice responses begin sooner instead of waiting for terminal punctuation. (#33305) thanks @mbelinky; original implementation by @ngutman.
+- iOS/Watch reply reliability: make watch session activation waiters robust under concurrent requests so status/send calls no longer hang intermittently, and align delegate callbacks with Swift 6 actor safety. (#33306) thanks @mbelinky; original implementation by @Rocuts.
+- Docs/tool-loop detection config keys: align `docs/tools/loop-detection.md` examples and field names with the current `tools.loopDetection` schema to prevent copy-paste validation failures from outdated keys. (#33182) Thanks @Mylszd.
+- Gateway/session agent discovery: include disk-scanned agent IDs in `listConfiguredAgentIds` even when `agents.list` is configured, so disk-only/ACP agent sessions remain visible in gateway session aggregation and listings. (#32831) thanks @Sid-Qin.
+- Discord/inbound debouncer: skip bot-own MESSAGE_CREATE events before they reach the debounce queue to avoid self-triggered slowdowns in busy servers. Thanks @thewilloftheshadow.
+- Discord/Agent-scoped media roots: pass `mediaLocalRoots` through Discord monitor reply delivery (message + component interaction paths) so local media attachments honor per-agent workspace roots instead of falling back to default global roots. Thanks @thewilloftheshadow.
+- Discord/slash command handling: intercept text-based slash commands in channels, register plugin commands as native, and send fallback acknowledgments for empty slash runs so interactions do not hang. Thanks @thewilloftheshadow.
+- Discord/thread session lifecycle: reset thread-scoped sessions when a thread is archived so reopening a thread starts fresh without deleting transcript history. Thanks @thewilloftheshadow.
+- Discord/presence defaults: send an online presence update on ready when no custom presence is configured so bots no longer appear offline by default. Thanks @thewilloftheshadow.
+- Discord/typing cleanup: stop typing indicators after silent/NO_REPLY runs by marking the run complete before dispatch idle cleanup. Thanks @thewilloftheshadow.
+- Discord/config SecretRef typing: align Discord account token config typing with SecretInput so SecretRef tokens typecheck. (#32490) Thanks @scoootscooob.
+- Discord/voice messages: request upload slots with JSON fetch calls so voice message uploads no longer fail with content-type errors. Thanks @thewilloftheshadow.
+- Discord/voice decoder fallback: drop the native Opus dependency and use opusscript for voice decoding to avoid native-opus installs. Thanks @thewilloftheshadow.
+- Discord/auto presence health signal: add runtime availability-driven presence updates plus connected-state reporting to improve health monitoring and operator visibility. (#33277) Thanks @thewilloftheshadow.
 - Telegram/DM draft finalization reliability: require verified final-text draft emission before treating preview finalization as delivered, and fall back to normal payload send when final draft delivery is not confirmed (preventing missing final responses and preserving media/button delivery). (#32118) Thanks @OpenCils.
-- Discord/audit wildcard warnings: ignore "*" wildcard keys when counting unresolved guild channels so doctor/status no longer warns on allow-all configs. (#33125) Thanks @thewilloftheshadow.
+- Telegram/draft preview boundary + silent-token reliability: stabilize answer-lane message boundaries across late-partial/message-start races, preserve/reset finalized preview state at the correct boundaries, and suppress `NO_REPLY` lead-fragment leaks without broad heartbeat-prefix false positives. (#33169) Thanks @obviyus.
+- Discord/audit wildcard warnings: ignore "\*" wildcard keys when counting unresolved guild channels so doctor/status no longer warns on allow-all configs. (#33125) Thanks @thewilloftheshadow.
 - Discord/channel resolution: default bare numeric recipients to channels, harden allowlist numeric ID handling with safe fallbacks, and avoid inbound WS heartbeat stalls. (#33142) Thanks @thewilloftheshadow.
+- Discord/chunk delivery reliability: preserve chunk ordering when using a REST client and retry chunk sends on 429/5xx using account retry settings. (#33226) Thanks @thewilloftheshadow.
+- Discord/mention handling: add id-based mention formatting + cached rewrites, resolve inbound mentions to display names, and add optional ignoreOtherMentions gating (excluding @everyone/@here). (#33224) Thanks @thewilloftheshadow.
+- Discord/media SSRF allowlist: allow Discord CDN hostnames (including wildcard domains) in inbound media SSRF policy to prevent proxy/VPN fake-ip blocks. (#33275) Thanks @thewilloftheshadow.
+- Telegram/device pairing notifications: auto-arm one-shot notify on `/pair qr`, auto-ping on new pairing requests, and add manual fallback via `/pair approve latest` if the ping does not arrive. (#33299) thanks @mbelinky.
 - Exec heartbeat routing: scope exec-triggered heartbeat wakes to agent session keys so unrelated agents are no longer awakened by exec events, while preserving legacy unscoped behavior for non-canonical session keys. (#32724) thanks @altaywtf
 - macOS/Tailscale remote gateway discovery: add a Tailscale Serve fallback peer probe path (`wss://<peer>.ts.net`) when Bonjour and wide-area DNS-SD discovery return no gateways, and refresh both discovery paths from macOS onboarding. (#32860) Thanks @ngutman.
+- iOS/Gateway keychain hardening: move gateway metadata and TLS fingerprints to device keychain storage with safer migration behavior and rollback-safe writes to reduce credential loss risk during upgrades. (#33029) thanks @mbelinky.
+- iOS/Concurrency stability: replace risky shared-state access in camera and gateway connection paths with lock-protected access patterns to reduce crash risk under load. (#33241) thanks @mbelinky.
+- iOS/Security guardrails: limit production API-key sourcing to app config and make deep-link confirmation prompts safer by coalescing queued requests instead of silently dropping them. (#33031) thanks @mbelinky.
+- iOS/TTS playback fallback: keep voice playback resilient by switching from PCM to MP3 when provider format support is unavailable, while avoiding sticky fallback on generic local playback errors. (#33032) thanks @mbelinky.
 - Telegram/multi-account default routing clarity: warn only for ambiguous (2+) account setups without an explicit default, add `openclaw doctor` warnings for missing/invalid multi-account defaults across channels, and document explicit-default guidance for channel routing and Telegram config. (#32544) thanks @Sid-Qin.
 - Telegram/plugin outbound hook parity: run `message_sending` + `message_sent` in Telegram reply delivery, include reply-path hook metadata (`mediaUrls`, `threadId`), and report `message_sent.success=false` when hooks blank text and no outbound message is delivered. (#32649) Thanks @KimGLee.
 - Agents/Skills runtime loading: propagate run config into embedded attempt and compaction skill-entry loading so explicitly enabled bundled companion skills are discovered consistently when skill snapshots do not already provide resolved entries. Thanks @gumadeiras.
@@ -370,8 +398,13 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Docs/Contributing: require before/after screenshots for UI or visual PRs in the pre-PR checklist. (#32206) Thanks @hydro13.
+
 ### Fixes
 
+- Logging/Subsystem console timestamps: route subsystem console timestamp rendering through `formatConsoleTimestamp(...)` so `pretty` and timestamp-prefix output use local timezone formatting consistently instead of inline UTC `toISOString()` paths. (#25970) Thanks @openperf.
 - Feishu/Multi-account + reply reliability: add `channels.feishu.defaultAccount` outbound routing support with schema validation, prevent inbound preview text from leaking into prompt system events, keep quoted-message extraction text-first (post/interactive/file placeholders instead of raw JSON), route Feishu video sends as `msg_type: "file"`, and avoid websocket event blocking by using non-blocking event handling in monitor dispatch. Landed from contributor PRs #31209, #29610, #30432, #30331, and #29501. Thanks @stakeswky, @hclsys, @bmendonca3, @patrick-yingxi-pan, and @zwffff.
 - Feishu/Target routing + replies + dedupe: normalize provider-prefixed targets (`feishu:`/`lark:`), prefer configured `channels.feishu.defaultAccount` for tool execution, honor Feishu outbound `renderMode` in adapter text/caption sends, fall back to normal send when reply targets are withdrawn/deleted, and add synchronous in-memory dedupe guard for concurrent duplicate inbound events. Landed from contributor PRs #30428, #30438, #29958, #30444, and #29463. Thanks @bmendonca3 and @Yaxuan42.
 - Channels/Multi-account default routing: add optional `channels.<channel>.defaultAccount` default-selection support across message channels so omitted `accountId` routes to an explicit configured account instead of relying on implicit first-entry ordering (fallback behavior unchanged when unset).
@@ -896,7 +929,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Kimi: classify Moonshot `Your request exceeded model token limit` failures as context overflows so auto-compaction and user-facing overflow recovery trigger correctly instead of surfacing raw invalid-request errors. (#9562) Thanks @danilofalcao.
 - Providers/Moonshot: mark Kimi K2.5 as image-capable in implicit + onboarding model definitions, and refresh stale explicit provider capability fields (`input`/`reasoning`/context limits) from implicit catalogs so existing configs pick up Moonshot vision support without manual model rewrites. (#13135, #4459) Thanks @manikv12.
 - Agents/Transcript: enable consecutive-user turn merging for strict non-OpenAI `openai-completions` providers (for example Moonshot/Kimi), reducing `roles must alternate` ordering failures on OpenAI-compatible endpoints while preserving current OpenRouter/Opencode behavior. (#7693) Thanks @steipete.
-- Install/Discord Voice: make `@discordjs/opus` an optional dependency so `openclaw` install/update no longer hard-fails when native Opus builds fail, while keeping `opusscript` as the runtime fallback decoder for Discord voice flows. (#23737, #23733, #23703) Thanks @jeadland, @Sheetaa, and @Breakyman.
+- Install/Discord Voice: make the native Opus decoder optional so `openclaw` install/update no longer hard-fails when native builds fail, while keeping `opusscript` as the runtime fallback decoder for Discord voice flows. (#23737, #23733, #23703) Thanks @jeadland, @Sheetaa, and @Breakyman.
 - Docker/Setup: precreate `$OPENCLAW_CONFIG_DIR/identity` during `docker-setup.sh` so CLI commands that need device identity (for example `devices list`) avoid `EACCES ... /home/node/.openclaw/identity` failures on restrictive bind mounts. (#23948) Thanks @ackson-beep.
 - Exec/Background: stop applying the default exec timeout to background sessions (`background: true` or explicit `yieldMs`) when no explicit timeout is set, so long-running background jobs are no longer terminated at the default timeout boundary. (#23303) Thanks @steipete.
 - Slack/Threading: sessions: keep parent-session forking and thread-history context active beyond first turn by removing first-turn-only gates in session init, thread-history fetch, and reply prompt context injection. (#23843, #23090) Thanks @vincentkoc and @Taskle.
