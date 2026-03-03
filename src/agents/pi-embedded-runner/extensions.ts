@@ -9,6 +9,10 @@ import contextPruningExtension from "../pi-extensions/context-pruning.js";
 import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../pi-extensions/context-pruning/tools.js";
+import toolResultSummaryExtension from "../pi-extensions/tool-result-summary/index.js";
+import { setToolResultSummaryRuntime } from "../pi-extensions/tool-result-summary/runtime.js";
+import { computeEffectiveSettings as computeToolResultSummarySettings } from "../pi-extensions/tool-result-summary/settings.js";
+import type { ToolResultSummaryRuntimeValue } from "../pi-extensions/tool-result-summary/types.js";
 import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 
@@ -57,6 +61,35 @@ function buildContextPruningFactory(params: {
   return contextPruningExtension;
 }
 
+function buildToolResultSummaryFactory(params: {
+  cfg: OpenClawConfig | undefined;
+  sessionManager: SessionManager;
+}): ExtensionFactory | undefined {
+  // Get config from agent defaults
+  const raw = params.cfg?.agents?.defaults?.toolResultSummary as unknown;
+  if (!raw) {
+    return undefined;
+  }
+
+  const config = computeToolResultSummarySettings(raw);
+  if (!config || !config.enabled) {
+    return undefined;
+  }
+
+  // Set runtime with configuration - use type assertion for extended runtime
+  const runtimeValue: ToolResultSummaryRuntimeValue = {
+    initialized: false,
+    entryCount: 0,
+    lastCleanupAt: null,
+    compactionOccurred: false,
+    config,
+    openClawConfig: params.cfg,
+  };
+  setToolResultSummaryRuntime(params.sessionManager, runtimeValue);
+
+  return toolResultSummaryExtension;
+}
+
 function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
   return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
@@ -90,6 +123,10 @@ export function buildEmbeddedExtensionFactories(params: {
   const pruningFactory = buildContextPruningFactory(params);
   if (pruningFactory) {
     factories.push(pruningFactory);
+  }
+  const toolResultSummaryFactory = buildToolResultSummaryFactory(params);
+  if (toolResultSummaryFactory) {
+    factories.push(toolResultSummaryFactory);
   }
   return factories;
 }

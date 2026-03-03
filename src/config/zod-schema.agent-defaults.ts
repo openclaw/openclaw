@@ -81,6 +81,57 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    toolResultSummary: z
+      .object({
+        enabled: z.boolean().optional(),
+        mode: z
+          .union([
+            z.literal("off"),
+            z.literal("store-only"),
+            z.literal("retrieve-only"),
+            z.literal("full"),
+          ])
+          .optional(),
+        oversizedHandling: z.union([z.literal("truncate"), z.literal("summary")]).optional(),
+        summary: z
+          .object({
+            maxChars: z.number().int().positive().optional(),
+            modelName: z.string().optional(),
+            timeoutMs: z.number().int().positive().optional(),
+            minContentForSummarization: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+        storage: z
+          .object({
+            dbPath: z.string().optional(),
+            maxResults: z.number().int().positive().optional(),
+            ttlDays: z.number().int().nonnegative().optional(),
+            maxContentChars: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        retrieval: z
+          .object({
+            maxResults: z.number().int().positive().optional(),
+            minScore: z.number().min(0).max(1).optional(),
+            injectFullContent: z.boolean().optional(),
+            maxFullContentChars: z.number().int().positive().optional(),
+            crossSessionSearch: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        tools: z
+          .object({
+            include: z.array(z.string()).optional(),
+            exclude: z.array(z.string()).optional(),
+            minContentChars: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),

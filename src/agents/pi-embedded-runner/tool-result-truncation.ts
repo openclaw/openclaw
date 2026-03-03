@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { ToolResultSummaryStoreLike } from "../pi-extensions/tool-result-summary/store-cache.js";
 import { log } from "./logger.js";
 
 /**
@@ -37,6 +38,18 @@ type ToolResultTruncationOptions = {
   suffix?: string;
   minKeepChars?: number;
 };
+
+/**
+ * Format for replacing oversized tool results with summary.
+ * Used when oversizedHandling is set to "summary".
+ */
+const SUMMARY_REPLACEMENT_FORMAT = (summary: string, originalLength: number): string =>
+  `${summary}
+
+---
+[Content replaced with summary for context window optimization.
+Original: ${originalLength.toLocaleString()} characters stored.
+Say "show me the original result" to retrieve the full content.]`;
 
 /**
  * Truncate a single text string to fit within maxChars, preserving the beginning.
@@ -142,14 +155,52 @@ export function truncateToolResultMessage(
 }
 
 /**
+ * Replace all text content in a tool result message with a summary.
+ * Returns a new message (does not mutate the original).
+ */
+function replaceToolResultText(msg: AgentMessage, summaryText: string): AgentMessage {
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return msg;
+  }
+
+  // Replace all text blocks with a single summary block
+  const newContent: unknown[] = [];
+  let hasText = false;
+
+  for (const block of content) {
+    if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
+      if (!hasText) {
+        // Only add summary once, replacing all text blocks
+        newContent.push({ type: "text", text: summaryText });
+        hasText = true;
+      }
+      // Skip additional text blocks
+    } else {
+      // Keep non-text blocks (images) as-is
+      newContent.push(block);
+    }
+  }
+
+  // If no text blocks were found, prepend summary
+  if (!hasText) {
+    newContent.unshift({ type: "text", text: summaryText });
+  }
+
+  return { ...msg, content: newContent } as AgentMessage;
+}
+
+/**
  * Find oversized tool result entries in a session and truncate them.
  *
  * This operates on the session file by:
  * 1. Opening the session manager
  * 2. Walking the current branch to find oversized tool results
  * 3. Branching from before the first oversized tool result
- * 4. Re-appending all entries from that point with truncated tool results
+ * 4. Re-appending all entries from that point with truncated/replaced tool results
  *
+ * @param params.oversizedHandling - How to handle oversized results: "truncate" or "summary"
+ * @param params.toolResultSummaryStore - Store for retrieving summaries when mode is "summary"
  * @returns Object indicating whether any truncation was performed
  */
 export async function truncateOversizedToolResultsInSession(params: {
@@ -157,8 +208,15 @@ export async function truncateOversizedToolResultsInSession(params: {
   contextWindowTokens: number;
   sessionId?: string;
   sessionKey?: string;
+  oversizedHandling?: "truncate" | "summary";
+  toolResultSummaryStore?: ToolResultSummaryStoreLike;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
-  const { sessionFile, contextWindowTokens } = params;
+  const {
+    sessionFile,
+    contextWindowTokens,
+    oversizedHandling = "truncate",
+    toolResultSummaryStore,
+  } = params;
   const maxChars = calculateMaxToolResultChars(contextWindowTokens);
 
   try {
@@ -219,14 +277,44 @@ export async function truncateOversizedToolResultsInSession(params: {
         let message = entry.message;
 
         if (oversizedSet.has(i)) {
-          message = truncateToolResultMessage(message, maxChars);
-          truncatedCount++;
-          const newLength = getToolResultTextLength(message);
-          log.info(
-            `[tool-result-truncation] Truncated tool result: ` +
-              `originalEntry=${entry.id} newChars=${newLength} ` +
-              `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
-          );
+          const toolCallId = (message as { toolCallId?: string }).toolCallId;
+          let replacedWithSummary = false;
+
+          // Try summary replacement if configured and store is available
+          if (oversizedHandling === "summary" && toolResultSummaryStore && toolCallId) {
+            try {
+              const entry = await toolResultSummaryStore.getByToolCallId(toolCallId);
+              if (entry) {
+                const originalLength = getToolResultTextLength(message);
+                const summaryText = SUMMARY_REPLACEMENT_FORMAT(entry.summary, originalLength);
+                message = replaceToolResultText(message, summaryText);
+                replacedWithSummary = true;
+                truncatedCount++;
+                const newLength = getToolResultTextLength(message);
+                log.info(
+                  `[tool-result-truncation] Replaced tool result with summary: ` +
+                    `toolCallId=${toolCallId} originalChars=${originalLength} newChars=${newLength} ` +
+                    `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
+                );
+              }
+            } catch (err) {
+              log.warn(
+                `[tool-result-truncation] Failed to get summary for toolCallId=${toolCallId}: ${String(err)}, falling back to truncation`,
+              );
+            }
+          }
+
+          // Fall back to traditional truncation
+          if (!replacedWithSummary) {
+            message = truncateToolResultMessage(message, maxChars);
+            truncatedCount++;
+            const newLength = getToolResultTextLength(message);
+            log.info(
+              `[tool-result-truncation] Truncated tool result: ` +
+                `originalEntry=${entry.id} newChars=${newLength} ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
+            );
+          }
         }
 
         // appendMessage expects Message | CustomMessage | BashExecutionMessage

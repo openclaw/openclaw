@@ -44,6 +44,64 @@ export type AgentContextPruningConfig = {
   };
 };
 
+/**
+ * Tool Result Summary extension configuration.
+ * Stores tool execution results with LLM-generated summaries in a vector database
+ * for semantic retrieval across sessions.
+ */
+export type AgentToolResultSummaryConfig = {
+  /** Whether the extension is enabled (default: false). */
+  enabled?: boolean;
+  /** Mode: "off", "store-only", "retrieve-only", "full" (default: "full"). */
+  mode?: "off" | "store-only" | "retrieve-only" | "full";
+  /** How to handle oversized tool results: "truncate" | "summary" (default: "truncate"). */
+  oversizedHandling?: "truncate" | "summary";
+  /** Summary generation settings. */
+  summary?: {
+    /** Maximum characters in generated summary (default: 200). */
+    maxChars?: number;
+    /** Model to use for summary generation (optional, uses default if not specified). */
+    modelName?: string;
+    /** Timeout for summary generation in milliseconds (default: 10000). */
+    timeoutMs?: number;
+    /** Minimum content length to trigger summarization (default: 500). */
+    minContentForSummarization?: number;
+  };
+  /** Storage settings. */
+  storage?: {
+    /** Database path (relative to agent directory or absolute, default: "tool-results"). */
+    dbPath?: string;
+    /** Maximum number of results to store (default: 10000). */
+    maxResults?: number;
+    /** Days to retain results (0 = no expiry, default: 30). */
+    ttlDays?: number;
+    /** Maximum character length for stored content (default: 50000). */
+    maxContentChars?: number;
+  };
+  /** Retrieval settings. */
+  retrieval?: {
+    /** Maximum number of results to retrieve (default: 5). */
+    maxResults?: number;
+    /** Minimum similarity score threshold 0-1 (default: 0.5). */
+    minScore?: number;
+    /** Whether to inject full content or just summaries (default: false). */
+    injectFullContent?: boolean;
+    /** Maximum characters to show for full content injection (default: 2000). */
+    maxFullContentChars?: number;
+    /** Whether to search across all sessions or just current (default: false). */
+    crossSessionSearch?: boolean;
+  };
+  /** Tool filtering settings. */
+  tools?: {
+    /** Tool name patterns to include (glob patterns). */
+    include?: string[];
+    /** Tool name patterns to exclude (glob patterns). */
+    exclude?: string[];
+    /** Minimum content character length to process (default: 200). */
+    minContentChars?: number;
+  };
+};
+
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -162,6 +220,8 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** Opt-in: store tool results with LLM summaries in vector DB for retrieval. */
+  toolResultSummary?: AgentToolResultSummaryConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Embedded Pi runner hardening and compatibility controls. */
