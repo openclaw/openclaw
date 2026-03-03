@@ -193,14 +193,20 @@ export function buildEmbeddedContextFromTemplate(params: {
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
 }) {
+  const originMessageProvider = resolveOriginMessageProvider({
+    originatingChannel: params.sessionCtx.OriginatingChannel,
+    provider: params.sessionCtx.Provider,
+  });
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
     agentId: params.run.agentId,
-    messageProvider: resolveOriginMessageProvider({
-      originatingChannel: params.sessionCtx.OriginatingChannel,
-      provider: params.sessionCtx.Provider,
-    }),
+    // Include both messageChannel and messageProvider for turn-source routing.
+    // messageChannel is required by the delivery planner's turnSourceChannel logic
+    // to ensure replies route back to the originating channel in shared sessions.
+    // See: https://github.com/openclaw/openclaw/issues/24571
+    messageChannel: originMessageProvider,
+    messageProvider: originMessageProvider,
     agentAccountId: params.sessionCtx.AccountId,
     messageTo: resolveOriginMessageTo({
       originatingTo: params.sessionCtx.OriginatingTo,
