@@ -330,6 +330,7 @@ export type PluginHookName =
   | "subagent_delivery_target"
   | "subagent_spawned"
   | "subagent_ended"
+  | "cron_execution"
   | "gateway_start"
   | "gateway_stop";
 
@@ -662,6 +663,17 @@ export type PluginHookSubagentEndedEvent = {
   error?: string;
 };
 
+// cron_execution hook
+export type PluginHookCronExecutionEvent = {
+  jobId: string;
+  cronName: string;
+  success: boolean;
+  durationMs?: number;
+  status?: string;
+  error?: string;
+  sessionId?: string;
+};
+
 // Gateway context
 export type PluginHookGatewayContext = {
   port?: number;
@@ -766,6 +778,10 @@ export type PluginHookHandlerMap = {
   subagent_ended: (
     event: PluginHookSubagentEndedEvent,
     ctx: PluginHookSubagentContext,
+  ) => Promise<void> | void;
+  cron_execution: (
+    event: PluginHookCronExecutionEvent,
+    ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
   gateway_start: (
     event: PluginHookGatewayStartEvent,
