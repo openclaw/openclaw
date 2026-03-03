@@ -46,25 +46,24 @@ import { logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
-import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
-import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import { withTimeout } from "../../utils/with-timeout.js";
 import { loadWebMedia } from "../../web/media.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
-  allowListMatches,
   isDiscordGroupAllowedByPolicy,
-  normalizeDiscordAllowList,
   normalizeDiscordSlug,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
+  resolveDiscordOwnerAccess,
   resolveDiscordOwnerAllowFrom,
 } from "./allow-list.js";
+import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
+import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import {
   readDiscordModelPickerRecentModels,
@@ -117,8 +116,9 @@ function buildDiscordCommandOptions(params: {
     }
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
     const shouldAutocomplete =
-      resolvedChoices.length > 0 &&
-      (typeof arg.choices === "function" || resolvedChoices.length > 25);
+      arg.preferAutocomplete === true ||
+      (resolvedChoices.length > 0 &&
+        (typeof arg.choices === "function" || resolvedChoices.length > 25));
     const autocomplete = shouldAutocomplete
       ? async (interaction: AutocompleteInteraction) => {
           const focused = interaction.options.getFocused();
@@ -1269,22 +1269,16 @@ async function dispatchDiscordCommandInteraction(params: {
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
     : [];
-  const ownerAllowList = normalizeDiscordAllowList(
-    discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
-    ["discord:", "user:", "pk:"],
-  );
-  const ownerOk =
-    ownerAllowList && user
-      ? allowListMatches(
-          ownerAllowList,
-          {
-            id: sender.id,
-            name: sender.name,
-            tag: sender.tag,
-          },
-          { allowNameMatching: isDangerousNameMatchingEnabled(discordConfig) },
-        )
-      : false;
+  const allowNameMatching = isDangerousNameMatchingEnabled(discordConfig);
+  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
+    allowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
+    sender: {
+      id: sender.id,
+      name: sender.name,
+      tag: sender.tag,
+    },
+    allowNameMatching,
+  });
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
     guildEntries: discordConfig?.guilds,
@@ -1357,56 +1351,43 @@ async function dispatchDiscordCommandInteraction(params: {
       await respond("Discord DMs are disabled.");
       return;
     }
-    if (dmPolicy !== "open") {
-      const storeAllowFrom = await readStoreAllowFromForDmPolicy({
-        provider: "discord",
+    const dmAccess = await resolveDiscordDmCommandAccess({
+      accountId,
+      dmPolicy,
+      configuredAllowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
+      sender: {
+        id: sender.id,
+        name: sender.name,
+        tag: sender.tag,
+      },
+      allowNameMatching,
+      useAccessGroups,
+    });
+    commandAuthorized = dmAccess.commandAuthorized;
+    if (dmAccess.decision !== "allow") {
+      await handleDiscordDmCommandDecision({
+        dmAccess,
         accountId,
-        dmPolicy,
-      });
-      const effectiveAllowFrom = [
-        ...(discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? []),
-        ...storeAllowFrom,
-      ];
-      const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
-      const permitted = allowList
-        ? allowListMatches(
-            allowList,
-            {
-              id: sender.id,
-              name: sender.name,
-              tag: sender.tag,
-            },
-            { allowNameMatching: isDangerousNameMatchingEnabled(discordConfig) },
-          )
-        : false;
-      if (!permitted) {
-        commandAuthorized = false;
-        if (dmPolicy === "pairing") {
-          const { code, created } = await upsertChannelPairingRequest({
-            channel: "discord",
-            id: user.id,
-            accountId,
-            meta: {
-              tag: sender.tag,
-              name: sender.name,
-            },
-          });
-          if (created) {
-            await respond(
-              buildPairingReply({
-                channel: "discord",
-                idLine: `Your Discord user id: ${user.id}`,
-                code,
-              }),
-              { ephemeral: true },
-            );
-          }
-        } else {
+        sender: {
+          id: user.id,
+          tag: sender.tag,
+          name: sender.name,
+        },
+        onPairingCreated: async (code) => {
+          await respond(
+            buildPairingReply({
+              channel: "discord",
+              idLine: `Your Discord user id: ${user.id}`,
+              code,
+            }),
+            { ephemeral: true },
+          );
+        },
+        onUnauthorized: async () => {
           await respond("You are not authorized to use this command.", { ephemeral: true });
-        }
-        return;
-      }
-      commandAuthorized = true;
+        },
+      });
+      return;
     }
   }
   if (!isDirectMessage) {
@@ -1415,7 +1396,7 @@ async function dispatchDiscordCommandInteraction(params: {
       guildInfo,
       memberRoleIds,
       sender,
-      allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
+      allowNameMatching,
     });
     const authorizers = useAccessGroups
       ? [
@@ -1521,7 +1502,7 @@ async function dispatchDiscordCommandInteraction(params: {
     channelConfig,
     guildInfo,
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
-    allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
+    allowNameMatching,
   });
   const ctxPayload = finalizeInboundContext({
     Body: prompt,
