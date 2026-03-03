@@ -1,9 +1,9 @@
-import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
+import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import {
   handleBlueBubblesWebhookRequest,
@@ -52,6 +52,9 @@ const mockResolveAgentRoute = vi.fn(() => ({
   agentId: "main",
   accountId: "default",
   sessionKey: "agent:main:bluebubbles:dm:+15551234567",
+  channel: "bluebubbles",
+  mainSessionKey: "agent:main:bluebubbles:dm:+15551234567",
+  matchedBy: "default" as const,
 }));
 const mockBuildMentionRegexes = vi.fn(() => [/\bbert\b/i]);
 const mockMatchesMentionPatterns = vi.fn((text: string, regexes: RegExp[]) =>
@@ -66,12 +69,20 @@ const mockMatchesMentionWithExplicit = vi.fn(
   },
 );
 const mockResolveRequireMention = vi.fn(() => false);
-const mockResolveGroupPolicy = vi.fn(() => "open");
+const mockResolveGroupPolicy = vi.fn(() => ({
+  allowlistEnabled: false,
+  allowed: true,
+}));
 type DispatchReplyParams = Parameters<
   PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"]
 >[0];
 const mockDispatchReplyWithBufferedBlockDispatcher = vi.fn(
-  async (_params: DispatchReplyParams): Promise<void> => undefined,
+  async (
+    _params: DispatchReplyParams,
+  ): Promise<{ queuedFinal: boolean; counts: Record<string, number> }> => ({
+    queuedFinal: false,
+    counts: {},
+  }),
 );
 const mockHasControlCommand = vi.fn(() => false);
 const mockResolveCommandAuthorizedFromAuthorizers = vi.fn(() => false);
@@ -82,7 +93,7 @@ const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
 const mockResolveStorePath = vi.fn(() => "/tmp/sessions.json");
 const mockReadSessionUpdatedAt = vi.fn(() => undefined);
 const mockResolveEnvelopeFormatOptions = vi.fn(() => ({
-  template: "channel+name+time",
+  timezone: "local",
 }));
 const mockFormatAgentEnvelope = vi.fn((opts: { body: string }) => opts.body);
 const mockFormatInboundEnvelope = vi.fn((opts: { body: string }) => opts.body);
@@ -90,7 +101,7 @@ const mockChunkMarkdownText = vi.fn((text: string) => [text]);
 const mockChunkByNewline = vi.fn((text: string) => (text ? [text] : []));
 const mockChunkTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockChunkMarkdownTextWithMode = vi.fn((text: string) => (text ? [text] : []));
-const mockResolveChunkMode = vi.fn(() => "length");
+const mockResolveChunkMode = vi.fn((): "length" | "newline" => "length");
 const mockFetchBlueBubblesHistory = vi.mocked(fetchBlueBubblesHistory);
 
 function createMockRuntime(): PluginRuntime {
@@ -827,6 +838,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+        return { queuedFinal: false, counts: {} };
       });
 
       const account = createMockAccount({ groupPolicy: "open" });
@@ -2376,6 +2388,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.onReplyStart?.();
+        return { queuedFinal: false, counts: {} };
       });
 
       const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
@@ -2426,6 +2439,7 @@ describe("BlueBubbles webhook monitor", () => {
         await params.dispatcherOptions.onReplyStart?.();
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
         await params.dispatcherOptions.onIdle?.();
+        return { queuedFinal: false, counts: {} };
       });
 
       const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
@@ -2471,7 +2485,10 @@ describe("BlueBubbles webhook monitor", () => {
         },
       };
 
-      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async () => undefined);
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async () => ({
+        queuedFinal: false,
+        counts: {},
+      }));
 
       const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
       const res = createMockResponse();
@@ -2493,6 +2510,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+        return { queuedFinal: false, counts: {} };
       });
 
       const account = createMockAccount();
@@ -2544,6 +2562,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+        return { queuedFinal: false, counts: {} };
       });
 
       const account = createMockAccount();
@@ -2616,6 +2635,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+        return { queuedFinal: false, counts: {} };
       });
 
       const account = createMockAccount();

@@ -29,7 +29,9 @@ const {
     agentId: "main",
     accountId: "default",
     sessionKey: "agent:main:feishu:dm:ou-attacker",
-    matchedBy: "default",
+    channel: "feishu",
+    mainSessionKey: "agent:main:feishu:dm:ou-attacker",
+    matchedBy: "default" as const,
   })),
 }));
 
@@ -133,7 +135,9 @@ describe("handleFeishuMessage command authorization", () => {
       agentId: "main",
       accountId: "default",
       sessionKey: "agent:main:feishu:dm:ou-attacker",
-      matchedBy: "default",
+      channel: "feishu",
+      mainSessionKey: "agent:main:feishu:dm:ou-attacker",
+      matchedBy: "default" as const,
     });
     mockCreateFeishuClient.mockReturnValue({
       contact: {
@@ -152,7 +156,7 @@ describe("handleFeishuMessage command authorization", () => {
           resolveAgentRoute: mockResolveAgentRoute,
         },
         reply: {
-          resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
+          resolveEnvelopeFormatOptions: vi.fn(() => ({ timezone: "local" })),
           formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
           finalizeInboundContext: mockFinalizeInboundContext,
           dispatchReplyFromConfig: mockDispatchReplyFromConfig,
