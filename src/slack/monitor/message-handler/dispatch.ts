@@ -56,6 +56,17 @@ export function resolveSlackStreamingThreadHint(params: {
   });
 }
 
+export function isSlackStreamingUnsupportedError(error: unknown): boolean {
+  if (!(error instanceof TypeError)) {
+    return false;
+  }
+  const text = error.message.toLowerCase();
+  return (
+    text.includes("chatstream") &&
+    (text.includes("not a function") || text.includes("is not a function"))
+  );
+}
+
 function shouldUseStreaming(params: {
   streamingEnabled: boolean;
   threadTs: string | undefined;
@@ -270,9 +281,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         text: "\n" + text,
       });
     } catch (err) {
-      runtime.error?.(
-        danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
-      );
+      if (isSlackStreamingUnsupportedError(err)) {
+        logVerbose(
+          `slack-stream: native streaming unsupported by client (${String(err)}), falling back`,
+        );
+      } else {
+        runtime.error?.(
+          danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
+        );
+      }
       streamFailed = true;
       await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
     }
