@@ -135,3 +135,5 @@ nul
 /assets/NFD/Hakua
 extensions/local-voice/moonshine-venv/
 */git-rewrite
+
+agents.db
