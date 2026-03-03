@@ -102,3 +102,27 @@ export type CronJobPatch = Partial<Omit<CronJob, "id" | "createdAtMs" | "state" 
   delivery?: CronDeliveryPatch;
   state?: Partial<CronJobState>;
 };
+
+export type CronRunStatus = "ok" | "error" | "skipped";
+
+export type CronRunOutcome = {
+  status: CronRunStatus;
+  error?: string;
+  /** Optional classifier for execution errors to guide fallback behavior. */
+  errorKind?: "delivery-target";
+  summary?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
+
+export type CronRunTelemetry = {
+  model?: string;
+  provider?: string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
+  };
+};

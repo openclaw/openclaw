@@ -155,6 +155,7 @@ export function loadSessionStore(
   // writer to finish.
   let store: Record<string, SessionEntry> = {};
   let mtimeMs = getFileMtimeMs(storePath);
+  let serializedFromDisk: string | undefined;
   const maxReadAttempts = process.platform === "win32" ? 3 : 1;
   const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
   for (let attempt = 0; attempt < maxReadAttempts; attempt++) {
@@ -168,6 +169,7 @@ export function loadSessionStore(
       const parsed = JSON5.parse(raw);
       if (isSessionStoreRecord(parsed)) {
         store = parsed;
+        serializedFromDisk = raw;
       }
       mtimeMs = getFileMtimeMs(storePath) ?? mtimeMs;
       break;
