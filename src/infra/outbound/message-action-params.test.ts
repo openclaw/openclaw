@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaParams,
+  resolveMatrixAutoThreadId,
 } from "./message-action-params.js";
 
 const cfg = {} as OpenClawConfig;
@@ -53,5 +54,52 @@ describe("message action sandbox media hydration", () => {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
       await fs.rm(outsideRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveMatrixAutoThreadId (#32744)", () => {
+  it("returns thread ID when target room matches current room", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "!abc123:example.org",
+        toolContext: {
+          currentThreadTs: "$ev1",
+          currentChannelId: "!abc123:example.org",
+        },
+      }),
+    ).toBe("$ev1");
+  });
+
+  it("handles room: prefix on channel ID", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "!abc123:example.org",
+        toolContext: {
+          currentThreadTs: "$ev2",
+          currentChannelId: "room:!abc123:example.org",
+        },
+      }),
+    ).toBe("$ev2");
+  });
+
+  it("returns undefined when rooms differ", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "!other:example.org",
+        toolContext: {
+          currentThreadTs: "$ev3",
+          currentChannelId: "!abc123:example.org",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when no thread context", () => {
+    expect(
+      resolveMatrixAutoThreadId({
+        to: "!abc123:example.org",
+        toolContext: undefined,
+      }),
+    ).toBeUndefined();
   });
 });

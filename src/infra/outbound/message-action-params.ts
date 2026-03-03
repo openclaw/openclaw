@@ -71,6 +71,31 @@ export function resolveTelegramAutoThreadId(params: {
   return context.currentThreadTs;
 }
 
+/**
+ * Auto-inject Matrix thread ID when the message tool targets the same room
+ * the session originated from.  Mirrors the Telegram auto-threading pattern.
+ * Matrix rooms use `!roomId:server` identifiers — compare after trimming any
+ * `room:` prefix that tool context may carry.  (#32744)
+ */
+export function resolveMatrixAutoThreadId(params: {
+  to: string;
+  toolContext?: ChannelThreadingToolContext;
+}): string | undefined {
+  const context = params.toolContext;
+  if (!context?.currentThreadTs || !context.currentChannelId) {
+    return undefined;
+  }
+  const normalize = (id: string): string =>
+    id
+      .trim()
+      .toLowerCase()
+      .replace(/^room:/, "");
+  if (normalize(params.to) !== normalize(context.currentChannelId)) {
+    return undefined;
+  }
+  return context.currentThreadTs;
+}
+
 function resolveAttachmentMaxBytes(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
