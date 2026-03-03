@@ -28,7 +28,7 @@ import {
 
 const channel = "slack" as const;
 
-function buildSlackManifest(botName: string) {
+export function buildSlackManifest(botName: string) {
   const safeName = botName.trim() || "OpenClaw";
   const manifest = {
     display_information: {
@@ -101,19 +101,19 @@ async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Pr
   const manifest = buildSlackManifest(botName);
   await prompter.note(
     [
-      "1) Slack API → Create App → From scratch or From manifest (with the JSON below)",
+      "1) Slack API → Create App → From scratch or From manifest (printed below)",
       "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
       "3) Install App to workspace to get the xoxb- bot token",
       "4) Enable Event Subscriptions (socket) for message events",
       "5) App Home → enable the Messages tab for DMs",
       "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
       `Docs: ${formatDocsLink("/slack", "slack")}`,
-      "",
-      "Manifest (JSON):",
-      manifest,
     ].join("\n"),
     "Slack socket mode tokens",
   );
+  console.log("\nManifest (JSON) — copy the block below:\n");
+  console.log(manifest);
+  console.log();
 }
 
 function setSlackChannelAllowlist(
