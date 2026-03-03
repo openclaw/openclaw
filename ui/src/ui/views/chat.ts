@@ -17,8 +17,6 @@ import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
-let _responseChipsLoaded = false;
-
 export type CompactionIndicatorStatus = {
   active: boolean;
   startedAt: number | null;
@@ -330,10 +328,7 @@ export function renderChat(props: ChatProps) {
               item.role === "assistant" &&
               item.messages.length > 0
             ) {
-              if (!_responseChipsLoaded) {
-                _responseChipsLoaded = true;
-                void import("../components/response-chips.ts");
-              }
+              void import("../components/response-chips.ts");
               const lastMsg = item.messages[item.messages.length - 1].message;
               const lastText = extractTextCached(lastMsg);
               if (lastText) {
