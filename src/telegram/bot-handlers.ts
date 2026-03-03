@@ -1424,10 +1424,12 @@ export const registerTelegramHandlers = ({
         if (modelCallback.type === "select") {
           const { provider, model } = modelCallback;
           // Process model selection as a synthetic message with /model command
+          // Handle both provider/model format and model-only format (for long IDs)
+          const modelArg = provider ? `${provider}/${model}` : model;
           const syntheticMessage = buildSyntheticTextMessage({
             base: callbackMessage,
             from: callback.from,
-            text: `/model ${provider}/${model}`,
+            text: `/model ${modelArg}`,
           });
           await processMessage(
             buildSyntheticContext(ctx, syntheticMessage),

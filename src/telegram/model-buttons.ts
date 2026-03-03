@@ -59,7 +59,7 @@ export function parseModelCallbackData(
     }
   }
 
-  // mdl_sel_{provider/model}
+  // mdl_sel_{provider/model} or mdl_sel_{model} (fallback for long IDs)
   const selMatch = trimmed.match(/^mdl_sel_(.+)$/);
   if (selMatch) {
     const modelRef = selMatch[1];
@@ -72,6 +72,12 @@ export function parseModelCallbackData(
           model: modelRef.slice(slashIndex + 1),
         };
       }
+      // Fallback: no provider prefix (model-only format for long IDs)
+      return {
+        type: "select",
+        provider: "",
+        model: modelRef,
+      };
     }
   }
 
@@ -135,10 +141,14 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     : currentModel;
 
   for (const model of pageModels) {
-    const callbackData = `mdl_sel_${provider}/${model}`;
-    // Skip models that would exceed Telegram's callback_data limit
+    let callbackData = `mdl_sel_${provider}/${model}`;
+    // If full format exceeds Telegram's 64-byte limit, try model-only format
     if (Buffer.byteLength(callbackData, "utf8") > MAX_CALLBACK_DATA_BYTES) {
-      continue;
+      callbackData = `mdl_sel_${model}`;
+      // Skip model if even the fallback format exceeds the limit
+      if (Buffer.byteLength(callbackData, "utf8") > MAX_CALLBACK_DATA_BYTES) {
+        continue;
+      }
     }
 
     const isCurrentModel = model === currentModelId;
