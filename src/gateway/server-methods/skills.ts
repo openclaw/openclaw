@@ -10,6 +10,7 @@ import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
+import { getSandboxSkillEligibility } from "../../infra/skills-sandbox.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
@@ -84,7 +85,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const report = buildWorkspaceSkillStatus(workspaceDir, {
       config: cfg,
-      eligibility: { remote: getRemoteSkillEligibility() },
+      eligibility: { remote: getRemoteSkillEligibility(), sandbox: getSandboxSkillEligibility() },
     });
     respond(true, report, undefined);
   },

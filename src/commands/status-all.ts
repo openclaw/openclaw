@@ -18,6 +18,7 @@ import { resolveOsSummary } from "../infra/os-summary.js";
 import { inspectPortUsage } from "../infra/ports.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
+import { getSandboxSkillEligibility } from "../infra/skills-sandbox.js";
 import { readTailscaleStatusJson } from "../infra/tailscale.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../infra/update-check.js";
@@ -221,7 +222,10 @@ export async function statusAllCommand(
             try {
               return buildWorkspaceSkillStatus(defaultWorkspace, {
                 config: cfg,
-                eligibility: { remote: getRemoteSkillEligibility() },
+                eligibility: {
+                  remote: getRemoteSkillEligibility(),
+                  sandbox: getSandboxSkillEligibility(),
+                },
               });
             } catch {
               return null;

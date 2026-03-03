@@ -40,6 +40,7 @@ import {
   refreshRemoteBinsForConnectedNodes,
   setSkillsRemoteRegistry,
 } from "../infra/skills-remote.js";
+import { refreshSandboxBinsCache } from "../infra/skills-sandbox.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
@@ -616,6 +617,7 @@ export async function startGatewayServer(
   if (!minimalTestGateway) {
     setSkillsRemoteRegistry(nodeRegistry);
     void primeRemoteSkillsCache();
+    void refreshSandboxBinsCache(cfgAtStart);
   }
   // Debounce skills-triggered node probes to avoid feedback loops and rapid-fire invokes.
   // Skills changes can happen in bursts (e.g., file watcher events), and each probe
@@ -635,6 +637,7 @@ export async function startGatewayServer(
           skillsRefreshTimer = null;
           const latest = loadConfig();
           void refreshRemoteBinsForConnectedNodes(latest);
+          void refreshSandboxBinsCache(latest);
         }, skillsRefreshDelayMs);
       });
 
