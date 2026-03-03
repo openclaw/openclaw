@@ -12,6 +12,7 @@ import { isRestartEnabled } from "../config/commands.js";
 import {
   CONFIG_PATH,
   ConfigWriteConflictError,
+  applyConfigOverrides,
   type OpenClawConfig,
   isNixMode,
   loadConfig,
@@ -396,8 +397,12 @@ export async function startGatewayServer(
     });
   }
 
-  cfgAtStart = loadConfig();
+  // Preserve loadConfig side effects (env var hydration and runtime overrides)
+  // before startup auth bootstrap, but use a single snapshot for cfg+hash so
+  // optimistic write guards can't pair a stale cfg with a newer expected hash.
+  void loadConfig();
   const authSnapshot = await readConfigFileSnapshot();
+  cfgAtStart = applyConfigOverrides(authSnapshot.config);
   const authBootstrap = await ensureGatewayStartupAuth({
     cfg: cfgAtStart,
     env: process.env,
