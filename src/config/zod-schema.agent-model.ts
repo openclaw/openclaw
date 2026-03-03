@@ -19,6 +19,7 @@ const AdaptiveRoutingSchema = z
     maxEscalations: z.number().int().min(0).max(1).optional(),
     bypassOnExplicitOverride: z.boolean().optional(),
     includeLocalAttemptSummary: z.boolean().optional(),
+    localTrialReadOnly: z.boolean().optional(),
     validation: AdaptiveRoutingValidationSchema.optional(),
   })
   .strict()
