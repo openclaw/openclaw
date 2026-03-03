@@ -124,7 +124,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `zai`
 - Auth: `ZAI_API_KEY`
-- Example model: `zai/glm-4.7`
+- Example model: `zai/glm-5`
 - CLI: `openclaw onboard --auth-choice zai-api-key`
   - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`
 
@@ -178,14 +178,14 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
 
 Kimi K2 model IDs:
 
-{/_moonshot-kimi-k2-model-refs:start_/ && null}
+{/_ moonshot-kimi-k2-model-refs:start _/ && null}
 
 - `moonshot/kimi-k2.5`
 - `moonshot/kimi-k2-0905-preview`
 - `moonshot/kimi-k2-turbo-preview`
 - `moonshot/kimi-k2-thinking`
 - `moonshot/kimi-k2-thinking-turbo`
-  {/_moonshot-kimi-k2-model-refs:end_/ && null}
+  {/_ moonshot-kimi-k2-model-refs:end _/ && null}
 
 ```json5
 {

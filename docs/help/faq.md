@@ -148,7 +148,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I switch models on the fly (without restarting)?](#how-do-i-switch-models-on-the-fly-without-restarting)
   - [Can I use GPT 5.2 for daily tasks and Codex 5.3 for coding](#can-i-use-gpt-52-for-daily-tasks-and-codex-53-for-coding)
   - [Why do I see "Model … is not allowed" and then no reply?](#why-do-i-see-model-is-not-allowed-and-then-no-reply)
-  - [Why do I see "Unknown model: minimax/MiniMax-M2.5"?](#why-do-i-see-unknown-model-minimaxminimaxm21)
+  - [Why do I see "Unknown model: minimax/MiniMax-M2.5"?](#why-do-i-see-unknown-model-minimaxminimaxm25)
   - [Can I use MiniMax as my default and OpenAI for complex tasks?](#can-i-use-minimax-as-my-default-and-openai-for-complex-tasks)
   - [Are opus / sonnet / gpt built-in shortcuts?](#are-opus-sonnet-gpt-builtin-shortcuts)
   - [How do I define/override model shortcuts (aliases)?](#how-do-i-defineoverride-model-shortcuts-aliases)
@@ -2173,7 +2173,7 @@ Model "provider/model" is not allowed. Use /model to list available models.
 That error is returned **instead of** a normal reply. Fix: add the model to
 `agents.defaults.models`, remove the allowlist, or pick a model from `/model list`.
 
-### Why do I see Unknown model minimaxMiniMaxM21
+### Why do I see Unknown model minimaxMiniMaxM25
 
 This means the **provider isn't configured** (no MiniMax provider config or auth
 profile was found), so the model can't be resolved. A fix for this detection is
@@ -2185,7 +2185,7 @@ Fix checklist:
 2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
    exists in env/auth profiles so the provider can be injected.
 3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.5` or
-   `minimax/MiniMax-M2.5-Lightning`.
+   `minimax/MiniMax-M2.5-highspeed` (legacy: `minimax/MiniMax-M2.5-Lightning`).
 4. Run:
 
    ```bash
@@ -2288,8 +2288,8 @@ Z.AI (GLM models):
 {
   agents: {
     defaults: {
-      model: { primary: "zai/glm-4.7" },
-      models: { "zai/glm-4.7": {} },
+      model: { primary: "zai/glm-5" },
+      models: { "zai/glm-5": {} },
     },
   },
   env: { ZAI_API_KEY: "..." },
