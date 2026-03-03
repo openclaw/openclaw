@@ -248,7 +248,10 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   it("assigns fallback ids to missing/blank tool call ids in streamed and final messages", async () => {
     const partialToolCall = { type: "toolCall", name: " read ", id: "   " };
     const finalToolCallA = { type: "toolCall", name: " exec ", id: "" };
-    const finalToolCallB = { type: "toolCall", name: " write " };
+    const finalToolCallB: { type: string; name: string; id?: string } = {
+      type: "toolCall",
+      name: " write ",
+    };
     const event = {
       type: "toolcall_delta",
       partial: { role: "assistant", content: [partialToolCall] },
