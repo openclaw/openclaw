@@ -2731,6 +2731,26 @@ Notes:
 
 ---
 
+## CLI
+
+```json5
+{
+  cli: {
+    banner: {
+      taglineMode: "off", // random | default | off
+    },
+  },
+}
+```
+
+- `cli.banner.taglineMode` controls banner tagline style:
+  - `"random"` (default): rotating funny/seasonal taglines.
+  - `"default"`: fixed neutral tagline (`All your chats, one OpenClaw.`).
+  - `"off"`: no tagline text (banner title/version still shown).
+- To hide the entire banner (not just taglines), set env `OPENCLAW_HIDE_BANNER=1`.
+
+---
+
 ## Wizard
 
 Metadata written by CLI wizards (`onboard`, `configure`, `doctor`):

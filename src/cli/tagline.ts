@@ -1,4 +1,5 @@
 const DEFAULT_TAGLINE = "All your chats, one OpenClaw.";
+export type TaglineMode = "random" | "default" | "off";
 
 const HOLIDAY_TAGLINES = {
   newYear:
@@ -248,6 +249,7 @@ export interface TaglineOptions {
   env?: NodeJS.ProcessEnv;
   random?: () => number;
   now?: () => Date;
+  mode?: TaglineMode;
 }
 
 export function activeTaglines(options: TaglineOptions = {}): string[] {
@@ -260,6 +262,12 @@ export function activeTaglines(options: TaglineOptions = {}): string[] {
 }
 
 export function pickTagline(options: TaglineOptions = {}): string {
+  if (options.mode === "off") {
+    return "";
+  }
+  if (options.mode === "default") {
+    return DEFAULT_TAGLINE;
+  }
   const env = options.env ?? process.env;
   const override = env?.OPENCLAW_TAGLINE_INDEX;
   if (override !== undefined) {
