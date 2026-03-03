@@ -312,6 +312,21 @@ describe("gateway session utils", () => {
       `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
     );
   });
+
+  test("listAgentsForGateway excludes disk-only agents when agents.list is configured", async () => {
+    await withStateDirEnv("openclaw-agent-list-scope-", async ({ stateDir }) => {
+      fs.mkdirSync(path.join(stateDir, "agents", "main"), { recursive: true });
+      fs.mkdirSync(path.join(stateDir, "agents", "codex"), { recursive: true });
+
+      const cfg = {
+        session: { mainKey: "main" },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      const { agents } = listAgentsForGateway(cfg);
+      expect(agents.map((agent) => agent.id)).toEqual(["main"]);
+    });
+  });
 });
 
 describe("resolveSessionModelRef", () => {
