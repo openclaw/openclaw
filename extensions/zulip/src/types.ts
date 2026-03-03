@@ -117,6 +117,14 @@ export type ZulipAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Draft streaming mode: edit-in-place preview while LLM generates.
+   * - "off": disabled (default)
+   * - "partial": update preview with cumulative text
+   * - "block": update preview with block-chunked text
+   */
+  draftStreaming?: "off" | "partial" | "block";
+  /** Throttle interval (ms) between draft stream edits. Default: 1200. */
+  draftStreamingThrottleMs?: number;
   /** Per-DM DM policy overrides by Zulip sender key. */
   groups?: Record<string, ZulipGroupConfig>;
   /** Topic/thread behavior for stream messages. */

@@ -98,6 +98,8 @@ const ZulipAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    draftStreaming: z.enum(["off", "partial", "block"]).optional(),
+    draftStreamingThrottleMs: z.number().int().min(250).max(5000).optional(),
     groups: z.record(z.string().min(1), ZulipGroupSchema).optional(),
     topic: ZulipTopicSchema,
     xcase: ZulipXCaseSchema,

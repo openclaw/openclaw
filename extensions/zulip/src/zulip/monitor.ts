@@ -41,6 +41,7 @@ import {
   type ZulipClient,
   type ZulipMessage,
 } from "./client.js";
+import { createZulipDraftStream, type ZulipDraftTarget } from "./draft-stream.js";
 import { sendMessageZulip } from "./send.js";
 
 const OPENCLAW_STATE_DIR =
@@ -2163,14 +2164,106 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       },
     });
 
+    // --- Draft streaming setup ---
+    const zulipDraftStreamMode = account.config.draftStreaming ?? "off";
+    const canStreamDraft = zulipDraftStreamMode !== "off";
+    const draftTarget: ZulipDraftTarget | undefined = canStreamDraft
+      ? msg.type === "stream"
+        ? { kind: "stream", stream: sName, topic }
+        : { kind: "dm", userIds: [msg.sender_id] }
+      : undefined;
+    const draftStream =
+      canStreamDraft && draftTarget
+        ? createZulipDraftStream({
+            client,
+            target: draftTarget,
+            maxChars: textLimit,
+            throttleMs: account.config.draftStreamingThrottleMs ?? 1200,
+            minInitialChars: 30,
+            log: logVerbose,
+            warn: logVerbose,
+          })
+        : undefined;
+    let lastPartialText = "";
+    let draftText = "";
+    let finalizedViaPreviewMessage = false;
+
+    const updateDraftFromPartial = (text?: string) => {
+      if (!draftStream || !text) {
+        return;
+      }
+      if (text === lastPartialText) {
+        return;
+      }
+      lastPartialText = text;
+      if (zulipDraftStreamMode === "partial") {
+        draftStream.update(text);
+        return;
+      }
+      // "block" mode: accumulate
+      draftText = text;
+      draftStream.update(draftText);
+    };
+
+    const flushDraft = async () => {
+      if (!draftStream) {
+        return;
+      }
+      if (draftText) {
+        draftStream.update(draftText);
+      }
+      await draftStream.flush();
+    };
+
+    // When draft streaming is active, suppress block streaming to avoid double-streaming.
+    const disableBlockStreamingForDraft = draftStream ? true : undefined;
+
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
         responsePrefix: prefixContext.responsePrefix,
         responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
-        deliver: async (payload: ReplyPayload) => {
+        deliver: async (payload: ReplyPayload, info) => {
+          const isFinal = info.kind === "final";
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+
+          if (draftStream && isFinal) {
+            await flushDraft();
+            const hasMedia = mediaUrls.length > 0;
+            const previewMessageId = draftStream.messageId();
+
+            // Try to finalize via preview edit (text-only, fits limit, not an error)
+            if (
+              !finalizedViaPreviewMessage &&
+              !hasMedia &&
+              typeof previewMessageId === "number" &&
+              text.length <= textLimit &&
+              !payload.isError
+            ) {
+              await draftStream.stop();
+              try {
+                await updateZulipMessage(client, {
+                  messageId: previewMessageId,
+                  content: text,
+                });
+                finalizedViaPreviewMessage = true;
+                runtime.log?.(`delivered reply to ${to} (finalized draft preview)`);
+                return;
+              } catch (err) {
+                logVerbose(
+                  `zulip: preview final edit failed; falling back to standard send (${String(err)})`,
+                );
+              }
+            }
+
+            // Stop the draft stream (preserving the partial text) and fall through
+            // to standard delivery.  Don't clear — "*(message cleared)*" is worse
+            // than a stale preview followed by the final reply.
+            if (!finalizedViaPreviewMessage) {
+              await draftStream.stop();
+            }
+          }
 
           if (mediaUrls.length === 0) {
             const chunkMode = core.channel.text.resolveChunkMode(cfg, "zulip", account.accountId);
@@ -2197,17 +2290,37 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
         onReplyStart: typingCallbacks.onReplyStart,
       });
 
-    await core.channel.reply.dispatchReplyFromConfig({
-      ctx: ctxPayload,
-      cfg,
-      dispatcher,
-      replyOptions: {
-        ...replyOptions,
-        disableBlockStreaming:
-          typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-        onModelSelected: prefixContext.onModelSelected,
-      },
-    });
+    try {
+      await core.channel.reply.dispatchReplyFromConfig({
+        ctx: ctxPayload,
+        cfg,
+        dispatcher,
+        replyOptions: {
+          ...replyOptions,
+          disableBlockStreaming:
+            disableBlockStreamingForDraft ??
+            (typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined),
+          onModelSelected: prefixContext.onModelSelected,
+          onPartialReply: draftStream
+            ? (payload) => updateDraftFromPartial(payload.text)
+            : undefined,
+          onAssistantMessageStart: draftStream
+            ? () => {
+                lastPartialText = "";
+                draftText = "";
+              }
+            : undefined,
+        },
+      });
+    } finally {
+      try {
+        await draftStream?.stop();
+        // Don't clear the draft on error — partial text is better than
+        // "*(message cleared)*" with no follow-up reply.
+      } catch (err) {
+        logVerbose(`zulip: draft cleanup failed: ${String(err)}`);
+      }
+    }
     markDispatchIdle();
 
     // Log message to Convex activity feed (fire-and-forget)
