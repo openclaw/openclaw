@@ -211,10 +211,11 @@ export function createTelegramDraftStream(params: {
         : {}),
       ...(renderedParseMode ? { parse_mode: renderedParseMode } : {}),
     };
+    const textWithRTLM = isRTL(renderedText) ? "\u200F" + renderedText : renderedText;
     await resolvedDraftApi!(
       chatId,
       draftId,
-      renderedText,
+      textWithRTLM,
       Object.keys(draftParams).length > 0 ? draftParams : undefined,
     );
     return true;
