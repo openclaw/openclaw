@@ -30,6 +30,13 @@ function normalizeToken(value: string | undefined | null): string {
   return (value ?? "").trim().toLowerCase();
 }
 
+export function scopedHeartbeatWakeOptions<T extends object>(
+  sessionKey: string,
+  wakeOptions: T,
+): T | (T & { sessionKey: string }) {
+  return parseAgentSessionKey(sessionKey) ? { ...wakeOptions, sessionKey } : wakeOptions;
+}
+
 export function normalizeMainKey(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
   return trimmed ? trimmed.toLowerCase() : DEFAULT_MAIN_KEY;
