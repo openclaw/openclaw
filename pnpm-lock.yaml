@@ -472,8 +472,8 @@ importers:
         specifier: ^3.0.0
         version: 3.0.0
       zod:
-        specifier: ^3.23.8
-        version: 3.25.76
+        specifier: ^4.3.6
+        version: 4.3.6
 
   extensions/twitch:
     dependencies:
