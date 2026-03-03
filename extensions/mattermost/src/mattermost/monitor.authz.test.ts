@@ -14,7 +14,7 @@ describe("mattermost monitor authz", () => {
     expect(resolved.effectiveAllowFrom).toEqual(["trusted-user", "attacker"]);
   });
 
-  it("uses explicit groupAllowFrom without pairing-store inheritance", () => {
+  it("includes pairing-store in groupAllowFrom for backward compatibility", () => {
     const resolved = resolveMattermostEffectiveAllowFromLists({
       dmPolicy: "pairing",
       allowFrom: ["@trusted-user"],
@@ -22,10 +22,11 @@ describe("mattermost monitor authz", () => {
       storeAllowFrom: ["user:attacker"],
     });
 
-    expect(resolved.effectiveGroupAllowFrom).toEqual(["group-owner"]);
+    // Pairing store is included in group auth for backward compatibility
+    expect(resolved.effectiveGroupAllowFrom).toEqual(["group-owner", "attacker"]);
   });
 
-  it("does not inherit pairing-store entries into group allowlist", () => {
+  it("inherits pairing-store entries into group allowlist (backward compat)", () => {
     const resolved = resolveMattermostEffectiveAllowFromLists({
       dmPolicy: "pairing",
       allowFrom: ["@trusted-user"],
@@ -33,7 +34,8 @@ describe("mattermost monitor authz", () => {
     });
 
     expect(resolved.effectiveAllowFrom).toEqual(["trusted-user", "attacker"]);
-    expect(resolved.effectiveGroupAllowFrom).toEqual(["trusted-user"]);
+    // Pairing store is included in group auth for backward compatibility
+    expect(resolved.effectiveGroupAllowFrom).toEqual(["trusted-user", "attacker"]);
   });
 
   it("does not auto-authorize DM commands in open mode without allowlists", () => {

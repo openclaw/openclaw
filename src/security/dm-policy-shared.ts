@@ -32,6 +32,8 @@ export function resolveEffectiveAllowFromLists(params: {
   storeAllowFrom?: Array<string | number> | null;
   dmPolicy?: string | null;
   groupAllowFromFallbackToAllowFrom?: boolean | null;
+  /** Include pairing store in group auth. Defaults to true for backward compatibility. */
+  groupAuthIncludesPairingStore?: boolean | null;
 }): {
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
@@ -46,12 +48,17 @@ export function resolveEffectiveAllowFromLists(params: {
       dmPolicy: params.dmPolicy ?? undefined,
     }),
   );
-  // Group auth is explicit (groupAllowFrom fallback allowFrom). Pairing store is DM-only.
+  // Include pairing store in group auth for backward compatibility.
+  // Users who paired via DM should be allowed in group chats.
+  // Users can opt out by setting groupAuthIncludesPairingStore: false.
   const effectiveGroupAllowFrom = normalizeStringEntries(
     resolveGroupAllowFromSources({
       allowFrom,
       groupAllowFrom,
+      storeAllowFrom,
+      dmPolicy: params.dmPolicy ?? undefined,
       fallbackToAllowFrom: params.groupAllowFromFallbackToAllowFrom ?? undefined,
+      groupAuthIncludesPairingStore: params.groupAuthIncludesPairingStore ?? undefined,
     }),
   );
   return { effectiveAllowFrom, effectiveGroupAllowFrom };

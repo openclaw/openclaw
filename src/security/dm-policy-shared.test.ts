@@ -106,20 +106,22 @@ describe("security/dm-policy-shared", () => {
       storeAllowFrom: [" owner3 ", ""],
     });
     expect(lists.effectiveAllowFrom).toEqual(["owner", "owner2", "owner3"]);
-    expect(lists.effectiveGroupAllowFrom).toEqual(["group:abc"]);
+    // Pairing store is included in group allowlist for backward compatibility
+    expect(lists.effectiveGroupAllowFrom).toEqual(["group:abc", "owner3"]);
   });
 
-  it("falls back to DM allowlist for groups when groupAllowFrom is empty", () => {
+  it("falls back to DM allowlist + store for groups when groupAllowFrom is empty", () => {
     const lists = resolveEffectiveAllowFromLists({
       allowFrom: [" owner "],
       groupAllowFrom: [],
       storeAllowFrom: [" owner2 "],
     });
     expect(lists.effectiveAllowFrom).toEqual(["owner", "owner2"]);
-    expect(lists.effectiveGroupAllowFrom).toEqual(["owner"]);
+    // Pairing store is included for backward compatibility
+    expect(lists.effectiveGroupAllowFrom).toEqual(["owner", "owner2"]);
   });
 
-  it("can keep group allowlist empty when fallback is disabled", () => {
+  it("includes store in group allowlist even when fallback is disabled (backward compat)", () => {
     const lists = resolveEffectiveAllowFromLists({
       allowFrom: ["owner"],
       groupAllowFrom: [],
@@ -127,7 +129,21 @@ describe("security/dm-policy-shared", () => {
       groupAllowFromFallbackToAllowFrom: false,
     });
     expect(lists.effectiveAllowFrom).toEqual(["owner", "paired-user"]);
-    expect(lists.effectiveGroupAllowFrom).toEqual([]);
+    // Pairing store is included for backward compatibility (unless dmPolicy=allowlist)
+    expect(lists.effectiveGroupAllowFrom).toEqual(["paired-user"]);
+  });
+
+  it("excludes pairing store from group auth when groupAuthIncludesPairingStore is false", () => {
+    const lists = resolveEffectiveAllowFromLists({
+      allowFrom: ["owner"],
+      groupAllowFrom: ["group-owner"],
+      storeAllowFrom: ["paired-user"],
+      dmPolicy: "pairing",
+      groupAuthIncludesPairingStore: false,
+    });
+    expect(lists.effectiveAllowFrom).toEqual(["owner", "paired-user"]);
+    // Pairing store excluded when groupAuthIncludesPairingStore is false
+    expect(lists.effectiveGroupAllowFrom).toEqual(["group-owner"]);
   });
 
   it("infers pinned main DM owner from a single configured allowlist entry", () => {
@@ -178,7 +194,7 @@ describe("security/dm-policy-shared", () => {
     expect(lists.effectiveGroupAllowFrom).toEqual(["group:abc"]);
   });
 
-  it("keeps group allowlist explicit when dmPolicy is pairing", () => {
+  it("includes pairing store in group allowlist for backward compatibility", () => {
     const lists = resolveEffectiveAllowFromLists({
       allowFrom: ["+1111"],
       groupAllowFrom: [],
@@ -186,7 +202,8 @@ describe("security/dm-policy-shared", () => {
       dmPolicy: "pairing",
     });
     expect(lists.effectiveAllowFrom).toEqual(["+1111", "+2222"]);
-    expect(lists.effectiveGroupAllowFrom).toEqual(["+1111"]);
+    // Pairing store is included in group auth for backward compatibility
+    expect(lists.effectiveGroupAllowFrom).toEqual(["+1111", "+2222"]);
   });
 
   it("resolves access + effective allowlists in one shared call", () => {
@@ -203,7 +220,8 @@ describe("security/dm-policy-shared", () => {
     expect(resolved.reasonCode).toBe(DM_GROUP_ACCESS_REASON.DM_POLICY_ALLOWLISTED);
     expect(resolved.reason).toBe("dmPolicy=pairing (allowlisted)");
     expect(resolved.effectiveAllowFrom).toEqual(["owner", "paired-user"]);
-    expect(resolved.effectiveGroupAllowFrom).toEqual(["group:room"]);
+    // Pairing store is included in group auth for backward compatibility
+    expect(resolved.effectiveGroupAllowFrom).toEqual(["group:room", "paired-user"]);
   });
 
   it("resolves command gate with dm/group parity for groups", () => {
@@ -211,8 +229,10 @@ describe("security/dm-policy-shared", () => {
       isGroup: true,
       isSenderAllowed: (allowFrom) => allowFrom.includes("paired-user"),
     });
-    expect(resolved.decision).toBe("block");
-    expect(resolved.reason).toBe("groupPolicy=allowlist (not allowlisted)");
+    // Paired users are allowed in groups for backward compatibility,
+    // but command authorization requires explicit allowlist (not pairing store)
+    expect(resolved.decision).toBe("allow");
+    expect(resolved.reason).toBe("groupPolicy=allowlist");
     expect(resolved.commandAuthorized).toBe(false);
     expect(resolved.shouldBlockControlCommand).toBe(true);
   });
@@ -355,15 +375,16 @@ describe("security/dm-policy-shared", () => {
         expectedReactionAllowed: false,
       }),
       createParityCase({
-        name: "groupPolicy=allowlist rejects DM-paired sender not in explicit group list",
+        // Pairing store is included in group auth for backward compatibility
+        name: "groupPolicy=allowlist allows DM-paired sender (backward compat)",
         isGroup: true,
         dmPolicy: "pairing",
         allowFrom: ["owner"],
         groupAllowFrom: ["group-owner"],
         storeAllowFrom: ["paired-user"],
         isSenderAllowed: (allowFrom: string[]) => allowFrom.includes("paired-user"),
-        expectedDecision: "block",
-        expectedReactionAllowed: false,
+        expectedDecision: "allow",
+        expectedReactionAllowed: true,
       }),
     ];
 
