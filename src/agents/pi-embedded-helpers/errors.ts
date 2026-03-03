@@ -641,8 +641,8 @@ const ERROR_PATTERNS = {
     "deadline exceeded",
     "context deadline exceeded",
     /without sending (?:any )?chunks?/i,
-    /\bstop reason:\s*abort\b/i,
-    /\breason:\s*abort\b/i,
+    /\bstop reason:\s*(?:abort|error)\b/i,
+    /\breason:\s*(?:abort|error)\b/i,
     /\bunhandled stop reason:\s*(?:abort|error)\b/i,
   ],
   billing: [

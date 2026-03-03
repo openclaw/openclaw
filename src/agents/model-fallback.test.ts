@@ -751,6 +751,17 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back on abort errors with reason: error", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("aborted"), {
+        name: "AbortError",
+        reason: "reason: error",
+      }),
+    });
+  });
+
   it("falls back when message says aborted but error is a timeout", async () => {
     await expectFallsBackToHaiku({
       provider: "openai",
