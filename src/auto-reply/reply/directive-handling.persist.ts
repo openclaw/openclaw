@@ -3,7 +3,7 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { lookupContextTokens } from "../../agents/context.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -210,10 +210,22 @@ export async function persistInlineDirectives(params: {
     }
   }
 
+  const configuredContextTokensOverride =
+    typeof agentCfg?.contextTokens === "number" && agentCfg.contextTokens > 0
+      ? Math.trunc(agentCfg.contextTokens)
+      : undefined;
+
   return {
     provider,
     model,
-    contextTokens: agentCfg?.contextTokens ?? lookupContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+    contextTokens:
+      resolveContextTokensForModel({
+        cfg,
+        provider,
+        model,
+        contextTokensOverride: configuredContextTokensOverride,
+        fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      }) ?? DEFAULT_CONTEXT_TOKENS,
   };
 }
 

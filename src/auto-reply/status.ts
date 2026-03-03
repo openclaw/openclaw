@@ -444,16 +444,25 @@ export function buildStatusMessage(args: StatusArgs): string {
     selectedModel,
     sessionEntry: entry,
   });
+
   let activeProvider = modelRefs.active.provider;
   let activeModel = modelRefs.active.model;
-  let contextTokens =
+
+  const configuredContextTokensOverride =
+    typeof args.agent?.contextTokens === "number" && args.agent.contextTokens > 0
+      ? Math.trunc(args.agent.contextTokens)
+      : undefined;
+
+  const resolveDisplayContextTokens = () =>
     resolveContextTokensForModel({
       cfg: contextConfig,
       provider: activeProvider,
       model: activeModel,
-      contextTokensOverride: entry?.contextTokens ?? args.agent?.contextTokens,
+      contextTokensOverride: configuredContextTokensOverride,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
     }) ?? DEFAULT_CONTEXT_TOKENS;
+
+  let contextTokens = resolveDisplayContextTokens();
 
   let inputTokens = entry?.inputTokens;
   let outputTokens = entry?.outputTokens;
@@ -489,14 +498,6 @@ export function buildStatusMessage(args: StatusArgs): string {
           activeModel = logUsage.model;
         }
       }
-      if (!contextTokens && logUsage.model) {
-        contextTokens =
-          resolveContextTokensForModel({
-            cfg: contextConfig,
-            model: logUsage.model,
-            fallbackContextTokens: contextTokens ?? undefined,
-          }) ?? contextTokens;
-      }
       if (!inputTokens || inputTokens === 0) {
         inputTokens = logUsage.input;
       }
@@ -505,6 +506,9 @@ export function buildStatusMessage(args: StatusArgs): string {
       }
     }
   }
+
+  // Transcript parsing may update active model/provider; refresh context display denominator.
+  contextTokens = resolveDisplayContextTokens();
 
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";

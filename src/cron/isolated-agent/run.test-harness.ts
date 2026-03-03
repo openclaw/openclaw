@@ -88,7 +88,7 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 }));
 
 vi.mock("../../agents/context.js", () => ({
-  lookupContextTokens: vi.fn().mockReturnValue(128000),
+  resolveContextTokensForModel: vi.fn().mockReturnValue(128000),
 }));
 
 vi.mock("../../agents/date-time.js", () => ({
