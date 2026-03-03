@@ -1,0 +1,65 @@
+import { describe, expect, it } from "vitest";
+import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
+
+describe("detectChangedScope", () => {
+  it("fails safe when no paths are provided", () => {
+    expect(detectChangedScope([])).toEqual({
+      runNode: true,
+      runMacos: true,
+      runAndroid: true,
+    });
+  });
+
+  it("keeps all lanes off for docs-only changes", () => {
+    expect(detectChangedScope(["docs/ci.md", "README.md"])).toEqual({
+      runNode: false,
+      runMacos: false,
+      runAndroid: false,
+    });
+  });
+
+  it("enables node lane for node-relevant files", () => {
+    expect(detectChangedScope(["src/plugins/runtime/index.ts"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+    });
+  });
+
+  it("keeps node lane off for native-only changes", () => {
+    expect(detectChangedScope(["apps/macos/Sources/Foo.swift"])).toEqual({
+      runNode: false,
+      runMacos: true,
+      runAndroid: false,
+    });
+    expect(detectChangedScope(["apps/shared/OpenClawKit/Sources/Foo.swift"])).toEqual({
+      runNode: false,
+      runMacos: true,
+      runAndroid: true,
+    });
+  });
+
+  it("does not force macOS for generated protocol model-only changes", () => {
+    expect(detectChangedScope(["apps/macos/Sources/OpenClawProtocol/GatewayModels.swift"])).toEqual(
+      {
+        runNode: false,
+        runMacos: false,
+        runAndroid: false,
+      },
+    );
+  });
+
+  it("enables node lane for non-native non-doc files by fallback", () => {
+    expect(detectChangedScope(["README.md"])).toEqual({
+      runNode: false,
+      runMacos: false,
+      runAndroid: false,
+    });
+
+    expect(detectChangedScope(["assets/icon.png"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+    });
+  });
+});
