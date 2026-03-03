@@ -236,6 +236,22 @@ describe("applyOpenAICodexModelDefault", () => {
     const applied = applyOpenAICodexModelDefaultWithOptions(cfg, { force: true });
     expectPrimaryModelChanged(applied, OPENAI_CODEX_DEFAULT_MODEL);
   });
+
+  it("overrides alternate openai-codex models when force=true", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai-codex/gpt-5.1-codex" } } },
+    };
+    const applied = applyOpenAICodexModelDefaultWithOptions(cfg, { force: true });
+    expectPrimaryModelChanged(applied, OPENAI_CODEX_DEFAULT_MODEL);
+  });
+
+  it("no-ops when already target default and force=true", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: OPENAI_CODEX_DEFAULT_MODEL } } },
+    };
+    const applied = applyOpenAICodexModelDefaultWithOptions(cfg, { force: true });
+    expectConfigUnchanged(applied, cfg);
+  });
 });
 
 describe("applyOpencodeZenModelDefault", () => {
