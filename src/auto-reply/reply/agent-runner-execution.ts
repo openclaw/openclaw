@@ -64,6 +64,27 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
+const ROLE_ORDERING_ERROR_RE =
+  /incorrect role information|roles must alternate|message ordering conflict/i;
+
+function extractRoleOrderingConflictFromPayloads(
+  payloads: ReplyPayload[] | undefined,
+): string | undefined {
+  for (const payload of payloads ?? []) {
+    if (!payload.isError || typeof payload.text !== "string") {
+      continue;
+    }
+    const text = payload.text.trim();
+    if (!text) {
+      continue;
+    }
+    if (ROLE_ORDERING_ERROR_RE.test(text)) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -443,8 +464,11 @@ export async function runAgentTurnWithFallback(params: {
           },
         };
       }
-      if (embeddedError?.kind === "role_ordering") {
-        const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
+      const roleOrderingMessage =
+        (embeddedError?.kind === "role_ordering" ? embeddedError.message : undefined) ??
+        extractRoleOrderingConflictFromPayloads(runResult.payloads);
+      if (roleOrderingMessage) {
+        const didReset = await params.resetSessionAfterRoleOrderingConflict(roleOrderingMessage);
         if (didReset) {
           return {
             kind: "final",
@@ -461,7 +485,7 @@ export async function runAgentTurnWithFallback(params: {
       const isContextOverflow = isLikelyContextOverflowError(message);
       const isCompactionFailure = isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
-      const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
+      const isRoleOrderingError = ROLE_ORDERING_ERROR_RE.test(message);
       const isTransientHttp = isTransientHttpError(message);
 
       if (

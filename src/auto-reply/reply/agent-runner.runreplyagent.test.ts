@@ -1233,6 +1233,96 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("resets the session after role ordering payload text without meta error", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry = { sessionId, updatedAt: Date.now(), sessionFile: transcriptPath };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "ok", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+        payloads: [
+          {
+            text: "Message ordering conflict - please try again. If this persists, use /new to start a fresh session.",
+            isError: true,
+          },
+        ],
+        meta: {
+          durationMs: 1,
+        },
+      }));
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      const payload = Array.isArray(res) ? res[0] : res;
+      expect(payload).toMatchObject({
+        text: expect.stringContaining("Message ordering conflict"),
+      });
+      if (!payload) {
+        throw new Error("expected payload");
+      }
+      expect(payload.text?.toLowerCase()).toContain("reset");
+      expect(sessionStore.main.sessionId).not.toBe(sessionId);
+      await expect(fs.access(transcriptPath)).rejects.toBeDefined();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
+    });
+  });
+
+  it("does not reset on non-error payload text mentioning ordering conflict", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry = { sessionId, updatedAt: Date.now(), sessionFile: transcriptPath };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "ok", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+        payloads: [{ text: "Message ordering conflict - please try again.", isError: false }],
+        meta: {
+          durationMs: 1,
+        },
+      }));
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      const payload = Array.isArray(res) ? res[0] : res;
+      expect(payload).toMatchObject({
+        text: expect.stringContaining("Message ordering conflict"),
+      });
+      expect(payload?.text?.toLowerCase()).not.toContain("i've reset");
+      expect(sessionStore.main.sessionId).toBe(sessionId);
+      await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main.sessionId).toBe(sessionId);
+    });
+  });
+
   it("resets corrupted Gemini sessions and deletes transcripts", async () => {
     await withTempStateDir(async (stateDir) => {
       const { storePath, sessionEntry, sessionStore, transcriptPath } =
