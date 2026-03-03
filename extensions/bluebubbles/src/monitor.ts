@@ -156,6 +156,8 @@ function shouldDropMentionOnlyDirectPayload(message: NormalizedWebhookMessage): 
   if (message.isGroup) {
     return false;
   }
+  const hasExplicitNonGroupHint =
+    message.explicitGroupChatHint === false || message.explicitIsGroupHint === false;
   const hasResolvedChatHandle =
     Boolean(message.chatGuid?.trim()) ||
     Boolean(message.chatIdentifier?.trim()) ||
@@ -163,7 +165,7 @@ function shouldDropMentionOnlyDirectPayload(message: NormalizedWebhookMessage): 
   const hasAmbiguousGroupHintWithoutChatContext =
     message.hasConversationLabel &&
     message.hasExplicitGroupChatFlag &&
-    message.explicitGroupChatHint !== false &&
+    !hasExplicitNonGroupHint &&
     !hasResolvedChatHandle;
   if (hasAmbiguousGroupHintWithoutChatContext) {
     return true;
@@ -174,12 +176,18 @@ function shouldDropMentionOnlyDirectPayload(message: NormalizedWebhookMessage): 
   if (
     message.hasConversationLabel &&
     message.hasExplicitGroupChatFlag &&
+    !hasExplicitNonGroupHint &&
     message.hasMessageIdFull &&
     !message.messageId?.trim()
   ) {
     return true;
   }
-  if (message.hasConversationLabel && message.hasExplicitGroupChatFlag && !hasResolvedChatHandle) {
+  if (
+    message.hasConversationLabel &&
+    message.hasExplicitGroupChatFlag &&
+    !hasExplicitNonGroupHint &&
+    !hasResolvedChatHandle
+  ) {
     return true;
   }
   return !hasExplicitChatContext(message);
