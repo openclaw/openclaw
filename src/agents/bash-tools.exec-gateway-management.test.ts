@@ -560,11 +560,38 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
+  it("detects schtasks task name for the active profile on windows", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: 'schtasks /Run /TN "OpenClaw Gateway (dev)"',
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_PROFILE: "dev" },
+      platform: "win32",
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "schtasks",
+      hard: false,
+      complex: false,
+    });
+  });
+
   it("does not detect prefixed schtasks task names", () => {
     const detected = detectGatewayManagementExecCommand({
       command: 'schtasks /Run /TN "OpenClaw Gateway Backup"',
       cwd: process.cwd(),
       env: process.env,
+      platform: "win32",
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect chained schtasks commands in windows fallback parsing", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: 'schtasks /Run /TN "OpenClaw Gateway (dev)" && echo done',
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_PROFILE: "dev" },
       platform: "win32",
     });
 

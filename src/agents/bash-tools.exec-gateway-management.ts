@@ -22,6 +22,7 @@ import {
 } from "../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../infra/restart.js";
 import { logInfo } from "../logger.js";
+import { splitShellArgs } from "../utils/shell-argv.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 
 const RUNNER_BINS = new Set(["pnpm", "npx", "bunx"]);
@@ -119,6 +120,7 @@ const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
   "--job-mode",
   "--when",
 ]);
+const SHELL_CONTROL_TOKENS = new Set(["&&", "||", ";", "|", ">", ">>", "<", "<<"]);
 
 export type GatewayManagementExecSource = "openclaw-cli" | "systemctl" | "launchctl" | "schtasks";
 
@@ -799,6 +801,32 @@ function parseGatewayActionFromSchtasksArgv(
   return action;
 }
 
+function detectGatewayManagementExecCommandFromWindowsFallback(params: {
+  command: string;
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+}): GatewayManagementExecCommand | null {
+  if (params.platform !== "win32") {
+    return null;
+  }
+
+  const argv = splitShellArgs(params.command).map((token) => token.trim());
+  if (argv.length === 0 || argv.some((token) => !token || SHELL_CONTROL_TOKENS.has(token))) {
+    return null;
+  }
+
+  const schtasksAction = parseGatewayActionFromSchtasksArgv(argv, params.env, params.platform);
+  if (!schtasksAction) {
+    return null;
+  }
+  return {
+    action: schtasksAction,
+    source: "schtasks",
+    hard: false,
+    complex: false,
+  };
+}
+
 export function detectGatewayManagementExecCommand(params: {
   command: string;
   cwd: string;
@@ -815,7 +843,11 @@ export function detectGatewayManagementExecCommand(params: {
     platform,
   });
   if (!analysis.ok || analysis.segments.length === 0) {
-    return null;
+    return detectGatewayManagementExecCommandFromWindowsFallback({
+      command: params.command,
+      env: identityEnv,
+      platform,
+    });
   }
 
   const complex = analysis.segments.length !== 1 || Boolean(analysis.chains);
