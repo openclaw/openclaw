@@ -182,6 +182,8 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
   }
 
   // Convert to OGG/Opus
+  // Always resample to 48kHz to ensure Discord voice messages play at correct speed
+  // (Discord expects 48kHz; lower sample rates like 24kHz from some TTS providers cause 0.5x playback)
   const tempDir = resolvePreferredOpenClawTmpDir();
   const outputPath = path.join(tempDir, `voice-${crypto.randomUUID()}.ogg`);
 
@@ -189,6 +191,8 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
     "-y",
     "-i",
     filePath,
+    "-ar",
+    "48000",
     "-c:a",
     "libopus",
     "-b:a",
