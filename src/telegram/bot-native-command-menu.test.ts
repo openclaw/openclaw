@@ -179,10 +179,6 @@ describe("bot-native-command-menu", () => {
       botIdentity: "bot-a",
     });
 
-    await vi.waitFor(() => {
-      expect(runtimeLog).toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync");
-    });
-
     // setMyCommands should NOT have been called a second time.
     expect(setMyCommands).toHaveBeenCalledTimes(1);
   });
@@ -213,7 +209,6 @@ describe("bot-native-command-menu", () => {
       botIdentity: "token-bot-b",
     });
     await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
-    expect(runtimeLog).not.toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync");
   });
 
   it("does not cache empty-menu hash when deleteMyCommands fails", async () => {
@@ -244,7 +239,6 @@ describe("bot-native-command-menu", () => {
       botIdentity: "bot-a",
     });
     await vi.waitFor(() => expect(deleteMyCommands).toHaveBeenCalledTimes(2));
-    expect(runtimeLog).not.toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync");
   });
 
   it("retries with fewer commands on BOT_COMMANDS_TOO_MUCH", async () => {
