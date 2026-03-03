@@ -66,7 +66,7 @@ async function expectThinkStatusForReasoningModel(params: {
 
   const text = replyText(res);
   expect(text).toContain(`Current thinking level: ${params.expectedLevel}`);
-  expect(text).toContain("Options: off, minimal, low, medium, high.");
+  expect(text).toContain("Options: off, minimal, low, medium, high, adaptive.");
 }
 
 function mockReasoningCapableCatalog() {
@@ -183,7 +183,7 @@ describe("directive behavior", () => {
             primary: "anthropic/claude-opus-4-5",
             fallbacks: ["openai/gpt-4.1-mini"],
           },
-          imageModel: { primary: "minimax/MiniMax-M2.1" },
+          imageModel: { primary: "minimax/MiniMax-M2.5" },
           models: undefined,
         },
       });
@@ -206,7 +206,7 @@ describe("directive behavior", () => {
           models: {
             "anthropic/claude-opus-4-5": {},
             "openai/gpt-4.1-mini": {},
-            "minimax/MiniMax-M2.1": { alias: "minimax" },
+            "minimax/MiniMax-M2.5": { alias: "minimax" },
           },
         },
         extra: {
@@ -216,14 +216,14 @@ describe("directive behavior", () => {
               minimax: {
                 baseUrl: "https://api.minimax.io/anthropic",
                 api: "anthropic-messages",
-                models: [{ id: "MiniMax-M2.1", name: "MiniMax M2.1" }],
+                models: [{ id: "MiniMax-M2.5", name: "MiniMax M2.5" }],
               },
             },
           },
         },
       });
       expect(configOnlyProviderText).toContain("Models (minimax");
-      expect(configOnlyProviderText).toContain("minimax/MiniMax-M2.1");
+      expect(configOnlyProviderText).toContain("minimax/MiniMax-M2.5");
 
       const missingAuthText = await runModelDirectiveText(home, "/model list", {
         defaults: {

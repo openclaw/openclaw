@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { triggerOpenClawRestart } from "./restart.js";
 import { hasSupervisorHint } from "./supervisor-markers.js";
 
 type RespawnMode = "spawned" | "supervised" | "disabled" | "failed";
@@ -32,6 +33,18 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     return { mode: "disabled" };
   }
   if (isLikelySupervisedProcess(process.env)) {
+    // On macOS under launchd, actively kickstart the supervised service to
+    // bypass ThrottleInterval delays for intentional restarts.
+    if (process.platform === "darwin" && process.env.OPENCLAW_LAUNCHD_LABEL?.trim()) {
+      const restart = triggerOpenClawRestart();
+      // Best-effort: if kickstart isn't supported in this environment, still treat as supervised.
+      if (restart && !restart.ok) {
+        return {
+          mode: "failed",
+          detail: restart.detail ?? "launchctl kickstart failed",
+        };
+      }
+    }
     return { mode: "supervised" };
   }
 

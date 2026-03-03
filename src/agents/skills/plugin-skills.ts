@@ -8,6 +8,7 @@ import {
   resolveMemorySlotDecision,
 } from "../../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
 
 const log = createSubsystemLogger("skills");
 
@@ -70,6 +71,10 @@ export function resolvePluginSkillDirs(params: {
       const candidate = path.resolve(record.rootDir, trimmed);
       if (!fs.existsSync(candidate)) {
         log.warn(`plugin skill path not found (${record.id}): ${candidate}`);
+        continue;
+      }
+      if (!isPathInsideWithRealpath(record.rootDir, candidate, { requireRealpath: true })) {
+        log.warn(`plugin skill path escapes plugin root (${record.id}): ${candidate}`);
         continue;
       }
       if (seen.has(candidate)) {

@@ -162,7 +162,9 @@ export function createFollowupRunner(params: {
         if (!queued.originatingTo) {
           return null;
         }
-        const parsed = parseSlackTarget(queued.originatingTo, { defaultKind: "channel" });
+        const parsed = parseSlackTarget(queued.originatingTo, {
+          defaultKind: "channel",
+        });
         return parsed?.kind === "channel" ? parsed : null;
       })();
       const queuedThreadTs =
@@ -195,6 +197,8 @@ export function createFollowupRunner(params: {
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
               agentId: queued.run.agentId,
+              trigger: "user",
+              messageChannel: queued.originatingChannel ?? undefined,
               messageProvider: queued.run.messageProvider,
               agentAccountId: queued.run.agentAccountId,
               messageTo: queued.originatingTo,

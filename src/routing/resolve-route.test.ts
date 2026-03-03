@@ -4,6 +4,15 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentRoute } from "./resolve-route.js";
 
 describe("resolveAgentRoute", () => {
+  const resolveDiscordGuildRoute = (cfg: OpenClawConfig) =>
+    resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "channel", id: "c1" },
+      guildId: "g1",
+    });
+
   test("defaults to main/default when no bindings exist", () => {
     const cfg: OpenClawConfig = {};
     const route = resolveAgentRoute({
@@ -123,13 +132,7 @@ describe("resolveAgentRoute", () => {
         },
       ],
     };
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "discord",
-      accountId: "default",
-      peer: { kind: "channel", id: "c1" },
-      guildId: "g1",
-    });
+    const route = resolveDiscordGuildRoute(cfg);
     expect(route.agentId).toBe("chan");
     expect(route.sessionKey).toBe("agent:chan:discord:channel:c1");
     expect(route.matchedBy).toBe("binding.peer");
@@ -163,13 +166,7 @@ describe("resolveAgentRoute", () => {
         },
       ],
     };
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "discord",
-      accountId: "default",
-      peer: { kind: "channel", id: "c1" },
-      guildId: "g1",
-    });
+    const route = resolveDiscordGuildRoute(cfg);
     expect(route.agentId).toBe("guild");
     expect(route.matchedBy).toBe("binding.guild");
   });
@@ -544,6 +541,74 @@ describe("backward compatibility: peer.kind dm → direct", () => {
     });
     expect(route.agentId).toBe("alex");
     expect(route.matchedBy).toBe("binding.peer");
+  });
+});
+
+describe("backward compatibility: peer.kind group ↔ channel", () => {
+  test("config group binding matches runtime channel scope", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "slack-group-agent",
+          match: {
+            channel: "slack",
+            peer: { kind: "group", id: "C123456" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: null,
+      peer: { kind: "channel", id: "C123456" },
+    });
+    expect(route.agentId).toBe("slack-group-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("config channel binding matches runtime group scope", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "slack-channel-agent",
+          match: {
+            channel: "slack",
+            peer: { kind: "channel", id: "C123456" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: null,
+      peer: { kind: "group", id: "C123456" },
+    });
+    expect(route.agentId).toBe("slack-channel-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("group/channel compatibility does not match direct peer kind", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "group-only-agent",
+          match: {
+            channel: "slack",
+            peer: { kind: "group", id: "C123456" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: null,
+      peer: { kind: "direct", id: "C123456" },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
   });
 });
 

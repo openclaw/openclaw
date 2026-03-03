@@ -96,6 +96,98 @@ class NotificationsHandlerTest {
     }
 
   @Test
+  fun notificationsActions_executesDismissAction() =
+    runTest {
+      val provider =
+        FakeNotificationsStateProvider(
+          DeviceNotificationSnapshot(
+            enabled = true,
+            connected = true,
+            notifications = listOf(sampleEntry("n2")),
+          ),
+        )
+      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+
+      val result = handler.handleNotificationsActions("""{"key":"n2","action":"dismiss"}""")
+
+      assertTrue(result.ok)
+      assertNull(result.error)
+      val payload = parsePayload(result)
+      assertTrue(payload.getValue("ok").jsonPrimitive.boolean)
+      assertEquals("n2", payload.getValue("key").jsonPrimitive.content)
+      assertEquals("dismiss", payload.getValue("action").jsonPrimitive.content)
+      assertEquals("n2", provider.lastAction?.key)
+      assertEquals(NotificationActionKind.Dismiss, provider.lastAction?.kind)
+    }
+
+  @Test
+  fun notificationsActions_requiresReplyTextForReplyAction() =
+    runTest {
+      val provider =
+        FakeNotificationsStateProvider(
+          DeviceNotificationSnapshot(
+            enabled = true,
+            connected = true,
+            notifications = listOf(sampleEntry("n3")),
+          ),
+        )
+      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+
+      val result = handler.handleNotificationsActions("""{"key":"n3","action":"reply"}""")
+
+      assertFalse(result.ok)
+      assertEquals("INVALID_REQUEST", result.error?.code)
+      assertEquals(0, provider.actionRequests)
+    }
+
+  @Test
+  fun notificationsActions_propagatesProviderError() =
+    runTest {
+      val provider =
+        FakeNotificationsStateProvider(
+          DeviceNotificationSnapshot(
+            enabled = true,
+            connected = true,
+            notifications = listOf(sampleEntry("n4")),
+          ),
+        ).also {
+          it.actionResult =
+            NotificationActionResult(
+              ok = false,
+              code = "NOTIFICATION_NOT_FOUND",
+              message = "NOTIFICATION_NOT_FOUND: notification key not found",
+            )
+        }
+      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+
+      val result = handler.handleNotificationsActions("""{"key":"n4","action":"open"}""")
+
+      assertFalse(result.ok)
+      assertEquals("NOTIFICATION_NOT_FOUND", result.error?.code)
+      assertEquals(1, provider.actionRequests)
+    }
+
+  @Test
+  fun notificationsActions_requestsRebindWhenEnabledButDisconnected() =
+    runTest {
+      val provider =
+        FakeNotificationsStateProvider(
+          DeviceNotificationSnapshot(
+            enabled = true,
+            connected = false,
+            notifications = listOf(sampleEntry("n5")),
+          ),
+        )
+      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+
+      val result = handler.handleNotificationsActions("""{"key":"n5","action":"open"}""")
+
+      assertTrue(result.ok)
+      assertEquals(1, provider.rebindRequests)
+      assertEquals(1, provider.actionRequests)
+    }
+
+  @Test
   fun sanitizeNotificationTextReturnsNullForBlankInput() {
     assertNull(sanitizeNotificationText(null))
     assertNull(sanitizeNotificationText("    "))
@@ -108,6 +200,13 @@ class NotificationsHandlerTest {
 
     assertEquals(512, sanitized?.length)
     assertTrue((sanitized ?: "").all { it == 'x' })
+  }
+
+  @Test
+  fun notificationsActionClearablePolicy_onlyRequiresClearableForDismiss() {
+    assertTrue(actionRequiresClearableNotification(NotificationActionKind.Dismiss))
+    assertFalse(actionRequiresClearableNotification(NotificationActionKind.Open))
+    assertFalse(actionRequiresClearableNotification(NotificationActionKind.Reply))
   }
 
   private fun parsePayload(result: GatewaySession.InvokeResult): JsonObject {
@@ -137,10 +236,23 @@ private class FakeNotificationsStateProvider(
 ) : NotificationsStateProvider {
   var rebindRequests: Int = 0
     private set
+  var actionRequests: Int = 0
+    private set
+  var actionResult: NotificationActionResult = NotificationActionResult(ok = true)
+  var lastAction: NotificationActionRequest? = null
 
   override fun readSnapshot(context: Context): DeviceNotificationSnapshot = snapshot
 
   override fun requestServiceRebind(context: Context) {
     rebindRequests += 1
+  }
+
+  override fun executeAction(
+    context: Context,
+    request: NotificationActionRequest,
+  ): NotificationActionResult {
+    actionRequests += 1
+    lastAction = request
+    return actionResult
   }
 }
