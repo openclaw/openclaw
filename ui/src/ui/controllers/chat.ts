@@ -150,21 +150,37 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
+export type SendChatResult = {
+  runId: string | null;
+  status: "new" | "steered" | "queued";
+};
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
-): Promise<string | null> {
+  opts?: { mode?: "steered" | "queued" },
+): Promise<SendChatResult> {
   if (!state.client || !state.connected) {
-    return null;
+    return { runId: null, status: "new" };
   }
   const msg = message.trim();
   const hasAttachments = attachments && attachments.length > 0;
   if (!msg && !hasAttachments) {
-    return null;
+    return { runId: null, status: "new" };
   }
 
+  const mode = opts?.mode ?? "new";
   const now = Date.now();
+
+  // For steered/queued messages, add to pending instead of sending immediately
+  if (mode === "steered" || mode === "queued") {
+    state.chatPendingMessages = [
+      ...state.chatPendingMessages,
+      { text: msg || "(attachments)", mode },
+    ];
+    return { runId: null, status: mode };
+  }
 
   // Build user message content blocks
   const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
@@ -222,7 +238,7 @@ export async function sendChatMessage(
       idempotencyKey: runId,
       attachments: apiAttachments,
     });
-    return runId;
+    return { runId, status: "new" };
   } catch (err) {
     const error = String(err);
     state.chatRunId = null;
@@ -237,7 +253,7 @@ export async function sendChatMessage(
         timestamp: Date.now(),
       },
     ];
-    return null;
+    return { runId: null, status: "new" };
   } finally {
     state.chatSending = false;
   }
@@ -307,6 +323,8 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    // Clear pending messages on run completion
+    state.chatPendingMessages = [];
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {

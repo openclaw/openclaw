@@ -1714,6 +1714,65 @@
   line-height: 1;
 }
 
+/* Pending messages (steered/queued toast feedback) */
+.chat-pending {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.chat-pending__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  animation: fadeSlideIn 0.2s ease-out;
+}
+
+.chat-pending__item--steered {
+  background: var(--warning-bg, rgba(255, 193, 7, 0.1));
+  border: 1px solid var(--warning-border, rgba(255, 193, 7, 0.3));
+  color: var(--warning-text, #856404);
+}
+
+.chat-pending__item--queued {
+  background: var(--info-bg, rgba(23, 162, 184, 0.1));
+  border: 1px solid var(--info-border, rgba(23, 162, 184, 0.3));
+  color: var(--info-text, #0c5460);
+}
+
+.chat-pending__badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.chat-pending__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* New messages indicator */
 .chat-new-messages {
   align-self: center;

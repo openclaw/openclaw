@@ -973,6 +973,7 @@ export function renderApp(state: AppViewState) {
                   state.chatStreamStartedAt = null;
                   state.chatRunId = null;
                   state.chatQueue = [];
+                  state.chatPendingMessages = [];
                   state.resetToolStream();
                   state.resetChatScroll();
                   state.applySettings({
@@ -998,6 +999,7 @@ export function renderApp(state: AppViewState) {
                 streamStartedAt: state.chatStreamStartedAt,
                 draft: state.chatMessage,
                 queue: state.chatQueue,
+                pendingMessages: state.chatPendingMessages,
                 connected: state.connected,
                 canSend: state.connected,
                 disabledReason: chatDisabledReason,

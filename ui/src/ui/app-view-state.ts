@@ -77,6 +77,7 @@ export type AppViewState = {
   chatThinkingLevel: string | null;
   chatPendingMessages: Array<{ text: string; mode: "steered" | "queued" }>;
   chatQueue: ChatQueueItem[];
+  chatPendingMessages: Array<{ text: string; mode: "steered" | "queued" }>;
   chatManualRefreshInFlight: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;

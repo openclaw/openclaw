@@ -154,6 +154,7 @@ export class OpenClawApp extends LitElement {
   @state() chatThinkingLevel: string | null = null;
   @state() chatPendingMessages: Array<{ text: string; mode: "steered" | "queued" }> = [];
   @state() chatQueue: ChatQueueItem[] = [];
+  @state() chatPendingMessages: Array<{ text: string; mode: "steered" | "queued" }> = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
   // Sidebar state for tool output viewing

@@ -49,6 +49,7 @@ export type ChatProps = {
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
+  pendingMessages?: Array<{ text: string; mode: "steered" | "queued" }>;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -399,6 +400,25 @@ export function renderChat(props: ChatProps) {
                   `,
                 )}
               </div>
+            </div>
+          `
+          : nothing
+      }
+
+      ${
+        (props.pendingMessages?.length ?? 0) > 0
+          ? html`
+            <div class="chat-pending" role="status" aria-live="polite">
+              ${props.pendingMessages?.map(
+                (msg) => html`
+                  <div class="chat-pending__item chat-pending__item--${msg.mode}">
+                    <span class="chat-pending__badge">
+                      ${msg.mode === "steered" ? "Steered" : "Queued"}
+                    </span>
+                    <span class="chat-pending__text">${msg.text}</span>
+                  </div>
+                `,
+              )}
             </div>
           `
           : nothing
