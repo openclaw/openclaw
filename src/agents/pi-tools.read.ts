@@ -27,6 +27,7 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
+  assertRequiredParams,
   CLAUDE_PARAM_GROUPS,
   normalizeToolParams,
   patchToolSchemaForClaudeCompatibility,
