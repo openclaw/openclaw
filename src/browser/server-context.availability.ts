@@ -1,3 +1,5 @@
+import { resolveFirecrawlApiKey, resolveFirecrawlConfig } from "../agents/tools/web-fetch.js";
+import { loadConfig } from "../config/config.js";
 import {
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
@@ -30,6 +32,13 @@ import type {
   ContextOptions,
   ProfileRuntimeState,
 } from "./server-context.types.js";
+
+/** Re-resolve firecrawl API key from current config + env, falling back to the captured opts value. */
+function getFirecrawlApiKey(opts: ContextOptions): string | undefined {
+  const cfg = loadConfig();
+  const firecrawl = resolveFirecrawlConfig(cfg.tools?.web?.fetch);
+  return resolveFirecrawlApiKey(firecrawl) || opts.firecrawlApiKey;
+}
 
 type AvailabilityDeps = {
   opts: ContextOptions;
@@ -138,7 +147,7 @@ export function createProfileAvailability({
         }
         profileState.firecrawlSession = null;
       }
-      const apiKey = opts.firecrawlApiKey;
+      const apiKey = getFirecrawlApiKey(opts);
       const baseUrl = opts.firecrawlBaseUrl || "https://api.firecrawl.dev";
       if (!apiKey) {
         throw new Error(
@@ -247,7 +256,7 @@ export function createProfileAvailability({
       const profileState = getProfileState();
       const session = profileState.firecrawlSession;
       if (session) {
-        const apiKey = opts.firecrawlApiKey;
+        const apiKey = getFirecrawlApiKey(opts);
         const baseUrl = opts.firecrawlBaseUrl || "https://api.firecrawl.dev";
         if (apiKey) {
           await deleteFirecrawlBrowserSession({

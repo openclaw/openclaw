@@ -162,7 +162,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         name,
         color: color || undefined,
         cdpUrl: cdpUrl || undefined,
-        driver: driver === "extension" ? "extension" : undefined,
+        driver: driver === "extension" || driver === "firecrawl" ? driver : undefined,
       });
       res.json(result);
     } catch (err) {
