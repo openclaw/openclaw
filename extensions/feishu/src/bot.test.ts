@@ -1,5 +1,6 @@
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { buildFeishuAgentBody, handleFeishuMessage, toMessageResourceType } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -27,8 +28,10 @@ const {
   mockCreateFeishuClient: vi.fn(),
   mockResolveAgentRoute: vi.fn(() => ({
     agentId: "main",
+    channel: "feishu",
     accountId: "default",
     sessionKey: "agent:main:feishu:dm:ou-attacker",
+    mainSessionKey: "agent:main:main",
     matchedBy: "default",
   })),
 }));
@@ -122,7 +125,9 @@ describe("handleFeishuMessage command authorization", () => {
   const mockBuildPairingReply = vi.fn(() => "Pairing response");
   const mockEnqueueSystemEvent = vi.fn();
   const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
+    id: "inbound-clip.mp4",
     path: "/tmp/inbound-clip.mp4",
+    size: Buffer.byteLength("video"),
     contentType: "video/mp4",
   });
 
@@ -131,8 +136,10 @@ describe("handleFeishuMessage command authorization", () => {
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
+      channel: "feishu",
       accountId: "default",
       sessionKey: "agent:main:feishu:dm:ou-attacker",
+      mainSessionKey: "agent:main:main",
       matchedBy: "default",
     });
     mockCreateFeishuClient.mockReturnValue({
@@ -143,38 +150,46 @@ describe("handleFeishuMessage command authorization", () => {
       },
     });
     mockEnqueueSystemEvent.mockReset();
-    setFeishuRuntime({
-      system: {
-        enqueueSystemEvent: mockEnqueueSystemEvent,
-      },
-      channel: {
-        routing: {
-          resolveAgentRoute: mockResolveAgentRoute,
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        system: {
+          enqueueSystemEvent: mockEnqueueSystemEvent,
         },
-        reply: {
-          resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
-          formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-          finalizeInboundContext: mockFinalizeInboundContext,
-          dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-          withReplyDispatcher: mockWithReplyDispatcher,
-        },
-        commands: {
-          shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
-          resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+        channel: {
+          routing: {
+            resolveAgentRoute:
+              mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+          },
+          reply: {
+            resolveEnvelopeFormatOptions: vi.fn(
+              () => ({}),
+            ) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext:
+              mockFinalizeInboundContext as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+            withReplyDispatcher:
+              mockWithReplyDispatcher as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
+          },
+          commands: {
+            shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+            resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+          },
+          media: {
+            saveMediaBuffer:
+              mockSaveMediaBuffer as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
+          },
+          pairing: {
+            readAllowFromStore: mockReadAllowFromStore,
+            upsertPairingRequest: mockUpsertPairingRequest,
+            buildPairingReply: mockBuildPairingReply,
+          },
         },
         media: {
-          saveMediaBuffer: mockSaveMediaBuffer,
+          detectMime: vi.fn(async () => "application/octet-stream"),
         },
-        pairing: {
-          readAllowFromStore: mockReadAllowFromStore,
-          upsertPairingRequest: mockUpsertPairingRequest,
-          buildPairingReply: mockBuildPairingReply,
-        },
-      },
-      media: {
-        detectMime: vi.fn(async () => "application/octet-stream"),
-      },
-    } as unknown as PluginRuntime);
+      }),
+    );
   });
 
   it("does not enqueue inbound preview text as system events", async () => {
