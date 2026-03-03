@@ -447,8 +447,7 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
         (parsed.provider === "anthropic" ||
           (parsed.provider === "amazon-bedrock" &&
             parsed.model.toLowerCase().includes("anthropic.claude")) ||
-          (parsed.provider === "litellm" &&
-            parsed.model.toLowerCase().startsWith("claude-"))),
+          (parsed.provider === "litellm" && parsed.model.toLowerCase().startsWith("claude-"))),
       );
 
     for (const [key, entry] of Object.entries(nextModels)) {

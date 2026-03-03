@@ -1,5 +1,3 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { ModelApi } from "../config/types.models.js";
 import {
   buildHuggingfaceModelDefinition,
   HUGGINGFACE_BASE_URL,
@@ -31,6 +29,8 @@ import {
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { ModelApi } from "../config/types.models.js";
 import type { ModelApi } from "../config/types.models.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 import {

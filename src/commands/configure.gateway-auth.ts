@@ -1,8 +1,7 @@
+import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import type { AuthChoice } from "./onboard-types.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import {
@@ -14,6 +13,7 @@ import {
 } from "./model-picker.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
 import { randomToken } from "./onboard-helpers.js";
+import type { AuthChoice } from "./onboard-types.js";
 
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 
