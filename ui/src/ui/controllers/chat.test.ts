@@ -1,5 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { handleChatEvent, loadChatHistory, type ChatEventPayload, type ChatState } from "./chat.ts";
+
+// Mock timers for timeout tests
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -11,6 +21,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
+    chatStreamTimeoutId: null,
     chatThinkingLevel: null,
     client: null,
     connected: true,
@@ -491,6 +502,72 @@ describe("handleChatEvent", () => {
     // entry.text takes precedence — "real reply" is NOT silent, so the message is kept.
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toHaveLength(1);
+  });
+
+  it("clears timeout when final event arrives", () => {
+    const mockTimeoutId = setTimeout(() => {}, 10000);
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Reply",
+      chatStreamStartedAt: 100,
+      chatStreamTimeoutId: mockTimeoutId,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatStreamTimeoutId).toBe(null);
+    clearTimeout(mockTimeoutId); // Cleanup
+  });
+
+  it("clears timeout when aborted event arrives", () => {
+    const mockTimeoutId = setTimeout(() => {}, 10000);
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial",
+      chatStreamStartedAt: 100,
+      chatStreamTimeoutId: mockTimeoutId,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "aborted",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("aborted");
+    expect(state.chatStreamTimeoutId).toBe(null);
+    clearTimeout(mockTimeoutId); // Cleanup
+  });
+
+  it("clears timeout when error event arrives", () => {
+    const mockTimeoutId = setTimeout(() => {}, 10000);
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial",
+      chatStreamStartedAt: 100,
+      chatStreamTimeoutId: mockTimeoutId,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "Something went wrong",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatStreamTimeoutId).toBe(null);
+    expect(state.lastError).toBe("Something went wrong");
+    clearTimeout(mockTimeoutId); // Cleanup
   });
 });
 

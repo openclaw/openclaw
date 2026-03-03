@@ -5,6 +5,10 @@ import { generateUUID } from "../uuid.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
+// Timeout for detecting stuck chat streams (e.g., when WebSocket disconnects during streaming)
+// Set to 60 seconds to allow for legitimate long responses while catching network issues
+const CHAT_STREAM_TIMEOUT_MS = 60_000;
+
 function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
 }
@@ -39,6 +43,7 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatStreamTimeoutId: ReturnType<typeof setTimeout> | null;
   lastError: string | null;
 };
 
@@ -178,6 +183,38 @@ export async function sendChatMessage(
   state.chatStream = "";
   state.chatStreamStartedAt = now;
 
+  // Set up timeout guard to detect stuck streams (e.g., WebSocket disconnect during streaming)
+  if (state.chatStreamTimeoutId) {
+    clearTimeout(state.chatStreamTimeoutId);
+  }
+  state.chatStreamTimeoutId = setTimeout(() => {
+    // Only reset if this timeout is for the current run and stream hasn't ended
+    if (state.chatRunId === runId && state.chatStreamStartedAt !== null) {
+      console.warn("[chat] Stream timeout, resetting state");
+
+      // Save partial streamed text before resetting
+      const streamedText = state.chatStream?.trim();
+
+      state.chatRunId = null;
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+      state.chatStreamTimeoutId = null;
+      state.lastError = "Response timed out. Please try again.";
+
+      // Add partial streamed text as assistant message if available
+      if (streamedText) {
+        state.chatMessages = [
+          ...state.chatMessages,
+          {
+            role: "assistant",
+            content: [{ type: "text", text: streamedText }],
+            timestamp: Date.now(),
+          },
+        ];
+      }
+    }
+  }, CHAT_STREAM_TIMEOUT_MS);
+
   // Convert attachments to API format
   const apiAttachments = hasAttachments
     ? attachments
@@ -205,6 +242,11 @@ export async function sendChatMessage(
     });
     return runId;
   } catch (err) {
+    // Clear timeout on error since stream won't start
+    if (state.chatStreamTimeoutId) {
+      clearTimeout(state.chatStreamTimeoutId);
+      state.chatStreamTimeoutId = null;
+    }
     const error = String(err);
     state.chatRunId = null;
     state.chatStream = null;
@@ -241,6 +283,17 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   }
 }
 
+/**
+ * Clears the chat stream timeout if one is pending.
+ * Should be called when a stream ends (final/aborted/error) to prevent spurious timeouts.
+ */
+function clearChatStreamTimeout(state: ChatState) {
+  if (state.chatStreamTimeoutId) {
+    clearTimeout(state.chatStreamTimeoutId);
+    state.chatStreamTimeoutId = null;
+  }
+}
+
 export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
@@ -272,6 +325,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       }
     }
   } else if (payload.state === "final") {
+    clearChatStreamTimeout(state);
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
@@ -289,6 +343,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
+    clearChatStreamTimeout(state);
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
@@ -309,6 +364,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
+    clearChatStreamTimeout(state);
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;

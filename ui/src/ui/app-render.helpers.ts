@@ -33,6 +33,11 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
 }
 
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
+  // Clear any pending stream timeout
+  if ((state as unknown as OpenClawApp).chatStreamTimeoutId) {
+    clearTimeout((state as unknown as OpenClawApp).chatStreamTimeoutId!);
+    (state as unknown as OpenClawApp).chatStreamTimeoutId = null;
+  }
   state.sessionKey = sessionKey;
   state.chatMessage = "";
   state.chatStream = null;
@@ -180,6 +185,11 @@ export function renderChatControls(state: AppViewState) {
           ?disabled=${!state.connected}
           @change=${(e: Event) => {
             const next = (e.target as HTMLSelectElement).value;
+            // Clear any pending stream timeout
+            if ((state as unknown as OpenClawApp).chatStreamTimeoutId) {
+              clearTimeout((state as unknown as OpenClawApp).chatStreamTimeoutId!);
+              (state as unknown as OpenClawApp).chatStreamTimeoutId = null;
+            }
             state.sessionKey = next;
             state.chatMessage = "";
             state.chatStream = null;
