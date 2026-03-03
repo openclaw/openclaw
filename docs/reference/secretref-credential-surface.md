@@ -20,7 +20,7 @@ Scope intent:
 
 ### `openclaw.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
 
-[//]: # "secretref-supported-list-start"
+[//]: # (secretref-supported-list-start)
 
 - `models.providers.*.apiKey`
 - `skills.entries.*.apiKey`
@@ -105,7 +105,7 @@ Notes:
 
 Out-of-scope credentials include:
 
-[//]: # "secretref-unsupported-list-start"
+[//]: # (secretref-unsupported-list-start)
 
 - `gateway.auth.token`
 - `commands.ownerDisplaySecret`
