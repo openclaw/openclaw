@@ -61,6 +61,15 @@ export function normalizeMessageActionInput(params: {
     }
   }
 
+  if ((action === "react" || action === "reactions") && !normalizedArgs.messageId) {
+    const inferredMessageId =
+      toolContext?.currentMessageTs?.trim() ??
+      (toolContext?.currentMessageId != null ? String(toolContext.currentMessageId).trim() : "");
+    if (inferredMessageId) {
+      normalizedArgs.messageId = inferredMessageId;
+    }
+  }
+
   applyTargetToParams({ action, args: normalizedArgs });
   if (actionRequiresTarget(action) && !actionHasTarget(action, normalizedArgs)) {
     throw new Error(`Action ${action} requires a target.`);
