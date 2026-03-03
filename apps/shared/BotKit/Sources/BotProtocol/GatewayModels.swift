@@ -11,6 +11,7 @@ public enum ErrorCode: String, Codable, Sendable {
     case invalidRequest = "INVALID_REQUEST"
     case unavailable = "UNAVAILABLE"
     case billingError = "BILLING_ERROR"
+    case rateLimited = "RATE_LIMITED"
 }
 
 public struct ConnectParams: Codable, Sendable {
