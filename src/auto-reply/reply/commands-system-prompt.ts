@@ -28,11 +28,17 @@ export async function resolveCommandsSystemPromptBundle(
   params: HandleCommandsParams,
 ): Promise<CommandsSystemPromptBundle> {
   const workspaceDir = params.workspaceDir;
+  const topicId =
+    params.command.channel === "telegram"
+      ? params.sessionEntry?.lastThreadId
+      : undefined;
   const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: params.cfg,
     sessionKey: params.sessionKey,
     sessionId: params.sessionEntry?.sessionId,
+    agentId: params.agentId,
+    topicId,
   });
   const skillsSnapshot = (() => {
     try {

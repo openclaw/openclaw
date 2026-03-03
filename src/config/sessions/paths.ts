@@ -15,6 +15,16 @@ function resolveAgentSessionsDir(
   return path.join(root, "agents", id, "sessions");
 }
 
+export function resolveAgentTopicsDir(
+  agentId?: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
+): string {
+  const root = resolveStateDir(env, homedir);
+  const id = normalizeAgentId(agentId ?? DEFAULT_AGENT_ID);
+  return path.join(root, "agents", id, "topics");
+}
+
 export function resolveSessionTranscriptsDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),

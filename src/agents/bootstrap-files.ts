@@ -1,4 +1,6 @@
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentTopicsDir } from "../config/sessions/paths.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -61,6 +63,26 @@ function applyContextModeFilter(params: {
   return [];
 }
 
+async function loadTopicBootstrapFiles(params: {
+  agentId?: string;
+  topicId?: string | number;
+}): Promise<WorkspaceBootstrapFile[]> {
+  const topicId = params.topicId;
+  if (topicId === undefined || topicId === null) {
+    return [];
+  }
+
+  const dirName =
+    typeof topicId === "string" ? topicId.trim() : Number.isFinite(topicId) ? String(topicId) : "";
+  if (!dirName || dirName.includes("/") || dirName.includes("\\") || dirName.includes("..")) {
+    return [];
+  }
+
+  const topicsRootDir = resolveAgentTopicsDir(params.agentId);
+  const topicDir = path.join(topicsRootDir, dirName);
+  return await loadWorkspaceBootstrapFiles(topicDir);
+}
+
 export async function resolveBootstrapFilesForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -70,6 +92,7 @@ export async function resolveBootstrapFilesForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  topicId?: string | number;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
   const rawFiles = params.sessionKey
@@ -78,8 +101,26 @@ export async function resolveBootstrapFilesForRun(params: {
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  const topicFiles = await loadTopicBootstrapFiles({
+    agentId: params.agentId,
+    topicId: params.topicId,
+  });
+
+  const mergedFiles = (() => {
+    if (!topicFiles.length) {
+      return rawFiles;
+    }
+    const overrides = topicFiles.filter((file) => !file.missing);
+    if (!overrides.length) {
+      return rawFiles;
+    }
+    const overriddenNames = new Set(overrides.map((file) => file.name));
+    const baseFiles = rawFiles.filter((file) => !overriddenNames.has(file.name));
+    return [...baseFiles, ...overrides];
+  })();
+
   const bootstrapFiles = applyContextModeFilter({
-    files: filterBootstrapFilesForSession(rawFiles, sessionKey),
+    files: filterBootstrapFilesForSession(mergedFiles, sessionKey),
     contextMode: params.contextMode,
     runKind: params.runKind,
   });
@@ -91,6 +132,7 @@ export async function resolveBootstrapFilesForRun(params: {
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.agentId,
+    topicId: params.topicId,
   });
   return sanitizeBootstrapFiles(updated, params.warn);
 }
@@ -104,6 +146,7 @@ export async function resolveBootstrapContextForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  topicId?: string | number;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -6,6 +7,7 @@ import {
   registerInternalHook,
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
+import { resolveAgentTopicsDir } from "../config/sessions/paths.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -80,6 +82,35 @@ describe("resolveBootstrapFilesForRun", () => {
     ).toBe(true);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
+  });
+
+  it("merges topic-scoped bootstrap files with workspace bootstrap, with topic overrides", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "global-agents", "utf8");
+
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-topic-bootstrap-"));
+    process.env.OPENCLAW_STATE_DIR = stateRoot;
+
+    try {
+      const topicsRoot = resolveAgentTopicsDir("main");
+      const topicDir = path.join(topicsRoot, "7");
+      await fs.mkdir(topicDir, { recursive: true });
+      await fs.writeFile(path.join(topicDir, "AGENTS.md"), "topic-agents", "utf8");
+
+      const files = await resolveBootstrapFilesForRun({
+        workspaceDir,
+        agentId: "main",
+        topicId: 7,
+      });
+
+      const agents = files.find((file) => file.name === "AGENTS.md");
+      expect(agents?.content).toBe("topic-agents");
+      expect(agents?.path).toBe(path.join(topicDir, "AGENTS.md"));
+    } finally {
+      process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
   });
 });
 

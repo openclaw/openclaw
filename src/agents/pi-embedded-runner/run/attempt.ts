@@ -593,12 +593,19 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
+    const topicId =
+      params.messageProvider === "telegram" && params.messageThreadId != null
+        ? params.messageThreadId
+        : undefined;
     const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
       await resolveBootstrapContextForRun({
         workspaceDir: effectiveWorkspace,
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
+        agentId: params.agentId,
+        // Thread-scoped bootstrap (e.g., Telegram forum topics and DM threads)
+        topicId,
         warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,

@@ -19,6 +19,8 @@ export type AgentBootstrapHookContext = {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  /** Optional topic identifier (e.g., Telegram messageThreadId) for topic-scoped bootstrap */
+  topicId?: string | number;
 };
 
 export type AgentBootstrapHookEvent = InternalHookEvent & {
