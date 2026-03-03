@@ -78,6 +78,38 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onPartialReply).toHaveBeenCalled();
     expect(onPartialReply.mock.calls[0][0].text).toBe("Hello world");
   });
+  it("continues streaming after non-text snapshot updates in enforce-final mode", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "<final>Hello" }],
+      },
+      assistantMessageEvent: { type: "start" },
+    });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: " world</final>" },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toMatchObject({ text: "Hello", delta: "Hello" });
+    expect(payloads[1]).toMatchObject({ text: "Hello world", delta: " world" });
+  });
   it("does not require <final> when enforcement is off", () => {
     const { session, emit } = createStubSessionHarness();
 

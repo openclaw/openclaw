@@ -19,7 +19,6 @@ import {
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
-  stripThinkingTagsFromText,
 } from "./pi-embedded-utils.js";
 
 const stripTrailingDirective = (text: string): string => {
@@ -106,8 +105,7 @@ function extractAssistantRawSnapshotText(msg: AgentMessage): string {
   const content = (msg as { content?: unknown }).content;
   return (
     extractTextFromChatContent(content, {
-      sanitizeText: (text) =>
-        stripThinkingTagsFromText(stripDowngradedToolCallText(stripMinimaxToolCallXml(text))),
+      sanitizeText: (text) => stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
       joinWith: "\n",
       normalizeText: (text) => text,
     }) ?? ""
@@ -224,7 +222,10 @@ export function handleMessageUpdate(
 
       if (shouldEmit) {
         if (cleanedText) {
-          syncSnapshotIntoTextBuffers(ctx, snapshotRaw);
+          // In strict final-tag mode, keep <final> markers in buffers so later
+          // text_delta updates continue parsing inside the same final block.
+          const snapshotBuffer = ctx.params.enforceFinalTag ? rawAssistantText : snapshotRaw;
+          syncSnapshotIntoTextBuffers(ctx, snapshotBuffer);
         }
         ctx.state.lastStreamedAssistant = snapshotRaw;
         ctx.state.lastStreamedAssistantCleaned = cleanedText;
