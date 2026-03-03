@@ -17,7 +17,7 @@ function generateCodeVerifier(): string {
   return crypto.randomBytes(32).toString("base64url");
 }
 
-async function generateCodeChallenge(verifier: string): Promise<string> {
+function generateCodeChallenge(verifier: string): string {
   const digest = crypto.createHash("sha256").update(verifier).digest();
   return digest.toString("base64url");
 }
@@ -47,7 +47,7 @@ async function pollFirecrawlAuthStatus(
     return null;
   }
   const data = (await res.json()) as { apiKey?: string; teamName?: string };
-  if (data.apiKey) {
+  if (data.apiKey && !validateFirecrawlKey(data.apiKey)) {
     return { apiKey: data.apiKey, teamName: data.teamName };
   }
   return null;
@@ -218,7 +218,7 @@ async function handleBrowserAuth(
   try {
     const sessionId = generateSessionId();
     const codeVerifier = generateCodeVerifier();
-    const codeChallenge = await generateCodeChallenge(codeVerifier);
+    const codeChallenge = generateCodeChallenge(codeVerifier);
 
     const authUrl = `${FIRECRAWL_AUTH_URL_BASE}?code_challenge=${codeChallenge}&source=openclaw#session_id=${sessionId}`;
 
