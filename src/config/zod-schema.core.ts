@@ -177,7 +177,7 @@ export const SecretsConfigSchema = z
       .strict()
       .optional(),
   })
-  .strict()
+  .catchall(z.string())
   .optional();
 
 export const ModelApiSchema = z.enum(MODEL_APIS);
