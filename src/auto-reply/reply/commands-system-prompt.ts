@@ -122,6 +122,7 @@ export async function resolveCommandsSystemPromptBundle(
     userTimezone,
     userTime,
     userTimeFormat,
+    includeTime: params.cfg?.agents?.defaults?.systemPromptTime === "on",
     contextFiles: injectedFiles,
     skillsPrompt,
     heartbeatPrompt: undefined,

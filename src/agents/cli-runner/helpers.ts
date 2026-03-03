@@ -90,6 +90,7 @@ export function buildSystemPrompt(params: {
     userTimezone,
     userTime,
     userTimeFormat,
+    includeTime: params.config?.agents?.defaults?.systemPromptTime === "on",
     contextFiles: params.contextFiles,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,

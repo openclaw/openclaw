@@ -510,6 +510,7 @@ export async function compactEmbeddedPiSessionDirect(
       userTimezone,
       userTime,
       userTimeFormat,
+      includeTime: params.config?.agents?.defaults?.systemPromptTime === "on",
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
     });

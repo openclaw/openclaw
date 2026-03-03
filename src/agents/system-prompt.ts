@@ -93,11 +93,19 @@ function buildOwnerIdentityLine(
   return `Authorized senders: ${displayOwnerNumbers.join(", ")}. These senders are allowlisted; do not assume they are the owner.`;
 }
 
-function buildTimeSection(params: { userTimezone?: string }) {
+function buildTimeSection(params: {
+  userTimezone?: string;
+  userTime?: string;
+  includeTime?: boolean;
+}) {
   if (!params.userTimezone) {
     return [];
   }
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  const timeLine =
+    params.includeTime && params.userTime
+      ? `${params.userTime} (${params.userTimezone})`
+      : `Time zone: ${params.userTimezone}`;
+  return ["## Current Date & Time", timeLine, ""];
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
@@ -200,6 +208,8 @@ export function buildAgentSystemPrompt(params: {
   userTimezone?: string;
   userTime?: string;
   userTimeFormat?: ResolvedTimeFormat;
+  /** When true, include the formatted current time in the system prompt (opt-in). */
+  includeTime?: boolean;
   contextFiles?: EmbeddedContextFile[];
   skillsPrompt?: string;
   heartbeatPrompt?: string;
@@ -499,7 +509,7 @@ export function buildAgentSystemPrompt(params: {
       ? params.modelAliasLines.join("\n")
       : "",
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-    userTimezone
+    userTimezone && !params.includeTime
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
     "## Workspace",
@@ -559,6 +569,8 @@ export function buildAgentSystemPrompt(params: {
     ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildTimeSection({
       userTimezone,
+      userTime: params.userTime,
+      includeTime: params.includeTime,
     }),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",

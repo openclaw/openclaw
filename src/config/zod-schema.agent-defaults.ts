@@ -42,6 +42,7 @@ export const AgentDefaultsSchema = z
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     userTimezone: z.string().optional(),
     timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
+    systemPromptTime: z.union([z.literal("on"), z.literal("off")]).optional(),
     envelopeTimezone: z.string().optional(),
     envelopeTimestamp: z.union([z.literal("on"), z.literal("off")]).optional(),
     envelopeElapsed: z.union([z.literal("on"), z.literal("off")]).optional(),

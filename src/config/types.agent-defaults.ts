@@ -145,6 +145,19 @@ export type AgentDefaultsConfig = {
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
   timeFormat?: "auto" | "12" | "24";
   /**
+   * Include the current date/time in the system prompt ("on" | "off", default: "off").
+   *
+   * When "on", the "## Current Date & Time" section includes a human-readable
+   * timestamp (e.g. "Wednesday, February 26th, 2026 — 14:30") alongside the
+   * timezone.  This gives agents reliable time awareness without needing to
+   * call `session_status`, at the cost of reduced prompt-cache hit rates
+   * (the system prompt changes every minute).
+   *
+   * When "off" (default), only the timezone is shown and agents are directed
+   * to use `session_status` or message envelope timestamps for the current time.
+   */
+  systemPromptTime?: "on" | "off";
+  /**
    * Envelope timestamp timezone: "utc" (default), "local", "user", or an IANA timezone string.
    */
   envelopeTimezone?: string;
