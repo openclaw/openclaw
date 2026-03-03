@@ -210,7 +210,8 @@ export function handleMessageUpdate(
             mediaUrls: hasMedia ? mediaUrls : undefined,
           },
         });
-        ctx.state.emittedAssistantUpdate = true;
+        // Keep message_end fallback enabled for snapshot-only updates so
+        // providers can still emit a final assistant payload at the end.
         if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
           void ctx.params.onPartialReply({
             text: cleanedText,
