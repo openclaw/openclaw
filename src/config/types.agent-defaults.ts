@@ -288,6 +288,8 @@ export type AgentCompactionConfig = {
   mode?: AgentCompactionMode;
   /** Thinking level for compaction summarization. Defaults to "off" regardless of session model. */
   thinking?: ThinkLevel;
+  /** Fallback model on quota/rate-limit errors: "off" (default), "fallback" (use model.fallbacks chain), or "provider/model". */
+  fallbackModel?: string;
   /** Pi reserve tokens target before floor enforcement. */
   reserveTokens?: number;
   /** Pi keepRecentTokens budget used for cut-point selection. */

@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/Compaction: add `agents.defaults.compaction.fallbackModel` to retry compaction with a different model on quota or rate-limit errors. Set to `"fallback"` to use the `agents.defaults.model.fallbacks` chain, or an explicit `"provider/model"` string (e.g. `"anthropic/claude-haiku-4-5"`). Defaults to `"off"` (no fallback). Auth errors and timeouts use their own retry mechanisms and are not affected.
 - Agents/Compaction: compaction now runs with `thinking: off` by default, regardless of the session model's thinking level — preventing timeout races on channels with strict reply windows (Discord 30s, Telegram 240s). Add `agents.defaults.compaction.thinking` to opt in (e.g. `"low"`). When a compaction run times out with thinking enabled, it retries once without thinking automatically.
 - CLI/Config validation: add `openclaw config validate` (with `--json`) to validate config files before gateway startup, and include detailed invalid-key paths in startup invalid-config errors. (#31220) thanks @Sid-Qin.
 - Sessions/Attachments: add inline file attachment support for `sessions_spawn` (subagent runtime only) with base64/utf8 encoding, transcript content redaction, lifecycle cleanup, and configurable limits via `tools.sessions_spawn.attachments`. (#16761) Thanks @napetrov.
