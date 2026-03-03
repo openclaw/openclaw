@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   applyOnboardingLocalWorkspaceConfig,
   ONBOARDING_DEFAULT_DM_SCOPE,
-  ONBOARDING_DEFAULT_TOOLS_PROFILE,
 } from "./onboard-config.js";
 
 describe("applyOnboardingLocalWorkspaceConfig", () => {
@@ -14,7 +13,8 @@ describe("applyOnboardingLocalWorkspaceConfig", () => {
     expect(result.session?.dmScope).toBe(ONBOARDING_DEFAULT_DM_SCOPE);
     expect(result.gateway?.mode).toBe("local");
     expect(result.agents?.defaults?.workspace).toBe("/tmp/workspace");
-    expect(result.tools?.profile).toBe(ONBOARDING_DEFAULT_TOOLS_PROFILE);
+    // tools.profile should not be set by onboarding - use system default
+    expect(result.tools?.profile).toBeUndefined();
   });
 
   it("preserves existing dmScope when already configured", () => {
