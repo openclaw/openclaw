@@ -1390,8 +1390,24 @@ export async function runEmbeddedAttempt(
         });
 
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
+        // Merge the orphaned message content into the current prompt to preserve context (#33549).
         const leafEntry = sessionManager.getLeafEntry();
         if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
+          const orphanedContent =
+            typeof leafEntry.message.content === "string"
+              ? leafEntry.message.content
+              : Array.isArray(leafEntry.message.content)
+                ? leafEntry.message.content
+                    .filter(
+                      (block: { type?: string; text?: string }) =>
+                        block.type === "text" && typeof block.text === "string",
+                    )
+                    .map((block: { text: string }) => block.text)
+                    .join("\n")
+                : "";
+          if (orphanedContent) {
+            effectivePrompt = `${orphanedContent}\n\n${effectivePrompt}`;
+          }
           if (leafEntry.parentId) {
             sessionManager.branch(leafEntry.parentId);
           } else {
@@ -1400,7 +1416,7 @@ export async function runEmbeddedAttempt(
           const sessionContext = sessionManager.buildSessionContext();
           activeSession.agent.replaceMessages(sessionContext.messages);
           log.warn(
-            `Removed orphaned user message to prevent consecutive user turns. ` +
+            `Merged orphaned user message into current prompt to prevent consecutive user turns. ` +
               `runId=${params.runId} sessionId=${params.sessionId}`,
           );
         }
