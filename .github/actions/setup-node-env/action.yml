@@ -15,6 +15,10 @@ inputs:
     description: Whether to install Bun alongside Node.
     required: false
     default: "true"
+  use-sticky-disk:
+    description: Use Blacksmith sticky disks for pnpm store caching.
+    required: false
+    default: "false"
   frozen-lockfile:
     description: Whether to use --frozen-lockfile for install.
     required: false
@@ -47,6 +51,7 @@ runs:
       with:
         pnpm-version: ${{ inputs.pnpm-version }}
         cache-key-suffix: "node22"
+        use-sticky-disk: ${{ inputs.use-sticky-disk }}
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'
