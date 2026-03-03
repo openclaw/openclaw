@@ -2,6 +2,7 @@ import type { Client } from "@buape/carbon";
 import { ChannelType, MessageType } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listNativeCommandSpecsForConfig } from "../auto-reply/commands-registry.js";
 import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import {
   dispatchMock,
@@ -345,6 +346,37 @@ describe("discord tool result dispatch", () => {
       expect(reply.mock.calls[0]?.[0]?.content).toContain("final");
     },
   );
+
+  it("registers /acp action with autocomplete instead of static choices", () => {
+    const cfg = {
+      commands: { native: true },
+      channels: {
+        discord: { dm: { enabled: true, policy: "open" } },
+      },
+      agents: { defaults: { workspace: "/tmp/openclaw" } },
+      session: { store: "/tmp/openclaw-sessions.json" },
+    } as ReturnType<typeof import("../config/config.js").loadConfig>;
+
+    const acpSpec = listNativeCommandSpecsForConfig(cfg, { provider: "discord" }).find(
+      (spec) => spec.name === "acp",
+    );
+    expect(acpSpec).toBeTruthy();
+
+    const command = createDiscordNativeCommand({
+      command: acpSpec!,
+      cfg,
+      discordConfig: cfg.channels!.discord!,
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+
+    const actionOption = (command.options ?? []).find((option) => option.name === "action");
+    expect(actionOption).toBeTruthy();
+    expect(actionOption?.autocomplete).toBeTypeOf("function");
+    expect(actionOption?.choices).toBeUndefined();
+  });
 
   it("accepts guild reply-to-bot messages as implicit mentions", async () => {
     const cfg = createMentionRequiredGuildConfig();

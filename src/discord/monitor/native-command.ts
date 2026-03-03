@@ -118,7 +118,9 @@ function buildDiscordCommandOptions(params: {
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
     const shouldAutocomplete =
       resolvedChoices.length > 0 &&
-      (typeof arg.choices === "function" || resolvedChoices.length > 25);
+      (typeof arg.choices === "function" ||
+        resolvedChoices.length > 25 ||
+        (command.key === "acp" && arg.name === "action"));
     const autocomplete = shouldAutocomplete
       ? async (interaction: AutocompleteInteraction) => {
           const focused = interaction.options.getFocused();
