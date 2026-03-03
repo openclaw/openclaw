@@ -873,6 +873,10 @@ async function agentCommandInternal(
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
       if (!lifecycleEnded) {
+        const stopReason = result.meta.stopReason;
+        if (stopReason && stopReason !== "end_turn") {
+          console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
+        }
         emitAgentEvent({
           runId,
           stream: "lifecycle",
@@ -881,6 +885,7 @@ async function agentCommandInternal(
             startedAt,
             endedAt: Date.now(),
             aborted: result.meta.aborted ?? false,
+            stopReason,
           },
         });
       }
