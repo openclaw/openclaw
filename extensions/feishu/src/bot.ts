@@ -13,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { tryRecordMessagePersistent } from "./dedup.js";
+import { tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
@@ -43,6 +43,13 @@ type PermissionError = {
   message: string;
   grantUrl?: string;
 };
+
+const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
+
+function shouldSuppressPermissionErrorNotice(permissionError: PermissionError): boolean {
+  const message = permissionError.message.toLowerCase();
+  return IGNORED_PERMISSION_SCOPE_TOKENS.some((token) => message.includes(token));
+}
 
 function extractPermissionError(err: unknown): PermissionError | null {
   if (!err || typeof err !== "object") return null;
@@ -140,6 +147,10 @@ async function resolveFeishuSenderName(params: {
     // Check if this is a permission error
     const permErr = extractPermissionError(err);
     if (permErr) {
+      if (shouldSuppressPermissionErrorNotice(permErr)) {
+        log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
+        return {};
+      }
       log(`feishu: permission error resolving sender name: code=${permErr.code}`);
       return { permissionError: permErr };
     }
@@ -164,10 +175,12 @@ export type FeishuMessageEvent = {
     message_id: string;
     root_id?: string;
     parent_id?: string;
+    thread_id?: string;
     chat_id: string;
-    chat_type: "p2p" | "group";
+    chat_type: "p2p" | "group" | "private";
     message_type: string;
     content: string;
+    create_time?: string;
     mentions?: Array<{
       key: string;
       id: {
@@ -191,6 +204,94 @@ export type FeishuBotAddedEvent = {
   external: boolean;
   operator_tenant_key?: string;
 };
+
+type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
+
+type ResolvedFeishuGroupSession = {
+  peerId: string;
+  parentPeer: { kind: "group"; id: string } | null;
+  groupSessionScope: GroupSessionScope;
+  replyInThread: boolean;
+  threadReply: boolean;
+};
+
+function resolveFeishuGroupSession(params: {
+  chatId: string;
+  senderOpenId: string;
+  messageId: string;
+  rootId?: string;
+  threadId?: string;
+  groupConfig?: {
+    groupSessionScope?: GroupSessionScope;
+    topicSessionMode?: "enabled" | "disabled";
+    replyInThread?: "enabled" | "disabled";
+  };
+  feishuCfg?: {
+    groupSessionScope?: GroupSessionScope;
+    topicSessionMode?: "enabled" | "disabled";
+    replyInThread?: "enabled" | "disabled";
+  };
+}): ResolvedFeishuGroupSession {
+  const { chatId, senderOpenId, messageId, rootId, threadId, groupConfig, feishuCfg } = params;
+
+  const normalizedThreadId = threadId?.trim();
+  const normalizedRootId = rootId?.trim();
+  const threadReply = Boolean(normalizedThreadId || normalizedRootId);
+  const replyInThread =
+    (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
+    threadReply;
+
+  const legacyTopicSessionMode =
+    groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
+  const groupSessionScope: GroupSessionScope =
+    groupConfig?.groupSessionScope ??
+    feishuCfg?.groupSessionScope ??
+    (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
+
+  // Keep topic session keys stable across the "first turn creates thread" flow:
+  // first turn may only have message_id, while the next turn carries root_id/thread_id.
+  // Prefer root_id first so both turns stay on the same peer key.
+  const topicScope =
+    groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender"
+      ? (normalizedRootId ?? normalizedThreadId ?? (replyInThread ? messageId : null))
+      : null;
+
+  let peerId = chatId;
+  switch (groupSessionScope) {
+    case "group_sender":
+      peerId = `${chatId}:sender:${senderOpenId}`;
+      break;
+    case "group_topic":
+      peerId = topicScope ? `${chatId}:topic:${topicScope}` : chatId;
+      break;
+    case "group_topic_sender":
+      peerId = topicScope
+        ? `${chatId}:topic:${topicScope}:sender:${senderOpenId}`
+        : `${chatId}:sender:${senderOpenId}`;
+      break;
+    case "group":
+    default:
+      peerId = chatId;
+      break;
+  }
+
+  const parentPeer =
+    topicScope &&
+    (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender")
+      ? {
+          kind: "group" as const,
+          id: chatId,
+        }
+      : null;
+
+  return {
+    peerId,
+    parentPeer,
+    groupSessionScope,
+    replyInThread,
+    threadReply,
+  };
+}
 
 function parseMessageContent(content: string, messageType: string): string {
   if (messageType === "post") {
@@ -623,6 +724,7 @@ export function parseFeishuMessageEvent(
     mentionedBot,
     rootId: event.message.root_id || undefined,
     parentId: event.message.parent_id || undefined,
+    threadId: event.message.thread_id || undefined,
     content,
     contentType: event.message.message_type,
   };
@@ -692,8 +794,15 @@ export async function handleFeishuMessage(params: {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
-  // Dedup check: skip if this message was already processed (memory + disk).
+  // Dedup: synchronous memory guard prevents concurrent duplicate dispatch
+  // before the async persistent check completes.
   const messageId = event.message.message_id;
+  const memoryDedupeKey = `${account.accountId}:${messageId}`;
+  if (!tryRecordMessage(memoryDedupeKey)) {
+    log(`feishu: skipping duplicate message ${messageId} (memory dedup)`);
+    return;
+  }
+  // Persistent dedup survives restarts and reconnects.
   if (!(await tryRecordMessagePersistent(messageId, account.accountId, log))) {
     log(`feishu: skipping duplicate message ${messageId}`);
     return;
@@ -701,6 +810,7 @@ export async function handleFeishuMessage(params: {
 
   let ctx = parseFeishuMessageEvent(event, botOpenId);
   const isGroup = ctx.chatType === "group";
+  const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
 
   // Handle merge_forward messages: fetch full message via API then expand sub-messages
@@ -776,6 +886,18 @@ export async function handleFeishuMessage(params: {
   const groupConfig = isGroup
     ? resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId })
     : undefined;
+  const groupSession = isGroup
+    ? resolveFeishuGroupSession({
+        chatId: ctx.chatId,
+        senderOpenId: ctx.senderOpenId,
+        messageId: ctx.messageId,
+        rootId: ctx.rootId,
+        threadId: ctx.threadId,
+        groupConfig,
+        feishuCfg,
+      })
+    : null;
+  const groupHistoryKey = isGroup ? (groupSession?.peerId ?? ctx.chatId) : undefined;
   const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
@@ -844,10 +966,10 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot, recording to history`,
       );
-      if (chatHistories) {
+      if (chatHistories && groupHistoryKey) {
         recordPendingHistoryEntryIfEnabled({
           historyMap: chatHistories,
-          historyKey: ctx.chatId,
+          historyKey: groupHistoryKey,
           limit: historyLimit,
           entry: {
             sender: ctx.senderOpenId,
@@ -887,7 +1009,7 @@ export async function handleFeishuMessage(params: {
       senderName: ctx.senderName,
     }).allowed;
 
-    if (!isGroup && dmPolicy !== "open" && !dmAllowed) {
+    if (isDirect && dmPolicy !== "open" && !dmAllowed) {
       if (dmPolicy === "pairing") {
         const { code, created } = await pairing.upsertPairingRequest({
           id: ctx.senderOpenId,
@@ -898,7 +1020,7 @@ export async function handleFeishuMessage(params: {
           try {
             await sendMessageFeishu({
               cfg,
-              to: `user:${ctx.senderOpenId}`,
+              to: `chat:${ctx.chatId}`,
               text: core.channel.pairing.buildPairingReply({
                 channel: "feishu",
                 idLine: `Your Feishu user id: ${ctx.senderOpenId}`,
@@ -942,50 +1064,14 @@ export async function handleFeishuMessage(params: {
     // Using a group-scoped From causes the agent to treat different users as the same person.
     const feishuFrom = `feishu:${ctx.senderOpenId}`;
     const feishuTo = isGroup ? `chat:${ctx.chatId}` : `user:${ctx.senderOpenId}`;
+    const peerId = isGroup ? (groupSession?.peerId ?? ctx.chatId) : ctx.senderOpenId;
+    const parentPeer = isGroup ? (groupSession?.parentPeer ?? null) : null;
+    const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : false;
 
-    // Resolve peer ID for session routing.
-    // Default is one session per group chat; this can be customized with groupSessionScope.
-    let peerId = isGroup ? ctx.chatId : ctx.senderOpenId;
-    let groupSessionScope: "group" | "group_sender" | "group_topic" | "group_topic_sender" =
-      "group";
-    let topicRootForSession: string | null = null;
-    const replyInThread =
-      isGroup &&
-      (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
-
-    if (isGroup) {
-      const legacyTopicSessionMode =
-        groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
-      groupSessionScope =
-        groupConfig?.groupSessionScope ??
-        feishuCfg?.groupSessionScope ??
-        (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
-
-      // When topic-scoped sessions are enabled and replyInThread is on, the first
-      // bot reply creates the thread rooted at the current message ID.
-      if (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender") {
-        topicRootForSession = ctx.rootId ?? (replyInThread ? ctx.messageId : null);
-      }
-
-      switch (groupSessionScope) {
-        case "group_sender":
-          peerId = `${ctx.chatId}:sender:${ctx.senderOpenId}`;
-          break;
-        case "group_topic":
-          peerId = topicRootForSession ? `${ctx.chatId}:topic:${topicRootForSession}` : ctx.chatId;
-          break;
-        case "group_topic_sender":
-          peerId = topicRootForSession
-            ? `${ctx.chatId}:topic:${topicRootForSession}:sender:${ctx.senderOpenId}`
-            : `${ctx.chatId}:sender:${ctx.senderOpenId}`;
-          break;
-        case "group":
-        default:
-          peerId = ctx.chatId;
-          break;
-      }
-
-      log(`feishu[${account.accountId}]: group session scope=${groupSessionScope}, peer=${peerId}`);
+    if (isGroup && groupSession) {
+      log(
+        `feishu[${account.accountId}]: group session scope=${groupSession.groupSessionScope}, peer=${peerId}`,
+      );
     }
 
     let route = core.channel.routing.resolveAgentRoute({
@@ -996,16 +1082,7 @@ export async function handleFeishuMessage(params: {
         kind: isGroup ? "group" : "direct",
         id: peerId,
       },
-      // Add parentPeer for binding inheritance in topic-scoped modes.
-      parentPeer:
-        isGroup &&
-        topicRootForSession &&
-        (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender")
-          ? {
-              kind: "group",
-              id: ctx.chatId,
-            }
-          : null,
+      parentPeer,
     });
 
     // Dynamic agent creation for DM users
@@ -1043,10 +1120,10 @@ export async function handleFeishuMessage(params: {
       ? `Feishu[${account.accountId}] message in group ${ctx.chatId}`
       : `Feishu[${account.accountId}] DM from ${ctx.senderOpenId}`;
 
-    core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
-      sessionKey: route.sessionKey,
-      contextKey: `feishu:message:${ctx.chatId}:${ctx.messageId}`,
-    });
+    // Do not enqueue inbound user previews as system events.
+    // System events are prepended to future prompts and can be misread as
+    // authoritative transcript turns.
+    log(`feishu[${account.accountId}]: ${inboundLabel}: ${preview}`);
 
     // Resolve media from message
     const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024; // 30MB default
@@ -1102,7 +1179,7 @@ export async function handleFeishuMessage(params: {
     });
 
     let combinedBody = body;
-    const historyKey = isGroup ? ctx.chatId : undefined;
+    const historyKey = groupHistoryKey;
 
     if (isGroup && historyKey && chatHistories) {
       combinedBody = buildPendingHistoryContextFromMap({
@@ -1161,17 +1238,24 @@ export async function handleFeishuMessage(params: {
       ...mediaPayload,
     });
 
+    // Parse message create_time (Feishu uses millisecond epoch string).
+    const messageCreateTimeMs = event.message.create_time
+      ? parseInt(event.message.create_time, 10)
+      : undefined;
+    const replyTargetMessageId = ctx.rootId ?? ctx.messageId;
     const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
       cfg,
       agentId: route.agentId,
       runtime: runtime as RuntimeEnv,
       chatId: ctx.chatId,
-      replyToMessageId: ctx.messageId,
+      replyToMessageId: replyTargetMessageId,
       skipReplyToInMessages: !isGroup,
       replyInThread,
       rootId: ctx.rootId,
+      threadReply: isGroup ? (groupSession?.threadReply ?? false) : false,
       mentionTargets: ctx.mentionTargets,
       accountId: account.accountId,
+      messageCreateTimeMs,
     });
 
     log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);

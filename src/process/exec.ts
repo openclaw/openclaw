@@ -9,6 +9,35 @@ import { resolveCommandStdio } from "./spawn-utils.js";
 
 const execFileAsync = promisify(execFile);
 
+const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
+
+function isWindowsBatchCommand(resolvedCommand: string): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  const ext = path.extname(resolvedCommand).toLowerCase();
+  return ext === ".cmd" || ext === ".bat";
+}
+
+function escapeForCmdExe(arg: string): string {
+  // Reject cmd metacharacters to avoid injection when we must pass a single command line.
+  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
+    throw new Error(
+      `Unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}. ` +
+        "Pass an explicit shell-wrapper argv at the call site instead.",
+    );
+  }
+  // Quote when needed; double inner quotes for cmd parsing.
+  if (!arg.includes(" ") && !arg.includes('"')) {
+    return arg;
+  }
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string {
+  return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
+}
+
 /**
  * On Windows, Node 18.20.2+ (CVE-2024-27980) rejects spawning .cmd/.bat directly
  * without shell, causing EINVAL. Resolve npm/npx to node + cli script so we
@@ -100,7 +129,14 @@ export async function runExec(
       execCommand = resolveCommand(command);
       execArgs = args;
     }
-    const { stdout, stderr } = await execFileAsync(execCommand, execArgs, options);
+    const useCmdWrapper = isWindowsBatchCommand(execCommand);
+    const { stdout, stderr } = useCmdWrapper
+      ? await execFileAsync(
+          process.env.ComSpec ?? "cmd.exe",
+          ["/d", "/s", "/c", buildCmdExeCommandLine(execCommand, execArgs)],
+          { ...options, windowsVerbatimArguments: true },
+        )
+      : await execFileAsync(execCommand, execArgs, options);
     if (shouldLogVerbose()) {
       if (stdout.trim()) {
         logDebug(stdout.trim());
@@ -138,16 +174,13 @@ export type CommandOptions = {
   noOutputTimeoutMs?: number;
 };
 
-export async function runCommandWithTimeout(
-  argv: string[],
-  optionsOrTimeout: number | CommandOptions,
-): Promise<SpawnResult> {
-  const options: CommandOptions =
-    typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
-  const { timeoutMs, cwd, input, env, noOutputTimeoutMs } = options;
-  const { windowsVerbatimArguments } = options;
-  const hasInput = input !== undefined;
-
+export function resolveCommandEnv(params: {
+  argv: string[];
+  env?: NodeJS.ProcessEnv;
+  baseEnv?: NodeJS.ProcessEnv;
+}): NodeJS.ProcessEnv {
+  const baseEnv = params.baseEnv ?? process.env;
+  const argv = params.argv;
   const shouldSuppressNpmFund = (() => {
     const cmd = path.basename(argv[0] ?? "");
     if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") {
@@ -160,7 +193,7 @@ export async function runCommandWithTimeout(
     return false;
   })();
 
-  const mergedEnv = env ? { ...process.env, ...env } : { ...process.env };
+  const mergedEnv = params.env ? { ...baseEnv, ...params.env } : { ...baseEnv };
   const resolvedEnv = Object.fromEntries(
     Object.entries(mergedEnv)
       .filter(([, value]) => value !== undefined)
@@ -174,19 +207,39 @@ export async function runCommandWithTimeout(
       resolvedEnv.npm_config_fund = "false";
     }
   }
+  return resolvedEnv;
+}
+
+export async function runCommandWithTimeout(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+): Promise<SpawnResult> {
+  const options: CommandOptions =
+    typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
+  const { timeoutMs, cwd, input, env, noOutputTimeoutMs } = options;
+  const { windowsVerbatimArguments } = options;
+  const hasInput = input !== undefined;
+  const resolvedEnv = resolveCommandEnv({ argv, env });
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
   const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
-  const child = spawn(resolvedCommand, finalArgv.slice(1), {
-    stdio,
-    cwd,
-    env: resolvedEnv,
-    windowsVerbatimArguments,
-    ...(shouldSpawnWithShell({ resolvedCommand, platform: process.platform })
-      ? { shell: true }
-      : {}),
-  });
+  const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
+  const child = spawn(
+    useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
+    useCmdWrapper
+      ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
+      : finalArgv.slice(1),
+    {
+      stdio,
+      cwd,
+      env: resolvedEnv,
+      windowsVerbatimArguments: useCmdWrapper ? true : windowsVerbatimArguments,
+      ...(shouldSpawnWithShell({ resolvedCommand, platform: process.platform })
+        ? { shell: true }
+        : {}),
+    },
+  );
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
     let stdout = "";

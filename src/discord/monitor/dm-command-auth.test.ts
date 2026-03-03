@@ -8,31 +8,27 @@ describe("resolveDiscordDmCommandAccess", () => {
     tag: "alice#0001",
   };
 
-  it("allows open DMs and keeps command auth enabled without allowlist entries", async () => {
-    const result = await resolveDiscordDmCommandAccess({
+  async function resolveOpenDmAccess(configuredAllowFrom: string[]) {
+    return await resolveDiscordDmCommandAccess({
       accountId: "default",
       dmPolicy: "open",
-      configuredAllowFrom: [],
+      configuredAllowFrom,
       sender,
       allowNameMatching: false,
       useAccessGroups: true,
       readStoreAllowFrom: async () => [],
     });
+  }
+
+  it("allows open DMs and keeps command auth enabled without allowlist entries", async () => {
+    const result = await resolveOpenDmAccess([]);
 
     expect(result.decision).toBe("allow");
     expect(result.commandAuthorized).toBe(true);
   });
 
   it("marks command auth true when sender is allowlisted", async () => {
-    const result = await resolveDiscordDmCommandAccess({
-      accountId: "default",
-      dmPolicy: "open",
-      configuredAllowFrom: ["discord:123"],
-      sender,
-      allowNameMatching: false,
-      useAccessGroups: true,
-      readStoreAllowFrom: async () => [],
-    });
+    const result = await resolveOpenDmAccess(["discord:123"]);
 
     expect(result.decision).toBe("allow");
     expect(result.commandAuthorized).toBe(true);

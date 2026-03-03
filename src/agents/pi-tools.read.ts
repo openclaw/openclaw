@@ -12,6 +12,7 @@ import {
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -762,6 +763,12 @@ function createSandboxEditOperations(params: SandboxToolParams) {
   } as const;
 }
 
+async function writeHostFile(absolutePath: string, content: string) {
+  const resolved = path.resolve(absolutePath);
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await fs.writeFile(resolved, content, "utf-8");
+}
+
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
@@ -772,25 +779,20 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         const resolved = path.resolve(dir);
         await fs.mkdir(resolved, { recursive: true });
       },
-      writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
-        const dir = path.dirname(resolved);
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(resolved, content, "utf-8");
-      },
+      writeFile: writeHostFile,
     } as const;
   }
 
   // When workspaceOnly is true, enforce workspace boundary
   return {
     mkdir: async (dir: string) => {
-      const relative = toRelativePathInRoot(root, dir, { allowRoot: true });
+      const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
       const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
       await assertSandboxPath({ filePath: resolved, cwd: root, root });
       await fs.mkdir(resolved, { recursive: true });
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativePathInRoot(root, absolutePath);
+      const relative = toRelativeWorkspacePath(root, absolutePath);
       await writeFileWithinRoot({
         rootDir: root,
         relativePath: relative,
@@ -811,12 +813,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         const resolved = path.resolve(absolutePath);
         return await fs.readFile(resolved);
       },
-      writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
-        const dir = path.dirname(resolved);
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(resolved, content, "utf-8");
-      },
+      writeFile: writeHostFile,
       access: async (absolutePath: string) => {
         const resolved = path.resolve(absolutePath);
         await fs.access(resolved);
@@ -827,7 +824,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   // When workspaceOnly is true, enforce workspace boundary
   return {
     readFile: async (absolutePath: string) => {
-      const relative = toRelativePathInRoot(root, absolutePath);
+      const relative = toRelativeWorkspacePath(root, absolutePath);
       const safeRead = await readFileWithinRoot({
         rootDir: root,
         relativePath: relative,
@@ -835,7 +832,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativePathInRoot(root, absolutePath);
+      const relative = toRelativeWorkspacePath(root, absolutePath);
       await writeFileWithinRoot({
         rootDir: root,
         relativePath: relative,
@@ -846,7 +843,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     access: async (absolutePath: string) => {
       let relative: string;
       try {
-        relative = toRelativePathInRoot(root, absolutePath);
+        relative = toRelativeWorkspacePath(root, absolutePath);
       } catch {
         // Path escapes workspace root.  Don't throw here – the upstream
         // library replaces any `access` error with a misleading "File not
@@ -874,26 +871,6 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       }
     },
   } as const;
-}
-
-function toRelativePathInRoot(
-  root: string,
-  candidate: string,
-  options?: { allowRoot?: boolean },
-): string {
-  const rootResolved = path.resolve(root);
-  const resolved = path.resolve(candidate);
-  const relative = path.relative(rootResolved, resolved);
-  if (relative === "" || relative === ".") {
-    if (options?.allowRoot) {
-      return "";
-    }
-    throw new Error(`Path escapes workspace root: ${candidate}`);
-  }
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Path escapes workspace root: ${candidate}`);
-  }
-  return relative;
 }
 
 function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {

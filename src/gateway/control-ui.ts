@@ -14,6 +14,12 @@ import {
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader } from "./control-ui-csp.js";
 import {
+  isReadHttpMethod,
+  respondNotFound as respondControlUiNotFound,
+  respondPlainText,
+} from "./control-ui-http-utils.js";
+import { classifyControlUiRequest } from "./control-ui-routing.js";
+import {
   buildControlUiAvatarUrl,
   CONTROL_UI_AVATAR_PREFIX,
   normalizeControlUiBasePath,
@@ -21,6 +27,8 @@ import {
 } from "./control-ui-shared.js";
 
 const ROOT_PREFIX = "/";
+const CONTROL_UI_ASSETS_MISSING_MESSAGE =
+  "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
 
 export type ControlUiRequestOptions = {
   basePath?: string;
@@ -118,6 +126,31 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+function respondControlUiAssetsUnavailable(
+  res: ServerResponse,
+  options?: { configuredRootPath?: string },
+) {
+  if (options?.configuredRootPath) {
+    respondPlainText(
+      res,
+      503,
+      `Control UI assets not found at ${options.configuredRootPath}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`,
+    );
+    return;
+  }
+  respondPlainText(res, 503, CONTROL_UI_ASSETS_MISSING_MESSAGE);
+}
+
+function respondHeadForFile(req: IncomingMessage, res: ServerResponse, filePath: string): boolean {
+  if (req.method !== "HEAD") {
+    return false;
+  }
+  res.statusCode = 200;
+  setStaticFileHeaders(res, filePath);
+  res.end();
+  return true;
+}
+
 function isValidAgentId(agentId: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(agentId);
 }
@@ -131,7 +164,7 @@ export function handleControlUiAvatarRequest(
   if (!urlRaw) {
     return false;
   }
-  if (req.method !== "GET" && req.method !== "HEAD") {
+  if (!isReadHttpMethod(req.method)) {
     return false;
   }
 
@@ -150,7 +183,7 @@ export function handleControlUiAvatarRequest(
   const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
   const agentId = agentIdParts[0] ?? "";
   if (agentIdParts.length !== 1 || !agentId || !isValidAgentId(agentId)) {
-    respondNotFound(res);
+    respondControlUiNotFound(res);
     return true;
   }
 
@@ -168,21 +201,17 @@ export function handleControlUiAvatarRequest(
 
   const resolved = opts.resolveAvatar(agentId);
   if (resolved.kind !== "local") {
-    respondNotFound(res);
+    respondControlUiNotFound(res);
     return true;
   }
 
   const safeAvatar = resolveSafeAvatarFile(resolved.filePath);
   if (!safeAvatar) {
-    respondNotFound(res);
+    respondControlUiNotFound(res);
     return true;
   }
   try {
-    if (req.method === "HEAD") {
-      res.statusCode = 200;
-      res.setHeader("Content-Type", contentTypeForExt(path.extname(safeAvatar.path).toLowerCase()));
-      res.setHeader("Cache-Control", "no-cache");
-      res.end();
+    if (respondHeadForFile(req, res, safeAvatar.path)) {
       return true;
     }
 
@@ -191,12 +220,6 @@ export function handleControlUiAvatarRequest(
   } finally {
     fs.closeSync(safeAvatar.fd);
   }
-}
-
-function respondNotFound(res: ServerResponse) {
-  res.statusCode = 404;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.end("Not Found");
 }
 
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
@@ -282,13 +305,6 @@ export function handleControlUiHttpRequest(
   if (!urlRaw) {
     return false;
   }
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    res.statusCode = 405;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Method Not Allowed");
-    return true;
-  }
-
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
@@ -315,6 +331,26 @@ export function handleControlUiHttpRequest(
     if (!pathname.startsWith(`${basePath}/`)) {
       return false;
     }
+  const route = classifyControlUiRequest({
+    basePath,
+    pathname,
+    search: url.search,
+    method: req.method,
+  });
+  if (route.kind === "not-control-ui") {
+    return false;
+  }
+  if (route.kind === "not-found") {
+    applyControlUiSecurityHeaders(res);
+    respondControlUiNotFound(res);
+    return true;
+  }
+  if (route.kind === "redirect") {
+    applyControlUiSecurityHeaders(res);
+    res.statusCode = 302;
+    res.setHeader("Location", route.location);
+    res.end();
+    return true;
   }
 
   applyControlUiSecurityHeaders(res, req);
@@ -350,19 +386,11 @@ export function handleControlUiHttpRequest(
 
   const rootState = opts?.root;
   if (rootState?.kind === "invalid") {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end(
-      `Control UI assets not found at ${rootState.path}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`,
-    );
+    respondControlUiAssetsUnavailable(res, { configuredRootPath: rootState.path });
     return true;
   }
   if (rootState?.kind === "missing") {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end(
-      "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
-    );
+    respondControlUiAssetsUnavailable(res);
     return true;
   }
 
@@ -375,11 +403,7 @@ export function handleControlUiHttpRequest(
           cwd: process.cwd(),
         });
   if (!root) {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end(
-      "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
-    );
+    respondControlUiAssetsUnavailable(res);
     return true;
   }
 
@@ -394,11 +418,7 @@ export function handleControlUiHttpRequest(
     }
   })();
   if (!rootReal) {
-    res.statusCode = 503;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end(
-      "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
-    );
+    respondControlUiAssetsUnavailable(res);
     return true;
   }
 
@@ -417,23 +437,20 @@ export function handleControlUiHttpRequest(
   const requested = rel && !rel.endsWith("/") ? rel : `${rel}index.html`;
   const fileRel = requested || "index.html";
   if (!isSafeRelativePath(fileRel)) {
-    respondNotFound(res);
+    respondControlUiNotFound(res);
     return true;
   }
 
   const filePath = path.resolve(root, fileRel);
   if (!isWithinDir(root, filePath)) {
-    respondNotFound(res);
+    respondControlUiNotFound(res);
     return true;
   }
 
   const safeFile = resolveSafeControlUiFile(rootReal, filePath);
   if (safeFile) {
     try {
-      if (req.method === "HEAD") {
-        res.statusCode = 200;
-        setStaticFileHeaders(res, safeFile.path);
-        res.end();
+      if (respondHeadForFile(req, res, safeFile.path)) {
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
@@ -453,7 +470,7 @@ export function handleControlUiHttpRequest(
   // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
   // client-side router fallback.
   if (STATIC_ASSET_EXTENSIONS.has(path.extname(fileRel).toLowerCase())) {
-    respondNotFound(res);
+    respondControlUiNotFound(res);
     return true;
   }
 
@@ -462,10 +479,7 @@ export function handleControlUiHttpRequest(
   const safeIndex = resolveSafeControlUiFile(rootReal, indexPath);
   if (safeIndex) {
     try {
-      if (req.method === "HEAD") {
-        res.statusCode = 200;
-        setStaticFileHeaders(res, safeIndex.path);
-        res.end();
+      if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
       serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
@@ -475,6 +489,6 @@ export function handleControlUiHttpRequest(
     }
   }
 
-  respondNotFound(res);
+  respondControlUiNotFound(res);
   return true;
 }

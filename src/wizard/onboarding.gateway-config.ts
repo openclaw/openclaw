@@ -12,6 +12,7 @@ import {
   TAILSCALE_EXPOSURE_OPTIONS,
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
+import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
@@ -21,20 +22,6 @@ import type {
   WizardFlow,
 } from "./onboarding.types.js";
 import type { WizardPrompter } from "./prompts.js";
-
-// These commands are "high risk" (privacy writes/recording) and should be
-// explicitly armed by the user when they want to use them.
-//
-// This only affects what the gateway will accept via node.invoke; the iOS app
-// still prompts for OS permissions (camera/photos/contacts/etc) on first use.
-const DEFAULT_DANGEROUS_NODE_DENY_COMMANDS = [
-  "camera.snap",
-  "camera.clip",
-  "screen.record",
-  "calendar.add",
-  "contacts.add",
-  "reminders.add",
-];
 
 type ConfigureGatewayOptions = {
   flow: WizardFlow;
@@ -161,12 +148,18 @@ export async function configureGatewayForOnboarding(
   let gatewayToken: string | undefined;
   if (authMode === "token") {
     if (flow === "quickstart") {
-      gatewayToken = quickstartGateway.token ?? randomToken();
+      gatewayToken =
+        (quickstartGateway.token ??
+          normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN)) ||
+        randomToken();
     } else {
       const tokenInput = await prompter.text({
         message: "Gateway token (blank to generate)",
         placeholder: "Needed for multi-machine or non-loopback access",
-        initialValue: quickstartGateway.token ?? "",
+        initialValue:
+          quickstartGateway.token ??
+          normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN) ??
+          "",
       });
       gatewayToken = normalizeGatewayTokenInput(tokenInput) || randomToken();
     }
@@ -244,7 +237,7 @@ export async function configureGatewayForOnboarding(
         ...nextConfig.gateway,
         nodes: {
           ...nextConfig.gateway?.nodes,
-          denyCommands: [...DEFAULT_DANGEROUS_NODE_DENY_COMMANDS],
+          denyCommands: [...DEFAULT_DANGEROUS_NODE_COMMANDS],
         },
       },
     };

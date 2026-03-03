@@ -15,6 +15,11 @@ import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-regis
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import {
+  resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingMaxAgeMs,
+  resolveThreadBindingsEnabled,
+} from "../../channels/thread-bindings-policy.js";
+import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -108,59 +113,6 @@ function summarizeGuilds(entries?: Record<string, unknown>) {
   const sample = keys.slice(0, 4);
   const suffix = keys.length > sample.length ? ` (+${keys.length - sample.length})` : "";
   return `${sample.join(", ")}${suffix}`;
-}
-
-const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
-const DEFAULT_THREAD_BINDING_MAX_AGE_HOURS = 0;
-
-function normalizeThreadBindingHours(raw: unknown): number | undefined {
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return undefined;
-  }
-  if (raw < 0) {
-    return undefined;
-  }
-  return raw;
-}
-
-function resolveThreadBindingIdleTimeoutMs(params: {
-  channelIdleHoursRaw: unknown;
-  sessionIdleHoursRaw: unknown;
-}): number {
-  const idleHours =
-    normalizeThreadBindingHours(params.channelIdleHoursRaw) ??
-    normalizeThreadBindingHours(params.sessionIdleHoursRaw) ??
-    DEFAULT_THREAD_BINDING_IDLE_HOURS;
-  return Math.floor(idleHours * 60 * 60 * 1000);
-}
-
-function resolveThreadBindingMaxAgeMs(params: {
-  channelMaxAgeHoursRaw: unknown;
-  sessionMaxAgeHoursRaw: unknown;
-}): number {
-  const maxAgeHours =
-    normalizeThreadBindingHours(params.channelMaxAgeHoursRaw) ??
-    normalizeThreadBindingHours(params.sessionMaxAgeHoursRaw) ??
-    DEFAULT_THREAD_BINDING_MAX_AGE_HOURS;
-  return Math.floor(maxAgeHours * 60 * 60 * 1000);
-}
-
-function normalizeThreadBindingsEnabled(raw: unknown): boolean | undefined {
-  if (typeof raw !== "boolean") {
-    return undefined;
-  }
-  return raw;
-}
-
-function resolveThreadBindingsEnabled(params: {
-  channelEnabledRaw: unknown;
-  sessionEnabledRaw: unknown;
-}): boolean {
-  return (
-    normalizeThreadBindingsEnabled(params.channelEnabledRaw) ??
-    normalizeThreadBindingsEnabled(params.sessionEnabledRaw) ??
-    true
-  );
 }
 
 function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
@@ -549,6 +501,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const logger = createSubsystemLogger("discord/monitor");
     const guildHistories = new Map<string, HistoryEntry[]>();
     let botUserId: string | undefined;
+    let botUserName: string | undefined;
     let voiceManager: DiscordVoiceManager | null = null;
 
     if (nativeDisabledExplicit) {
@@ -562,6 +515,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     try {
       const botUser = await client.fetchUser("@me");
       botUserId = botUser?.id;
+      botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
     } catch (err) {
       runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
     }
@@ -610,43 +564,26 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       client.listeners,
       new DiscordMessageListener(messageHandler, logger, trackInboundEvent),
     );
+    const reactionListenerOptions = {
+      cfg,
+      accountId: account.accountId,
+      runtime,
+      botUserId,
+      dmEnabled,
+      groupDmEnabled,
+      groupDmChannels: groupDmChannels ?? [],
+      dmPolicy,
+      allowFrom: allowFrom ?? [],
+      groupPolicy,
+      allowNameMatching: isDangerousNameMatchingEnabled(discordCfg),
+      guildEntries,
+      logger,
+      onEvent: trackInboundEvent,
+    };
+    registerDiscordListener(client.listeners, new DiscordReactionListener(reactionListenerOptions));
     registerDiscordListener(
       client.listeners,
-      new DiscordReactionListener({
-        cfg,
-        accountId: account.accountId,
-        runtime,
-        botUserId,
-        dmEnabled,
-        groupDmEnabled,
-        groupDmChannels: groupDmChannels ?? [],
-        dmPolicy,
-        allowFrom: allowFrom ?? [],
-        groupPolicy,
-        allowNameMatching: isDangerousNameMatchingEnabled(discordCfg),
-        guildEntries,
-        logger,
-        onEvent: trackInboundEvent,
-      }),
-    );
-    registerDiscordListener(
-      client.listeners,
-      new DiscordReactionRemoveListener({
-        cfg,
-        accountId: account.accountId,
-        runtime,
-        botUserId,
-        dmEnabled,
-        groupDmEnabled,
-        groupDmChannels: groupDmChannels ?? [],
-        dmPolicy,
-        allowFrom: allowFrom ?? [],
-        groupPolicy,
-        allowNameMatching: isDangerousNameMatchingEnabled(discordCfg),
-        guildEntries,
-        logger,
-        onEvent: trackInboundEvent,
-      }),
+      new DiscordReactionRemoveListener(reactionListenerOptions),
     );
 
     if (discordCfg.intents?.presence) {
@@ -657,7 +594,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
     }
 
-    runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
+    const botIdentity =
+      botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
+    runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
 
     lifecycleStarted = true;
     await runDiscordGatewayLifecycle({

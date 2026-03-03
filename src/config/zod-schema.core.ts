@@ -680,6 +680,8 @@ export const ToolsMediaUnderstandingSchema = z
     ...MediaUnderstandingRuntimeFields,
     attachments: MediaUnderstandingAttachmentsSchema,
     models: z.array(MediaUnderstandingModelSchema).optional(),
+    echoTranscript: z.boolean().optional(),
+    echoFormat: z.string().optional(),
   })
   .strict()
   .optional();

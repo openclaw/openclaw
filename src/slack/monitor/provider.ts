@@ -105,7 +105,8 @@ function waitForSlackSocketDisconnect(
     }
 
     const disconnectListener = () => resolveOnce({ event: "disconnect" });
-    const startFailListener = () => resolveOnce({ event: "unable_to_socket_mode_start" });
+    const startFailListener = (error?: unknown) =>
+      resolveOnce({ event: "unable_to_socket_mode_start", error });
     const errorListener = (error: unknown) => resolveOnce({ event: "error", error });
     const abortListener = () => resolveOnce({ event: "disconnect" });
 
@@ -126,6 +127,18 @@ function waitForSlackSocketDisconnect(
     emitter.on("error", errorListener);
     abortSignal?.addEventListener("abort", abortListener, { once: true });
   });
+}
+
+/**
+ * Detect non-recoverable Slack API / auth errors that should NOT be retried.
+ * These indicate permanent credential problems (revoked bot, deactivated account, etc.)
+ * and retrying will never succeed — continuing to retry blocks the entire gateway.
+ */
+export function isNonRecoverableSlackAuthError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|missing_scope|cannot_find_service|invalid_token/i.test(
+    msg,
+  );
 }
 
 function formatUnknownError(error: unknown): string {
@@ -473,6 +486,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           reconnectAttempts = 0;
           runtime.log?.("slack socket mode connected");
         } catch (err) {
+          // Auth errors (account_inactive, invalid_auth, etc.) are permanent —
+          // retrying will never succeed and blocks the entire gateway.  Fail fast.
+          if (isNonRecoverableSlackAuthError(err)) {
+            runtime.error?.(
+              `slack socket mode failed to start due to non-recoverable auth error — skipping channel (${formatUnknownError(err)})`,
+            );
+            throw err;
+          }
           reconnectAttempts += 1;
           if (
             SLACK_SOCKET_RECONNECT_POLICY.maxAttempts > 0 &&
@@ -499,6 +520,16 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         const disconnect = await waitForSlackSocketDisconnect(app, opts.abortSignal);
         if (opts.abortSignal?.aborted) {
           break;
+        }
+
+        // Bail immediately on non-recoverable auth errors during reconnect too.
+        if (disconnect.error && isNonRecoverableSlackAuthError(disconnect.error)) {
+          runtime.error?.(
+            `slack socket mode disconnected due to non-recoverable auth error — skipping channel (${formatUnknownError(disconnect.error)})`,
+          );
+          throw disconnect.error instanceof Error
+            ? disconnect.error
+            : new Error(formatUnknownError(disconnect.error));
         }
 
         reconnectAttempts += 1;

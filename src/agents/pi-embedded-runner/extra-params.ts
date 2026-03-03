@@ -518,6 +518,9 @@ function mapThinkingLevelToOpenRouterReasoningEffort(
   if (thinkingLevel === "off") {
     return "none";
   }
+  if (thinkingLevel === "adaptive") {
+    return "medium";
+  }
   return thinkingLevel;
 }
 
@@ -549,6 +552,107 @@ function createSiliconFlowThinkingWrapper(baseStreamFn: StreamFn | undefined): S
           const payloadObj = payload as Record<string, unknown>;
           if (payloadObj.thinking === "off") {
             payloadObj.thinking = null;
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+type MoonshotThinkingType = "enabled" | "disabled";
+
+function normalizeMoonshotThinkingType(value: unknown): MoonshotThinkingType | undefined {
+  if (typeof value === "boolean") {
+    return value ? "enabled" : "disabled";
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (
+      normalized === "enabled" ||
+      normalized === "enable" ||
+      normalized === "on" ||
+      normalized === "true"
+    ) {
+      return "enabled";
+    }
+    if (
+      normalized === "disabled" ||
+      normalized === "disable" ||
+      normalized === "off" ||
+      normalized === "false"
+    ) {
+      return "disabled";
+    }
+    return undefined;
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const typeValue = (value as Record<string, unknown>).type;
+    return normalizeMoonshotThinkingType(typeValue);
+  }
+  return undefined;
+}
+
+function resolveMoonshotThinkingType(params: {
+  configuredThinking: unknown;
+  thinkingLevel?: ThinkLevel;
+}): MoonshotThinkingType | undefined {
+  const configured = normalizeMoonshotThinkingType(params.configuredThinking);
+  if (configured) {
+    return configured;
+  }
+  if (!params.thinkingLevel) {
+    return undefined;
+  }
+  return params.thinkingLevel === "off" ? "disabled" : "enabled";
+}
+
+function isMoonshotToolChoiceCompatible(toolChoice: unknown): boolean {
+  if (toolChoice == null) {
+    return true;
+  }
+  if (toolChoice === "auto" || toolChoice === "none") {
+    return true;
+  }
+  if (typeof toolChoice === "object" && !Array.isArray(toolChoice)) {
+    const typeValue = (toolChoice as Record<string, unknown>).type;
+    return typeValue === "auto" || typeValue === "none";
+  }
+  return false;
+}
+
+/**
+ * Moonshot Kimi supports native binary thinking mode:
+ * - { thinking: { type: "enabled" } }
+ * - { thinking: { type: "disabled" } }
+ *
+ * When thinking is enabled, Moonshot only accepts tool_choice auto|none.
+ * Normalize incompatible values to auto instead of failing the request.
+ */
+function createMoonshotThinkingWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingType?: MoonshotThinkingType,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          let effectiveThinkingType = normalizeMoonshotThinkingType(payloadObj.thinking);
+
+          if (thinkingType) {
+            payloadObj.thinking = { type: thinkingType };
+            effectiveThinkingType = thinkingType;
+          }
+
+          if (
+            effectiveThinkingType === "enabled" &&
+            !isMoonshotToolChoiceCompatible(payloadObj.tool_choice)
+          ) {
+            payloadObj.tool_choice = "auto";
           }
         }
         originalOnPayload?.(payload);
@@ -617,6 +721,15 @@ function createOpenRouterWrapper(
   };
 }
 
+/**
+ * Models on OpenRouter that do not support the `reasoning.effort` parameter.
+ * Injecting it causes "Invalid arguments passed to the model" errors.
+ */
+function isOpenRouterReasoningUnsupported(modelId: string): boolean {
+  const id = modelId.toLowerCase();
+  return id.startsWith("x-ai/");
+}
+
 function isGemini31Model(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
   return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
@@ -631,6 +744,7 @@ function mapThinkLevelToGoogleThinkingLevel(
     case "low":
       return "LOW";
     case "medium":
+    case "adaptive":
       return "MEDIUM";
     case "high":
     case "xhigh":
@@ -795,6 +909,19 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
 
+  if (provider === "moonshot") {
+    const moonshotThinkingType = resolveMoonshotThinkingType({
+      configuredThinking: merged?.thinking,
+      thinkingLevel,
+    });
+    if (moonshotThinkingType) {
+      log.debug(
+        `applying Moonshot thinking=${moonshotThinkingType} payload wrapper for ${provider}/${modelId}`,
+      );
+    }
+    agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, moonshotThinkingType);
+  }
+
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
     // "auto" is a dynamic routing model — we don't know which underlying model
@@ -803,7 +930,13 @@ export function applyExtraParamsToAgent(
     // which would cause a 400 on models where reasoning is mandatory.
     // Users who need reasoning control should target a specific model ID.
     // See: openclaw/openclaw#24851
-    const openRouterThinkingLevel = modelId === "auto" ? undefined : thinkingLevel;
+    //
+    // x-ai/grok models do not support OpenRouter's reasoning.effort parameter
+    // and reject payloads containing it with "Invalid arguments passed to the
+    // model." Skip reasoning injection for these models.
+    // See: openclaw/openclaw#32039
+    const skipReasoningInjection = modelId === "auto" || isOpenRouterReasoningUnsupported(modelId);
+    const openRouterThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
   }

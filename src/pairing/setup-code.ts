@@ -1,10 +1,9 @@
 import os from "node:os";
+import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import { isCarrierGradeNatIpv4Address, isRfc1918Ipv4Address } from "../shared/net/ip.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
-
-const DEFAULT_GATEWAY_PORT = 18789;
 
 export type PairingSetupPayload = {
   url: string;
@@ -87,21 +86,6 @@ function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null 
     return null;
   }
   return `${schemeFallback}://${withoutPath}`;
-}
-
-function resolveGatewayPort(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): number {
-  const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim();
-  if (envRaw) {
-    const parsed = Number.parseInt(envRaw, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
-  }
-  const configPort = cfg.gateway?.port;
-  if (typeof configPort === "number" && Number.isFinite(configPort) && configPort > 0) {
-    return configPort;
-  }
-  return DEFAULT_GATEWAY_PORT;
 }
 
 function resolveScheme(

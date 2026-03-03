@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 
@@ -59,53 +60,65 @@ describe("configureGatewayForOnboarding", () => {
     };
   }
 
+  async function runGatewayConfig(params?: {
+    flow?: "advanced" | "quickstart";
+    bindChoice?: string;
+    authChoice?: "token" | "password";
+    tailscaleChoice?: "off" | "serve";
+    textQueue?: Array<string | undefined>;
+    nextConfig?: Record<string, unknown>;
+  }) {
+    const authChoice = params?.authChoice ?? "token";
+    const prompter = createPrompter({
+      selectQueue: [params?.bindChoice ?? "loopback", authChoice, params?.tailscaleChoice ?? "off"],
+      textQueue: params?.textQueue ?? ["18789", undefined],
+    });
+    const runtime = createRuntime();
+    return configureGatewayForOnboarding({
+      flow: params?.flow ?? "advanced",
+      baseConfig: {},
+      nextConfig: params?.nextConfig ?? {},
+      localPort: 18789,
+      quickstartGateway: createQuickstartGateway(authChoice),
+      prompter,
+      runtime,
+    });
+  }
+
   it("generates a token when the prompt returns undefined", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
-
-    const prompter = createPrompter({
-      selectQueue: ["loopback", "token", "off"],
-      textQueue: ["18789", undefined],
-    });
-    const runtime = createRuntime();
-
-    const result = await configureGatewayForOnboarding({
-      flow: "advanced",
-      baseConfig: {},
-      nextConfig: {},
-      localPort: 18789,
-      quickstartGateway: createQuickstartGateway("token"),
-      prompter,
-      runtime,
-    });
+    const result = await runGatewayConfig();
 
     expect(result.settings.gatewayToken).toBe("generated-token");
-    expect(result.nextConfig.gateway?.nodes?.denyCommands).toEqual([
-      "camera.snap",
-      "camera.clip",
-      "screen.record",
-      "calendar.add",
-      "contacts.add",
-      "reminders.add",
-    ]);
+    expect(result.nextConfig.gateway?.nodes?.denyCommands).toEqual(DEFAULT_DANGEROUS_NODE_COMMANDS);
   });
+
+  it("prefers OPENCLAW_GATEWAY_TOKEN during quickstart token setup", async () => {
+    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "token-from-env";
+    mocks.randomToken.mockReturnValue("generated-token");
+    mocks.randomToken.mockClear();
+
+    try {
+      const result = await runGatewayConfig({
+        flow: "quickstart",
+        textQueue: [],
+      });
+
+      expect(result.settings.gatewayToken).toBe("token-from-env");
+    } finally {
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
+    }
+  });
+
   it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
     mocks.randomToken.mockReturnValue("unused");
-
-    // Flow: loopback bind → password auth → tailscale off
-    const prompter = createPrompter({
-      selectQueue: ["loopback", "password", "off"],
-      textQueue: ["18789", undefined],
-    });
-    const runtime = createRuntime();
-
-    const result = await configureGatewayForOnboarding({
-      flow: "advanced",
-      baseConfig: {},
-      nextConfig: {},
-      localPort: 18789,
-      quickstartGateway: createQuickstartGateway("password"),
-      prompter,
-      runtime,
+    const result = await runGatewayConfig({
+      authChoice: "password",
     });
 
     const authConfig = result.nextConfig.gateway?.auth as { mode?: string; password?: string };
@@ -116,21 +129,8 @@ describe("configureGatewayForOnboarding", () => {
 
   it("seeds control UI allowed origins for non-loopback binds", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
-
-    const prompter = createPrompter({
-      selectQueue: ["lan", "token", "off"],
-      textQueue: ["18789", undefined],
-    });
-    const runtime = createRuntime();
-
-    const result = await configureGatewayForOnboarding({
-      flow: "advanced",
-      baseConfig: {},
-      nextConfig: {},
-      localPort: 18789,
-      quickstartGateway: createQuickstartGateway("token"),
-      prompter,
-      runtime,
+    const result = await runGatewayConfig({
+      bindChoice: "lan",
     });
 
     expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toEqual([
@@ -142,21 +142,8 @@ describe("configureGatewayForOnboarding", () => {
   it("adds Tailscale origin to controlUi.allowedOrigins when tailscale serve is enabled", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
     mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
-
-    const prompter = createPrompter({
-      selectQueue: ["loopback", "token", "serve"],
-      textQueue: ["18789", undefined],
-    });
-    const runtime = createRuntime();
-
-    const result = await configureGatewayForOnboarding({
-      flow: "advanced",
-      baseConfig: {},
-      nextConfig: {},
-      localPort: 18789,
-      quickstartGateway: createQuickstartGateway("token"),
-      prompter,
-      runtime,
+    const result = await runGatewayConfig({
+      tailscaleChoice: "serve",
     });
 
     expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toContain(
@@ -167,21 +154,8 @@ describe("configureGatewayForOnboarding", () => {
   it("does not add Tailscale origin when getTailnetHostname fails", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
     mocks.getTailnetHostname.mockRejectedValue(new Error("not found"));
-
-    const prompter = createPrompter({
-      selectQueue: ["loopback", "token", "serve"],
-      textQueue: ["18789", undefined],
-    });
-    const runtime = createRuntime();
-
-    const result = await configureGatewayForOnboarding({
-      flow: "advanced",
-      baseConfig: {},
-      nextConfig: {},
-      localPort: 18789,
-      quickstartGateway: createQuickstartGateway("token"),
-      prompter,
-      runtime,
+    const result = await runGatewayConfig({
+      tailscaleChoice: "serve",
     });
 
     expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toBeUndefined();
@@ -190,21 +164,8 @@ describe("configureGatewayForOnboarding", () => {
   it("formats IPv6 Tailscale fallback addresses as valid HTTPS origins", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
     mocks.getTailnetHostname.mockResolvedValue("fd7a:115c:a1e0::99");
-
-    const prompter = createPrompter({
-      selectQueue: ["loopback", "token", "serve"],
-      textQueue: ["18789", undefined],
-    });
-    const runtime = createRuntime();
-
-    const result = await configureGatewayForOnboarding({
-      flow: "advanced",
-      baseConfig: {},
-      nextConfig: {},
-      localPort: 18789,
-      quickstartGateway: createQuickstartGateway("token"),
-      prompter,
-      runtime,
+    const result = await runGatewayConfig({
+      tailscaleChoice: "serve",
     });
 
     expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toContain(
@@ -215,16 +176,8 @@ describe("configureGatewayForOnboarding", () => {
   it("does not duplicate Tailscale origin when allowlist already contains case variants", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
     mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
-
-    const prompter = createPrompter({
-      selectQueue: ["loopback", "token", "serve"],
-      textQueue: ["18789", undefined],
-    });
-    const runtime = createRuntime();
-
-    const result = await configureGatewayForOnboarding({
-      flow: "advanced",
-      baseConfig: {},
+    const result = await runGatewayConfig({
+      tailscaleChoice: "serve",
       nextConfig: {
         gateway: {
           controlUi: {
@@ -232,10 +185,6 @@ describe("configureGatewayForOnboarding", () => {
           },
         },
       },
-      localPort: 18789,
-      quickstartGateway: createQuickstartGateway("token"),
-      prompter,
-      runtime,
     });
 
     const origins = result.nextConfig.gateway?.controlUi?.allowedOrigins ?? [];

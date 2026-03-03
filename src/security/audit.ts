@@ -40,6 +40,7 @@ import {
   collectPluginsCodeSafetyFindings,
   collectStateDeepFilesystemFindings,
   collectSyncedFolderFindings,
+  collectWorkspaceSkillSymlinkEscapeFindings,
   readConfigSnapshotForAudit,
 } from "./audit-extra.js";
 import {
@@ -519,11 +520,11 @@ function collectGatewayConfigFindings(
     findings.push({
       checkId: "channels.feishu.doc_owner_open_id",
       severity: "warn",
-      title: "Feishu doc create can grant owner permissions",
+      title: "Feishu doc create can grant requester permissions",
       detail:
-        'channels.feishu tools include "doc"; feishu_doc action "create" accepts owner_open_id and can grant document access to that user.',
+        'channels.feishu tools include "doc"; feishu_doc action "create" can grant document access to the trusted requesting Feishu user.',
       remediation:
-        "Disable channels.feishu.tools.doc when not needed, and restrict tool access so untrusted prompts cannot set owner_open_id.",
+        "Disable channels.feishu.tools.doc when not needed, and restrict tool access for untrusted prompts.",
     });
   }
 
@@ -1036,6 +1037,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       : null;
 
   if (opts.includeFilesystem !== false) {
+    const codeSafetySummaryCache = new Map<string, Promise<unknown>>();
     findings.push(
       ...(await collectFilesystemFindings({
         stateDir,
@@ -1053,6 +1055,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     findings.push(
       ...(await collectStateDeepFilesystemFindings({ cfg, env, stateDir, platform, execIcacls })),
     );
+    findings.push(...(await collectWorkspaceSkillSymlinkEscapeFindings({ cfg })));
     findings.push(
       ...(await collectSandboxBrowserHashLabelFindings({
         execDockerRawFn: opts.execDockerRawFn,
@@ -1060,8 +1063,19 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     );
     findings.push(...(await collectPluginsTrustFindings({ cfg, stateDir })));
     if (opts.deep === true) {
-      findings.push(...(await collectPluginsCodeSafetyFindings({ stateDir })));
-      findings.push(...(await collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir })));
+      findings.push(
+        ...(await collectPluginsCodeSafetyFindings({
+          stateDir,
+          summaryCache: codeSafetySummaryCache,
+        })),
+      );
+      findings.push(
+        ...(await collectInstalledSkillsCodeSafetyFindings({
+          cfg,
+          stateDir,
+          summaryCache: codeSafetySummaryCache,
+        })),
+      );
     }
   }
 

@@ -71,7 +71,9 @@ import { shouldLogVerbose } from "../../globals.js";
 import { monitorIMessageProvider } from "../../imessage/monitor.js";
 import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   listLineAccountIds,
@@ -95,6 +97,7 @@ import { buildTemplateMessageFromPayload } from "../../line/template-messages.js
 import { getChildLogger } from "../../logging.js";
 import { normalizeLogLevel } from "../../logging/levels.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
+import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
 import { isVoiceCompatibleAudio } from "../../media/audio.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
@@ -108,6 +111,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { monitorSignalProvider } from "../../signal/index.js";
 import { probeSignal } from "../../signal/probe.js";
 import { sendMessageSignal } from "../../signal/send.js";
@@ -244,8 +248,13 @@ export function createPluginRuntime(): PluginRuntime {
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     tts: { textToSpeechTelephony },
+    stt: { transcribeAudioFile },
     tools: createRuntimeTools(),
     channel: createRuntimeChannel(),
+    events: {
+      onAgentEvent,
+      onSessionTranscriptUpdate,
+    },
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
   };
@@ -261,6 +270,7 @@ function createRuntimeConfig(): PluginRuntime["config"] {
 function createRuntimeSystem(): PluginRuntime["system"] {
   return {
     enqueueSystemEvent,
+    requestHeartbeatNow,
     runCommandWithTimeout,
     formatNativeDependencyHint,
   };

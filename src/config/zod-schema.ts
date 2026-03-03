@@ -222,6 +222,19 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    cli: z
+      .object({
+        banner: z
+          .object({
+            taglineMode: z
+              .union([z.literal("random"), z.literal("default"), z.literal("off")])
+              .optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     update: z
       .object({
         channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
@@ -250,6 +263,7 @@ export const OpenClawSchema = z
         headless: z.boolean().optional(),
         noSandbox: z.boolean().optional(),
         attachOnly: z.boolean().optional(),
+        cdpPortRangeStart: z.number().int().min(1).max(65535).optional(),
         defaultProfile: z.string().optional(),
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
         ssrfPolicy: z
@@ -271,6 +285,7 @@ export const OpenClawSchema = z
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
                 driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
+                attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
               })
               .strict()
@@ -279,6 +294,7 @@ export const OpenClawSchema = z
               }),
           )
           .optional(),
+        extraArgs: z.array(z.string()).optional(),
       })
       .strict()
       .optional(),
@@ -414,6 +430,17 @@ export const OpenClawSchema = z
             enabled: z.boolean().optional(),
             after: z.number().int().min(1).optional(),
             cooldownMs: z.number().int().min(0).optional(),
+            mode: z.enum(["announce", "webhook"]).optional(),
+            accountId: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        failureDestination: z
+          .object({
+            channel: z.string().optional(),
+            to: z.string().optional(),
+            accountId: z.string().optional(),
+            mode: z.enum(["announce", "webhook"]).optional(),
           })
           .strict()
           .optional(),
