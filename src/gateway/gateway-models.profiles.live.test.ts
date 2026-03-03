@@ -20,6 +20,7 @@ import {
 import { isModernModelRef } from "../agents/live-model-filter.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { loadConfig } from "../config/config.js";
 import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
@@ -1105,6 +1106,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           if (model.provider === "anthropic" && isEmptyStreamText(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (anthropic empty response)`);
+            break;
+          }
+          if (isGoogleishProvider(model.provider) && isRateLimitErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (google rate limit)`);
             break;
           }
           if (isProviderUnavailableErrorMessage(message)) {
