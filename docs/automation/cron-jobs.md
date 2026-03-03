@@ -73,6 +73,10 @@ The Gateway loads the file into memory and writes it back on changes, so manual 
 are only safe when the Gateway is stopped. Prefer `openclaw cron add/edit` or the cron
 tool call API for changes.
 
+**Do not put cron jobs in `openclaw.json`.** Keys like `cron.jobs` are not part of the
+config schema, so keep job definitions in the cron store and manage them via the CLI
+or cron tool API instead.
+
 ## Beginner-friendly overview
 
 Think of a cron job as: **when** to run + **what** to do.
