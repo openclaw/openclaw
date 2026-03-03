@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- WebChat/markdown tables: ensure GitHub-flavored markdown table parsing is explicitly enabled at render time and add horizontal overflow handling for wide tables, with regression coverage for table-only and mixed text+table content. (#32365) Thanks @BlueBirdBack.
 - Feishu/default account resolution: always honor explicit `channels.feishu.defaultAccount` during outbound account selection (including top-level-credential setups where the preferred id is not present in `accounts`), instead of silently falling back to another account id. (#32253) Thanks @bmendonca3.
 - Gemini schema sanitization: coerce malformed JSON Schema `properties` values (`null`, arrays, primitives) to `{}` before provider validation, preventing downstream strict-validator crashes on invalid plugin/tool schemas. (#32332) Thanks @webdevtodayjason.
 - OpenAI/Responses WebSocket tool-call id hygiene: normalize blank/whitespace streamed tool-call ids before persistence, and block empty `function_call_output.call_id` payloads in the WS conversion path to avoid OpenAI 400 errors (`Invalid 'input[n].call_id': empty string`), with regression coverage for both inbound stream normalization and outbound payload guards.
