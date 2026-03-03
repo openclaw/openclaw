@@ -52,6 +52,29 @@ const EXTRA_TEXT_MIMES = [
   "text/javascript",
   "text/tab-separated-values",
 ];
+/**
+ * File extensions known to be binary. Used as a fallback when MIME type is
+ * missing or generic (e.g. application/octet-stream) to prevent binary content
+ * from being injected into the prompt context as text. (#33320)
+ */
+const BINARY_EXTENSIONS = new Set([
+  // Archives
+  ".zip", ".gz", ".tar", ".rar", ".7z", ".bz2", ".xz", ".zst",
+  // Executables & libraries
+  ".exe", ".dll", ".so", ".dylib", ".bin", ".msi", ".deb", ".rpm", ".dmg", ".app",
+  // Office / document containers
+  ".msg", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+  ".odt", ".ods", ".odp",
+  // Media (not already handled by kind checks)
+  ".psd", ".ai", ".sketch", ".fig",
+  // Databases & data
+  ".db", ".sqlite", ".sqlite3", ".mdb",
+  // Other binary formats
+  ".class", ".pyc", ".pyo", ".wasm", ".o", ".a", ".lib",
+  ".iso", ".img", ".vmdk", ".qcow2",
+  ".dat", ".pak", ".cab",
+]);
+
 const TEXT_EXT_MIME = new Map<string, string>([
   [".csv", "text/csv"],
   [".tsv", "text/tab-separated-values"],
@@ -301,6 +324,70 @@ function resolveTextMimeFromName(name?: string): string | undefined {
   return TEXT_EXT_MIME.get(ext);
 }
 
+/**
+ * Check for well-known binary file signatures (magic bytes) in the buffer
+ * header. This catches binary files even when MIME type is missing or wrong.
+ */
+function hasBinaryFileSignature(buffer?: Buffer): boolean {
+  if (!buffer || buffer.length < 4) {
+    return false;
+  }
+  // ZIP (also .docx, .xlsx, .pptx, .jar, .odt, .ods, .odp)
+  if (buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04) {
+    return true;
+  }
+  // OLE2 Compound Document (.msg, .doc, .xls, .ppt)
+  if (
+    buffer[0] === 0xd0 &&
+    buffer[1] === 0xcf &&
+    buffer[2] === 0x11 &&
+    buffer[3] === 0xe0
+  ) {
+    return true;
+  }
+  // ELF binary
+  if (buffer[0] === 0x7f && buffer[1] === 0x45 && buffer[2] === 0x4c && buffer[3] === 0x46) {
+    return true;
+  }
+  // Windows PE/MZ executable
+  if (buffer[0] === 0x4d && buffer[1] === 0x5a) {
+    return true;
+  }
+  // gzip
+  if (buffer[0] === 0x1f && buffer[1] === 0x8b) {
+    return true;
+  }
+  // RAR
+  if (buffer[0] === 0x52 && buffer[1] === 0x61 && buffer[2] === 0x72 && buffer[3] === 0x21) {
+    return true;
+  }
+  // 7z
+  if (buffer[0] === 0x37 && buffer[1] === 0x7a && buffer[2] === 0xbc && buffer[3] === 0xaf) {
+    return true;
+  }
+  // Mach-O (macOS binary)
+  if (
+    (buffer[0] === 0xfe && buffer[1] === 0xed && buffer[2] === 0xfa) ||
+    (buffer[0] === 0xce && buffer[1] === 0xfa && buffer[2] === 0xed) ||
+    (buffer[0] === 0xcf && buffer[1] === 0xfa && buffer[2] === 0xed)
+  ) {
+    return true;
+  }
+  // SQLite
+  if (buffer.length >= 6 && buffer.subarray(0, 6).toString("ascii") === "SQLite") {
+    return true;
+  }
+  return false;
+}
+
+function isBinaryFileExtension(name?: string): boolean {
+  if (!name) {
+    return false;
+  }
+  const ext = path.extname(name).toLowerCase();
+  return BINARY_EXTENSIONS.has(ext);
+}
+
 function isBinaryMediaMime(mime?: string): boolean {
   if (!mime) {
     return false;
@@ -380,6 +467,23 @@ async function extractFileBlocks(params: {
     const normalizedRawMime = normalizeMimeType(rawMime);
     if (!forcedTextMimeResolved && isBinaryMediaMime(normalizedRawMime)) {
       continue;
+    }
+    // Catch binary files when MIME type is missing or not in the binary MIME list.
+    // File extension and magic bytes act as additional safety layers to prevent
+    // binary content from being injected into the prompt as text. (#33320)
+    if (!forcedTextMimeResolved) {
+      if (isBinaryFileExtension(nameHint)) {
+        logVerbose(
+          `media: file attachment skipped (binary extension) index=${attachment.index} name=${nameHint}`,
+        );
+        continue;
+      }
+      if (hasBinaryFileSignature(bufferResult?.buffer)) {
+        logVerbose(
+          `media: file attachment skipped (binary signature) index=${attachment.index}`,
+        );
+        continue;
+      }
     }
     const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
     const textSample = decodeTextSample(bufferResult?.buffer);
