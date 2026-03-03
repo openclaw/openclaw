@@ -36,6 +36,7 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 installGatewayTestHooks({ scope: "suite" });
 const CRON_WAIT_INTERVAL_MS = 5;
 const CRON_WAIT_TIMEOUT_MS = 3_000;
+const EMPTY_CRON_STORE_CONTENT = JSON.stringify({ version: 1, jobs: [] });
 let cronSuiteTempRootPromise: Promise<string> | null = null;
 let cronSuiteCaseId = 0;
 
@@ -79,10 +80,20 @@ async function waitForCondition(check: () => boolean | Promise<boolean>, timeout
   );
 }
 
+async function createCronCasePaths(tempPrefix: string): Promise<{
+  dir: string;
+  storePath: string;
+}> {
+  const suiteRoot = await getCronSuiteTempRoot();
+  const dir = path.join(suiteRoot, `${tempPrefix}${cronSuiteCaseId++}`);
+  const storePath = path.join(dir, "cron", "jobs.json");
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  return { dir, storePath };
+}
+
 async function cleanupCronTestRun(params: {
   ws: { close: () => void };
   server: { close: () => Promise<void> };
-  dir: string;
   prevSkipCron: string | undefined;
   clearSessionConfig?: boolean;
 }) {
@@ -108,16 +119,13 @@ async function setupCronTestRun(params: {
 }): Promise<{ prevSkipCron: string | undefined; dir: string }> {
   const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
   process.env.OPENCLAW_SKIP_CRON = "0";
-  const suiteRoot = await getCronSuiteTempRoot();
-  const dir = path.join(suiteRoot, `${params.tempPrefix}${cronSuiteCaseId++}`);
-  await fs.mkdir(dir, { recursive: true });
-  testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+  const { dir, storePath } = await createCronCasePaths(params.tempPrefix);
+  testState.cronStorePath = storePath;
   testState.sessionConfig = params.sessionConfig;
   testState.cronEnabled = params.cronEnabled;
-  await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
   await fs.writeFile(
     testState.cronStorePath,
-    JSON.stringify({ version: 1, jobs: params.jobs ?? [] }),
+    params.jobs ? JSON.stringify({ version: 1, jobs: params.jobs }) : EMPTY_CRON_STORE_CONTENT,
   );
   return { prevSkipCron, dir };
 }
@@ -138,7 +146,7 @@ describe("gateway server cron", () => {
   });
 
   test("handles cron CRUD, normalization, and patch semantics", { timeout: 20_000 }, async () => {
-    const { prevSkipCron, dir } = await setupCronTestRun({
+    const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-",
       sessionConfig: { mainKey: "primary" },
       cronEnabled: false,
@@ -403,7 +411,6 @@ describe("gateway server cron", () => {
       await cleanupCronTestRun({
         ws,
         server,
-        dir,
         prevSkipCron,
         clearSessionConfig: true,
       });
@@ -514,7 +521,7 @@ describe("gateway server cron", () => {
       const runs = autoEntries?.entries ?? [];
       expect(runs.at(-1)?.jobId).toBe(autoJobId);
     } finally {
-      await cleanupCronTestRun({ ws, server, dir, prevSkipCron });
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
   }, 45_000);
 
@@ -532,7 +539,7 @@ describe("gateway server cron", () => {
       payload: { kind: "systemEvent", text: "legacy webhook" },
       state: {},
     };
-    const { prevSkipCron, dir } = await setupCronTestRun({
+    const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-webhook-",
       cronEnabled: false,
       jobs: [legacyNotifyJob],
@@ -741,7 +748,7 @@ describe("gateway server cron", () => {
       await yieldToEventLoop();
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     } finally {
-      await cleanupCronTestRun({ ws, server, dir, prevSkipCron });
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
   }, 60_000);
 });
