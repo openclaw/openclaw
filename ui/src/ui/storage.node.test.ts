@@ -60,4 +60,20 @@ describe("loadSettings default gateway URL derivation", () => {
     const { loadSettings } = await import("./storage.ts");
     expect(loadSettings().gatewayUrl).toBe("ws://gateway.example:18789/apps/openclaw");
   });
+
+  it("hydrates dismissed update version when persisted", async () => {
+    vi.stubGlobal("location", {
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/openclaw/chat",
+    } as Location);
+    vi.stubGlobal("window", {} as Window & typeof globalThis);
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({ dismissedUpdateVersion: "2026.3.1" }),
+    );
+
+    const { loadSettings } = await import("./storage.ts");
+    expect(loadSettings().dismissedUpdateVersion).toBe("2026.3.1");
+  });
 });

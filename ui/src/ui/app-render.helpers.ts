@@ -8,9 +8,10 @@ import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import type { UiSettings } from "./storage.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { SessionsListResult, UpdateAvailable } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
@@ -45,6 +46,19 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
     sessionKey,
     lastActiveSessionKey: sessionKey,
   });
+}
+
+export function shouldRenderUpdateBanner(
+  updateAvailable: UpdateAvailable | null,
+  settings: Pick<UiSettings, "dismissedUpdateVersion">,
+): boolean {
+  if (!updateAvailable) {
+    return false;
+  }
+  if (updateAvailable.latestVersion === updateAvailable.currentVersion) {
+    return false;
+  }
+  return settings.dismissedUpdateVersion !== updateAvailable.latestVersion;
 }
 
 export function renderTab(state: AppViewState, tab: Tab) {

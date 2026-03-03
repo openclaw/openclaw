@@ -3,7 +3,12 @@ import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
-import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
+import {
+  renderChatControls,
+  renderTab,
+  renderThemeToggle,
+  shouldRenderUpdateBanner,
+} from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
@@ -143,11 +148,9 @@ export function renderApp(state: AppViewState) {
     (typeof state.hello?.server?.version === "string" && state.hello.server.version.trim()) ||
     state.updateAvailable?.currentVersion ||
     t("common.na");
-  const availableUpdate =
-    state.updateAvailable &&
-    state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion
-      ? state.updateAvailable
-      : null;
+  const availableUpdate = shouldRenderUpdateBanner(state.updateAvailable, state.settings)
+    ? state.updateAvailable
+    : null;
   const versionStatusClass = availableUpdate ? "warn" : "ok";
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
@@ -309,8 +312,22 @@ export function renderApp(state: AppViewState) {
         ${
           availableUpdate
             ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${availableUpdate.latestVersion}
-              (running v${availableUpdate.currentVersion}).
+              <span>
+                <strong>Update available:</strong> v${availableUpdate.latestVersion}
+                (running v${availableUpdate.currentVersion}).
+              </span>
+              <button
+                class="btn btn--sm btn--icon update-banner__dismiss"
+                @click=${() =>
+                  state.applySettings({
+                    ...state.settings,
+                    dismissedUpdateVersion: availableUpdate.latestVersion,
+                  })}
+                title="Dismiss update notice"
+                aria-label="Dismiss update notice"
+              >
+                ${icons.x}
+              </button>
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}

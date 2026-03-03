@@ -8,6 +8,11 @@
   position: sticky;
   top: 0;
   z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
   margin: 0 calc(-1 * var(--shell-pad)) 0;
   border-radius: 0;
   border-left: none;
@@ -18,7 +23,6 @@
 }
 
 .update-banner__btn {
-  margin-left: 8px;
   border-color: var(--danger);
   color: var(--danger);
   font-size: 12px;
@@ -27,6 +31,13 @@
 
 .update-banner__btn:hover:not(:disabled) {
   background: rgba(239, 68, 68, 0.15);
+}
+
+.update-banner__dismiss {
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
+  color: var(--danger);
 }
 
 /* ===========================================

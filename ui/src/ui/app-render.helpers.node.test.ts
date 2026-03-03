@@ -3,6 +3,7 @@ import {
   isCronSessionKey,
   parseSessionKey,
   resolveSessionDisplayName,
+  shouldRenderUpdateBanner,
 } from "./app-render.helpers.ts";
 import type { SessionsListResult } from "./types.ts";
 
@@ -282,5 +283,38 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("shouldRenderUpdateBanner", () => {
+  it("returns false when update payload is missing", () => {
+    expect(shouldRenderUpdateBanner(null, {})).toBe(false);
+  });
+
+  it("returns false when latest version matches current version", () => {
+    expect(
+      shouldRenderUpdateBanner(
+        { latestVersion: "2026.3.1", currentVersion: "2026.3.1", channel: "latest" },
+        { dismissedUpdateVersion: undefined },
+      ),
+    ).toBe(false);
+  });
+
+  it("returns false when user already dismissed the same latest version", () => {
+    expect(
+      shouldRenderUpdateBanner(
+        { latestVersion: "2026.3.1", currentVersion: "2026.2.26", channel: "latest" },
+        { dismissedUpdateVersion: "2026.3.1" },
+      ),
+    ).toBe(false);
+  });
+
+  it("returns true for a new version when dismissal points to an older version", () => {
+    expect(
+      shouldRenderUpdateBanner(
+        { latestVersion: "2026.3.2", currentVersion: "2026.2.26", channel: "latest" },
+        { dismissedUpdateVersion: "2026.3.1" },
+      ),
+    ).toBe(true);
   });
 });
