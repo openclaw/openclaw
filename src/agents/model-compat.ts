@@ -20,6 +20,23 @@ function isOpenAINativeEndpoint(baseUrl: string): boolean {
   }
 }
 
+/**
+ * Returns true for endpoints known to accept the `reasoning_effort` parameter.
+ * Only native OpenAI endpoints are confirmed to support it. OpenRouter handles
+ * reasoning via its own nested `reasoning.effort` format (injected separately).
+ * All other openai-completions backends (Ollama, vLLM, custom proxies, etc.)
+ * may reject or misinterpret the parameter, causing 400 errors or broken tool
+ * calling. See: openclaw/openclaw#33272
+ */
+function isReasoningEffortEndpoint(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
 function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
   return model.api === "anthropic-messages";
 }
@@ -67,13 +84,31 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   // here for non-native endpoints — those backends would return a 400 if we
   // sent `developer`, so safety takes precedence over the caller's hint.
   const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
-  if (!needsForce) {
+
+  // Default supportsReasoningEffort to false for non-OpenAI endpoints.
+  // pi-ai defaults supportsReasoningEffort to true for all unknown providers,
+  // which causes reasoning_effort to be injected into requests to backends
+  // that don't support it (Ollama, vLLM proxies, Kimi, etc.), breaking tool
+  // calling or causing 400 errors. Only override when the user has not
+  // explicitly set supportsReasoningEffort in their config.
+  // See: openclaw/openclaw#33272
+  const needsReasoningGuard =
+    baseUrl && !isReasoningEffortEndpoint(baseUrl) && compat?.supportsReasoningEffort === undefined;
+
+  if (!needsForce && !needsReasoningGuard) {
     return model;
   }
 
   // Return a new object — do not mutate the caller's model reference.
+  const compatPatch: Record<string, unknown> = {};
+  if (needsForce) {
+    compatPatch.supportsDeveloperRole = false;
+  }
+  if (needsReasoningGuard) {
+    compatPatch.supportsReasoningEffort = false;
+  }
   return {
     ...model,
-    compat: compat ? { ...compat, supportsDeveloperRole: false } : { supportsDeveloperRole: false },
+    compat: compat ? { ...compat, ...compatPatch } : compatPatch,
   } as typeof model;
 }

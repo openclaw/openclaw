@@ -23,6 +23,11 @@ function supportsDeveloperRole(model: Model<Api>): boolean | undefined {
   return (model.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole;
 }
 
+function supportsReasoningEffort(model: Model<Api>): boolean | undefined {
+  return (model.compat as { supportsReasoningEffort?: boolean } | undefined)
+    ?.supportsReasoningEffort;
+}
+
 function createTemplateModel(provider: string, id: string): Model<Api> {
   return {
     id,
@@ -231,6 +236,75 @@ describe("normalizeModelCompat", () => {
     model.compat = { supportsDeveloperRole: false };
     const normalized = normalizeModelCompat(model);
     expect(supportsDeveloperRole(normalized)).toBe(false);
+  });
+});
+
+describe("normalizeModelCompat — supportsReasoningEffort guard (#33272)", () => {
+  it("defaults supportsReasoningEffort to false for custom provider endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-ollama",
+      baseUrl: "https://ollama.example.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsReasoningEffort(normalized)).toBe(false);
+  });
+
+  it("defaults supportsReasoningEffort to false for Ollama endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "ollama",
+      baseUrl: "http://localhost:11434/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsReasoningEffort(normalized)).toBe(false);
+  });
+
+  it("preserves supportsReasoningEffort for native OpenAI endpoint", () => {
+    const model = {
+      ...baseModel(),
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    // Should not force supportsReasoningEffort off for native OpenAI
+    expect(supportsReasoningEffort(normalized)).toBeUndefined();
+  });
+
+  it("respects explicit supportsReasoningEffort: true from user config", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-gemini-proxy",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsReasoningEffort: true },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsReasoningEffort(normalized)).toBe(true);
+  });
+
+  it("respects explicit supportsReasoningEffort: false from user config", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-provider",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsReasoningEffort: false },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsReasoningEffort(normalized)).toBe(false);
+  });
+
+  it("does not touch supportsReasoningEffort for models with empty baseUrl", () => {
+    const model = {
+      ...baseModel(),
+      provider: "openai",
+    };
+    delete (model as { baseUrl?: unknown }).baseUrl;
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsReasoningEffort(normalized)).toBeUndefined();
   });
 });
 
