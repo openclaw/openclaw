@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -10,6 +10,7 @@ import {
   deriveSessionTitle,
   listAgentsForGateway,
   listSessionsFromStore,
+  loadCombinedSessionStoreForGateway,
   parseGroupKey,
   pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -744,5 +745,65 @@ describe("listSessionsFromStore search", () => {
     expect(stale?.totalTokensFresh).toBe(false);
     expect(missing?.totalTokens).toBeUndefined();
     expect(missing?.totalTokensFresh).toBe(false);
+  });
+});
+
+describe("loadCombinedSessionStoreForGateway (#32804)", () => {
+  const savedStateDir = process.env.OPENCLAW_STATE_DIR;
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    if (savedStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = savedStateDir;
+    }
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("includes sessions from disk-only agents when agents.list is configured", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-acp-"));
+    tempDirs.push(root);
+
+    // Set up state dir with two agent dirs: "main" (configured) and "codex" (ACP-spawned, disk-only).
+    process.env.OPENCLAW_STATE_DIR = root;
+    const mainStore = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const codexStore = path.join(root, "agents", "codex", "sessions", "sessions.json");
+    fs.mkdirSync(path.dirname(mainStore), { recursive: true });
+    fs.mkdirSync(path.dirname(codexStore), { recursive: true });
+
+    const now = Date.now();
+    fs.writeFileSync(
+      mainStore,
+      JSON.stringify({
+        work: { sessionId: "sess-main", updatedAt: now },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      codexStore,
+      JSON.stringify({
+        "acp-task-1": { sessionId: "sess-acp", updatedAt: now - 1000 },
+      }),
+      "utf8",
+    );
+
+    const cfg = {
+      session: {
+        mainKey: "main",
+        store: path.join(root, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
+    const result = loadCombinedSessionStoreForGateway(cfg);
+
+    // The "codex" agent is only on disk (not in agents.list), but its sessions
+    // must still appear in the combined store.  (#32804)
+    const keys = Object.keys(result.store);
+    expect(keys).toContain("agent:main:work");
+    expect(keys).toContain("agent:codex:acp-task-1");
   });
 });
