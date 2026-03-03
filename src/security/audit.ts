@@ -8,6 +8,7 @@ import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { resolveGatewayProbeAuth } from "../gateway/probe-auth.js";
@@ -172,7 +173,7 @@ function isFeishuDocToolEnabled(cfg: OpenClawConfig): boolean {
   const baseTools = asRecord(feishu.tools);
   const baseDocEnabled = baseTools?.doc !== false;
   const baseAppId = hasNonEmptyString(feishu.appId);
-  const baseAppSecret = hasNonEmptyString(feishu.appSecret);
+  const baseAppSecret = hasConfiguredSecretInput(feishu.appSecret, cfg.secrets?.defaults);
   const baseConfigured = baseAppId && baseAppSecret;
 
   const accounts = asRecord(feishu.accounts);
@@ -193,7 +194,7 @@ function isFeishuDocToolEnabled(cfg: OpenClawConfig): boolean {
     }
     const accountConfigured =
       (hasNonEmptyString(account.appId) || baseAppId) &&
-      (hasNonEmptyString(account.appSecret) || baseAppSecret);
+      (hasConfiguredSecretInput(account.appSecret, cfg.secrets?.defaults) || baseAppSecret);
     if (accountConfigured) {
       return true;
     }
@@ -353,8 +354,43 @@ function collectGatewayConfigFindings(
     : [];
   const hasToken = typeof auth.token === "string" && auth.token.trim().length > 0;
   const hasPassword = typeof auth.password === "string" && auth.password.trim().length > 0;
+  const envTokenConfigured =
+    hasNonEmptyString(env.OPENCLAW_GATEWAY_TOKEN) || hasNonEmptyString(env.CLAWDBOT_GATEWAY_TOKEN);
+  const envPasswordConfigured =
+    hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD) ||
+    hasNonEmptyString(env.CLAWDBOT_GATEWAY_PASSWORD);
+  const tokenConfiguredFromConfig = hasConfiguredSecretInput(
+    cfg.gateway?.auth?.token,
+    cfg.secrets?.defaults,
+  );
+  const passwordConfiguredFromConfig = hasConfiguredSecretInput(
+    cfg.gateway?.auth?.password,
+    cfg.secrets?.defaults,
+  );
+  const remoteTokenConfigured = hasConfiguredSecretInput(
+    cfg.gateway?.remote?.token,
+    cfg.secrets?.defaults,
+  );
+  const explicitAuthMode = cfg.gateway?.auth?.mode;
+  const tokenCanWin =
+    hasToken || envTokenConfigured || tokenConfiguredFromConfig || remoteTokenConfigured;
+  const passwordCanWin =
+    explicitAuthMode === "password" ||
+    (explicitAuthMode !== "token" &&
+      explicitAuthMode !== "none" &&
+      explicitAuthMode !== "trusted-proxy" &&
+      !tokenCanWin);
+  const tokenConfigured = tokenCanWin;
+  const passwordConfigured =
+    hasPassword || (passwordCanWin && (envPasswordConfigured || passwordConfiguredFromConfig));
   const hasSharedSecret =
-    (auth.mode === "token" && hasToken) || (auth.mode === "password" && hasPassword);
+    explicitAuthMode === "token"
+      ? tokenConfigured
+      : explicitAuthMode === "password"
+        ? passwordConfigured
+        : explicitAuthMode === "none" || explicitAuthMode === "trusted-proxy"
+          ? false
+          : tokenConfigured || passwordConfigured;
   const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
   const allowRealIpFallback = cfg.gateway?.allowRealIpFallback === true;
@@ -702,7 +738,25 @@ function collectBrowserControlFindings(
   }
 
   const browserAuth = resolveBrowserControlAuth(cfg, env);
-  if (!browserAuth.token && !browserAuth.password) {
+  const explicitAuthMode = cfg.gateway?.auth?.mode;
+  const tokenConfigured =
+    Boolean(browserAuth.token) ||
+    hasNonEmptyString(env.OPENCLAW_GATEWAY_TOKEN) ||
+    hasNonEmptyString(env.CLAWDBOT_GATEWAY_TOKEN) ||
+    hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults);
+  const passwordCanWin =
+    explicitAuthMode === "password" ||
+    (explicitAuthMode !== "token" &&
+      explicitAuthMode !== "none" &&
+      explicitAuthMode !== "trusted-proxy" &&
+      !tokenConfigured);
+  const passwordConfigured =
+    Boolean(browserAuth.password) ||
+    (passwordCanWin &&
+      (hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD) ||
+        hasNonEmptyString(env.CLAWDBOT_GATEWAY_PASSWORD) ||
+        hasConfiguredSecretInput(cfg.gateway?.auth?.password, cfg.secrets?.defaults)));
+  if (!tokenConfigured && !passwordConfigured) {
     findings.push({
       checkId: "browser.control_no_auth",
       severity: "critical",
