@@ -801,6 +801,21 @@ Max total characters injected across all workspace bootstrap files. Default: `15
 }
 ```
 
+### `agents.defaults.bootstrapPromptTruncationWarning`
+
+Controls agent-visible warning text when bootstrap context is truncated.
+Default: `"once"`.
+
+- `"off"`: never inject warning text into the system prompt.
+- `"once"`: inject warning once per unique truncation signature (recommended).
+- `"always"`: inject warning on every run when truncation exists.
+
+```json5
+{
+  agents: { defaults: { bootstrapPromptTruncationWarning: "once" } }, // off | once | always
+}
+```
+
 ### `agents.defaults.imageMaxDimensionPx`
 
 Max pixel size for the longest image side in transcript/tool image blocks before provider calls.

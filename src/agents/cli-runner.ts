@@ -7,6 +7,12 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
+import {
+  analyzeBootstrapBudget,
+  buildBootstrapInjectionStats,
+  buildBootstrapPromptWarning,
+  buildBootstrapTruncationReportMeta,
+} from "./bootstrap-budget.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import {
@@ -26,8 +32,15 @@ import {
 } from "./cli-runner/helpers.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
-import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
+import {
+  classifyFailoverReason,
+  isFailoverErrorMessage,
+  resolveBootstrapMaxChars,
+  resolveBootstrapPromptTruncationWarningMode,
+  resolveBootstrapTotalMaxChars,
+} from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
@@ -49,6 +62,7 @@ export async function runCliAgent(params: {
   streamParams?: import("../commands/agent/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
+  bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
@@ -86,12 +100,28 @@ export async function runCliAgent(params: {
     .join("\n");
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { contextFiles } = await resolveBootstrapContextForRun({
+  const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+  });
+  const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
+  const bootstrapAnalysis = analyzeBootstrapBudget({
+    files: buildBootstrapInjectionStats({
+      bootstrapFiles,
+      injectedFiles: contextFiles,
+    }),
+    bootstrapMaxChars,
+    bootstrapTotalMaxChars,
+  });
+  const bootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(params.config);
+  const bootstrapPromptWarning = buildBootstrapPromptWarning({
+    analysis: bootstrapAnalysis,
+    mode: bootstrapPromptWarningMode,
+    previousSignature: params.bootstrapPromptWarningSignature,
   });
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
@@ -118,8 +148,31 @@ export async function runCliAgent(params: {
     docsPath: docsPath ?? undefined,
     tools: [],
     contextFiles,
+    bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
     modelDisplay,
     agentId: sessionAgentId,
+  });
+  const systemPromptReport = buildSystemPromptReport({
+    source: "run",
+    generatedAt: Date.now(),
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    provider: params.provider,
+    model: modelId,
+    workspaceDir,
+    bootstrapMaxChars,
+    bootstrapTotalMaxChars,
+    bootstrapTruncation: buildBootstrapTruncationReportMeta({
+      analysis: bootstrapAnalysis,
+      warningMode: bootstrapPromptWarningMode,
+      warning: bootstrapPromptWarning,
+    }),
+    sandbox: { mode: "off", sandboxed: false },
+    systemPrompt,
+    bootstrapFiles,
+    injectedFiles: contextFiles,
+    skillsPrompt: "",
+    tools: [],
   });
 
   // Helper function to execute CLI with given session ID
@@ -344,6 +397,7 @@ export async function runCliAgent(params: {
       payloads,
       meta: {
         durationMs: Date.now() - started,
+        systemPromptReport,
         agentMeta: {
           sessionId: output.sessionId ?? params.cliSessionId ?? params.sessionId ?? "",
           provider: params.provider,
@@ -373,6 +427,7 @@ export async function runCliAgent(params: {
           payloads,
           meta: {
             durationMs: Date.now() - started,
+            systemPromptReport,
             agentMeta: {
               sessionId: output.sessionId ?? params.sessionId ?? "",
               provider: params.provider,

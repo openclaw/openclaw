@@ -328,6 +328,14 @@ export type SessionSystemPromptReport = {
   workspaceDir?: string;
   bootstrapMaxChars?: number;
   bootstrapTotalMaxChars?: number;
+  bootstrapTruncation?: {
+    warningMode?: "off" | "once" | "always";
+    warningShown?: boolean;
+    promptWarningSignature?: string;
+    truncatedFiles?: number;
+    nearLimitFiles?: number;
+    totalNearLimit?: boolean;
+  };
   sandbox?: {
     mode?: string;
     sandboxed?: boolean;
