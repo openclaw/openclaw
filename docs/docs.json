@@ -1233,12 +1233,7 @@
               },
               {
                 "group": "Security",
-                "pages": [
-                  "security/formal-verification",
-                  "security/README",
-                  "security/THREAT-MODEL-ATLAS",
-                  "security/CONTRIBUTING-THREAT-MODEL"
-                ]
+                "pages": ["security/formal-verification"]
               },
               {
                 "group": "Web interfaces",
