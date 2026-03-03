@@ -497,6 +497,28 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    threadCommunication: z
+      .object({
+        enabled: z.boolean().optional(),
+        allowSiblingMentionsInThreads: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    a2aRetry: z
+      .object({
+        enabled: z.boolean().optional(),
+        responseTimeoutMs: z.number().int().positive().optional(),
+        maxAttempts: z.number().int().positive().optional(),
+        checkIntervalMs: z.number().int().positive().optional(),
+        cleanupMaxAgeMs: z.number().int().positive().optional(),
+        escalationMentionId: z.string().optional(),
+        notifyOnFailure: z.boolean().optional(),
+        ttlHours: z.number().nonnegative().optional(),
+        spawnSubagentSessions: z.boolean().optional(),
+        spawnAcpSessions: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     threadBindings: z
       .object({
         enabled: z.boolean().optional(),
