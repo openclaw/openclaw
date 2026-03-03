@@ -36,11 +36,8 @@ describe("inferUpdateFailureHints", () => {
     expect(hints.join("\n")).toContain("npm config set prefix ~/.local");
   });
 
-  it("returns native optional dependency hint for node-gyp/opus failures", () => {
-    const result = makeResult(
-      "global update",
-      "node-pre-gyp ERR!\n@discordjs/opus\nnode-gyp rebuild failed",
-    );
+  it("returns native optional dependency hint for node-gyp failures", () => {
+    const result = makeResult("global update", "node-pre-gyp ERR!\nnode-gyp rebuild failed");
     const hints = inferUpdateFailureHints(result);
     expect(hints.join("\n")).toContain("--omit=optional");
   });

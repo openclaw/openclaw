@@ -247,9 +247,6 @@
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.16.2"
   },
-  "optionalDependencies": {
-    "@discordjs/opus": "^0.10.0"
-  },
   "engines": {
     "node": ">=22.12.0"
   },
