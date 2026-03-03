@@ -172,6 +172,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     reactions: true,
     threads: true,
     media: true,
+    voiceMessages: true,
   },
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },

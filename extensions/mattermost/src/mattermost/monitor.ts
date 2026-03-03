@@ -756,6 +756,20 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         deliver: async (payload: ReplyPayload) => {
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+
+          // Voice message: send audio without text to avoid duplication
+          if (payload.audioAsVoice && mediaUrls.length > 0) {
+            for (const mediaUrl of mediaUrls) {
+              await sendMessageMattermost(to, "", {
+                accountId: account.accountId,
+                mediaUrl,
+                replyToId: threadRootId,
+              });
+            }
+            runtime.log?.(`delivered voice reply to ${to}`);
+            return;
+          }
+
           if (mediaUrls.length === 0) {
             const chunkMode = core.channel.text.resolveChunkMode(
               cfg,
