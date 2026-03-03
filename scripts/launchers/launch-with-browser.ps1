@@ -83,8 +83,30 @@ while ($waited -lt $maxWait) {
 
 # --- Open Browser ---
 if ($isReady) {
-    Write-Host "[3/3] Launching browser: $BrowserUrl" -ForegroundColor Green
-    Start-Process $BrowserUrl
+    # Extract auth token to prevent rate-limit lockouts in the browser UI
+    $Token = ""
+    if ($env:OPENCLAW_GATEWAY_TOKEN) {
+        $Token = $env:OPENCLAW_GATEWAY_TOKEN
+    } else {
+        $ConfigPath = Join-Path $env:USERPROFILE ".openclaw\openclaw.json"
+        if (Test-Path $ConfigPath) {
+            try {
+                $ConfigRaw = Get-Content $ConfigPath -Raw
+                $Config = ConvertFrom-Json $ConfigRaw
+                if ($Config.gateway.auth.mode -eq "token" -and $Config.gateway.auth.token) {
+                    $Token = $Config.gateway.auth.token
+                }
+            } catch {}
+        }
+    }
+
+    $FinalUrl = $BrowserUrl
+    if ($Token) {
+        $FinalUrl = "$BrowserUrl/?token=$Token"
+    }
+
+    Write-Host "[3/3] Launching browser: $FinalUrl" -ForegroundColor Green
+    Start-Process $FinalUrl
 }
 else {
     Write-Host "[!] Server timed out." -ForegroundColor Red
