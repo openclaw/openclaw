@@ -14,11 +14,13 @@ export type CompactionModelCandidate = { provider: string; model: string };
  *
  * Returns [] when fallbackModel is absent or "off".
  * Returns candidates (excluding the current model) for "fallback" or an explicit string.
+ * Calls warn() when an explicit string cannot be resolved so the misconfiguration is visible.
  */
 export function resolveCompactionFallbackCandidates(params: {
   cfg?: OpenClawConfig;
   currentProvider: string;
   currentModel: string;
+  warn?: (msg: string) => void;
 }): CompactionModelCandidate[] {
   const fallbackModel = params.cfg?.agents?.defaults?.compaction?.fallbackModel;
   if (!fallbackModel || fallbackModel === "off") {
@@ -59,5 +61,11 @@ export function resolveCompactionFallbackCandidates(params: {
     defaultProvider,
     aliasIndex,
   });
-  return resolved && !isCurrent(resolved.ref) ? [resolved.ref] : [];
+  if (!resolved) {
+    params.warn?.(
+      `[compaction] fallbackModel "${fallbackModel}" could not be resolved — expected "off", "fallback", or a "provider/model" string; no fallback will be used`,
+    );
+    return [];
+  }
+  return !isCurrent(resolved.ref) ? [resolved.ref] : [];
 }

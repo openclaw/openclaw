@@ -109,7 +109,12 @@ export const AgentDefaultsSchema = z
           .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
           .optional(),
         identifierInstructions: z.string().optional(),
-        fallbackModel: z.string().optional(),
+        fallbackModel: z
+          .string()
+          .optional()
+          .describe(
+            'Fallback model for compaction on quota or rate-limit errors. "off" (default) disables fallback. "fallback" uses the agents.defaults.model.fallbacks chain in order. An explicit "provider/model" string (e.g. "anthropic/claude-haiku-4-5") targets a specific model.',
+          ),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),

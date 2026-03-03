@@ -296,6 +296,7 @@ export async function compactEmbeddedPiSessionDirect(
       cfg: params.config,
       currentProvider: provider,
       currentModel: modelId,
+      warn: (msg) => log.warn(msg),
     }),
   ];
   // Mutable model state — updated when falling back to a different candidate.
