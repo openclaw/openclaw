@@ -1,5 +1,13 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_USER_FILENAME,
+  resolveDefaultAgentWorkspaceDir,
+} from "../agents/workspace.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -1538,5 +1546,61 @@ export const registerTelegramHandlers = ({
       oversizeLogMessage: "channel post media exceeds size limit",
       errorMessage: "channel_post handler failed",
     });
+  });
+
+  // ── Soul Wizard: receive identity files from the Mini App ──────────────────
+  // https://github.com/monswag/soul-wizard
+  bot.on("message:web_app_data", async (ctx) => {
+    if (shouldSkipUpdate(ctx)) {
+      return;
+    }
+    const raw = ctx.message.web_app_data?.data;
+    if (!raw) {
+      return;
+    }
+
+    let payload: { identityMd?: string; soulMd?: string; userMd?: string };
+    try {
+      payload = JSON.parse(raw) as typeof payload;
+    } catch {
+      await ctx.reply("❌ Soul wizard sent invalid data — please try again.");
+      return;
+    }
+
+    const { identityMd, soulMd, userMd } = payload;
+    if (!identityMd || !soulMd || !userMd) {
+      await ctx.reply("❌ Soul wizard payload is incomplete — please try again.");
+      return;
+    }
+
+    // Guard against arbitrarily large payloads (generated files are well under 8 KB).
+    const MAX_FILE_BYTES = 65_536;
+    if (
+      Buffer.byteLength(identityMd, "utf-8") > MAX_FILE_BYTES ||
+      Buffer.byteLength(soulMd, "utf-8") > MAX_FILE_BYTES ||
+      Buffer.byteLength(userMd, "utf-8") > MAX_FILE_BYTES
+    ) {
+      await ctx.reply("❌ Soul wizard payload exceeds size limit — please try again.");
+      return;
+    }
+
+    const workspaceDir = resolveDefaultAgentWorkspaceDir();
+    try {
+      await mkdir(workspaceDir, { recursive: true });
+      await Promise.all([
+        writeFile(join(workspaceDir, DEFAULT_IDENTITY_FILENAME), identityMd, "utf-8"),
+        writeFile(join(workspaceDir, DEFAULT_SOUL_FILENAME), soulMd, "utf-8"),
+        writeFile(join(workspaceDir, DEFAULT_USER_FILENAME), userMd, "utf-8"),
+      ]);
+      await ctx.reply(
+        `✅ IDENTITY.md, SOUL.md, and USER.md have been written to your workspace` +
+          ` (any previous versions were replaced).\n\n` +
+          `Review the files before restarting the gateway to make sure everything looks right.`,
+        { reply_markup: { remove_keyboard: true } },
+      );
+    } catch (err) {
+      runtime.log?.(danger(`[telegram] web_app_data write failed: ${String(err)}`));
+      await ctx.reply(`❌ Failed to write identity files: ${String(err)}`);
+    }
   });
 };
