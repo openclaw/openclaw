@@ -510,6 +510,29 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toContain("forwarded hello");
   });
 
+  it("resolves user mentions in content", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "Hello <@123> and <@456>!",
+        mentionedUsers: [
+          { id: "123", username: "alice", globalName: "Alice Wonderland", discriminator: "0" },
+          { id: "456", username: "bob", discriminator: "0" },
+        ],
+      }),
+    );
+    expect(text).toBe("Hello @Alice Wonderland and @bob!");
+  });
+
+  it("leaves content unchanged if no mentions present", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "Hello world",
+        mentionedUsers: [],
+      }),
+    );
+    expect(text).toBe("Hello world");
+  });
+
   it("uses sticker placeholders when content is empty", () => {
     const text = resolveDiscordMessageText(
       asMessage({
