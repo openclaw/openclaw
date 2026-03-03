@@ -12,7 +12,6 @@ import {
   type OpenClawConfig,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk";
-import { waitForAbortSignal } from "../../../src/infra/abort-signal.js";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
@@ -30,6 +29,20 @@ import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
 import type { CoreConfig } from "./types.js";
+
+/** Wait for an abort signal to fire (resolves when aborted or if already aborted). Plugin-local to avoid core path dependency when installed. */
+async function waitForAbortSignal(signal?: AbortSignal): Promise<void> {
+  if (!signal || signal.aborted) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 const meta = {
   id: "nextcloud-talk",
