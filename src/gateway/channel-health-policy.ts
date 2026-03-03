@@ -1,6 +1,7 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 
 export type ChannelHealthSnapshot = {
+  connectionModel?: "stateful" | "stateless";
   running?: boolean;
   connected?: boolean;
   enabled?: boolean;
@@ -63,6 +64,11 @@ export function evaluateChannelHealth(
   }
   if (!snapshot.running) {
     return { healthy: false, reason: "not-running" };
+  }
+  // Stateless/webhook channels should not be judged by idle event age or
+  // "connected" state. Keep auto-restart only for true stopped/crashed tasks.
+  if (snapshot.connectionModel === "stateless") {
+    return { healthy: true, reason: "healthy" };
   }
   const activeRuns =
     typeof snapshot.activeRuns === "number" && Number.isFinite(snapshot.activeRuns)
