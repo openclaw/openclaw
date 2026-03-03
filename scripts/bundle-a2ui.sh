@@ -24,6 +24,21 @@ if [[ ! -d "$A2UI_RENDERER_DIR" || ! -d "$A2UI_APP_DIR" ]]; then
   exit 1
 fi
 
+# WSL detection: when pnpm runs "bash" on Windows it resolves to WSL
+# (C:\Windows\System32\bash.exe), where native Node.js is typically absent.
+# The pnpm wrappers for tsc/rolldown also invoke node internally, so the
+# entire build pipeline fails. Use the prebuilt bundle when available;
+# otherwise guide the user to build outside WSL where Windows node is on PATH.
+if grep -qi microsoft /proc/version 2>/dev/null; then
+  if [[ -f "$OUTPUT_FILE" ]]; then
+    echo "WSL detected; using prebuilt A2UI bundle."
+    exit 0
+  fi
+  echo "WSL environment detected but no prebuilt bundle found at: $OUTPUT_FILE" >&2
+  echo "Build outside WSL first (e.g. Git Bash): pnpm canvas:a2ui:bundle" >&2
+  exit 1
+fi
+
 INPUT_PATHS=(
   "$ROOT_DIR/package.json"
   "$ROOT_DIR/pnpm-lock.yaml"
