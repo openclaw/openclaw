@@ -420,7 +420,15 @@ export const buildTelegramMessageContext = async ({
     direction: "inbound",
   });
 
-  const botUsername = primaryCtx.me?.username?.toLowerCase();
+  let botUsername =
+    primaryCtx.me?.username?.toLowerCase() ??
+    (
+      bot as Bot & {
+        botInfo?: {
+          username?: string;
+        };
+      }
+    ).botInfo?.username?.toLowerCase();
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
   const senderAllowedForCommands = isSenderAllowed({
     allow: allowForCommands,
@@ -527,6 +535,18 @@ export const buildTelegramMessageContext = async ({
   const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
     (ent) => ent.type === "mention",
   );
+  if (
+    !botUsername &&
+    isGroup &&
+    requireMention &&
+    (hasAnyMention || (msg.text ?? msg.caption ?? "").includes("@"))
+  ) {
+    try {
+      botUsername = (await bot.api.getMe()).username?.toLowerCase();
+    } catch (err) {
+      logVerbose(`telegram: failed to resolve bot username for mention detection: ${String(err)}`);
+    }
+  }
   const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
 
   const computedWasMentioned = matchesMentionWithExplicit({

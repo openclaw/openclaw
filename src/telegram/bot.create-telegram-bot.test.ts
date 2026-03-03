@@ -12,6 +12,7 @@ import {
   getLoadConfigMock,
   getLoadWebMediaMock,
   getOnHandler,
+  getMeSpy,
   getReadChannelAllowFromStoreMock,
   getUpsertChannelPairingRequestMock,
   makeForumGroupMessageCtx,
@@ -1279,6 +1280,40 @@ describe("createTelegramBot", () => {
         expect(payload.WasMentioned, testCase.name).toBe(testCase.expectedWasMentioned);
       }
     }
+  });
+
+  it("falls back to getMe when ctx.me is missing for explicit mention detection", async () => {
+    resetHarnessSpies();
+    getMeSpy.mockResolvedValue({
+      username: "openclaw_bot",
+      has_topics_enabled: true,
+    });
+    loadConfig.mockReturnValue({
+      messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+
+    await dispatchMessage({
+      message: {
+        chat: { id: 7, type: "group", title: "Test Group" },
+        text: "@openclaw_bot hello",
+        entities: [{ type: "mention", offset: 0, length: 13 }],
+        date: 1_736_380_900,
+        message_id: 200,
+        from: { id: 9, first_name: "Ada" },
+      },
+      me: {},
+    });
+
+    expect(getMeSpy).toHaveBeenCalledTimes(1);
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.WasMentioned).toBe(true);
   });
   it("includes reply-to context when a Telegram reply is received", async () => {
     resetHarnessSpies();
