@@ -80,13 +80,24 @@ export async function resolveSlackMessageContent(params: {
   // Bot messages (e.g. Prometheus, Gatus webhooks) often carry content only in
   // non-forwarded attachments (is_share !== true). Extract their text/fallback
   // so the message isn't silently dropped when `allowBots: true` (#27616).
-  // Skip is_share attachments since resolveSlackAttachmentContent already handles those.
+  // Skip the first 8 is_share attachments since resolveSlackAttachmentContent already handles those.
+  // However, keep is_share attachments beyond the first 8 as a fallback in case there are more
+  // than MAX_SLACK_FORWARDED_ATTACHMENTS (8), since resolveSlackAttachmentContent only processes
+  // the first 8.
+  let isShareCount = 0;
   const botAttachmentText =
     params.isBotMessage && !attachmentContent?.text
       ? (params.message.attachments ?? [])
-          .filter((a) => !a.is_share)
-          .map((a) => a.text?.trim() || a.fallback?.trim())
-          .filter(Boolean)
+          .flatMap((a) => {
+            if (a.is_share) {
+              if (isShareCount < MAX_SLACK_FORWARDED_ATTACHMENTS) {
+                isShareCount++;
+                return [];
+              }
+            }
+            const text = a.text?.trim() || a.fallback?.trim();
+            return text ? [text] : [];
+          })
           .join("\n")
       : undefined;
 
