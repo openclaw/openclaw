@@ -106,6 +106,7 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
+import { createReadinessChecker, type ReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { ensureGatewayStartupAuth } from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
@@ -516,6 +517,13 @@ export async function startGatewayServer(
   if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
+  const serverStartedAt = Date.now();
+  let pendingReadinessChecker: ReadinessChecker | undefined;
+  const getReadiness: ReadinessChecker = () =>
+    pendingReadinessChecker
+      ? pendingReadinessChecker()
+      : { ready: true, failing: [], uptimeMs: Date.now() - serverStartedAt };
+
   const {
     canvasHost,
     httpServer,
@@ -558,6 +566,7 @@ export async function startGatewayServer(
     log,
     logHooks,
     logPlugins,
+    getReadiness,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   const nodeRegistry = new NodeRegistry();
@@ -593,6 +602,7 @@ export async function startGatewayServer(
     channelRuntimeEnvs,
     channelRuntime: createPluginRuntime().channel,
   });
+  pendingReadinessChecker = createReadinessChecker({ channelManager, startedAt: serverStartedAt });
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
 
