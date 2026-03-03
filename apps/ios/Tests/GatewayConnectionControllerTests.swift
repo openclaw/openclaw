@@ -71,18 +71,37 @@ import UIKit
     }
 
     @Test @MainActor func loadLastConnectionReadsSavedValues() {
-        withUserDefaults([:]) {
-            GatewaySettingsStore.saveLastGatewayConnectionManual(
-                host: "gateway.example.com",
-                port: 443,
-                useTLS: true,
-                stableID: "manual|gateway.example.com|443")
-            let loaded = GatewaySettingsStore.loadLastGatewayConnection()
-            #expect(loaded == .manual(host: "gateway.example.com", port: 443, useTLS: true, stableID: "manual|gateway.example.com|443"))
+        let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
+        defer {
+            if let prior {
+                _ = KeychainStore.saveString(prior, service: "ai.openclaw.gateway", account: "lastConnection")
+            } else {
+                _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+            }
         }
+        _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+
+        GatewaySettingsStore.saveLastGatewayConnectionManual(
+            host: "gateway.example.com",
+            port: 443,
+            useTLS: true,
+            stableID: "manual|gateway.example.com|443")
+        let loaded = GatewaySettingsStore.loadLastGatewayConnection()
+        #expect(loaded == .manual(host: "gateway.example.com", port: 443, useTLS: true, stableID: "manual|gateway.example.com|443"))
     }
 
     @Test @MainActor func loadLastConnectionReturnsNilForInvalidData() {
+        let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
+        defer {
+            if let prior {
+                _ = KeychainStore.saveString(prior, service: "ai.openclaw.gateway", account: "lastConnection")
+            } else {
+                _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+            }
+        }
+        _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+
+        // Plant legacy UserDefaults with invalid host/port to exercise migration + validation.
         withUserDefaults([
             "gateway.last.kind": "manual",
             "gateway.last.host": "",
