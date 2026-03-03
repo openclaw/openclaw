@@ -221,6 +221,7 @@ describe("applyAuthChoice", () => {
     expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
       "openai-codex/gpt-5.3-codex",
     );
+    expect(result.config.agents?.defaults?.models?.["openai-codex/gpt-5.3-codex"]).toBeUndefined();
   });
 
   it("prompts and writes provider API key for common providers", async () => {

@@ -103,7 +103,23 @@ export async function applyAuthChoiceOpenAI(
       });
       if (params.setDefaultModel) {
         const previousPrimary = resolveAgentModelPrimaryValue(nextConfig.agents?.defaults?.model);
-        nextConfig = applyPrimaryModel(nextConfig, OPENAI_CODEX_DEFAULT_MODEL);
+        nextConfig = {
+          ...nextConfig,
+          agents: {
+            ...nextConfig.agents,
+            defaults: {
+              ...nextConfig.agents?.defaults,
+              model:
+                nextConfig.agents?.defaults?.model &&
+                typeof nextConfig.agents.defaults.model === "object"
+                  ? {
+                      ...nextConfig.agents.defaults.model,
+                      primary: OPENAI_CODEX_DEFAULT_MODEL,
+                    }
+                  : { primary: OPENAI_CODEX_DEFAULT_MODEL },
+            },
+          },
+        };
         const nextPrimary = resolveAgentModelPrimaryValue(nextConfig.agents?.defaults?.model);
         if (nextPrimary !== previousPrimary) {
           await params.prompter.note(
