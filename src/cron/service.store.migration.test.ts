@@ -62,6 +62,26 @@ async function migrateLegacyJob(legacyJob: Record<string, unknown>) {
   }
 }
 
+async function expectDefaultCronStaggerForLegacySchedule(params: {
+  id: string;
+  name: string;
+  expr: string;
+}) {
+  const createdAtMs = 1_700_000_000_000;
+  const migrated = await migrateLegacyJob(
+    makeLegacyJob({
+      id: params.id,
+      name: params.name,
+      createdAtMs,
+      updatedAtMs: createdAtMs,
+      schedule: { kind: "cron", expr: params.expr, tz: "UTC" },
+    }),
+  );
+  const schedule = migrated.schedule as Record<string, unknown>;
+  expect(schedule.kind).toBe("cron");
+  expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+}
+
 describe("cron store migration", () => {
   beforeEach(() => {
     noopLogger.debug.mockClear();
@@ -130,35 +150,19 @@ describe("cron store migration", () => {
   });
 
   it("adds default staggerMs to legacy recurring top-of-hour cron schedules", async () => {
-    const createdAtMs = 1_700_000_000_000;
-    const migrated = await migrateLegacyJob(
-      makeLegacyJob({
-        id: "job-cron-legacy",
-        name: "Legacy cron",
-        createdAtMs,
-        updatedAtMs: createdAtMs,
-        schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
-      }),
-    );
-    const schedule = migrated.schedule as Record<string, unknown>;
-    expect(schedule.kind).toBe("cron");
-    expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+    await expectDefaultCronStaggerForLegacySchedule({
+      id: "job-cron-legacy",
+      name: "Legacy cron",
+      expr: "0 */2 * * *",
+    });
   });
 
   it("adds default staggerMs to legacy 6-field top-of-hour cron schedules", async () => {
-    const createdAtMs = 1_700_000_000_000;
-    const migrated = await migrateLegacyJob(
-      makeLegacyJob({
-        id: "job-cron-seconds-legacy",
-        name: "Legacy cron seconds",
-        createdAtMs,
-        updatedAtMs: createdAtMs,
-        schedule: { kind: "cron", expr: "0 0 */3 * * *", tz: "UTC" },
-      }),
-    );
-    const schedule = migrated.schedule as Record<string, unknown>;
-    expect(schedule.kind).toBe("cron");
-    expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+    await expectDefaultCronStaggerForLegacySchedule({
+      id: "job-cron-seconds-legacy",
+      name: "Legacy cron seconds",
+      expr: "0 0 */3 * * *",
+    });
   });
 
   it("removes invalid legacy staggerMs from non top-of-hour cron schedules", async () => {
