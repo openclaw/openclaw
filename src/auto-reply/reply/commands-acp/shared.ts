@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { toAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
 import type { AcpRuntimeError } from "../../../acp/runtime/errors.js";
 import type { AcpRuntimeSessionMode } from "../../../acp/runtime/types.js";
@@ -415,9 +416,17 @@ export function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
   }
   const backendId = resolveConfiguredAcpBackendId(cfg).toLowerCase();
   if (backendId === "acpx") {
-    const localPath = path.resolve(process.cwd(), "extensions/acpx");
-    if (existsSync(localPath)) {
-      return `openclaw plugins install ${localPath}`;
+    // Try CWD first (dev/monorepo), then the bundled extension relative to
+    // the package root.  The scoped npm package @openclaw/acpx is NOT
+    // published, so we must resolve the local path.  See: #32380
+    const cwdPath = path.resolve(process.cwd(), "extensions/acpx");
+    if (existsSync(cwdPath)) {
+      return `openclaw plugins install ${cwdPath}`;
+    }
+    const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
+    const bundledPath = path.resolve(pkgRoot, "extensions/acpx");
+    if (existsSync(bundledPath)) {
+      return `openclaw plugins install ${bundledPath}`;
     }
     return "openclaw plugins install @openclaw/acpx";
   }
