@@ -620,17 +620,20 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
   }
 
   const normalizedPrompt = params.prompt.trim();
-  const carryForwardEntries = orphanedUserCarryForward.toReversed().filter((entry) => {
-    const normalizedEntry = entry.trim();
-    if (!normalizedEntry) {
-      return false;
+  const carryForwardEntries = orphanedUserCarryForward
+    .toReversed()
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (normalizedPrompt) {
+    // Drop only one prompt-echo entry to avoid transient retry duplication,
+    // while preserving distinct repeated orphaned turns with identical text.
+    const promptEchoIndex = carryForwardEntries.findLastIndex(
+      (entry) => entry === normalizedPrompt,
+    );
+    if (promptEchoIndex >= 0) {
+      carryForwardEntries.splice(promptEchoIndex, 1);
     }
-    if (!normalizedPrompt) {
-      return true;
-    }
-    // Avoid duplicate "<user text>\n\n<user text>" prompts on transient retries.
-    return normalizedEntry !== normalizedPrompt;
-  });
+  }
   if (carryForwardEntries.length === 0) {
     return {
       prompt: params.prompt,

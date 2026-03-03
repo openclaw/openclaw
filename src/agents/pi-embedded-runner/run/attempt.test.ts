@@ -263,6 +263,43 @@ describe("recoverOrphanedUserMessagesForPrompt", () => {
     });
     expect(replaceMessages).toHaveBeenCalledTimes(1);
   });
+
+  it("preserves repeated orphaned turns when multiple entries match current prompt", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: { role: "assistant", content: [{ type: "text", text: "seed assistant" }] },
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: { role: "user", content: [{ type: "text", text: "retry me" }] },
+        },
+        {
+          id: "u2",
+          type: "message",
+          parentId: "u1",
+          message: { role: "user", content: [{ type: "text", text: "retry me" }] },
+        },
+      ],
+      "u2",
+    );
+
+    const replaceMessages = vi.fn();
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "retry me",
+      replaceMessages,
+    });
+
+    expect(result.recoveredCount).toBe(2);
+    expect(result.mergedCount).toBe(1);
+    expect(result.prompt).toBe("retry me\n\nretry me");
+    expect(replaceMessages).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("resolveAttemptFsWorkspaceOnly", () => {
