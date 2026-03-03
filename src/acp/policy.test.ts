@@ -11,11 +11,11 @@ import {
 } from "./policy.js";
 
 describe("acp policy", () => {
-  it("treats ACP as enabled by default", () => {
+  it("treats ACP + ACP dispatch as enabled by default", () => {
     const cfg = {} satisfies OpenClawConfig;
     expect(isAcpEnabledByPolicy(cfg)).toBe(true);
-    expect(isAcpDispatchEnabledByPolicy(cfg)).toBe(false);
-    expect(resolveAcpDispatchPolicyState(cfg)).toBe("dispatch_disabled");
+    expect(isAcpDispatchEnabledByPolicy(cfg)).toBe(true);
+    expect(resolveAcpDispatchPolicyState(cfg)).toBe("enabled");
   });
 
   it("reports ACP disabled state when acp.enabled is false", () => {
