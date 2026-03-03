@@ -184,6 +184,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           enabled: true,
           configured: true,
           running: true,
+          // Reset connected so the health monitor doesn't see a stale `false`
+          // from the previous stop cycle while the provider is still connecting.
+          connected: undefined,
           lastStartAt: Date.now(),
           lastError: null,
           reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,

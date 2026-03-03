@@ -217,13 +217,30 @@ async function maybeApplyCrossContextMarker(params: {
   });
 }
 
-async function resolveChannel(cfg: OpenClawConfig, params: Record<string, unknown>) {
+async function resolveChannel(
+  cfg: OpenClawConfig,
+  params: Record<string, unknown>,
+  toolContext?: { currentChannelProvider?: string },
+) {
   const channelHint = readStringParam(params, "channel");
-  const selection = await resolveMessageChannelSelection({
-    cfg,
-    channel: channelHint,
-  });
-  return selection.channel;
+  try {
+    const selection = await resolveMessageChannelSelection({
+      cfg,
+      channel: channelHint,
+    });
+    return selection.channel;
+  } catch (err) {
+    // If the agent passed a platform-specific ID (e.g. a Discord snowflake) as
+    // the `channel` param instead of the channel type, fall back to the
+    // inferred channel from tool context so the call doesn't fail outright.
+    if (channelHint && toolContext?.currentChannelProvider) {
+      const fallback = normalizeMessageChannel(toolContext.currentChannelProvider);
+      if (fallback && isDeliverableMessageChannel(fallback)) {
+        return fallback;
+      }
+    }
+    throw err;
+  }
 }
 
 async function resolveActionTarget(params: {
@@ -754,7 +771,7 @@ export async function runMessageAction(
     }
   }
 
-  const channel = await resolveChannel(cfg, params);
+  const channel = await resolveChannel(cfg, params, input.toolContext);
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
     const byAgent = buildChannelAccountBindings(cfg).get(channel);

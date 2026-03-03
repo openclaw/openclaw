@@ -201,6 +201,7 @@ describe("channel-health-monitor", () => {
   });
 
   it("restarts a stuck channel (running but not connected)", async () => {
+    const now = Date.now();
     const manager = createSnapshotManager({
       whatsapp: {
         default: {
@@ -209,6 +210,8 @@ describe("channel-health-monitor", () => {
           enabled: true,
           configured: true,
           linked: true,
+          // Started long enough ago that the channel startup grace has elapsed.
+          lastStartAt: now - 300_000,
         },
       },
     });
@@ -216,6 +219,42 @@ describe("channel-health-monitor", () => {
     expect(manager.stopChannel).toHaveBeenCalledWith("whatsapp", "default");
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("whatsapp", "default");
     expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
+    monitor.stop();
+  });
+
+  it("skips a recently-started channel still within its startup grace", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          // Started very recently; the provider is still connecting.
+          lastStartAt: now - 5_000,
+        },
+      },
+    });
+    await expectNoRestart(manager);
+  });
+
+  it("respects custom channelStartupGraceMs", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          lastStartAt: now - 30_000,
+        },
+      },
+    });
+    // With a 60s channel startup grace, the channel should still be skipped.
+    const monitor = await startAndRunCheck(manager, { channelStartupGraceMs: 60_000 });
+    expect(manager.stopChannel).not.toHaveBeenCalled();
     monitor.stop();
   });
 
