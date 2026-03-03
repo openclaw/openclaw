@@ -923,6 +923,7 @@ export function buildKilocodeProvider(): ProviderConfig {
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
+  config?: OpenClawConfig;
 }): Promise<ModelsConfig["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
   const authStore = ensureAuthProfileStore(params.agentDir, {
@@ -1041,13 +1042,17 @@ export async function resolveImplicitProviders(params: {
   // Use the user's configured baseUrl (from explicit providers) for model
   // discovery so that remote / non-default Ollama instances are reachable.
   // Skip discovery when explicit models are already defined.
+  // Respect models.ollamaDiscovery.enabled toggle.
+  const ollamaDiscoveryEnabled = params.config?.models?.ollamaDiscovery?.enabled;
   const ollamaKey =
     resolveEnvApiKeyVarName("ollama") ??
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
   const explicitOllama = params.explicitProviders?.ollama;
   const hasExplicitModels =
     Array.isArray(explicitOllama?.models) && explicitOllama.models.length > 0;
-  if (hasExplicitModels && explicitOllama) {
+  if (ollamaDiscoveryEnabled === false) {
+    // User explicitly disabled Ollama discovery; skip entirely.
+  } else if (hasExplicitModels && explicitOllama) {
     providers.ollama = {
       ...explicitOllama,
       baseUrl: resolveOllamaApiBase(explicitOllama.baseUrl),
@@ -1097,15 +1102,18 @@ export async function resolveImplicitProviders(params: {
     };
   }
 
-  const huggingfaceKey =
-    resolveEnvApiKeyVarName("huggingface") ??
-    resolveApiKeyFromProfiles({ provider: "huggingface", store: authStore });
-  if (huggingfaceKey) {
-    const hfProvider = await buildHuggingfaceProvider(huggingfaceKey);
-    providers.huggingface = {
-      ...hfProvider,
-      apiKey: huggingfaceKey,
-    };
+  // HuggingFace discovery: respect models.huggingfaceDiscovery.enabled toggle.
+  if (params.config?.models?.huggingfaceDiscovery?.enabled !== false) {
+    const huggingfaceKey =
+      resolveEnvApiKeyVarName("huggingface") ??
+      resolveApiKeyFromProfiles({ provider: "huggingface", store: authStore });
+    if (huggingfaceKey) {
+      const hfProvider = await buildHuggingfaceProvider(huggingfaceKey);
+      providers.huggingface = {
+        ...hfProvider,
+        apiKey: huggingfaceKey,
+      };
+    }
   }
 
   const qianfanKey =
@@ -1141,8 +1149,14 @@ export async function resolveImplicitProviders(params: {
 
 export async function resolveImplicitCopilotProvider(params: {
   agentDir: string;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<ProviderConfig | null> {
+  // Respect models.copilotDiscovery.enabled toggle.
+  if (params.config?.models?.copilotDiscovery?.enabled === false) {
+    return null;
+  }
+
   const env = params.env ?? process.env;
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
