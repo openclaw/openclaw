@@ -748,7 +748,8 @@ export function renderApp(state: AppViewState) {
                     index = list.length;
                     updateConfigFormValue(state, ["agents", "list", index, "id"], agentId);
                   }
-                  const entry = list[index] as { skills?: unknown };
+                  // list[index] may be undefined when the stub was just created above.
+                  const entry = list[index] as { skills?: unknown } | undefined;
                   const normalizedSkill = skillName.trim();
                   if (!normalizedSkill) {
                     return;
@@ -756,8 +757,8 @@ export function renderApp(state: AppViewState) {
                   const allSkills =
                     state.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
                     [];
-                  const existing = Array.isArray(entry.skills)
-                    ? entry.skills.map((name) => String(name).trim()).filter(Boolean)
+                  const existing = Array.isArray(entry?.skills)
+                    ? (entry.skills as unknown[]).map((name) => String(name).trim()).filter(Boolean)
                     : undefined;
                   const base = existing ?? allSkills;
                   const next = new Set(base);
@@ -861,9 +862,10 @@ export function renderApp(state: AppViewState) {
                     updateConfigFormValue(state, ["agents", "list", index, "id"], agentId);
                   }
                   const basePath = ["agents", "list", index, "model"];
-                  const entry = list[index] as { model?: unknown };
+                  // list[index] may be undefined when the stub was just created above.
+                  const entry = list[index] as { model?: unknown } | undefined;
                   const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
-                  const existing = entry.model;
+                  const existing = entry?.model;
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
                       return existing.trim() || null;
