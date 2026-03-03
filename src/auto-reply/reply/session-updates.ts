@@ -13,6 +13,31 @@ import {
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 
+export const resolveSystemEventTimezone = (cfg: OpenClawConfig) => {
+  const raw = cfg.agents?.defaults?.envelopeTimezone?.trim();
+  if (!raw) {
+    // Fall back to the user's configured timezone instead of host timezone
+    // to avoid incorrect timestamps when host TZ differs from user TZ (#33083)
+    const userTz = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
+    return { mode: "iana" as const, timeZone: userTz };
+  }
+  const lowered = raw.toLowerCase();
+  if (lowered === "utc" || lowered === "gmt") {
+    return { mode: "utc" as const };
+  }
+  if (lowered === "local" || lowered === "host") {
+    return { mode: "local" as const };
+  }
+  if (lowered === "user") {
+    return {
+      mode: "iana" as const,
+      timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
+    };
+  }
+  const explicit = resolveTimezone(raw);
+  return explicit ? { mode: "iana" as const, timeZone: explicit } : { mode: "local" as const };
+};
+
 export async function buildQueuedSystemPrompt(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -41,28 +66,6 @@ export async function buildQueuedSystemPrompt(params: {
       return trimmed.replace(/ · last input [^·]+/i, "").trim();
     }
     return trimmed;
-  };
-
-  const resolveSystemEventTimezone = (cfg: OpenClawConfig) => {
-    const raw = cfg.agents?.defaults?.envelopeTimezone?.trim();
-    if (!raw) {
-      return { mode: "local" as const };
-    }
-    const lowered = raw.toLowerCase();
-    if (lowered === "utc" || lowered === "gmt") {
-      return { mode: "utc" as const };
-    }
-    if (lowered === "local" || lowered === "host") {
-      return { mode: "local" as const };
-    }
-    if (lowered === "user") {
-      return {
-        mode: "iana" as const,
-        timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
-      };
-    }
-    const explicit = resolveTimezone(raw);
-    return explicit ? { mode: "iana" as const, timeZone: explicit } : { mode: "local" as const };
   };
 
   const formatSystemEventTimestamp = (ts: number, cfg: OpenClawConfig) => {

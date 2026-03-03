@@ -8,7 +8,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
-import { buildQueuedSystemPrompt } from "./session-updates.js";
+import { buildQueuedSystemPrompt, resolveSystemEventTimezone } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
 
@@ -1161,6 +1161,43 @@ describe("buildQueuedSystemPrompt", () => {
       resetSystemEventsForTest();
       vi.useRealTimers();
     }
+  });
+});
+
+describe("resolveSystemEventTimezone", () => {
+  it("uses userTimezone when envelopeTimezone is not set", () => {
+    const result = resolveSystemEventTimezone({
+      agents: { defaults: { userTimezone: "America/Vancouver" } },
+    } as OpenClawConfig);
+    expect(result).toEqual({ mode: "iana", timeZone: "America/Vancouver" });
+  });
+
+  it("uses userTimezone when envelopeTimezone is empty string", () => {
+    const result = resolveSystemEventTimezone({
+      agents: { defaults: { envelopeTimezone: "  ", userTimezone: "Asia/Tokyo" } },
+    } as OpenClawConfig);
+    expect(result).toEqual({ mode: "iana", timeZone: "Asia/Tokyo" });
+  });
+
+  it("returns utc for envelopeTimezone 'utc'", () => {
+    const result = resolveSystemEventTimezone({
+      agents: { defaults: { envelopeTimezone: "utc" } },
+    } as OpenClawConfig);
+    expect(result).toEqual({ mode: "utc" });
+  });
+
+  it("returns iana with resolved user timezone for envelopeTimezone 'user'", () => {
+    const result = resolveSystemEventTimezone({
+      agents: { defaults: { envelopeTimezone: "user", userTimezone: "Europe/Vienna" } },
+    } as OpenClawConfig);
+    expect(result).toEqual({ mode: "iana", timeZone: "Europe/Vienna" });
+  });
+
+  it("returns local for envelopeTimezone 'local'", () => {
+    const result = resolveSystemEventTimezone({
+      agents: { defaults: { envelopeTimezone: "local" } },
+    } as OpenClawConfig);
+    expect(result).toEqual({ mode: "local" });
   });
 });
 
