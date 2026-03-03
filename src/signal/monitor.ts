@@ -288,11 +288,12 @@ async function deliverReplies(params: {
   maxBytes: number;
   textLimit: number;
   chunkMode: "length" | "newline";
-}): Promise<{ delivered: boolean; messageId?: string }> {
+}): Promise<{ delivered: boolean; messageId?: string; deliveredContent?: string }> {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
   let delivered = false;
   let lastMessageId: string | undefined;
+  let lastDeliveredContent: string | undefined;
   for (const payload of replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
@@ -300,6 +301,7 @@ async function deliverReplies(params: {
       continue;
     }
     if (mediaList.length === 0) {
+      const deliveredChunks: string[] = [];
       for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
         const result = await sendMessageSignal(target, chunk, {
           baseUrl,
@@ -308,9 +310,13 @@ async function deliverReplies(params: {
           accountId,
         });
         delivered = true;
+        deliveredChunks.push(chunk);
         if (result.messageId && result.messageId !== "unknown") {
           lastMessageId = result.messageId;
         }
+      }
+      if (deliveredChunks.length > 0) {
+        lastDeliveredContent = deliveredChunks.join("");
       }
     } else {
       let first = true;
@@ -329,12 +335,14 @@ async function deliverReplies(params: {
           lastMessageId = result.messageId;
         }
       }
+      lastDeliveredContent = text;
     }
     runtime.log?.(`delivered reply to ${target}`);
   }
   return {
     delivered,
     messageId: lastMessageId,
+    ...(lastDeliveredContent !== undefined ? { deliveredContent: lastDeliveredContent } : {}),
   };
 }
 

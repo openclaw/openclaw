@@ -18,6 +18,7 @@ import {
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop, logTypingFailure } from "../../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js";
@@ -224,12 +225,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         });
       },
     });
+    const deliveredContentByPayload = new WeakMap<ReplyPayload, string>();
 
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
       ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
       deliver: async (payload) => {
+        deliveredContentByPayload.delete(payload);
         const result = await deps.deliverReplies({
           replies: [payload],
           target: ctxPayload.To,
@@ -240,6 +243,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           maxBytes: deps.mediaMaxBytes,
           textLimit: deps.textLimit,
         });
+        if (result?.delivered) {
+          deliveredContentByPayload.set(payload, result.deliveredContent ?? payload.text ?? "");
+        }
         return {
           delivered: result?.delivered ?? true,
           messageId: result?.messageId,
@@ -247,13 +253,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       onDelivery: (payload, info) => {
         const target = ctxPayload.To;
+        const hookContent = deliveredContentByPayload.get(payload) ?? payload.text ?? "";
+        deliveredContentByPayload.delete(payload);
         if (info.success) {
           if (!info.delivered) {
             return;
           }
           emitMessageSentHooks({
             to: target,
-            content: payload.text ?? "",
+            content: hookContent,
             success: true,
             channelId: "signal",
             accountId: deps.accountId,
@@ -265,7 +273,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         }
         emitMessageSentHooks({
           to: target,
-          content: payload.text ?? "",
+          content: hookContent,
           success: false,
           error: info.error instanceof Error ? info.error.message : String(info.error),
           channelId: "signal",

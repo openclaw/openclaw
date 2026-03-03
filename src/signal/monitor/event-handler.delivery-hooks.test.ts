@@ -113,4 +113,34 @@ describe("signal message:sent delivery hooks", () => {
       messageId: "signal-msg-1",
     });
   });
+
+  it("emits success hooks with deliveredContent when provided", async () => {
+    setDispatchPayload({ text: "|A|B|   " });
+    const deliverReplies = vi.fn<SignalEventHandlerDeps["deliverReplies"]>(async () => ({
+      delivered: true,
+      messageId: "signal-msg-2",
+      deliveredContent: "A\tB",
+    }));
+    const handler = createDeliveryHookHandler({ deliverReplies });
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "hello",
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(emitMessageSentHooksMock).toHaveBeenCalledTimes(1);
+    expect(emitMessageSentHooksMock.mock.calls[0]?.[0]).toMatchObject({
+      to: "+15550001111",
+      content: "A\tB",
+      success: true,
+      channelId: "signal",
+      accountId: "default",
+      messageId: "signal-msg-2",
+    });
+  });
 });
