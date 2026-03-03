@@ -24,23 +24,41 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+function localOpenClawProfile(): Parameters<typeof createProfileResetOps>[0]["profile"] {
+  return {
+    name: "openclaw",
+    cdpUrl: "http://127.0.0.1:18800",
+    cdpHost: "127.0.0.1",
+    cdpIsLoopback: true,
+    cdpPort: 18800,
+    color: "#f60",
+    driver: "openclaw",
+    attachOnly: false,
+  };
+}
+
+function createLocalOpenClawResetOps(
+  params: Omit<Parameters<typeof createProfileResetOps>[0], "profile">,
+) {
+  return createProfileResetOps({ profile: localOpenClawProfile(), ...params });
+}
+
+function createStatelessResetOps(profile: Parameters<typeof createProfileResetOps>[0]["profile"]) {
+  return createProfileResetOps({
+    profile,
+    getProfileState: () => ({ profile: {} as never, running: null }),
+    stopRunningBrowser: vi.fn(async () => ({ stopped: false })),
+    isHttpReachable: vi.fn(async () => false),
+    resolveOpenClawUserDataDir: (name: string) => `/tmp/${name}`,
+  });
+}
+
 describe("createProfileResetOps", () => {
   it("stops extension relay for extension profiles", async () => {
-    const ops = createProfileResetOps({
-      profile: {
-        name: "chrome",
-        cdpUrl: "http://127.0.0.1:18800",
-        cdpHost: "127.0.0.1",
-        cdpIsLoopback: true,
-        cdpPort: 18800,
-        color: "#f60",
-        driver: "extension",
-        attachOnly: false,
-      },
-      getProfileState: () => ({ profile: {} as never, running: null }),
-      stopRunningBrowser: vi.fn(async () => ({ stopped: false })),
-      isHttpReachable: vi.fn(async () => false),
-      resolveOpenClawUserDataDir: (name: string) => `/tmp/${name}`,
+    const ops = createStatelessResetOps({
+      ...localOpenClawProfile(),
+      name: "chrome",
+      driver: "extension",
     });
 
     await expect(ops.resetProfile()).resolves.toEqual({
@@ -54,21 +72,14 @@ describe("createProfileResetOps", () => {
   });
 
   it("rejects remote non-extension profiles", async () => {
-    const ops = createProfileResetOps({
-      profile: {
-        name: "remote",
-        cdpUrl: "https://browserless.example/chrome",
-        cdpHost: "browserless.example",
-        cdpIsLoopback: false,
-        cdpPort: 443,
-        color: "#0f0",
-        driver: "openclaw",
-        attachOnly: false,
-      },
-      getProfileState: () => ({ profile: {} as never, running: null }),
-      stopRunningBrowser: vi.fn(async () => ({ stopped: false })),
-      isHttpReachable: vi.fn(async () => false),
-      resolveOpenClawUserDataDir: (name: string) => `/tmp/${name}`,
+    const ops = createStatelessResetOps({
+      ...localOpenClawProfile(),
+      name: "remote",
+      cdpUrl: "https://browserless.example/chrome",
+      cdpHost: "browserless.example",
+      cdpIsLoopback: false,
+      cdpPort: 443,
+      color: "#0f0",
     });
 
     await expect(ops.resetProfile()).rejects.toThrow(/only supported for local profiles/i);
@@ -86,17 +97,7 @@ describe("createProfileResetOps", () => {
       running: { pid: 1 } as never,
     }));
 
-    const ops = createProfileResetOps({
-      profile: {
-        name: "openclaw",
-        cdpUrl: "http://127.0.0.1:18800",
-        cdpHost: "127.0.0.1",
-        cdpIsLoopback: true,
-        cdpPort: 18800,
-        color: "#f60",
-        driver: "openclaw",
-        attachOnly: false,
-      },
+    const ops = createLocalOpenClawResetOps({
       getProfileState,
       stopRunningBrowser,
       isHttpReachable,
@@ -121,17 +122,7 @@ describe("createProfileResetOps", () => {
     fs.mkdirSync(profileDir, { recursive: true });
 
     const stopRunningBrowser = vi.fn(async () => ({ stopped: false }));
-    const ops = createProfileResetOps({
-      profile: {
-        name: "openclaw",
-        cdpUrl: "http://127.0.0.1:18800",
-        cdpHost: "127.0.0.1",
-        cdpIsLoopback: true,
-        cdpPort: 18800,
-        color: "#f60",
-        driver: "openclaw",
-        attachOnly: false,
-      },
+    const ops = createLocalOpenClawResetOps({
       getProfileState: () => ({ profile: {} as never, running: null }),
       stopRunningBrowser,
       isHttpReachable: vi.fn(async () => true),

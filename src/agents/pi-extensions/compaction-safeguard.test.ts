@@ -482,40 +482,39 @@ describe("compaction-safeguard double-compaction guard", () => {
   });
 });
 
+async function expectWorkspaceSummaryEmptyForAgentsAlias(
+  createAlias: (outsidePath: string, agentsPath: string) => void,
+) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
+  const prevCwd = process.cwd();
+  try {
+    const outside = path.join(root, "outside-secret.txt");
+    fs.writeFileSync(outside, "secret");
+    createAlias(outside, path.join(root, "AGENTS.md"));
+    process.chdir(root);
+    await expect(readWorkspaceContextForSummary()).resolves.toBe("");
+  } finally {
+    process.chdir(prevCwd);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe("readWorkspaceContextForSummary", () => {
   it.runIf(process.platform !== "win32")(
     "returns empty when AGENTS.md is a symlink escape",
     async () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-      const prevCwd = process.cwd();
-      try {
-        const outside = path.join(root, "outside-secret.txt");
-        fs.writeFileSync(outside, "secret");
-        fs.symlinkSync(outside, path.join(root, "AGENTS.md"));
-        process.chdir(root);
-        await expect(readWorkspaceContextForSummary()).resolves.toBe("");
-      } finally {
-        process.chdir(prevCwd);
-        fs.rmSync(root, { recursive: true, force: true });
-      }
+      await expectWorkspaceSummaryEmptyForAgentsAlias((outside, agentsPath) => {
+        fs.symlinkSync(outside, agentsPath);
+      });
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "returns empty when AGENTS.md is a hardlink alias",
     async () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
-      const prevCwd = process.cwd();
-      try {
-        const outside = path.join(root, "outside-secret.txt");
-        fs.writeFileSync(outside, "secret");
-        fs.linkSync(outside, path.join(root, "AGENTS.md"));
-        process.chdir(root);
-        await expect(readWorkspaceContextForSummary()).resolves.toBe("");
-      } finally {
-        process.chdir(prevCwd);
-        fs.rmSync(root, { recursive: true, force: true });
-      }
+      await expectWorkspaceSummaryEmptyForAgentsAlias((outside, agentsPath) => {
+        fs.linkSync(outside, agentsPath);
+      });
     },
   );
 });
