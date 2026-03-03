@@ -1635,7 +1635,7 @@ export async function runEmbeddedAttempt(
                   provider: params.provider,
                   model: params.modelId,
                   customInstructions: compactionCustomInstructions,
-                  trigger: "manual" as const, // TODO: add "plugin" trigger variant
+                  trigger: "plugin" as const,
                 });
               }
             })

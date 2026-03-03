@@ -140,7 +140,7 @@ export type CompactEmbeddedPiSessionParams = {
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
   customInstructions?: string;
-  trigger?: "overflow" | "manual";
+  trigger?: "overflow" | "manual" | "plugin";
   diagId?: string;
   attempt?: number;
   maxAttempts?: number;
