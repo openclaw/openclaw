@@ -356,21 +356,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(payload)).toBe("hello");
   });
 
-  it("chat.send does not emit an empty final payload for queued followups", async () => {
+  it("chat.send emits terminal final payload for queued followups without final text", async () => {
     createTranscriptFixture("openclaw-chat-send-queued-followup-");
     mockState.queuedFollowup = true;
     const respond = vi.fn();
     const context = createChatContext();
 
-    await runNonStreamingChatSend({
+    const payload = await runNonStreamingChatSend({
       context,
       respond,
       idempotencyKey: "idem-queued-followup",
-      expectBroadcast: false,
     });
 
     const broadcast = context.broadcast as unknown as ReturnType<typeof vi.fn>;
-    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    expect(payload).toEqual(
+      expect.objectContaining({
+        runId: "idem-queued-followup",
+        state: "final",
+      }),
+    );
+    expect(extractFirstTextBlock(payload)).toBeUndefined();
   });
 
   it("chat.send still emits final payload when queued followup also returns final output", async () => {
