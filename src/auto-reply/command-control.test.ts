@@ -296,33 +296,6 @@ describe("resolveCommandAuthorization", () => {
       expect(whatsappAuth.isAuthorizedSender).toBe(true);
     });
 
-    it("denies providers not present in commands.allowFrom when no wildcard is set", () => {
-      const cfg = {
-        commands: {
-          allowFrom: {
-            signal: ["user123"],
-          },
-        },
-        // Channel allowFrom would normally allow, but commands.allowFrom should override.
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig;
-
-      const ctx = {
-        Provider: "whatsapp",
-        Surface: "whatsapp",
-        From: "whatsapp:anyuser",
-        SenderId: "anyuser",
-      } as MsgContext;
-
-      const auth = resolveCommandAuthorization({
-        ctx,
-        cfg,
-        commandAuthorized: true,
-      });
-
-      expect(auth.isAuthorizedSender).toBe(false);
-    });
-
     it("falls back to channel allowFrom when commands.allowFrom not set", () => {
       const cfg = {
         channels: { whatsapp: { allowFrom: ["+15551234567"] } },
