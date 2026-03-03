@@ -14,6 +14,7 @@ import { createImageTool } from "./tools/image-tool.js";
 import { createMaestroTool } from "./tools/maestro-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
+import { createPdfTool } from "./tools/pdf-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -74,6 +75,8 @@ export function createOpenClawTools(options?: {
   requesterSenderId?: string | null;
   /** Whether the requesting sender is an owner. */
   senderIsOwner?: boolean;
+  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  sessionId?: string;
 }): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const imageTool = options?.agentDir?.trim()
@@ -87,6 +90,18 @@ export function createOpenClawTools(options?: {
             : undefined,
         fsPolicy: options?.fsPolicy,
         modelHasVision: options?.modelHasVision,
+      })
+    : null;
+  const pdfTool = options?.agentDir?.trim()
+    ? createPdfTool({
+        config: options?.config,
+        agentDir: options.agentDir,
+        workspaceDir,
+        sandbox:
+          options?.sandboxRoot && options?.sandboxFsBridge
+            ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
+            : undefined,
+        fsPolicy: options?.fsPolicy,
       })
     : null;
   const webSearchTool = createWebSearchTool({
@@ -184,6 +199,7 @@ export function createOpenClawTools(options?: {
     ...(webSearchContextTool ? [webSearchContextTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
+    ...(pdfTool ? [pdfTool] : []),
   ];
 
   const pluginTools = resolvePluginTools({
@@ -196,8 +212,11 @@ export function createOpenClawTools(options?: {
         config: options?.config,
       }),
       sessionKey: options?.agentSessionKey,
+      sessionId: options?.sessionId,
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
+      requesterSenderId: options?.requesterSenderId ?? undefined,
+      senderIsOwner: options?.senderIsOwner ?? undefined,
       sandboxed: options?.sandboxed,
     },
     existingToolNames: new Set(tools.map((tool) => tool.name)),

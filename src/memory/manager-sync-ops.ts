@@ -156,6 +156,7 @@ export abstract class MemoryManagerSyncOps {
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
+  private lastMetaSerialized: string | null = null;
 
   /** Audit event emitter — set by MemoryIndexManager during construction */
   protected emitAuditEvent?: AuditEventEmitter;
@@ -1268,22 +1269,30 @@ export abstract class MemoryManagerSyncOps {
       | { value: string }
       | undefined;
     if (!row?.value) {
+      this.lastMetaSerialized = null;
       return null;
     }
     try {
-      return JSON.parse(row.value) as MemoryIndexMeta;
+      const parsed = JSON.parse(row.value) as MemoryIndexMeta;
+      this.lastMetaSerialized = row.value;
+      return parsed;
     } catch {
+      this.lastMetaSerialized = null;
       return null;
     }
   }
 
   protected writeMeta(meta: MemoryIndexMeta) {
     const value = JSON.stringify(meta);
+    if (this.lastMetaSerialized === value) {
+      return;
+    }
     this.db
       .prepare(
         `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
       )
       .run(META_KEY, value);
+    this.lastMetaSerialized = value;
   }
 
   private resolveConfiguredSourcesForMeta(): MemorySource[] {

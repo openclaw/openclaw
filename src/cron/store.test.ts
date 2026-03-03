@@ -1,20 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCronStoreHarness } from "./service.test-harness.js";
 import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
-async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-store-"));
-  return {
-    dir,
-    storePath: path.join(dir, "jobs.json"),
-    cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
-    },
-  };
-}
+const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-store-" });
 
 function makeStore(jobId: string, enabled: boolean): CronStoreFile {
   const now = Date.now();
@@ -56,14 +47,13 @@ describe("cron store", () => {
     const store = await makeStorePath();
     const loaded = await loadCronStore(store.storePath);
     expect(loaded).toEqual({ version: 1, jobs: [] });
-    await store.cleanup();
   });
 
   it("throws when store contains invalid JSON", async () => {
     const store = await makeStorePath();
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, "{ not json", "utf-8");
     await expect(loadCronStore(store.storePath)).rejects.toThrow(/Failed to parse cron store/i);
-    await store.cleanup();
   });
 
   it("does not create a backup file when saving unchanged content", async () => {
@@ -74,7 +64,6 @@ describe("cron store", () => {
     await saveCronStore(store.storePath, payload);
 
     await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
-    await store.cleanup();
   });
 
   it("backs up previous content before replacing the store", async () => {
@@ -89,6 +78,63 @@ describe("cron store", () => {
     const backupRaw = await fs.readFile(`${store.storePath}.bak`, "utf-8");
     expect(JSON.parse(currentRaw)).toEqual(second);
     expect(JSON.parse(backupRaw)).toEqual(first);
-    await store.cleanup();
+  });
+});
+
+describe("saveCronStore", () => {
+  const dummyStore: CronStoreFile = { version: 1, jobs: [] };
+
+  it("persists and round-trips a store file", async () => {
+    const { storePath } = await makeStorePath();
+    await saveCronStore(storePath, dummyStore);
+    const loaded = await loadCronStore(storePath);
+    expect(loaded).toEqual(dummyStore);
+  });
+
+  it("retries rename on EBUSY then succeeds", async () => {
+    const { storePath } = await makeStorePath();
+    const realSetTimeout = globalThis.setTimeout;
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation(((handler: TimerHandler, _timeout?: number, ...args: unknown[]) =>
+        realSetTimeout(handler, 0, ...args)) as typeof setTimeout);
+    const origRename = fs.rename.bind(fs);
+    let ebusyCount = 0;
+    const spy = vi.spyOn(fs, "rename").mockImplementation(async (src, dest) => {
+      if (ebusyCount < 2) {
+        ebusyCount++;
+        const err = new Error("EBUSY") as NodeJS.ErrnoException;
+        err.code = "EBUSY";
+        throw err;
+      }
+      return origRename(src, dest);
+    });
+
+    try {
+      await saveCronStore(storePath, dummyStore);
+
+      expect(ebusyCount).toBe(2);
+      const loaded = await loadCronStore(storePath);
+      expect(loaded).toEqual(dummyStore);
+    } finally {
+      spy.mockRestore();
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("falls back to copyFile on EPERM (Windows)", async () => {
+    const { storePath } = await makeStorePath();
+
+    const spy = vi.spyOn(fs, "rename").mockImplementation(async () => {
+      const err = new Error("EPERM") as NodeJS.ErrnoException;
+      err.code = "EPERM";
+      throw err;
+    });
+
+    await saveCronStore(storePath, dummyStore);
+    const loaded = await loadCronStore(storePath);
+    expect(loaded).toEqual(dummyStore);
+
+    spy.mockRestore();
   });
 });

@@ -2,13 +2,6 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./config.js";
 
 describe("config schema regressions", () => {
-  const validWorkflowLane = {
-    enabled: true,
-    mode: "hard",
-    applyWhen: "always",
-    domain: "ops",
-  } as const;
-
   it("accepts nested telegram groupPolicy overrides", () => {
     const res = validateConfigObject({
       channels: {
@@ -123,6 +116,40 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts pdf default model and limits", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          pdfModel: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["openai/gpt-5-mini"],
+          },
+          pdfMaxBytesMb: 12,
+          pdfMaxPages: 25,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects non-positive pdf limits", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          pdfModel: { primary: "openai/gpt-5-mini" },
+          pdfMaxBytesMb: 0,
+          pdfMaxPages: 0,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path.includes("agents.defaults.pdfMax"))).toBe(true);
+    }
+  });
+
   it("rejects relative iMessage attachment roots", () => {
     const res = validateConfigObject({
       channels: {
@@ -138,69 +165,23 @@ describe("config schema regressions", () => {
     }
   });
 
-  it("rejects invalid workflowLane.domain values", () => {
+  it("accepts browser.extraArgs for proxy and custom flags", () => {
     const res = validateConfigObject({
-      agents: {
-        defaults: {
-          workflowLane: {
-            ...validWorkflowLane,
-            domain: "toString",
-          },
-        },
+      browser: {
+        extraArgs: ["--proxy-server=http://127.0.0.1:7890"],
       },
     });
 
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path === "agents.defaults.workflowLane.domain")).toBe(
-        true,
-      );
-    }
+    expect(res.ok).toBe(true);
   });
 
-  it("rejects invalid workflowLane.mode values", () => {
+  it("rejects browser.extraArgs with non-array value", () => {
     const res = validateConfigObject({
-      agents: {
-        list: [
-          {
-            id: "main",
-            workflowLane: {
-              ...validWorkflowLane,
-              mode: "disabled",
-            },
-          },
-        ],
+      browser: {
+        extraArgs: "--proxy-server=http://127.0.0.1:7890" as unknown,
       },
     });
 
     expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path === "agents.list.0.workflowLane.mode")).toBe(
-        true,
-      );
-    }
-  });
-
-  it("rejects invalid workflowLane.applyWhen values", () => {
-    const res = validateConfigObject({
-      agents: {
-        list: [
-          {
-            id: "main",
-            workflowLane: {
-              ...validWorkflowLane,
-              applyWhen: "sometimes",
-            },
-          },
-        ],
-      },
-    });
-
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(
-        res.issues.some((issue) => issue.path === "agents.list.0.workflowLane.applyWhen"),
-      ).toBe(true);
-    }
   });
 });

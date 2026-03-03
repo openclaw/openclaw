@@ -1,5 +1,7 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -33,13 +35,26 @@ export async function ensureSandboxWorkspace(
       const src = path.join(seed, name);
       const dest = path.join(workspaceDir, name);
       try {
-        // Always overwrite sandbox copies from the agent workspace source
-        // to prevent drift when source files (vault) are updated.
-        // Previous behavior used flag:"wx" which never refreshed stale copies.
-        const content = await fs.readFile(src, "utf-8");
-        await fs.writeFile(dest, content, { encoding: "utf-8" });
+        await fs.access(dest);
       } catch {
-        // ignore missing seed file
+        try {
+          const opened = await openBoundaryFile({
+            absolutePath: src,
+            rootPath: seed,
+            boundaryLabel: "sandbox seed workspace",
+          });
+          if (!opened.ok) {
+            continue;
+          }
+          try {
+            const content = syncFs.readFileSync(opened.fd, "utf-8");
+            await fs.writeFile(dest, content, { encoding: "utf-8", flag: "wx" });
+          } finally {
+            syncFs.closeSync(opened.fd);
+          }
+        } catch {
+          // ignore missing seed file
+        }
       }
     }
   }

@@ -78,6 +78,7 @@ export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) =>
 
 export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   accounts: z.record(z.string(), IrcAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({
     policy: value.dmPolicy,

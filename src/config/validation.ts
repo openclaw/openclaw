@@ -15,6 +15,7 @@ import {
   isPathWithinRoot,
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
@@ -80,6 +81,33 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
   return issues;
 }
 
+function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationIssue[] {
+  const tailscaleMode = config.gateway?.tailscale?.mode ?? "off";
+  if (tailscaleMode !== "serve" && tailscaleMode !== "funnel") {
+    return [];
+  }
+  const bindMode = config.gateway?.bind ?? "loopback";
+  if (bindMode === "loopback") {
+    return [];
+  }
+  const customBindHost = config.gateway?.customBindHost;
+  if (
+    bindMode === "custom" &&
+    isCanonicalDottedDecimalIPv4(customBindHost) &&
+    isLoopbackIpAddress(customBindHost)
+  ) {
+    return [];
+  }
+  return [
+    {
+      path: "gateway.bind",
+      message:
+        `gateway.bind must resolve to loopback when gateway.tailscale.mode=${tailscaleMode} ` +
+        '(use gateway.bind="loopback" or gateway.bind="custom" with gateway.customBindHost="127.0.0.1")',
+    },
+  ];
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -122,6 +150,10 @@ export function validateConfigObjectRaw(
   const avatarIssues = validateIdentityAvatar(validated.data as OpenClawConfig);
   if (avatarIssues.length > 0) {
     return { ok: false, issues: avatarIssues };
+  }
+  const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validated.data as OpenClawConfig);
+  if (gatewayTailscaleBindIssues.length > 0) {
+    return { ok: false, issues: gatewayTailscaleBindIssues };
   }
   return {
     ok: true,
@@ -197,8 +229,8 @@ function validateConfigObjectWithPluginsBase(
 
   type RegistryInfo = {
     registry: ReturnType<typeof loadPluginManifestRegistry>;
-    knownIds: Set<string>;
-    normalizedPlugins: ReturnType<typeof normalizePluginsConfig>;
+    knownIds?: Set<string>;
+    normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
   };
 
   let registryInfo: RegistryInfo | null = null;
@@ -213,8 +245,6 @@ function validateConfigObjectWithPluginsBase(
       config,
       workspaceDir: workspaceDir ?? undefined,
     });
-    const knownIds = new Set(registry.plugins.map((record) => record.id));
-    const normalizedPlugins = normalizePluginsConfig(config.plugins);
 
     for (const diag of registry.diagnostics) {
       let path = diag.pluginId ? `plugins.entries.${diag.pluginId}` : "plugins";
@@ -230,8 +260,24 @@ function validateConfigObjectWithPluginsBase(
       }
     }
 
-    registryInfo = { registry, knownIds, normalizedPlugins };
+    registryInfo = { registry };
     return registryInfo;
+  };
+
+  const ensureKnownIds = (): Set<string> => {
+    const info = ensureRegistry();
+    if (!info.knownIds) {
+      info.knownIds = new Set(info.registry.plugins.map((record) => record.id));
+    }
+    return info.knownIds;
+  };
+
+  const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
+    const info = ensureRegistry();
+    if (!info.normalizedPlugins) {
+      info.normalizedPlugins = normalizePluginsConfig(config.plugins);
+    }
+    return info.normalizedPlugins;
   };
 
   const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
@@ -314,7 +360,9 @@ function validateConfigObjectWithPluginsBase(
     return { ok: true, config, warnings };
   }
 
-  const { registry, knownIds, normalizedPlugins } = ensureRegistry();
+  const { registry } = ensureRegistry();
+  const knownIds = ensureKnownIds();
+  const normalizedPlugins = ensureNormalizedPlugins();
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,

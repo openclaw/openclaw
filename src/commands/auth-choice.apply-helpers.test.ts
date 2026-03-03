@@ -44,6 +44,46 @@ function createPromptSpies(params?: { confirmResult?: boolean; textResult?: stri
   return { confirm, note, text };
 }
 
+async function ensureMinimaxApiKey(params: {
+  confirm: WizardPrompter["confirm"];
+  text: WizardPrompter["text"];
+  setCredential: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["setCredential"];
+  config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
+  secretInputMode?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["secretInputMode"];
+}) {
+  return await ensureApiKeyFromEnvOrPrompt({
+    config: params.config ?? {},
+    provider: "minimax",
+    envLabel: "MINIMAX_API_KEY",
+    promptMessage: "Enter key",
+    normalize: (value) => value.trim(),
+    validate: () => undefined,
+    prompter: createPrompter({ confirm: params.confirm, text: params.text }),
+    secretInputMode: params.secretInputMode,
+    setCredential: params.setCredential,
+  });
+}
+
+async function ensureMinimaxApiKeyWithEnvRefPrompter(params: {
+  config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
+  note: WizardPrompter["note"];
+  select: WizardPrompter["select"];
+  setCredential: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["setCredential"];
+  text: WizardPrompter["text"];
+}) {
+  return await ensureApiKeyFromEnvOrPrompt({
+    config: params.config ?? {},
+    provider: "minimax",
+    envLabel: "MINIMAX_API_KEY",
+    promptMessage: "Enter key",
+    normalize: (value) => value.trim(),
+    validate: () => undefined,
+    prompter: createPrompter({ select: params.select, text: params.text, note: params.note }),
+    secretInputMode: "ref",
+    setCredential: params.setCredential,
+  });
+}
+
 async function runEnsureMinimaxApiKeyFlow(params: { confirmResult: boolean; textResult: string }) {
   process.env.MINIMAX_API_KEY = "env-key";
   delete process.env.MINIMAX_OAUTH_TOKEN;
@@ -53,15 +93,9 @@ async function runEnsureMinimaxApiKeyFlow(params: { confirmResult: boolean; text
     textResult: params.textResult,
   });
   const setCredential = vi.fn(async () => undefined);
-
-  const result = await ensureApiKeyFromEnvOrPrompt({
-    config: {},
-    provider: "minimax",
-    envLabel: "MINIMAX_API_KEY",
-    promptMessage: "Enter key",
-    normalize: (value) => value.trim(),
-    validate: () => undefined,
-    prompter: createPrompter({ confirm, text }),
+  const result = await ensureMinimaxApiKey({
+    confirm,
+    text,
     setCredential,
   });
 
@@ -164,14 +198,9 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     });
     const setCredential = vi.fn(async () => undefined);
 
-    const result = await ensureApiKeyFromEnvOrPrompt({
-      config: {},
-      provider: "minimax",
-      envLabel: "MINIMAX_API_KEY",
-      promptMessage: "Enter key",
-      normalize: (value) => value.trim(),
-      validate: () => undefined,
-      prompter: createPrompter({ confirm, text }),
+    const result = await ensureMinimaxApiKey({
+      confirm,
+      text,
       secretInputMode: "ref",
       setCredential,
     });
@@ -195,14 +224,9 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     const setCredential = vi.fn(async () => undefined);
 
     await expect(
-      ensureApiKeyFromEnvOrPrompt({
-        config: {},
-        provider: "minimax",
-        envLabel: "MINIMAX_API_KEY",
-        promptMessage: "Enter key",
-        normalize: (value) => value.trim(),
-        validate: () => undefined,
-        prompter: createPrompter({ confirm, text }),
+      ensureMinimaxApiKey({
+        confirm,
+        text,
         secretInputMode: "ref",
         setCredential,
       }),
@@ -225,7 +249,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     const note = vi.fn(async () => undefined);
     const setCredential = vi.fn(async () => undefined);
 
-    const result = await ensureApiKeyFromEnvOrPrompt({
+    const result = await ensureMinimaxApiKeyWithEnvRefPrompter({
       config: {
         secrets: {
           providers: {
@@ -237,13 +261,9 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
           },
         },
       },
-      provider: "minimax",
-      envLabel: "MINIMAX_API_KEY",
-      promptMessage: "Enter key",
-      normalize: (value) => value.trim(),
-      validate: () => undefined,
-      prompter: createPrompter({ select, text, note }),
-      secretInputMode: "ref",
+      select,
+      text,
+      note,
       setCredential,
     });
 
@@ -267,15 +287,11 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     const note = vi.fn(async () => undefined);
     const setCredential = vi.fn(async () => undefined);
 
-    const result = await ensureApiKeyFromEnvOrPrompt({
+    const result = await ensureMinimaxApiKeyWithEnvRefPrompter({
       config: {},
-      provider: "minimax",
-      envLabel: "MINIMAX_API_KEY",
-      promptMessage: "Enter key",
-      normalize: (value) => value.trim(),
-      validate: () => undefined,
-      prompter: createPrompter({ select, text, note }),
-      secretInputMode: "ref",
+      select,
+      text,
+      note,
       setCredential,
     });
 
