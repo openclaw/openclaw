@@ -421,10 +421,13 @@ type PerplexitySearchApiResult = {
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
 
+const EXA_SEARCH_TYPES = ["auto", "neural", "keyword"] as const;
+type ExaSearchType = (typeof EXA_SEARCH_TYPES)[number];
+
 type ExaConfig = {
   apiKey?: string;
   numResults?: number;
-  type?: string;
+  type?: ExaSearchType;
   contents?: boolean;
 };
 
@@ -976,9 +979,12 @@ function resolveExaApiKey(exa?: ExaConfig): string | undefined {
   return fromEnv || undefined;
 }
 
-function resolveExaSearchType(exa?: ExaConfig): string {
-  const fromConfig = exa && "type" in exa && typeof exa.type === "string" ? exa.type.trim() : "";
-  return fromConfig || "auto";
+function resolveExaSearchType(exa?: ExaConfig): ExaSearchType {
+  const raw = exa?.type;
+  if (raw && EXA_SEARCH_TYPES.includes(raw)) {
+    return raw;
+  }
+  return "auto";
 }
 
 function resolveExaContents(exa?: ExaConfig): boolean {

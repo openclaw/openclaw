@@ -319,7 +319,7 @@ export const ToolsWebSearchSchema = z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
         numResults: z.number().int().positive().optional(),
-        type: z.string().optional(),
+        type: z.enum(["auto", "neural", "keyword"]).optional(),
         contents: z.boolean().optional(),
       })
       .strict()
