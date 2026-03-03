@@ -337,6 +337,11 @@ async function fixAllowlistDmPolicyEmptyAllowFrom(params: {
       if (useNested) {
         const dmObj = dm ?? {};
         dmObj.allowFrom = recovered;
+        // When policy lives at the top level, move it inside dm to keep the structure consistent.
+        if (account.dmPolicy === "allowlist" && !dmObj.policy) {
+          dmObj.policy = "allowlist";
+          delete account.dmPolicy;
+        }
         account.dm = dmObj;
       } else {
         account.allowFrom = recovered;
@@ -545,6 +550,7 @@ export async function fixSecurityFootguns(opts?: {
       }
     }
   } else if (snap.exists && snap.config && typeof snap.config === "object") {
+    const preFixErrorCount = errors.length;
     const fixedCfg = structuredClone(snap.config);
     await fixAllowlistDmPolicyEmptyAllowFrom({ cfg: fixedCfg, env, changes });
 
@@ -552,6 +558,8 @@ export async function fixSecurityFootguns(opts?: {
       try {
         await io.writeConfigFile(fixedCfg);
         configWritten = true;
+        // Config was repaired — clear the pre-fix validation errors that triggered this branch.
+        errors.splice(0, preFixErrorCount);
       } catch (err) {
         errors.push(`writeConfigFile failed: ${String(err)}`);
       }

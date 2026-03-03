@@ -266,6 +266,7 @@ describe("security fix", () => {
     });
 
     const { res, channels } = await runFixAndReadChannels(stateDir, configPath);
+    expect(res.ok).toBe(true);
     expect(res.configWritten).toBe(true);
     expect(res.changes).toEqual(
       expect.arrayContaining([
@@ -286,6 +287,7 @@ describe("security fix", () => {
     await writeWhatsAppAllowFromStore(stateDir, ["+15559990000"]);
 
     const { res, channels } = await runFixAndReadChannels(stateDir, configPath);
+    expect(res.ok).toBe(true);
     expect(res.configWritten).toBe(true);
     expect(res.changes).toEqual(
       expect.arrayContaining(["channels.whatsapp.allowFrom: seeded 1 entry from pairing store"]),
@@ -308,6 +310,7 @@ describe("security fix", () => {
     });
 
     const { res, channels } = await runFixAndReadChannels(stateDir, configPath);
+    expect(res.ok).toBe(true);
     expect(res.configWritten).toBe(true);
     expect(res.changes).toEqual(
       expect.arrayContaining([
