@@ -14,7 +14,7 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
-import { ToolInputError } from "../agents/tools/common.js";
+import { type AnyAgentTool, ToolInputError } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
@@ -266,10 +266,8 @@ export async function handleToolsInvokeHttpRequest(
   });
 
   const subagentFiltered = applyToolPolicyPipeline({
-    // oxlint-disable-next-line typescript/no-explicit-any
-    tools: allTools as any,
-    // oxlint-disable-next-line typescript/no-explicit-any
-    toolMeta: (tool) => getPluginToolMeta(tool as any),
+    tools: allTools,
+    toolMeta: (tool) => getPluginToolMeta(tool),
     warn: logWarn,
     steps: [
       ...buildDefaultToolPolicyPipelineSteps({
@@ -310,13 +308,17 @@ export async function handleToolsInvokeHttpRequest(
 
   try {
     const toolArgs = mergeActionIntoArgsIfSupported({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      toolSchema: (tool as any).parameters,
+      toolSchema: tool.parameters,
       action,
       args,
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
+
+    // Type-safe tool execution check
+    if (typeof tool.execute !== "function") {
+      throw new Error(`Tool ${toolName} does not have an execute function`);
+    }
+
+    const result = await tool.execute(`http-${Date.now()}`, toolArgs);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);
