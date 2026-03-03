@@ -223,6 +223,55 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.error).toMatch(/network down/i);
   });
 
+  it("merges runtime snapshot fields into channel health output", async () => {
+    testConfig = { channels: { telegram: { botToken: "t-runtime" } } };
+    testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      probe: false,
+      runtimeSnapshot: {
+        channels: {
+          telegram: {
+            accountId: "default",
+            running: true,
+            lastStartAt: 123,
+          },
+        },
+        channelAccounts: {
+          telegram: {
+            default: {
+              accountId: "default",
+              running: true,
+              lastStartAt: 123,
+              lastInboundAt: 456,
+              lastOutboundAt: 789,
+            },
+          },
+        },
+      },
+    });
+
+    const telegram = snap.channels.telegram as {
+      running?: boolean;
+      lastStartAt?: number | null;
+      accounts?: Record<
+        string,
+        {
+          running?: boolean;
+          lastInboundAt?: number | null;
+          lastOutboundAt?: number | null;
+        }
+      >;
+    };
+    expect(telegram.running).toBe(true);
+    expect(telegram.lastStartAt).toBe(123);
+    expect(telegram.accounts?.default?.running).toBe(true);
+    expect(telegram.accounts?.default?.lastInboundAt).toBe(456);
+    expect(telegram.accounts?.default?.lastOutboundAt).toBe(789);
+  });
+
   it("disables heartbeat for agents without heartbeat blocks", async () => {
     testConfig = {
       agents: {

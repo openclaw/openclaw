@@ -107,6 +107,35 @@ describe("doctor config flow", () => {
     ).toBe(false);
   });
 
+  it("skips empty allowlist warnings for disabled channel/account scopes", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        whatsapp: {
+          enabled: false,
+          groupPolicy: "allowlist",
+        },
+        telegram: {
+          groupPolicy: "open",
+          accounts: {
+            work: {
+              enabled: false,
+              groupPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some((line) => line.includes('channels.whatsapp.groupPolicy is "allowlist"')),
+    ).toBe(false);
+    expect(
+      doctorWarnings.some((line) =>
+        line.includes('channels.telegram.accounts.work.groupPolicy is "allowlist"'),
+      ),
+    ).toBe(false);
+  });
+
   it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {

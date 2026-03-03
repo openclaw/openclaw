@@ -1,6 +1,7 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import { buildChannelAccountSnapshot } from "../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import { withProgress } from "../cli/progress.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -32,6 +33,11 @@ export type ChannelAccountHealthSummary = {
 
 export type ChannelHealthSummary = ChannelAccountHealthSummary & {
   accounts?: Record<string, ChannelAccountHealthSummary>;
+};
+
+type HealthRuntimeSnapshot = {
+  channels?: Partial<Record<string, ChannelAccountSnapshot>>;
+  channelAccounts?: Partial<Record<string, Partial<Record<string, ChannelAccountSnapshot>>>>;
 };
 
 export type AgentHeartbeatSummary = HeartbeatSummary;
@@ -348,6 +354,7 @@ export const formatHealthChannelLines = (
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
+  runtimeSnapshot?: HealthRuntimeSnapshot;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const cfg = loadConfig();
@@ -414,6 +421,18 @@ export async function getHealthSnapshot(params?: {
       accountIdsToProbe,
     });
     const accountSummaries: Record<string, ChannelAccountHealthSummary> = {};
+    const runtimeChannelAccounts = params?.runtimeSnapshot?.channelAccounts?.[plugin.id];
+    const runtimeChannelDefault = params?.runtimeSnapshot?.channels?.[plugin.id];
+    const resolveRuntimeSnapshot = (accountId: string): ChannelAccountSnapshot | undefined => {
+      const fromAccounts = runtimeChannelAccounts?.[accountId];
+      if (fromAccounts) {
+        return fromAccounts;
+      }
+      if (accountId === defaultAccountId && runtimeChannelDefault) {
+        return runtimeChannelDefault;
+      }
+      return undefined;
+    };
 
     for (const accountId of accountIdsToProbe) {
       const account = plugin.config.resolveAccount(cfg, accountId);
@@ -450,17 +469,23 @@ export async function getHealthSnapshot(params?: {
         debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
       }
 
-      const snapshot: ChannelAccountSnapshot = {
+      const snapshot = await buildChannelAccountSnapshot({
+        plugin,
+        cfg,
         accountId,
-        enabled,
-        configured,
-      };
-      if (probe !== undefined) {
-        snapshot.probe = probe;
+        runtime: resolveRuntimeSnapshot(accountId),
+        probe,
+      });
+      if (snapshot.enabled === undefined) {
+        snapshot.enabled = enabled;
       }
-      if (lastProbeAt) {
+      if (snapshot.configured === undefined) {
+        snapshot.configured = configured;
+      }
+      if (lastProbeAt && snapshot.lastProbeAt === undefined) {
         snapshot.lastProbeAt = lastProbeAt;
       }
+      snapshot.accountId = accountId;
 
       const summary = plugin.status?.buildChannelSummary
         ? await plugin.status.buildChannelSummary({
@@ -469,21 +494,24 @@ export async function getHealthSnapshot(params?: {
             defaultAccountId: accountId,
             snapshot,
           })
-        : undefined;
-      const record =
+        : snapshot;
+      const summaryRecord =
         summary && typeof summary === "object"
           ? (summary as ChannelAccountHealthSummary)
-          : ({
-              accountId,
-              configured,
-              probe,
-              lastProbeAt,
-            } satisfies ChannelAccountHealthSummary);
+          : ({} as ChannelAccountHealthSummary);
+      const record: ChannelAccountHealthSummary = {
+        ...(snapshot as ChannelAccountHealthSummary),
+        ...summaryRecord,
+        accountId: snapshot.accountId,
+      };
       if (record.configured === undefined) {
-        record.configured = configured;
+        record.configured = snapshot.configured ?? configured;
       }
-      if (record.lastProbeAt === undefined && lastProbeAt) {
-        record.lastProbeAt = lastProbeAt;
+      if (record.probe === undefined && snapshot.probe !== undefined) {
+        record.probe = snapshot.probe;
+      }
+      if (record.lastProbeAt === undefined && snapshot.lastProbeAt !== undefined) {
+        record.lastProbeAt = snapshot.lastProbeAt;
       }
       record.accountId = accountId;
       accountSummaries[accountId] = record;
