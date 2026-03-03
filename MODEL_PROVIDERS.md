@@ -8,12 +8,12 @@
 
 ### `claude-sub2api`
 
-| 字段 | 值 |
-|------|----|
-| Base URL | `http://146.148.90.243:8080` |
-| API 格式 | `anthropic-messages`（`x-api-key` 请求头） |
-| API Key | 见服务器配置 |
-| UI 模型列表 | 空（不在 UI 选择器中显示） |
+| 字段        | 值                                         |
+| ----------- | ------------------------------------------ |
+| Base URL    | `http://api.infinite-status.com`           |
+| API 格式    | `anthropic-messages`（`x-api-key` 请求头） |
+| API Key     | 见服务器配置                               |
+| UI 模型列表 | 空（不在 UI 选择器中显示）                 |
 
 **说明**：这是 sub2api 中转网关，代理到真实的 Anthropic API。Provider key 不能用 `anthropic`，否则 OpenClaw 会命中内置注册表直接打 `api.anthropic.com`。
 
@@ -27,17 +27,17 @@
 
 ### `openai`
 
-| 字段 | 值 |
-|------|----|
+| 字段     | 值                            |
+| -------- | ----------------------------- |
 | Base URL | `https://newapi.infist.cn/v1` |
-| API 格式 | OpenAI-compat（默认） |
-| API Key | 环境变量 `OPENAI_API_KEY` |
+| API 格式 | OpenAI-compat（默认）         |
+| API Key  | 环境变量 `OPENAI_API_KEY`     |
 
 **UI 模型列表**：
 
-| 模型 ID | 名称 | 用途 |
-|---------|------|------|
-| `gpt-4.1` | GPT-4.1 | 对话 / 任务 |
+| 模型 ID                  | 名称                   | 用途                                       |
+| ------------------------ | ---------------------- | ------------------------------------------ |
+| `gpt-4.1`                | GPT-4.1                | 对话 / 任务                                |
 | `text-embedding-3-small` | Text Embedding 3 Small | 向量嵌入（memory search 专用，非对话模型） |
 
 > `text-embedding-3-small` 用于启用 OpenClaw 长期记忆功能，配置见下文。
@@ -46,20 +46,20 @@
 
 ### `gemini`
 
-| 字段 | 值 |
-|------|----|
+| 字段     | 值                            |
+| -------- | ----------------------------- |
 | Base URL | `https://newapi.infist.cn/v1` |
 | API 格式 | OpenAI-compat（同一中转网关） |
-| API Key | 环境变量 `OPENAI_API_KEY` |
+| API Key  | 环境变量 `OPENAI_API_KEY`     |
 
 **UI 模型列表**：
 
-| 模型 ID | 名称 | 输入 |
-|---------|------|------|
-| `gemini-3-pro-preview` | Gemini 3 Pro Preview | 文本 + 图像 |
-| `gemini-2.5-flash-lite` | Gemini 2.5 Flash Lite | 文本 + 图像 |
-| `deep-research-pro-preview-12-2025` | Deep Research Pro Preview | 文本 |
-| `gemini-2.5-flash-image` | Gemini 2.5 Flash Image | 文本 + 图像 |
+| 模型 ID                             | 名称                      | 输入        |
+| ----------------------------------- | ------------------------- | ----------- |
+| `gemini-3-pro-preview`              | Gemini 3 Pro Preview      | 文本 + 图像 |
+| `gemini-2.5-flash-lite`             | Gemini 2.5 Flash Lite     | 文本 + 图像 |
+| `deep-research-pro-preview-12-2025` | Deep Research Pro Preview | 文本        |
+| `gemini-2.5-flash-image`            | Gemini 2.5 Flash Image    | 文本 + 图像 |
 
 ---
 

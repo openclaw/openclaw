@@ -52,6 +52,8 @@ Optional env vars:
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
 
+The default Docker image already includes GitHub CLI (`gh`).
+
 After it finishes:
 
 - Open `http://127.0.0.1:18789/` in your browser.
