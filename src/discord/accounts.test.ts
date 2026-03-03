@@ -55,4 +55,63 @@ describe("resolveDiscordAccount allowFrom precedence", () => {
 
     expect(resolved.config.allowFrom).toBeUndefined();
   });
+
+  it("inherits top-level guilds when account allowlist mode overrides with empty guilds", () => {
+    const resolved = resolveDiscordAccount({
+      cfg: {
+        channels: {
+          discord: {
+            groupPolicy: "allowlist",
+            guilds: {
+              "123": {
+                channels: {
+                  "456": { allow: true },
+                },
+              },
+            },
+            accounts: {
+              default: {
+                token: "token-default",
+                groupPolicy: "allowlist",
+                guilds: {},
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(Object.keys(resolved.config.guilds ?? {})).toEqual(["123"]);
+    expect(resolved.config.guilds?.["123"]?.channels?.["456"]?.allow).toBe(true);
+  });
+
+  it("keeps explicit empty guild override when account groupPolicy is not allowlist", () => {
+    const resolved = resolveDiscordAccount({
+      cfg: {
+        channels: {
+          discord: {
+            groupPolicy: "allowlist",
+            guilds: {
+              "123": {
+                channels: {
+                  "456": { allow: true },
+                },
+              },
+            },
+            accounts: {
+              default: {
+                token: "token-default",
+                groupPolicy: "open",
+                guilds: {},
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.config.guilds).toEqual({});
+  });
 });

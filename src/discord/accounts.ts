@@ -2,6 +2,7 @@ import { createAccountActionGate } from "../channels/plugins/account-action-gate
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiscordAccountConfig, DiscordActionConfig } from "../config/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveDiscordToken } from "./token.js";
@@ -18,6 +19,20 @@ export type ResolvedDiscordAccount = {
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord");
 export const listDiscordAccountIds = listAccountIds;
 export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
+const log = createSubsystemLogger("discord/accounts");
+const warnedEmptyGuildOverrides = new Set<string>();
+
+function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+function hasObjectKeys(value: unknown): boolean {
+  const record = asObjectRecord(value);
+  return Boolean(record && Object.keys(record).length > 0);
+}
 
 function resolveAccountConfig(
   cfg: OpenClawConfig,
@@ -31,7 +46,29 @@ function mergeDiscordAccountConfig(cfg: OpenClawConfig, accountId: string): Disc
     accounts?: unknown;
   };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  const merged = { ...base, ...account };
+  const accountExplicitlyOverridesGuilds = Object.hasOwn(account, "guilds");
+  const accountGuildsEmpty = !hasObjectKeys(account.guilds);
+  const parentGuildsConfigured = hasObjectKeys(base.guilds);
+
+  // Preserve parent guild allowlist when an account sets allowlist mode but leaves
+  // guilds empty (for example `guilds: {}`), which otherwise overrides to deny-all.
+  if (
+    merged.groupPolicy === "allowlist" &&
+    accountExplicitlyOverridesGuilds &&
+    accountGuildsEmpty &&
+    parentGuildsConfigured
+  ) {
+    if (!warnedEmptyGuildOverrides.has(accountId)) {
+      warnedEmptyGuildOverrides.add(accountId);
+      log.warn?.(
+        `channels.discord.accounts.${accountId}.groupPolicy is "allowlist" but guilds is empty; inheriting channels.discord.guilds for this account. Configure channels.discord.accounts.${accountId}.guilds explicitly or remove the empty override.`,
+      );
+    }
+    merged.guilds = base.guilds;
+  }
+
+  return merged;
 }
 
 export function createDiscordActionGate(params: {

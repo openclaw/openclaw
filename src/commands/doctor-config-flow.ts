@@ -1318,6 +1318,12 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
   }
 
   const warnings: string[] = [];
+  const hasConfigEntries = (value: unknown): boolean => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+    return Object.keys(value as Record<string, unknown>).length > 0;
+  };
 
   const usesSenderBasedGroupAllowlist = (channelName?: string): boolean => {
     if (!channelName) {
@@ -1382,6 +1388,19 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
       (account.groupPolicy as string | undefined) ??
       (parent?.groupPolicy as string | undefined) ??
       undefined;
+
+    if (
+      channelName === "discord" &&
+      parent &&
+      groupPolicy === "allowlist" &&
+      Object.hasOwn(account, "guilds") &&
+      !hasConfigEntries(account.guilds) &&
+      hasConfigEntries(parent.guilds)
+    ) {
+      warnings.push(
+        `- ${prefix}.groupPolicy is "allowlist" but guilds is empty — this account override replaces channels.discord.guilds and can block all guild messages. Remove ${prefix}.guilds to inherit channels.discord.guilds, or configure guild entries under ${prefix}.guilds.`,
+      );
+    }
 
     if (groupPolicy === "allowlist" && usesSenderBasedGroupAllowlist(channelName)) {
       const rawGroupAllowFrom =
