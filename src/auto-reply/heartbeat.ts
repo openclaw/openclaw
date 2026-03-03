@@ -7,6 +7,8 @@ export const HEARTBEAT_PROMPT =
   "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
+const HEARTBEAT_POLL_NOISE_RE = /\bheartbeat\s+(poll|wake)\b/i;
+const CURRENT_TIME_LINE_RE = /^current time:/i;
 
 /**
  * Check if HEARTBEAT.md content is "effectively empty" - meaning it has no actionable tasks.
@@ -55,6 +57,65 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
 export function resolveHeartbeatPrompt(raw?: string): string {
   const trimmed = typeof raw === "string" ? raw.trim() : "";
   return trimmed || HEARTBEAT_PROMPT;
+}
+
+function normalizeHeartbeatText(raw?: string): string {
+  if (typeof raw !== "string") {
+    return "";
+  }
+  return raw
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function stripTrailingCurrentTimeLine(raw: string): string {
+  if (!raw) {
+    return "";
+  }
+  const lines = raw.split("\n");
+  while (lines.length > 0) {
+    const last = lines.at(-1)?.trim() ?? "";
+    if (!CURRENT_TIME_LINE_RE.test(last)) {
+      break;
+    }
+    lines.pop();
+  }
+  return lines.join("\n").trim();
+}
+
+export function isHeartbeatPollText(raw?: string, opts?: { prompt?: string }): boolean {
+  const normalized = normalizeHeartbeatText(raw);
+  if (!normalized) {
+    return false;
+  }
+  const normalizedPrompt = normalizeHeartbeatText(resolveHeartbeatPrompt(opts?.prompt));
+  if (normalized === normalizedPrompt) {
+    return true;
+  }
+  if (stripTrailingCurrentTimeLine(normalized) === normalizedPrompt) {
+    return true;
+  }
+  return HEARTBEAT_POLL_NOISE_RE.test(normalized);
+}
+
+export function normalizeHeartbeatPollForDedupe(
+  raw?: string,
+  opts?: { prompt?: string },
+): string | undefined {
+  if (!isHeartbeatPollText(raw, opts)) {
+    return undefined;
+  }
+  const normalized = normalizeHeartbeatText(raw);
+  const stripped = stripTrailingCurrentTimeLine(normalized);
+  const normalizedPrompt = normalizeHeartbeatText(resolveHeartbeatPrompt(opts?.prompt));
+  if (stripped === normalizedPrompt) {
+    return normalizedPrompt;
+  }
+  return stripped || normalized;
 }
 
 export type StripHeartbeatMode = "heartbeat" | "message";

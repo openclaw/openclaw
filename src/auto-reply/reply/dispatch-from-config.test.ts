@@ -3,6 +3,7 @@ import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import { HEARTBEAT_PROMPT } from "../heartbeat.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
@@ -1418,6 +1419,86 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates heartbeat poll content even when MessageSid changes", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    const firstCtx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:12345",
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-1",
+      CommandBody: `${HEARTBEAT_PROMPT}\nCurrent time: 2026-03-03 12:00 (Asia/Taipei)`,
+    });
+    const secondCtx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:12345",
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-2",
+      CommandBody: `${HEARTBEAT_PROMPT}\nCurrent time: 2026-03-03 12:01 (Asia/Taipei)`,
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: firstCtx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+    await dispatchReplyFromConfig({
+      ctx: secondCtx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dedupe non-heartbeat content when MessageSid differs", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    const firstCtx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:12345",
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-1",
+      CommandBody: "daily summary please",
+    });
+    const secondCtx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:12345",
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-2",
+      CommandBody: "daily summary please",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: firstCtx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+    await dispatchReplyFromConfig({
+      ctx: secondCtx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(2);
   });
 
   it("emits message_received hook with originating channel metadata", async () => {

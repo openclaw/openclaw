@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
+  isHeartbeatPollText,
+  normalizeHeartbeatPollForDedupe,
   stripHeartbeatToken,
 } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
@@ -235,5 +237,29 @@ Check the server logs
 ### Subsection
 `;
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+});
+
+describe("heartbeat poll helpers", () => {
+  it("detects direct heartbeat prompt text", () => {
+    const raw =
+      "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
+    expect(isHeartbeatPollText(raw)).toBe(true);
+  });
+
+  it("detects heartbeat prompt with trailing current time line", () => {
+    const raw = `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.
+Current time: 2026-03-03 12:00 (Asia/Taipei)`;
+    expect(isHeartbeatPollText(raw)).toBe(true);
+    expect(normalizeHeartbeatPollForDedupe(raw)).toBe(
+      "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+    );
+  });
+
+  it("does not classify normal user text as heartbeat poll", () => {
+    expect(isHeartbeatPollText("please check heartbeat status in this channel")).toBe(false);
+    expect(normalizeHeartbeatPollForDedupe("please check heartbeat status in this channel")).toBe(
+      undefined,
+    );
   });
 });

@@ -9,6 +9,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { resetHeartbeatDeliveryCircuitForTests } from "./heartbeat-runner.js";
 
 const slackChannelPlugin = slackPlugin as unknown as ChannelPlugin;
 const telegramChannelPlugin = telegramPlugin as unknown as ChannelPlugin;
@@ -16,6 +17,7 @@ const whatsappChannelPlugin = whatsappPlugin as unknown as ChannelPlugin;
 
 export function installHeartbeatRunnerTestRuntime(params?: { includeSlack?: boolean }): void {
   beforeEach(() => {
+    resetHeartbeatDeliveryCircuitForTests();
     const runtime = createPluginRuntime();
     setTelegramRuntime(runtime);
     setWhatsAppRuntime(runtime);

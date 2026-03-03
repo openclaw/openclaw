@@ -19,6 +19,7 @@ import { typedCases } from "../test-utils/typed-cases.js";
 import {
   type HeartbeatDeps,
   isHeartbeatEnabledForAgent,
+  resetHeartbeatDeliveryCircuitForTests,
   resolveHeartbeatIntervalMs,
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
@@ -105,6 +106,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetSystemEventsForTest();
+  resetHeartbeatDeliveryCircuitForTests();
   if (testRegistry) {
     setActivePluginRegistry(testRegistry);
   }
@@ -514,6 +516,132 @@ describe("runHeartbeatOnce", () => {
     expect(res.status).toBe("skipped");
     if (res.status === "skipped") {
       expect(res.reason).toBe("quiet-hours");
+    }
+  });
+
+  it("opens delivery circuit after repeated send failures and skips new runs while open", async () => {
+    const tmpDir = await createCaseDir("hb-delivery-circuit-open");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "Final alert" }]);
+      const failingSend = vi
+        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .mockRejectedValue(new Error("Network request for 'sendMessage' failed!"));
+
+      for (let i = 0; i < 3; i += 1) {
+        const result = await runHeartbeatOnce({
+          cfg,
+          deps: createHeartbeatDeps(failingSend, 1_000 + i),
+        });
+        expect(result.status).toBe("failed");
+      }
+
+      const guardedSend = vi
+        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .mockResolvedValue({ messageId: "guarded", toJid: "jid" });
+      const blocked = await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(guardedSend, 5_000),
+      });
+
+      expect(blocked).toEqual({ status: "skipped", reason: "delivery-circuit-open" });
+      expect(guardedSend).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledTimes(3);
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("allows delivery again after cooldown and resets circuit on success", async () => {
+    const tmpDir = await createCaseDir("hb-delivery-circuit-recover");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "Final alert" }]);
+      const failingSend = vi
+        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .mockRejectedValue(new Error("Network request for 'sendMessage' failed!"));
+      for (let i = 0; i < 3; i += 1) {
+        await runHeartbeatOnce({
+          cfg,
+          deps: createHeartbeatDeps(failingSend, 10_000 + i),
+        });
+      }
+
+      const stillBlocked = await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(failingSend, 20_000),
+      });
+      expect(stillBlocked).toEqual({ status: "skipped", reason: "delivery-circuit-open" });
+
+      const successSend = vi
+        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .mockResolvedValue({ messageId: "ok", toJid: "jid" });
+      const recovered = await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(successSend, 16 * 60_000),
+      });
+      expect(recovered.status).toBe("ran");
+      expect(successSend).toHaveBeenCalledTimes(1);
+
+      replySpy.mockResolvedValueOnce([{ text: "Another alert" }]);
+      const secondSuccess = await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(successSend, 16 * 60_000 + 1_000),
+      });
+      expect(secondSuccess.status).toBe("ran");
+      expect(successSend).toHaveBeenCalledTimes(2);
+    } finally {
+      replySpy.mockRestore();
     }
   });
 

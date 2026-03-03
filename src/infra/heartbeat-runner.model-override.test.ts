@@ -9,7 +9,7 @@ import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/ses
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { runHeartbeatOnce } from "./heartbeat-runner.js";
+import { resetHeartbeatDeliveryCircuitForTests, runHeartbeatOnce } from "./heartbeat-runner.js";
 import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
@@ -45,6 +45,7 @@ async function withHeartbeatFixture(
 }
 
 beforeEach(() => {
+  resetHeartbeatDeliveryCircuitForTests();
   const runtime = createPluginRuntime();
   setTelegramRuntime(runtime);
   setWhatsAppRuntime(runtime);
@@ -94,6 +95,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         deps: {
           getQueueSize: () => 0,
           nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
         },
       });
 
@@ -171,6 +174,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         deps: {
           getQueueSize: () => 0,
           nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
         },
       });
 

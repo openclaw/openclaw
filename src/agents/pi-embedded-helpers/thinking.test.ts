@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { pickFallbackThinkingLevel } from "./thinking.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  pickFallbackThinkingLevel,
+  pickFallbackThinkingLevelWithCache,
+  resetFallbackThinkingCacheForTests,
+} from "./thinking.js";
+
+beforeEach(() => {
+  resetFallbackThinkingCacheForTests();
+});
 
 describe("pickFallbackThinkingLevel", () => {
   it("returns undefined for empty message", () => {
@@ -56,5 +64,67 @@ describe("pickFallbackThinkingLevel", () => {
       attempted: new Set(),
     });
     expect(result).toBeUndefined();
+  });
+});
+
+describe("pickFallbackThinkingLevelWithCache", () => {
+  it("stores and reuses parsed fallback per provider/model", () => {
+    const first = pickFallbackThinkingLevelWithCache({
+      message: 'Supported values are: "high", "medium"',
+      attempted: new Set(),
+      provider: "openai-codex",
+      model: "gpt-5.2",
+      nowMs: 1,
+    });
+    expect(first).toEqual({ level: "high", source: "parsed" });
+
+    const second = pickFallbackThinkingLevelWithCache({
+      message: "think value low is not supported",
+      attempted: new Set(),
+      provider: "openai-codex",
+      model: "gpt-5.2",
+      nowMs: 2,
+    });
+    expect(second).toEqual({ level: "high", source: "cache" });
+  });
+
+  it("does not reuse cached fallback when already attempted", () => {
+    pickFallbackThinkingLevelWithCache({
+      message: 'Supported values are: "high", "medium"',
+      attempted: new Set(),
+      provider: "openai-codex",
+      model: "gpt-5.2",
+      nowMs: 1,
+    });
+
+    const result = pickFallbackThinkingLevelWithCache({
+      message: "think value low is not supported",
+      attempted: new Set(["high"]),
+      provider: "openai-codex",
+      model: "gpt-5.2",
+      nowMs: 2,
+    });
+
+    expect(result).toEqual({ level: "off", source: "parsed" });
+  });
+
+  it("isolates cache by provider/model", () => {
+    pickFallbackThinkingLevelWithCache({
+      message: 'Supported values are: "high", "medium"',
+      attempted: new Set(),
+      provider: "openai-codex",
+      model: "gpt-5.2",
+      nowMs: 1,
+    });
+
+    const otherModel = pickFallbackThinkingLevelWithCache({
+      message: "think value low is not supported",
+      attempted: new Set(),
+      provider: "openai-codex",
+      model: "gpt-5.3",
+      nowMs: 2,
+    });
+
+    expect(otherModel).toEqual({ level: "off", source: "parsed" });
   });
 });

@@ -56,7 +56,11 @@ export {
   normalizeTextForComparison,
 } from "./pi-embedded-helpers/messaging-dedupe.js";
 
-export { pickFallbackThinkingLevel } from "./pi-embedded-helpers/thinking.js";
+export {
+  pickFallbackThinkingLevel,
+  pickFallbackThinkingLevelWithCache,
+  resetFallbackThinkingCacheForTests,
+} from "./pi-embedded-helpers/thinking.js";
 
 export {
   mergeConsecutiveUserTurns,

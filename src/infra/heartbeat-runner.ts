@@ -113,6 +113,87 @@ export type HeartbeatRunner = {
   updateConfig: (cfg: OpenClawConfig) => void;
 };
 
+type HeartbeatDeliveryCircuitState = {
+  consecutiveFailures: number;
+  cooldownMs: number;
+  openUntil?: number;
+  openCount: number;
+};
+
+const HEARTBEAT_DELIVERY_FAILURE_THRESHOLD = 3;
+const HEARTBEAT_DELIVERY_BASE_COOLDOWN_MS = 15 * 60_000;
+const HEARTBEAT_DELIVERY_MAX_COOLDOWN_MS = 60 * 60_000;
+const HEARTBEAT_DELIVERY_CIRCUIT_MAX_KEYS = 2000;
+const heartbeatDeliveryCircuit = new Map<string, HeartbeatDeliveryCircuitState>();
+
+function resolveHeartbeatDeliveryCircuitKey(
+  delivery: ReturnType<typeof resolveHeartbeatDeliveryTarget>,
+): string | undefined {
+  if (delivery.channel === "none" || !delivery.to) {
+    return undefined;
+  }
+  return [
+    delivery.channel,
+    delivery.accountId ?? "",
+    delivery.to,
+    delivery.threadId != null ? String(delivery.threadId) : "",
+  ]
+    .filter(Boolean)
+    .join("|");
+}
+
+function pruneHeartbeatDeliveryCircuit() {
+  while (heartbeatDeliveryCircuit.size > HEARTBEAT_DELIVERY_CIRCUIT_MAX_KEYS) {
+    const oldestKey = heartbeatDeliveryCircuit.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    heartbeatDeliveryCircuit.delete(oldestKey);
+  }
+}
+
+function getHeartbeatDeliveryCircuitState(key: string, nowMs: number) {
+  const state = heartbeatDeliveryCircuit.get(key);
+  if (!state?.openUntil) {
+    return { isOpen: false, retryAfterMs: 0 };
+  }
+  const retryAfterMs = state.openUntil - nowMs;
+  if (retryAfterMs <= 0) {
+    return { isOpen: false, retryAfterMs: 0 };
+  }
+  return { isOpen: true, retryAfterMs };
+}
+
+function recordHeartbeatDeliveryFailure(key: string, nowMs: number): HeartbeatDeliveryCircuitState {
+  const prev = heartbeatDeliveryCircuit.get(key);
+  const next: HeartbeatDeliveryCircuitState = prev
+    ? { ...prev }
+    : {
+        consecutiveFailures: 0,
+        cooldownMs: HEARTBEAT_DELIVERY_BASE_COOLDOWN_MS,
+        openCount: 0,
+      };
+  next.consecutiveFailures += 1;
+  if (next.consecutiveFailures >= HEARTBEAT_DELIVERY_FAILURE_THRESHOLD) {
+    if (next.openCount > 0) {
+      next.cooldownMs = Math.min(next.cooldownMs * 2, HEARTBEAT_DELIVERY_MAX_COOLDOWN_MS);
+    }
+    next.openCount += 1;
+    next.openUntil = nowMs + next.cooldownMs;
+  }
+  heartbeatDeliveryCircuit.set(key, next);
+  pruneHeartbeatDeliveryCircuit();
+  return next;
+}
+
+function recordHeartbeatDeliverySuccess(key: string) {
+  heartbeatDeliveryCircuit.delete(key);
+}
+
+export function resetHeartbeatDeliveryCircuitForTests() {
+  heartbeatDeliveryCircuit.clear();
+}
+
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = cfg.agents?.list ?? [];
   return list.some((entry) => Boolean(entry?.heartbeat));
@@ -659,6 +740,71 @@ export async function runHeartbeatOnce(opts: {
           accountId: delivery.accountId,
         })
       : { showOk: false, showAlerts: true, useIndicator: true };
+  const deliveryAccountId = delivery.accountId;
+  const heartbeatPlugin = delivery.channel !== "none" ? getChannelPlugin(delivery.channel) : null;
+  if (delivery.channel !== "none" && heartbeatPlugin?.heartbeat?.checkReady) {
+    const readiness = await heartbeatPlugin.heartbeat.checkReady({
+      cfg,
+      accountId: deliveryAccountId,
+      deps: opts.deps,
+    });
+    if (!readiness.ok) {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: readiness.reason,
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel,
+        accountId: delivery.accountId,
+      });
+      log.info("heartbeat: channel not ready", {
+        channel: delivery.channel,
+        reason: readiness.reason,
+      });
+      return { status: "skipped", reason: readiness.reason };
+    }
+  }
+  const deliveryCircuitKey = resolveHeartbeatDeliveryCircuitKey(delivery);
+  if (deliveryCircuitKey) {
+    const circuitState = getHeartbeatDeliveryCircuitState(deliveryCircuitKey, startedAt);
+    if (circuitState.isOpen) {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "delivery-circuit-open",
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("failed") : undefined,
+      });
+      return { status: "skipped", reason: "delivery-circuit-open" };
+    }
+  }
+
+  const markDeliverySuccess = () => {
+    if (!deliveryCircuitKey) {
+      return;
+    }
+    recordHeartbeatDeliverySuccess(deliveryCircuitKey);
+  };
+  const markDeliveryFailure = (err: unknown) => {
+    if (!deliveryCircuitKey) {
+      return;
+    }
+    const next = recordHeartbeatDeliveryFailure(
+      deliveryCircuitKey,
+      opts.deps?.nowMs?.() ?? Date.now(),
+    );
+    if (!next.openUntil) {
+      return;
+    }
+    log.warn("heartbeat: delivery circuit opened", {
+      channel: delivery.channel,
+      to: delivery.to,
+      accountId: delivery.accountId,
+      cooldownMs: next.cooldownMs,
+      consecutiveFailures: next.consecutiveFailures,
+      error: formatErrorMessage(err),
+    });
+  };
   const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
   const responsePrefix = resolveEffectiveMessagesConfig(cfg, agentId, {
     channel: delivery.channel !== "none" ? delivery.channel : undefined,
@@ -709,27 +855,32 @@ export async function runHeartbeatOnce(opts: {
     if (!canAttemptHeartbeatOk || delivery.channel === "none" || !delivery.to) {
       return false;
     }
-    const heartbeatPlugin = getChannelPlugin(delivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
         cfg,
-        accountId: delivery.accountId,
+        accountId: deliveryAccountId,
         deps: opts.deps,
       });
       if (!readiness.ok) {
         return false;
       }
     }
-    await deliverOutboundPayloads({
-      cfg,
-      channel: delivery.channel,
-      to: delivery.to,
-      accountId: delivery.accountId,
-      threadId: delivery.threadId,
-      payloads: [{ text: heartbeatOkText }],
-      session: outboundSession,
-      deps: opts.deps,
-    });
+    try {
+      await deliverOutboundPayloads({
+        cfg,
+        channel: delivery.channel,
+        to: delivery.to,
+        accountId: deliveryAccountId,
+        threadId: delivery.threadId,
+        payloads: [{ text: heartbeatOkText }],
+        session: outboundSession,
+        deps: opts.deps,
+      });
+      markDeliverySuccess();
+    } catch (err) {
+      markDeliveryFailure(err);
+      throw err;
+    }
     return true;
   };
 
@@ -896,52 +1047,32 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    const deliveryAccountId = delivery.accountId;
-    const heartbeatPlugin = getChannelPlugin(delivery.channel);
-    if (heartbeatPlugin?.heartbeat?.checkReady) {
-      const readiness = await heartbeatPlugin.heartbeat.checkReady({
+    try {
+      await deliverOutboundPayloads({
         cfg,
+        channel: delivery.channel,
+        to: delivery.to,
         accountId: deliveryAccountId,
+        session: outboundSession,
+        threadId: delivery.threadId,
+        payloads: [
+          ...reasoningPayloads,
+          ...(shouldSkipMain
+            ? []
+            : [
+                {
+                  text: normalized.text,
+                  mediaUrls,
+                },
+              ]),
+        ],
         deps: opts.deps,
       });
-      if (!readiness.ok) {
-        emitHeartbeatEvent({
-          status: "skipped",
-          reason: readiness.reason,
-          preview: previewText?.slice(0, 200),
-          durationMs: Date.now() - startedAt,
-          hasMedia: mediaUrls.length > 0,
-          channel: delivery.channel,
-          accountId: delivery.accountId,
-        });
-        log.info("heartbeat: channel not ready", {
-          channel: delivery.channel,
-          reason: readiness.reason,
-        });
-        return { status: "skipped", reason: readiness.reason };
-      }
+      markDeliverySuccess();
+    } catch (err) {
+      markDeliveryFailure(err);
+      throw err;
     }
-
-    await deliverOutboundPayloads({
-      cfg,
-      channel: delivery.channel,
-      to: delivery.to,
-      accountId: deliveryAccountId,
-      session: outboundSession,
-      threadId: delivery.threadId,
-      payloads: [
-        ...reasoningPayloads,
-        ...(shouldSkipMain
-          ? []
-          : [
-              {
-                text: normalized.text,
-                mediaUrls,
-              },
-            ]),
-      ],
-      deps: opts.deps,
-    });
 
     // Record last delivered heartbeat payload for dedupe.
     if (!shouldSkipMain && normalized.text.trim()) {

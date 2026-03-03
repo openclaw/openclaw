@@ -159,7 +159,7 @@ export async function dispatchReplyFromConfig(params: {
     });
   };
 
-  if (shouldSkipDuplicateInbound(ctx)) {
+  if (shouldSkipDuplicateInbound(ctx, { config: cfg })) {
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }

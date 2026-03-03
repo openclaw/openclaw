@@ -45,7 +45,7 @@ import {
   parseImageDimensionError,
   isRateLimitAssistantError,
   isTimeoutErrorMessage,
-  pickFallbackThinkingLevel,
+  pickFallbackThinkingLevelWithCache,
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
@@ -1062,15 +1062,23 @@ export async function runEmbeddedPiAgent(
             ) {
               continue;
             }
-            const fallbackThinking = pickFallbackThinkingLevel({
+            const fallbackThinking = pickFallbackThinkingLevelWithCache({
               message: errorText,
               attempted: attemptedThinking,
+              provider,
+              model: modelId,
             });
-            if (fallbackThinking) {
-              log.warn(
-                `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
-              );
-              thinkLevel = fallbackThinking;
+            if (fallbackThinking.level) {
+              if (fallbackThinking.source === "parsed") {
+                log.warn(
+                  `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking.level}`,
+                );
+              } else {
+                log.debug(
+                  `unsupported thinking level for ${provider}/${modelId}; reusing cached fallback ${fallbackThinking.level}`,
+                );
+              }
+              thinkLevel = fallbackThinking.level;
               continue;
             }
             // FIX: Throw FailoverError for prompt errors when fallbacks configured
@@ -1087,15 +1095,23 @@ export async function runEmbeddedPiAgent(
             throw promptError;
           }
 
-          const fallbackThinking = pickFallbackThinkingLevel({
+          const fallbackThinking = pickFallbackThinkingLevelWithCache({
             message: lastAssistant?.errorMessage,
             attempted: attemptedThinking,
+            provider,
+            model: modelId,
           });
-          if (fallbackThinking && !aborted) {
-            log.warn(
-              `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
-            );
-            thinkLevel = fallbackThinking;
+          if (fallbackThinking.level && !aborted) {
+            if (fallbackThinking.source === "parsed") {
+              log.warn(
+                `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking.level}`,
+              );
+            } else {
+              log.debug(
+                `unsupported thinking level for ${provider}/${modelId}; reusing cached fallback ${fallbackThinking.level}`,
+              );
+            }
+            thinkLevel = fallbackThinking.level;
             continue;
           }
 
