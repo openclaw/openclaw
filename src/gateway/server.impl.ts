@@ -48,7 +48,7 @@ import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
-import { getTotalQueueSize } from "../process/command-queue.js";
+import { getTotalQueueSize, setMaxCommandQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { CommandSecretAssignment } from "../secrets/command-config.js";
 import {
@@ -94,7 +94,7 @@ import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
-import { logGatewayStartup } from "./server-startup-log.js";
+import { checkSandboxFallthroughRisk, logGatewayStartup } from "./server-startup-log.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
@@ -404,6 +404,32 @@ export async function startGatewayServer(
       activate: true,
     })
   ).config;
+
+  // Enforce sandbox.requireAvailable: if sandbox mode is enabled and
+  // requireAvailable=true, check Docker availability and refuse to start
+  // if Docker is not reachable. This prevents silent fallthrough to host execution.
+  const sandboxFallthrough = checkSandboxFallthroughRisk(cfgAtStart);
+  if (sandboxFallthrough.requireAvailable && sandboxFallthrough.mode !== "off") {
+    const { runExec } = await import("../process/exec.js");
+    let dockerOk = false;
+    try {
+      await runExec("docker", ["version", "--format", "{{.Server.Version}}"], {
+        timeoutMs: 5_000,
+      });
+      dockerOk = true;
+    } catch {
+      dockerOk = false;
+    }
+    if (!dockerOk) {
+      const msg =
+        `sandbox.requireAvailable is true and sandbox mode is "${sandboxFallthrough.mode}", ` +
+        "but Docker is not available. Refusing to start to prevent silent host execution fallthrough. " +
+        "Install Docker or set agents.defaults.sandbox.requireAvailable=false to allow startup with warnings.";
+      log.error(msg);
+      throw new Error(msg);
+    }
+  }
+
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat();
@@ -579,6 +605,12 @@ export async function startGatewayServer(
   };
   const hasMobileNodeConnected = () => hasConnectedMobileNode(nodeRegistry);
   applyGatewayLaneConcurrency(cfgAtStart);
+
+  // Apply command queue size limit from config (default: 500)
+  const configuredQueueSize = cfgAtStart.gateway?.maxCommandQueueSize;
+  if (typeof configuredQueueSize === "number" && configuredQueueSize >= 0) {
+    setMaxCommandQueueSize(configuredQueueSize);
+  }
 
   let cronState = buildGatewayCronService({
     cfg: cfgAtStart,

@@ -247,6 +247,55 @@ export async function maybeRepairSandboxImages(
   return next;
 }
 
+/**
+ * Check for sandbox fallthrough risk: sandbox mode is enabled but Docker
+ * may not be available, which causes silent fallthrough to host execution.
+ * Also validates the `requireAvailable` config flag.
+ */
+export async function noteSandboxFallthroughWarnings(cfg: OpenClawConfig) {
+  const sandbox = cfg.agents?.defaults?.sandbox;
+  const mode = sandbox?.mode ?? "off";
+  if (mode === "off") {
+    return;
+  }
+
+  const dockerAvailable = await isDockerAvailable();
+  const requireAvailable = sandbox?.requireAvailable === true;
+
+  if (!dockerAvailable) {
+    const lines = [
+      `Sandbox mode is "${mode}" but Docker is not available.`,
+      "Without Docker, sandbox-targeted commands will silently fall back to host execution.",
+      "This is a mental-model mismatch: you may expect isolation when none is present.",
+      "",
+      "Options:",
+      "- Install and start Docker",
+      "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
+    ];
+    if (requireAvailable) {
+      lines.push(
+        "",
+        "requireAvailable is enabled — the gateway will refuse to start until Docker is available.",
+      );
+    } else {
+      lines.push(
+        "",
+        "To fail-closed instead of falling through:",
+        "  openclaw config set agents.defaults.sandbox.requireAvailable true",
+      );
+    }
+    note(lines.join("\n"), "Sandbox safety");
+  } else if (!requireAvailable) {
+    // Docker is available now, but suggest opt-in for safety
+    const lines = [
+      `Sandbox mode is "${mode}" and Docker is currently available.`,
+      "Consider setting requireAvailable=true to prevent silent host fallthrough if Docker becomes unavailable.",
+      "  openclaw config set agents.defaults.sandbox.requireAvailable true",
+    ];
+    note(lines.join("\n"), "Sandbox safety");
+  }
+}
+
 export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
   const globalSandbox = cfg.agents?.defaults?.sandbox;
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
