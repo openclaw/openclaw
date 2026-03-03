@@ -62,7 +62,7 @@ function resolveWebhookPublicUrl(params: {
 }
 
 async function initializeTelegramWebhookBot(params: {
-  bot: ReturnType<typeof createTelegramBot>;
+  bot: ReturnType<typeof createTelegramBot>["bot"];
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
 }) {
@@ -101,7 +101,7 @@ export async function startTelegramWebhook(opts: {
   }
   const runtime = opts.runtime ?? defaultRuntime;
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
-  const bot = createTelegramBot({
+  const { bot } = createTelegramBot({
     token: opts.token,
     runtime,
     proxyFetch: opts.fetch,

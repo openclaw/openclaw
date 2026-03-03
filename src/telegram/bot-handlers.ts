@@ -119,7 +119,7 @@ export const registerTelegramHandlers = ({
   shouldSkipUpdate,
   processMessage,
   logger,
-}: RegisterTelegramHandlerParams) => {
+}: RegisterTelegramHandlerParams): { drain: () => Promise<void> } => {
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
@@ -1487,6 +1487,42 @@ export const registerTelegramHandlers = ({
     });
   });
 
+  // Flush all pending timer-based buffers. Called on graceful shutdown so that
+  // messages buffered for media-group assembly, text-fragment reassembly, or
+  // inbound debouncing are dispatched before the process exits.  Messages already
+  // confirmed to Telegram via getUpdates are never re-delivered, so without this
+  // drain they would be silently lost on systemd restarts.
+  const drain = async () => {
+    // Flush pending text-fragment reassembly timers
+    const textEntries = [...textFragmentBuffer.values()];
+    textFragmentBuffer.clear();
+    for (const entry of textEntries) {
+      clearTimeout(entry.timer);
+      textFragmentProcessing = textFragmentProcessing
+        .then(async () => {
+          await flushTextFragments(entry);
+        })
+        .catch(() => undefined);
+    }
+    await textFragmentProcessing;
+
+    // Flush pending media-group assembly timers
+    const mediaEntries = [...mediaGroupBuffer.values()];
+    mediaGroupBuffer.clear();
+    for (const entry of mediaEntries) {
+      clearTimeout(entry.timer);
+      mediaGroupProcessing = mediaGroupProcessing
+        .then(async () => {
+          await processMediaGroup(entry);
+        })
+        .catch(() => undefined);
+    }
+    await mediaGroupProcessing;
+
+    // Flush pending inbound-debounce buffers
+    await inboundDebouncer.drain();
+  };
+
   // Handle channel posts — enables bot-to-bot communication via Telegram channels.
   // Telegram bots cannot see other bot messages in groups, but CAN in channels.
   // This handler normalizes channel_post updates into the standard message pipeline.
@@ -1539,4 +1575,6 @@ export const registerTelegramHandlers = ({
       errorMessage: "channel_post handler failed",
     });
   });
+
+  return { drain };
 };

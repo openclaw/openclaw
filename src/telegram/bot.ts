@@ -106,6 +106,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const pendingUpdateIds = new Set<number>();
   let highestCompletedUpdateId: number | null = initialUpdateId;
   let highestPersistedUpdateId: number | null = initialUpdateId;
+  // Track the last pending watermark write so drain() can await it on shutdown.
+  let pendingWatermarkWrite: Promise<void> | undefined;
   const maybePersistSafeWatermark = () => {
     if (typeof opts.updateOffset?.onUpdateId !== "function") {
       return;
@@ -129,7 +131,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       return;
     }
     highestPersistedUpdateId = safe;
-    void opts.updateOffset.onUpdateId(safe);
+    // Track the write promise so drain() can await it, preventing offset loss on
+    // abrupt shutdown (e.g. systemd SIGTERM before the async write completes).
+    pendingWatermarkWrite = Promise.resolve(opts.updateOffset.onUpdateId(safe)).then(
+      () => undefined,
+      () => undefined,
+    );
   };
 
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
@@ -362,7 +369,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     opts,
   });
 
-  registerTelegramHandlers({
+  const { drain: handlersDrain } = registerTelegramHandlers({
     cfg,
     accountId: account.accountId,
     bot,
@@ -379,7 +386,18 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     logger,
   });
 
-  return bot;
+  // Drain all pending timer-based buffers and await any in-flight watermark write.
+  // Called by the polling/webhook lifecycle on graceful shutdown so that buffered
+  // messages (media groups, text fragments, debounce windows) are dispatched before
+  // the process exits, and the update-offset file reflects the latest processed ID.
+  const drain = async () => {
+    await handlersDrain();
+    if (pendingWatermarkWrite) {
+      await pendingWatermarkWrite;
+    }
+  };
+
+  return { bot, drain };
 }
 
 export function createTelegramWebhookCallback(bot: Bot, path = "/telegram-webhook") {

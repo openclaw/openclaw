@@ -120,5 +120,11 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey };
+  // Flush all pending debounce buffers immediately (used on graceful shutdown).
+  const drain = async () => {
+    const keys = [...buffers.keys()];
+    await Promise.all(keys.map((key) => flushKey(key)));
+  };
+
+  return { enqueue, flushKey, drain };
 }
