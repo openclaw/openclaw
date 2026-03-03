@@ -66,10 +66,10 @@ async function resolveTelegramFileWithRetry(
 ): Promise<{ file_path?: string } | null> {
   try {
     return await retryAsync(() => ctx.getFile(), {
-      attempts: 3,
-      minDelayMs: 1000,
-      maxDelayMs: 4000,
-      jitter: 0.2,
+      attempts: 5,
+      minDelayMs: 2000,
+      maxDelayMs: 8000,
+      jitter: 0.3,
       label: "telegram:getFile",
       shouldRetry: isRetryableGetFileError,
       onRetry: ({ attempt, maxAttempts }) =>

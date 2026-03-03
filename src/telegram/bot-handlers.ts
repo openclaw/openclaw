@@ -979,12 +979,15 @@ export const registerTelegramHandlers = ({
         logger.warn({ chatId, error: String(mediaErr) }, oversizeLogMessage);
         return;
       }
-      logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
+      const mediaErrMsg = String(mediaErr);
+      logger.warn({ chatId, error: mediaErrMsg }, "media fetch failed");
+      const userHint =
+        mediaErrMsg.length > 0 && mediaErrMsg.length < 200 ? ` (${mediaErrMsg})` : "";
       await withTelegramApiErrorLogging({
         operation: "sendMessage",
         runtime,
         fn: () =>
-          bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+          bot.api.sendMessage(chatId, `⚠️ Failed to download media. Please try again.${userHint}`, {
             reply_to_message_id: msg.message_id,
           }),
       }).catch(() => {});

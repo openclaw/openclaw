@@ -2047,7 +2047,7 @@ describe("createTelegramBot", () => {
 
       expect(sendMessageSpy).toHaveBeenCalledWith(
         1234,
-        "⚠️ Failed to download media. Please try again.",
+        expect.stringContaining("⚠️ Failed to download media. Please try again."),
         { reply_to_message_id: 411 },
       );
       expect(replySpy).not.toHaveBeenCalled();

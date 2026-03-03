@@ -186,7 +186,7 @@ describe("resolveMedia getFile retry", () => {
       await flushRetryTimers();
       const result = await promise;
 
-      expect(getFile).toHaveBeenCalledTimes(3);
+      expect(getFile).toHaveBeenCalledTimes(5);
       expect(result).toBeNull();
     },
   );
@@ -290,7 +290,7 @@ describe("resolveMedia getFile retry", () => {
     await flushRetryTimers();
     const result = await promise;
 
-    expect(getFile).toHaveBeenCalledTimes(3);
+    expect(getFile).toHaveBeenCalledTimes(5);
     expect(result).toBeNull();
   });
 });
