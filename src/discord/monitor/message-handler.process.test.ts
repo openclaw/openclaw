@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EMOJIS } from "../../channels/status-reactions.js";
-import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
+import {
+  createBaseDiscordMessageContext,
+  createDiscordDirectMessageContextOverrides,
+} from "./message-handler.test-harness.js";
 import {
   __testing as threadBindingTesting,
   createThreadBindingManager,
@@ -117,6 +120,19 @@ const { processDiscordMessage } = await import("./message-handler.process.js");
 
 const createBaseContext = createBaseDiscordMessageContext;
 
+function mockDispatchSingleBlockReply(payload: { text: string; isReasoning?: boolean }) {
+  dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+    await params?.dispatcher.sendBlockReply(payload);
+    return { queuedFinal: false, counts: { final: 0, tool: 0, block: 1 } };
+  });
+}
+
+async function processStreamOffDiscordMessage() {
+  const ctx = await createBaseContext({ discordConfig: { streamMode: "off" } });
+  // oxlint-disable-next-line typescript/no-explicit-any
+  await processDiscordMessage(ctx as any);
+}
+
 beforeEach(() => {
   vi.useRealTimers();
   sendMocks.reactMessageDiscord.mockClear();
@@ -163,6 +179,18 @@ function getLastDispatchCtx():
     | { ctx?: { SessionKey?: string; MessageThreadId?: string | number } }
     | undefined;
   return params?.ctx;
+}
+
+async function runProcessDiscordMessage(ctx: unknown): Promise<void> {
+  // oxlint-disable-next-line typescript/no-explicit-any
+  await processDiscordMessage(ctx as any);
+}
+
+async function runInPartialStreamMode(): Promise<void> {
+  const ctx = await createBaseContext({
+    discordConfig: { streamMode: "partial" },
+  });
+  await runProcessDiscordMessage(ctx);
 }
 
 describe("processDiscordMessage ack reactions", () => {
@@ -295,18 +323,7 @@ describe("processDiscordMessage ack reactions", () => {
 describe("processDiscordMessage session routing", () => {
   it("stores DM lastRoute with user target for direct-session continuity", async () => {
     const ctx = await createBaseContext({
-      data: { guild: null },
-      channelInfo: null,
-      channelName: undefined,
-      isGuildMessage: false,
-      isDirectMessage: true,
-      isGroupDm: false,
-      shouldRequireMention: false,
-      canDetectMention: false,
-      effectiveWasMentioned: false,
-      displayChannelSlug: "",
-      guildInfo: null,
-      guildSlug: "",
+      ...createDiscordDirectMessageContextOverrides(),
       message: {
         id: "m1",
         channelId: "dm1",
@@ -314,14 +331,6 @@ describe("processDiscordMessage session routing", () => {
         attachments: [],
       },
       messageChannelId: "dm1",
-      baseSessionKey: "agent:main:discord:direct:u1",
-      route: {
-        agentId: "main",
-        channel: "discord",
-        accountId: "default",
-        sessionKey: "agent:main:discord:direct:u1",
-        mainSessionKey: "agent:main:main",
-      },
     });
 
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -467,15 +476,8 @@ describe("processDiscordMessage draft streaming", () => {
   });
 
   it("suppresses reasoning payload delivery to Discord", async () => {
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendBlockReply({ text: "thinking...", isReasoning: true });
-      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 1 } };
-    });
-
-    const ctx = await createBaseContext({ discordConfig: { streamMode: "off" } });
-
-    // oxlint-disable-next-line typescript/no-explicit-any
-    await processDiscordMessage(ctx as any);
+    mockDispatchSingleBlockReply({ text: "thinking...", isReasoning: true });
+    await processStreamOffDiscordMessage();
 
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
@@ -499,15 +501,8 @@ describe("processDiscordMessage draft streaming", () => {
   });
 
   it("delivers non-reasoning block payloads to Discord", async () => {
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendBlockReply({ text: "hello from block stream" });
-      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 1 } };
-    });
-
-    const ctx = await createBaseContext({ discordConfig: { streamMode: "off" } });
-
-    // oxlint-disable-next-line typescript/no-explicit-any
-    await processDiscordMessage(ctx as any);
+    mockDispatchSingleBlockReply({ text: "hello from block stream" });
+    await processStreamOffDiscordMessage();
 
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
@@ -559,12 +554,7 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({
-      discordConfig: { streamMode: "partial" },
-    });
-
-    // oxlint-disable-next-line typescript/no-explicit-any
-    await processDiscordMessage(ctx as any);
+    await runInPartialStreamMode();
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     for (const text of updates) {
@@ -583,12 +573,7 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({
-      discordConfig: { streamMode: "partial" },
-    });
-
-    // oxlint-disable-next-line typescript/no-explicit-any
-    await processDiscordMessage(ctx as any);
+    await runInPartialStreamMode();
 
     expect(draftStream.update).not.toHaveBeenCalled();
   });

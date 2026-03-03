@@ -1,5 +1,15 @@
+import { loadMatrixSdk } from "../sdk-runtime.js";
+
 let matrixSdkLoggingConfigured = false;
-let matrixSdkLoggingPromise: Promise<void> | null = null;
+let matrixSdkBaseLogger:
+  | {
+      trace: (module: string, ...messageOrObject: unknown[]) => void;
+      debug: (module: string, ...messageOrObject: unknown[]) => void;
+      info: (module: string, ...messageOrObject: unknown[]) => void;
+      warn: (module: string, ...messageOrObject: unknown[]) => void;
+      error: (module: string, ...messageOrObject: unknown[]) => void;
+    }
+  | undefined;
 
 function shouldSuppressMatrixHttpNotFound(module: string, messageOrObject: unknown[]): boolean {
   if (module !== "MatrixHttpClient") {
@@ -17,34 +27,20 @@ export async function ensureMatrixSdkLoggingConfigured(): Promise<void> {
   if (matrixSdkLoggingConfigured) {
     return;
   }
-  if (matrixSdkLoggingPromise) {
-    await matrixSdkLoggingPromise;
-    return;
-  }
-  matrixSdkLoggingPromise = (async () => {
-    try {
-      const { ConsoleLogger, LogService } = await import("@vector-im/matrix-bot-sdk");
-      const matrixSdkBaseLogger = new ConsoleLogger();
-      LogService.setLogger({
-        trace: (module, ...messageOrObject) =>
-          matrixSdkBaseLogger.trace(module, ...messageOrObject),
-        debug: (module, ...messageOrObject) =>
-          matrixSdkBaseLogger.debug(module, ...messageOrObject),
-        info: (module, ...messageOrObject) => matrixSdkBaseLogger.info(module, ...messageOrObject),
-        warn: (module, ...messageOrObject) => matrixSdkBaseLogger.warn(module, ...messageOrObject),
-        error: (module, ...messageOrObject) => {
-          if (shouldSuppressMatrixHttpNotFound(module, messageOrObject)) {
-            return;
-          }
-          matrixSdkBaseLogger.error(module, ...messageOrObject);
-        },
-      });
-    } catch {
-      // Matrix SDK logging is optional in environments without native crypto deps.
-    } finally {
-      matrixSdkLoggingConfigured = true;
-      matrixSdkLoggingPromise = null;
-    }
-  })();
-  await matrixSdkLoggingPromise;
+  const { ConsoleLogger, LogService } = loadMatrixSdk();
+  matrixSdkBaseLogger = new ConsoleLogger();
+  matrixSdkLoggingConfigured = true;
+
+  LogService.setLogger({
+    trace: (module, ...messageOrObject) => matrixSdkBaseLogger?.trace(module, ...messageOrObject),
+    debug: (module, ...messageOrObject) => matrixSdkBaseLogger?.debug(module, ...messageOrObject),
+    info: (module, ...messageOrObject) => matrixSdkBaseLogger?.info(module, ...messageOrObject),
+    warn: (module, ...messageOrObject) => matrixSdkBaseLogger?.warn(module, ...messageOrObject),
+    error: (module, ...messageOrObject) => {
+      if (shouldSuppressMatrixHttpNotFound(module, messageOrObject)) {
+        return;
+      }
+      matrixSdkBaseLogger?.error(module, ...messageOrObject);
+    },
+  });
 }

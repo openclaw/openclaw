@@ -8,6 +8,10 @@ DEFAULT_PACKAGE="@qverisai/qverisbot"
 DEFAULT_CLI_NAME="qverisbot"
 PACKAGE_NAME="${QVERISBOT_INSTALL_PACKAGE:-${OPENCLAW_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}}"
 CLI_NAME="${QVERISBOT_INSTALL_CLI:-${OPENCLAW_INSTALL_CLI:-$DEFAULT_CLI_NAME}}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# shellcheck source=../install-sh-common/cli-verify.sh
+source "$SCRIPT_DIR/../install-sh-common/cli-verify.sh"
 
 echo "==> Resolve npm versions"
 LATEST_VERSION="$(npm view "$PACKAGE_NAME" version)"
@@ -53,6 +57,10 @@ echo "==> Run official installer one-liner"
 curl -fsSL "$INSTALL_URL" | bash
 
 echo "==> Verify installed version"
+LATEST_OUT_PATH="${QVERISBOT_INSTALL_LATEST_OUT:-${OPENCLAW_INSTALL_LATEST_OUT:-}}"
+if [[ -n "$LATEST_OUT_PATH" ]]; then
+  printf "%s" "$LATEST_VERSION" > "$LATEST_OUT_PATH"
+fi
 CMD_PATH="$(command -v "$CLI_NAME" || true)"
 if [[ -z "$CMD_PATH" && -x "$HOME/.npm-global/bin/$CLI_NAME" ]]; then
   CMD_PATH="$HOME/.npm-global/bin/$CLI_NAME"
@@ -68,22 +76,16 @@ if [[ -z "$CMD_PATH" && -z "$ENTRY_PATH" ]]; then
   echo "ERROR: $PACKAGE_NAME is not on PATH" >&2
   exit 1
 fi
-LATEST_OUT_PATH="${QVERISBOT_INSTALL_LATEST_OUT:-${OPENCLAW_INSTALL_LATEST_OUT:-}}"
-if [[ -n "$LATEST_OUT_PATH" ]]; then
-  printf "%s" "$LATEST_VERSION" > "$LATEST_OUT_PATH"
-fi
 if [[ -n "$CMD_PATH" ]]; then
   INSTALLED_VERSION="$("$CMD_PATH" --version 2>/dev/null | head -n 1 | tr -d '\r')"
 else
   INSTALLED_VERSION="$(node "$ENTRY_PATH" --version 2>/dev/null | head -n 1 | tr -d '\r')"
 fi
 echo "cli=$CLI_NAME installed=$INSTALLED_VERSION expected=$LATEST_VERSION"
-
 if [[ "$INSTALLED_VERSION" != "$LATEST_VERSION" ]]; then
   echo "ERROR: expected ${CLI_NAME}@${LATEST_VERSION}, got ${CLI_NAME}@${INSTALLED_VERSION}" >&2
   exit 1
 fi
-
 echo "==> Sanity: CLI runs"
 if [[ -n "$CMD_PATH" ]]; then
   "$CMD_PATH" --help >/dev/null

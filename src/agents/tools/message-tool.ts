@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { BLUEBUBBLES_GROUP_ACTIONS } from "../../channels/plugins/bluebubbles-actions.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   listChannelMessageActions,
   supportsChannelMessageButtons,
@@ -242,14 +243,14 @@ function buildReactionSchema() {
     messageId: Type.Optional(
       Type.String({
         description:
-          "Target message id for reaction. For Telegram, if omitted, defaults to the current inbound message id when available.",
+          "Target message id for reaction. If omitted, defaults to the current inbound message id when available.",
       }),
     ),
     message_id: Type.Optional(
       Type.String({
         // Intentional duplicate alias for tool-schema discoverability in LLMs.
         description:
-          "snake_case alias of messageId. For Telegram, if omitted, defaults to the current inbound message id when available.",
+          "snake_case alias of messageId. If omitted, defaults to the current inbound message id when available.",
       }),
     ),
     emoji: Type.Optional(Type.String()),
@@ -312,6 +313,7 @@ function buildThreadSchema() {
   return {
     threadName: Type.Optional(Type.String()),
     autoArchiveMin: Type.Optional(Type.Number()),
+    appliedTags: Type.Optional(Type.Array(Type.String())),
   };
 }
 
@@ -473,6 +475,18 @@ function resolveMessageToolSchemaActions(params: {
     });
     const withSend = new Set<string>(["send", ...scopedActions, ...crossActions]);
     return Array.from(withSend);
+    const allActions = new Set<string>(["send", ...scopedActions]);
+    // Include actions from other configured channels so isolated/cron agents
+    // can invoke cross-channel actions without validation errors.
+    for (const plugin of listChannelPlugins()) {
+      if (plugin.id === currentChannel) {
+        continue;
+      }
+      for (const action of listChannelSupportedActions({ cfg: params.cfg, channel: plugin.id })) {
+        allActions.add(action);
+      }
+    }
+    return Array.from(allActions);
   }
   const actions = listChannelMessageActions(params.cfg);
   return actions.length > 0 ? actions : ["send"];

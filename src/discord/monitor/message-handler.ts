@@ -29,7 +29,10 @@ export function createDiscordMessageHandler(
     groupPolicy: params.discordConfig?.groupPolicy,
     defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
   });
-  const ackReactionScope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
+  const ackReactionScope =
+    params.discordConfig?.ackReactionScope ??
+    params.cfg.messages?.ackReactionScope ??
+    "group-mentions";
   const debounceMs = resolveInboundDebounceMs({ cfg: params.cfg, channel: "discord" });
 
   const debouncer = createInboundDebouncer<{ data: DiscordMessageEvent; client: Client }>({

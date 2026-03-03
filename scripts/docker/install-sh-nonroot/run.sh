@@ -6,6 +6,16 @@ DEFAULT_PACKAGE="@qverisai/qverisbot"
 DEFAULT_CLI_NAME="qverisbot"
 PACKAGE_NAME="${QVERISBOT_INSTALL_PACKAGE:-${OPENCLAW_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}}"
 CLI_NAME="${QVERISBOT_INSTALL_CLI:-${OPENCLAW_INSTALL_CLI:-$DEFAULT_CLI_NAME}}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# shellcheck source=../install-sh-common/cli-verify.sh
+source "$SCRIPT_DIR/../install-sh-common/cli-verify.sh"
+
+echo "==> Pre-flight: ensure git absent"
+if command -v git >/dev/null; then
+  echo "git is present unexpectedly" >&2
+  exit 1
+fi
 
 echo "==> Run installer (non-root user)"
 curl -fsSL "$INSTALL_URL" | bash
@@ -19,6 +29,7 @@ if [[ -n "$EXPECTED_VERSION" ]]; then
 else
   LATEST_VERSION="$(npm view "$PACKAGE_NAME" version)"
 fi
+echo "==> Verify CLI installed: $CLI_NAME"
 CMD_PATH="$(command -v "$CLI_NAME" || true)"
 if [[ -z "$CMD_PATH" && -x "$HOME/.npm-global/bin/$CLI_NAME" ]]; then
   CMD_PATH="$HOME/.npm-global/bin/$CLI_NAME"
@@ -34,7 +45,6 @@ if [[ -z "$CMD_PATH" && -z "$ENTRY_PATH" ]]; then
   echo "$PACKAGE_NAME is not on PATH" >&2
   exit 1
 fi
-echo "==> Verify CLI installed: $CLI_NAME"
 if [[ -n "$CMD_PATH" ]]; then
   INSTALLED_VERSION="$("$CMD_PATH" --version 2>/dev/null | head -n 1 | tr -d '\r')"
 else

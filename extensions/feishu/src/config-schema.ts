@@ -1,3 +1,4 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { z } from "zod";
 export { z };
 
@@ -82,6 +83,7 @@ const DynamicAgentCreationSchema = z
 const FeishuToolsConfigSchema = z
   .object({
     doc: z.boolean().optional(), // Document operations (default: true)
+    chat: z.boolean().optional(), // Chat info + member query operations (default: true)
     wiki: z.boolean().optional(), // Knowledge base operations (default: true, requires doc)
     drive: z.boolean().optional(), // Cloud storage operations (default: true)
     perm: z.boolean().optional(), // Permission management (default: false, sensitive)
@@ -108,8 +110,12 @@ const GroupSessionScopeSchema = z
  * Topic session isolation mode for group chats.
  * - "disabled" (default): All messages in a group share one session
  * - "enabled": Messages in different topics get separate sessions
+ *
+ * Topic routing uses `root_id` when present to keep session continuity and
+ * falls back to `thread_id` when `root_id` is unavailable.
  */
 const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
+const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
 
 /**
  * Reply-in-thread mode for group chats.
@@ -145,6 +151,7 @@ const FeishuSharedConfigShape = {
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupPolicy: GroupPolicySchema.optional(),
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  groupSenderAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   requireMention: z.boolean().optional(),
   groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
   historyLimit: z.number().int().min(0).optional(),
@@ -159,6 +166,9 @@ const FeishuSharedConfigShape = {
   streaming: StreamingModeSchema,
   tools: FeishuToolsConfigSchema,
   replyInThread: ReplyInThreadSchema,
+  reactionNotifications: ReactionNotificationModeSchema,
+  typingIndicator: z.boolean().optional(),
+  resolveSenderNames: z.boolean().optional(),
 };
 
 /**
@@ -185,6 +195,7 @@ export const FeishuAccountConfigSchema = z
 export const FeishuConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
+    defaultAccount: z.string().optional(),
     // Top-level credentials (backward compatible for single-account mode)
     appId: z.string().optional(),
     appSecret: z.string().optional(),
@@ -198,17 +209,33 @@ export const FeishuConfigSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     /** Feishu user IDs allowed to trigger X actions (follow/like/reply/dm). Separate from allowFrom. */
     xActionsAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    reactionNotifications: ReactionNotificationModeSchema.optional().default("own"),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     requireMention: z.boolean().optional().default(true),
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
     // Dynamic agent creation for DM users
     dynamicAgentCreation: DynamicAgentCreationSchema,
+    // Optimization flags
+    typingIndicator: z.boolean().optional().default(true),
+    resolveSenderNames: z.boolean().optional().default(true),
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
+    const defaultAccount = value.defaultAccount?.trim();
+    if (defaultAccount && value.accounts && Object.keys(value.accounts).length > 0) {
+      const normalizedDefaultAccount = normalizeAccountId(defaultAccount);
+      if (!Object.prototype.hasOwnProperty.call(value.accounts, normalizedDefaultAccount)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["defaultAccount"],
+          message: `channels.feishu.defaultAccount="${defaultAccount}" does not match a configured account key`,
+        });
+      }
+    }
+
     const defaultConnectionMode = value.connectionMode ?? "websocket";
     const defaultVerificationToken = value.verificationToken?.trim();
     if (defaultConnectionMode === "webhook" && !defaultVerificationToken) {

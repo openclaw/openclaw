@@ -73,12 +73,12 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     })();
   const cleaned = text.trim();
   if (!cleaned) {
-    return;
+    return false;
   }
   const normalizedContextKey = normalizeContextKey(options?.contextKey);
   entry.lastContextKey = normalizedContextKey;
   if (entry.lastText === cleaned) {
-    return;
+    return false;
   } // skip consecutive duplicates
   entry.lastText = cleaned;
   entry.queue.push({
@@ -90,6 +90,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
   }
+  return true;
 }
 
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {

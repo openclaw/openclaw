@@ -65,6 +65,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "x-search",
   "x-tweet-info",
   "set-presence",
+  "download-file",
 ] as const;
 
 export type ChannelMessageActionName = (typeof CHANNEL_MESSAGE_ACTION_NAMES)[number];

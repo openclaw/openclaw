@@ -6,7 +6,9 @@ import {
   defaultSlackTestConfig,
   getSlackTestState,
   getSlackClient,
+  getSlackHandlers,
   getSlackHandlerOrThrow,
+  flush,
   resetSlackTestState,
   runSlackMessageOnce,
   startSlackMonitor,
@@ -35,16 +37,17 @@ describe("monitorSlackProvider tool results", () => {
     parent_user_id?: string;
   };
 
+  const baseSlackMessageEvent = Object.freeze({
+    type: "message",
+    user: "U1",
+    text: "hello",
+    ts: "123",
+    channel: "C1",
+    channel_type: "im",
+  }) as SlackMessageEvent;
+
   function makeSlackMessageEvent(overrides: Partial<SlackMessageEvent> = {}): SlackMessageEvent {
-    return {
-      type: "message",
-      user: "U1",
-      text: "hello",
-      ts: "123",
-      channel: "C1",
-      channel_type: "im",
-      ...overrides,
-    };
+    return { ...baseSlackMessageEvent, ...overrides };
   }
 
   function setDirectMessageReplyMode(replyToMode: "off" | "all" | "first") {
@@ -118,6 +121,32 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
   }
+
+  it("skips socket startup when Slack channel is disabled", async () => {
+    slackTestState.config = {
+      channels: {
+        slack: {
+          enabled: false,
+          mode: "socket",
+          botToken: "xoxb-config",
+          appToken: "xapp-config",
+        },
+      },
+    };
+    const client = getSlackClient();
+    if (!client) {
+      throw new Error("Slack client not registered");
+    }
+    client.auth.test.mockClear();
+
+    const { controller, run } = startSlackMonitor(monitorSlackProvider);
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(client.auth.test).not.toHaveBeenCalled();
+    expect(getSlackHandlers()?.size ?? 0).toBe(0);
+  });
 
   it("skips tool summaries with responsePrefix", async () => {
     replyMock.mockResolvedValue({ text: "final reply" });

@@ -1,6 +1,10 @@
 import fs from "node:fs";
-import type { IStorageProvider, ICryptoStorageProvider } from "@vector-im/matrix-bot-sdk";
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
+import type {
+  IStorageProvider,
+  ICryptoStorageProvider,
+  MatrixClient,
+} from "@vector-im/matrix-bot-sdk";
+import { loadMatrixSdk } from "../sdk-runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import {
   maybeMigrateLegacyStorage,
@@ -8,11 +12,8 @@ import {
   writeStorageMeta,
 } from "./storage.js";
 
-function sanitizeUserIdList(
-  input: unknown,
-  label: string,
-  warn: (message: string) => void,
-): string[] {
+function sanitizeUserIdList(input: unknown, label: string): string[] {
+  const LogService = loadMatrixSdk().LogService;
   if (input == null) {
     return [];
   }
@@ -37,12 +38,9 @@ export async function createMatrixClient(params: {
   localTimeoutMs?: number;
   accountId?: string | null;
 }): Promise<MatrixClient> {
-  await ensureMatrixSdkLoggingConfigured();
-  const { LogService, MatrixClient, SimpleFsStorageProvider, RustSdkCryptoStorageProvider } =
-    await import("@vector-im/matrix-bot-sdk");
-  const warn = (message: string, err?: unknown) => {
-    LogService.warn("MatrixClientLite", message, err);
-  };
+  const { MatrixClient, SimpleFsStorageProvider, RustSdkCryptoStorageProvider, LogService } =
+    loadMatrixSdk();
+  ensureMatrixSdkLoggingConfigured();
   const env = process.env;
 
   // Create storage provider
