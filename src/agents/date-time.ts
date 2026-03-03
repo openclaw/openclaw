@@ -191,3 +191,14 @@ export function formatUserTime(
     return undefined;
   }
 }
+
+/**
+ * Returns current date in YYYY-MM-DD (UTC).
+ * Used to replace the YYYY-MM-DD placeholder in AGENTS.md at runtime so the agent
+ * receives the actual date (e.g. for memory/YYYY-MM-DD.md paths).
+ */
+export function getDateStampUTC(nowMs?: number): string {
+  const d =
+    typeof nowMs === "number" && Number.isFinite(nowMs) ? new Date(nowMs) : new Date();
+  return d.toISOString().slice(0, 10);
+}

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
+import { getDateStampUTC } from "../date-time.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -193,10 +194,11 @@ async function readWorkspaceContextForSummary(): Promise<string> {
     }
 
     const combined = sections.join("\n\n");
+    const withDate = combined.replaceAll("YYYY-MM-DD", getDateStampUTC());
     const safeContent =
-      combined.length > MAX_SUMMARY_CONTEXT_CHARS
-        ? combined.slice(0, MAX_SUMMARY_CONTEXT_CHARS) + "\n...[truncated]..."
-        : combined;
+      withDate.length > MAX_SUMMARY_CONTEXT_CHARS
+        ? withDate.slice(0, MAX_SUMMARY_CONTEXT_CHARS) + "\n...[truncated]..."
+        : withDate;
 
     return `\n\n<workspace-critical-rules>\n${safeContent}\n</workspace-critical-rules>`;
   } catch {

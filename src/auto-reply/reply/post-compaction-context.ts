@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { getDateStampUTC } from "../../agents/date-time.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 
 const MAX_CONTEXT_CHARS = 3000;
@@ -37,10 +38,11 @@ export async function readPostCompactionContext(workspaceDir: string): Promise<s
     }
 
     const combined = sections.join("\n\n");
+    const withDate = combined.replaceAll("YYYY-MM-DD", getDateStampUTC());
     const safeContent =
-      combined.length > MAX_CONTEXT_CHARS
-        ? combined.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]..."
-        : combined;
+      withDate.length > MAX_CONTEXT_CHARS
+        ? withDate.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]..."
+        : withDate;
 
     return (
       "[Post-compaction context refresh]\n\n" +

@@ -2,6 +2,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { getDateStampUTC } from "./date-time.js";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -541,10 +542,14 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
+      const content =
+        entry.name === DEFAULT_AGENTS_FILENAME
+          ? loaded.content.replaceAll("YYYY-MM-DD", getDateStampUTC())
+          : loaded.content;
       result.push({
         name: entry.name,
         path: entry.filePath,
-        content: loaded.content,
+        content,
         missing: false,
       });
     } else {
@@ -629,10 +634,14 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
+      const content =
+        baseName === DEFAULT_AGENTS_FILENAME
+          ? loaded.content.replaceAll("YYYY-MM-DD", getDateStampUTC())
+          : loaded.content;
       files.push({
         name: baseName as WorkspaceBootstrapFileName,
         path: filePath,
-        content: loaded.content,
+        content,
         missing: false,
       });
       continue;
