@@ -644,12 +644,8 @@ export function createGatewayHttpServer(opts: {
           name: "a2ui",
           run: () => handleA2uiHttpRequest(req, res),
         });
-        requestStages.push({
-          name: "canvas-http",
-          run: () => canvasHost.handleHttpRequest(req, res),
-        });
       }
-      // Plugin routes run before the Control UI SPA catch-all so explicitly
+      // Plugin routes run before canvas-http (the catch-all) so explicitly
       // registered plugin endpoints stay reachable. Core built-in gateway
       // routes above still keep precedence on overlapping paths.
       requestStages.push(
@@ -667,6 +663,12 @@ export function createGatewayHttpServer(opts: {
           rateLimiter,
         }),
       );
+      if (canvasHost) {
+        requestStages.push({
+          name: "canvas-http",
+          run: () => canvasHost.handleHttpRequest(req, res),
+        });
+      }
 
       if (controlUiEnabled) {
         requestStages.push({
