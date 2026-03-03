@@ -13,7 +13,7 @@ import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
-import { FeishuStreamingSession } from "./streaming-card.js";
+import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
@@ -143,29 +143,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
   let lastPartial = "";
+  let finalTextDelivered = false;
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
-
-  const mergeStreamingText = (nextText: string) => {
-    if (!streamText) {
-      streamText = nextText;
-      return;
-    }
-    if (nextText.startsWith(streamText)) {
-      // Handle cumulative partial payloads where nextText already includes prior text.
-      streamText = nextText;
-      return;
-    }
-    if (streamText.endsWith(nextText)) {
-      return;
-    }
-    streamText += nextText;
-  };
+  type StreamTextUpdateMode = "snapshot" | "delta";
 
   const queueStreamingUpdate = (
     nextText: string,
     options?: {
       dedupeWithLastPartial?: boolean;
+      mode?: StreamTextUpdateMode;
     },
   ) => {
     if (!nextText) {
@@ -177,7 +164,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (options?.dedupeWithLastPartial) {
       lastPartial = nextText;
     }
-    mergeStreamingText(nextText);
+    const mode = options?.mode ?? "snapshot";
+    streamText = mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
     partialUpdateQueue = partialUpdateQueue.then(async () => {
       if (streamingStartPromise) {
         await streamingStartPromise;
@@ -241,6 +229,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
+        finalTextDelivered = false;
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -256,6 +245,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               : [];
         const hasText = Boolean(text.trim());
         const hasMedia = mediaList.length > 0;
+
+        if (info?.kind === "final" && hasText && finalTextDelivered) {
+          if (!hasMedia) {
+            return;
+          }
+        }
 
         if (!hasText && !hasMedia) {
           return;
@@ -287,11 +282,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text);
+              queueStreamingUpdate(text, { mode: "delta" });
             }
             if (info?.kind === "final") {
-              streamText = text;
+              streamText = mergeStreamingText(streamText, text);
               await closeStreaming();
+              finalTextDelivered = true;
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
@@ -327,6 +323,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               });
               first = false;
             }
+            if (info?.kind === "final") {
+              finalTextDelivered = true;
+            }
           } else {
             const converted = core.channel.text.convertMarkdownTables(text, tableMode);
             for (const chunk of core.channel.text.chunkTextWithMode(
@@ -344,6 +343,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 accountId,
               });
               first = false;
+            }
+            if (info?.kind === "final") {
+              finalTextDelivered = true;
             }
           }
         }
@@ -387,7 +389,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (!payload.text) {
               return;
             }
-            queueStreamingUpdate(payload.text, { dedupeWithLastPartial: true });
+            queueStreamingUpdate(payload.text, {
+              dedupeWithLastPartial: true,
+              mode: "snapshot",
+            });
           }
         : undefined,
     },

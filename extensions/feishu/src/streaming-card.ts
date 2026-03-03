@@ -94,7 +94,25 @@ export function mergeStreamingText(
   if (!next) {
     return previous;
   }
-  if (!previous || next === previous || next.includes(previous)) {
+  if (!previous || next === previous) {
+    return next;
+  }
+  if (next.startsWith(previous)) {
+    return next;
+  }
+  if (previous.startsWith(next)) {
+    return previous;
+  }
+
+  // Merge partial overlaps, e.g. "这" + "这是" => "这是".
+  const maxOverlap = Math.min(previous.length, next.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (previous.slice(-overlap) === next.slice(0, overlap)) {
+      return `${previous}${next.slice(overlap)}`;
+    }
+  }
+
+  if (next.includes(previous)) {
     return next;
   }
   if (previous.includes(next)) {
