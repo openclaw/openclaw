@@ -295,6 +295,7 @@ export async function runAgentTurnWithFallback(params: {
           });
           return runEmbeddedPiAgent({
             ...embeddedContext,
+            trigger: params.isHeartbeat ? "heartbeat" : "user",
             groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
             groupChannel:
               params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
@@ -314,6 +315,8 @@ export async function runAgentTurnWithFallback(params: {
               return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
             })(),
             suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
+            bootstrapContextMode: params.opts?.bootstrapContextMode,
+            bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
             images: params.opts?.images,
             abortSignal: params.opts?.abortSignal,
             blockReplyBreak: params.resolvedBlockStreamingBreak,

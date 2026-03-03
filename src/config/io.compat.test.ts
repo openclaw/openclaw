@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "./io.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
@@ -135,6 +135,35 @@ describe("config io paths", () => {
         },
       });
       expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
+    });
+  });
+
+  it("logs invalid config path details and returns empty config", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      const configPath = path.join(configDir, "openclaw.json");
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ gateway: { port: "not-a-number" } }, null, 2),
+      );
+
+      const logger = {
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+      });
+
+      expect(io.loadConfig()).toEqual({});
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining(`Invalid config at ${configPath}:\\n`),
+      );
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("- gateway.port:"));
     });
   });
 });

@@ -415,6 +415,7 @@ describe("isFailoverErrorMessage", () => {
       "429 rate limit exceeded",
       "Your credit balance is too low",
       "request timed out",
+      "Connection error.",
       "invalid request format",
     ];
     for (const sample of samples) {
@@ -423,7 +424,14 @@ describe("isFailoverErrorMessage", () => {
   });
 
   it("matches abort stop-reason timeout variants", () => {
-    const samples = ["Unhandled stop reason: abort", "stop reason: abort", "reason: abort"];
+    const samples = [
+      "Unhandled stop reason: abort",
+      "Unhandled stop reason: error",
+      "stop reason: abort",
+      "stop reason: error",
+      "reason: abort",
+      "reason: error",
+    ];
     for (const sample of samples) {
       expect(isTimeoutErrorMessage(sample)).toBe(true);
       expect(classifyFailoverReason(sample)).toBe("timeout");
@@ -461,6 +469,11 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("invalid api key")).toBe("auth");
     expect(classifyFailoverReason("no credentials found")).toBe("auth");
     expect(classifyFailoverReason("no api key found")).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        'No API key found for provider "openai". Auth store: /tmp/openclaw-agent-abc/auth-profiles.json (agentDir: /tmp/openclaw-agent-abc).',
+      ),
+    ).toBe("auth");
     expect(classifyFailoverReason("You have insufficient permissions for this operation.")).toBe(
       "auth",
     );
@@ -482,6 +495,13 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
+    expect(classifyFailoverReason("Connection error.")).toBe("timeout");
+    expect(classifyFailoverReason("fetch failed")).toBe("timeout");
+    expect(classifyFailoverReason("network error: ECONNREFUSED")).toBe("timeout");
+    expect(
+      classifyFailoverReason("dial tcp: lookup api.example.com: no such host (ENOTFOUND)"),
+    ).toBe("timeout");
+    expect(classifyFailoverReason("temporary dns failure EAI_AGAIN")).toBe("timeout");
     expect(
       classifyFailoverReason(
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
