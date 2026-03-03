@@ -61,10 +61,7 @@ export function isSlackStreamingUnsupportedError(error: unknown): boolean {
     return false;
   }
   const text = error.message.toLowerCase();
-  return (
-    text.includes("chatstream") &&
-    (text.includes("not a function") || text.includes("is not a function"))
-  );
+  return text.includes("chatstream") && text.includes("not a function");
 }
 
 function shouldUseStreaming(params: {
