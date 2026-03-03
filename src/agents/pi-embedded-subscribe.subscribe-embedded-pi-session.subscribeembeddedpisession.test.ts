@@ -344,6 +344,7 @@ describe("subscribeEmbeddedPiSession", () => {
       },
       assistantMessageEvent: { type: "start" },
     });
+    // Non-text snapshot fallback should not break later text_delta append behavior.
     emit({
       type: "message_update",
       message: { role: "assistant" },
