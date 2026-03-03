@@ -11,6 +11,7 @@ export type HookContext = {
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
+  runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
 };
 
@@ -141,17 +142,22 @@ export async function runBeforeToolCallHook(args: {
 
   try {
     const normalizedParams = isPlainObject(params) ? params : {};
+    const toolContext = {
+      toolName,
+      ...(args.ctx?.agentId ? { agentId: args.ctx.agentId } : {}),
+      ...(args.ctx?.sessionKey ? { sessionKey: args.ctx.sessionKey } : {}),
+      ...(args.ctx?.sessionId ? { sessionId: args.ctx.sessionId } : {}),
+      ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
+      ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+    };
     const hookResult = await hookRunner.runBeforeToolCall(
       {
         toolName,
         params: normalizedParams,
+        ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
+        ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
       },
-      {
-        toolName,
-        agentId: args.ctx?.agentId,
-        sessionKey: args.ctx?.sessionKey,
-        sessionId: args.ctx?.sessionId,
-      },
+      toolContext,
     );
 
     if (hookResult?.block) {
