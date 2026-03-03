@@ -41,6 +41,10 @@ class CanvasController {
   private val _a2uiHydrated = MutableStateFlow(false)
   val a2uiHydrated: StateFlow<Boolean> = _a2uiHydrated.asStateFlow()
 
+  fun setA2uiHydrated(value: Boolean) {
+    _a2uiHydrated.value = value
+  }
+
   private val scaffoldAssetUrl = "file:///android_asset/CanvasScaffold/scaffold.html"
 
   private fun clampJpegQuality(quality: Double?): Int {

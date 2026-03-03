@@ -153,6 +153,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setMicEnabled(enabled)
   }
 
+  fun setVoiceScreenActive(active: Boolean) {
+    runtime.setVoiceScreenActive(active)
+  }
+
   fun setGatewayPassword(password: String) {
     runtime.setGatewayPassword(password)
   }

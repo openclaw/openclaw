@@ -21,6 +21,7 @@ import ai.hanzo.bot.android.protocol.HanzoBotCanvasA2UIAction
 import ai.hanzo.bot.android.voice.MicCaptureManager
 import ai.hanzo.bot.android.voice.TalkModeManager
 import ai.hanzo.bot.android.voice.VoiceConversationEntry
+import ai.hanzo.bot.android.voice.VoiceWakeManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,7 +38,8 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import java.util.concurrent.atomicCapture.AtomicLong
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 
 class NodeRuntime(context: Context) {
   private val appContext = context.applicationContext
@@ -87,27 +89,6 @@ class NodeRuntime(context: Context) {
 
   val talkIsSpeaking: StateFlow<Boolean>
     get() = voiceReplySpeaker.isSpeaking
-
-  val micEnabled: StateFlow<Boolean>
-    get() = micCapture.micEnabled
-
-  val micStatusText: StateFlow<String>
-    get() = micCapture.statusText
-
-  val micLiveTranscript: StateFlow<String?>
-    get() = micCapture.liveTranscript
-
-  val micQueuedMessages: StateFlow<List<String>>
-    get() = micCapture.queuedMessages
-
-  val micConversation: StateFlow<List<VoiceConversationEntry>>
-    get() = micCapture.conversation
-
-  val micInputLevel: StateFlow<Float>
-    get() = micCapture.inputLevel
-
-  val micIsSending: StateFlow<Boolean>
-    get() = micCapture.isSending
 
   private val discovery = GatewayDiscovery(appContext, scope = scope)
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
@@ -226,11 +207,11 @@ class NodeRuntime(context: Context) {
     debugBuild = { BuildConfig.DEBUG },
     refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
     onCanvasA2uiPush = {
-      _canvasA2uiHydrated.value = true
+      canvas.setA2uiHydrated(true)
       _canvasRehydratePending.value = false
       _canvasRehydrateErrorText.value = null
     },
-    onCanvasA2uiReset = { _canvasA2uiHydrated.value = false },
+    onCanvasA2uiReset = { canvas.setA2uiHydrated(false) },
     motionActivityAvailable = { motionHandler.isActivityAvailable() },
     motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
   )
@@ -712,6 +693,12 @@ class NodeRuntime(context: Context) {
 
   fun setMicEnabled(enabled: Boolean) {
     micCapture.setMicEnabled(enabled)
+  }
+
+  fun setVoiceScreenActive(active: Boolean) {
+    if (!active) {
+      voiceReplySpeaker.stopTts()
+    }
   }
 
   fun setGatewayPassword(password: String) {
