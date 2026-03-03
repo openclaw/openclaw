@@ -84,10 +84,11 @@ function runScript(
   stdout: string;
   stderr: string;
 } {
-  const cacheKey = JSON.stringify({
-    homeDir,
-    extraEnv: Object.entries(extraEnv).toSorted(([a], [b]) => a.localeCompare(b)),
-  });
+  const extraEnvKey = Object.keys(extraEnv)
+    .toSorted((a, b) => a.localeCompare(b))
+    .map((key) => `${key}=${extraEnv[key] ?? ""}`)
+    .join("\u0001");
+  const cacheKey = `${homeDir}\u0000${extraEnvKey}`;
   const cached = runScriptCache.get(cacheKey);
   if (cached) {
     return cached;

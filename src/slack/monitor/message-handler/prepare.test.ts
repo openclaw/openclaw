@@ -24,9 +24,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     if (!fixtureRoot) {
       throw new Error("fixtureRoot missing");
     }
-    const dir = path.join(fixtureRoot, `case-${caseId++}`);
-    fs.mkdirSync(dir);
-    return { dir, storePath: path.join(dir, "sessions.json") };
+    return { storePath: path.join(fixtureRoot, `case-${caseId++}.sessions.json`) };
   }
 
   beforeAll(() => {

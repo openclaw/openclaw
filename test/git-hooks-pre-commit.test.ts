@@ -8,12 +8,13 @@ const baseGitEnv = {
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_TERMINAL_PROMPT: "0",
 };
+const baseRunEnv: NodeJS.ProcessEnv = { ...process.env, ...baseGitEnv };
 
 const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.ProcessEnv) => {
   return execFileSync(cmd, args, {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, ...baseGitEnv, ...env },
+    env: env ? { ...baseRunEnv, ...env } : baseRunEnv,
   }).trim();
 };
 
