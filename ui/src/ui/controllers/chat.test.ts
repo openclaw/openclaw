@@ -258,6 +258,31 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe(null);
   });
 
+  it("keeps final payload when a multi-line suffix is intentional", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Intro line 1\nIntro line 2\nAnswer line 1\nAnswer line 2",
+      chatStreamStartedAt: 100,
+    });
+    const finalMsg = {
+      role: "assistant",
+      content: [{ type: "text", text: "Answer line 1\nAnswer line 2" }],
+      timestamp: 101,
+    };
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: finalMsg,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([finalMsg]);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatRunId).toBe(null);
+  });
+
   it("appends final payload message from own run before clearing stream state", () => {
     const state = createState({
       sessionKey: "main",

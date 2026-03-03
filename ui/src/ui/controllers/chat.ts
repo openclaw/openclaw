@@ -142,6 +142,13 @@ function shouldPreferStreamedText(
   if (!prefix.trim()) {
     return false;
   }
+  const finalLines = normalizedFinal
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (finalLines.length !== 1) {
+    return false;
+  }
   // Treat suffix-only finals as truncated only when earlier sections were already streamed.
   const prefixLines = prefix
     .split(/\r?\n/)
