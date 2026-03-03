@@ -399,7 +399,12 @@ export function handleMessageEnd(
               messagingToolSentTargets: ctx.state.messagingToolSentTargets,
               originatingTo: ctx.params.originatingTo,
               accountId: ctx.params.accountId,
-            }) || ctx.state.messagingToolSentWithoutTargetTextsNormalized.has(normalizedText)
+            }) ||
+            ctx.state.messagingToolSentTextsNormalized.some(
+              (sentText, idx) =>
+                sentText === normalizedText &&
+                !ctx.state.messagingToolSentTextsHadExplicitTarget[idx],
+            )
         : true;
       if (
         shouldSuppressBlockReply &&

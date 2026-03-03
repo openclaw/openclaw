@@ -73,8 +73,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     unsubscribed: false,
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
+    messagingToolSentTextsHadExplicitTarget: [],
     messagingToolSentTargets: [],
-    messagingToolSentWithoutTargetTextsNormalized: new Set(),
     messagingToolSentMediaUrls: [],
     pendingMessagingTexts: new Map(),
     pendingMessagingTargets: new Map(),
@@ -96,6 +96,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const toolSummaryById = state.toolSummaryById;
   const messagingToolSentTexts = state.messagingToolSentTexts;
   const messagingToolSentTextsNormalized = state.messagingToolSentTextsNormalized;
+  const messagingToolSentTextsHadExplicitTarget = state.messagingToolSentTextsHadExplicitTarget;
   const messagingToolSentTargets = state.messagingToolSentTargets;
   const messagingToolSentMediaUrls = state.messagingToolSentMediaUrls;
   const pendingMessagingTexts = state.pendingMessagingTexts;
@@ -227,14 +228,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return true;
     }
     // Mixed runs may include explicit off-target sends and inferred sends without target metadata.
-    // Keep fallback suppression only for texts that were actually sent via targetless sends.
-    return state.messagingToolSentWithoutTargetTextsNormalized.has(normalizedText);
+    // Keep fallback suppression only for retained texts sent without explicit targets.
+    return messagingToolSentTextsNormalized.some(
+      (sentText, idx) =>
+        sentText === normalizedText && !messagingToolSentTextsHadExplicitTarget[idx],
+    );
   };
   const trimMessagingToolSent = () => {
     if (messagingToolSentTexts.length > MAX_MESSAGING_SENT_TEXTS) {
       const overflow = messagingToolSentTexts.length - MAX_MESSAGING_SENT_TEXTS;
       messagingToolSentTexts.splice(0, overflow);
       messagingToolSentTextsNormalized.splice(0, overflow);
+      messagingToolSentTextsHadExplicitTarget.splice(0, overflow);
     }
     if (messagingToolSentTargets.length > MAX_MESSAGING_SENT_TARGETS) {
       const overflow = messagingToolSentTargets.length - MAX_MESSAGING_SENT_TARGETS;
@@ -613,8 +618,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastToolError = undefined;
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
+    messagingToolSentTextsHadExplicitTarget.length = 0;
     messagingToolSentTargets.length = 0;
-    state.messagingToolSentWithoutTargetTextsNormalized.clear();
     messagingToolSentMediaUrls.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();

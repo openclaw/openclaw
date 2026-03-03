@@ -360,9 +360,7 @@ export async function handleToolExecutionEnd(
       ctx.state.messagingToolSentTexts.push(pendingText);
       const normalizedPendingText = normalizeTextForComparison(pendingText);
       ctx.state.messagingToolSentTextsNormalized.push(normalizedPendingText);
-      if (!pendingTarget) {
-        ctx.state.messagingToolSentWithoutTargetTextsNormalized.add(normalizedPendingText);
-      }
+      ctx.state.messagingToolSentTextsHadExplicitTarget.push(Boolean(pendingTarget));
       ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
       ctx.trimMessagingToolSent();
     }

@@ -42,7 +42,7 @@ function createTestContext(): {
       pendingMessagingMediaUrls: new Map<string, string[]>(),
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
-      messagingToolSentWithoutTargetTextsNormalized: new Set<string>(),
+      messagingToolSentTextsHadExplicitTarget: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
@@ -194,9 +194,7 @@ describe("messaging tool media URL tracking", () => {
       result: { details: { status: "ok" } },
     });
 
-    expect(
-      ctx.state.messagingToolSentWithoutTargetTextsNormalized.has("sent via inferred route"),
-    ).toBe(true);
+    expect(ctx.state.messagingToolSentTextsHadExplicitTarget).toEqual([false]);
   });
 
   it("does not count targetless sends when the tool errors", async () => {
@@ -216,7 +214,7 @@ describe("messaging tool media URL tracking", () => {
       result: { details: { status: "error" } },
     });
 
-    expect(ctx.state.messagingToolSentWithoutTargetTextsNormalized.size).toBe(0);
+    expect(ctx.state.messagingToolSentTextsHadExplicitTarget).toEqual([]);
   });
 
   it("tracks media arg from messaging tool as pending", async () => {
@@ -307,6 +305,7 @@ describe("messaging tool media URL tracking", () => {
         const overflow = ctx.state.messagingToolSentTexts.length - MAX;
         ctx.state.messagingToolSentTexts.splice(0, overflow);
         ctx.state.messagingToolSentTextsNormalized.splice(0, overflow);
+        ctx.state.messagingToolSentTextsHadExplicitTarget.splice(0, overflow);
       }
       if (ctx.state.messagingToolSentTargets.length > MAX) {
         const overflow = ctx.state.messagingToolSentTargets.length - MAX;

@@ -176,6 +176,37 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
   });
+  it("does not suppress message_end when a stale inferred text was trimmed from retention window", async () => {
+    const { emit, onBlockReply } = createBlockReplyHarness({ blockReplyBreak: "message_end" });
+    const staleInferredText = "stale inferred text that should age out";
+
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-inferred-target-stale-0",
+      omitTo: true,
+      message: staleInferredText,
+      result: "ok",
+    });
+    for (let i = 1; i <= 200; i += 1) {
+      await emitMessageToolLifecycle({
+        emit,
+        toolCallId: `tool-message-inferred-target-stale-${i}`,
+        omitTo: true,
+        message: `filler inferred message ${i}`,
+        result: "ok",
+      });
+    }
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-explicit-other-chat-stale-text",
+      to: "any;+;c9e1c78203f74195b1db32e57529fb6a",
+      message: staleInferredText,
+      result: "ok",
+    });
+    emitAssistantMessageEnd(emit, staleInferredText);
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
   it("suppresses text_end block replies when message tool infers target without to/target args", async () => {
     const { emit, onBlockReply } = createBlockReplyHarness({ blockReplyBreak: "text_end" });
 

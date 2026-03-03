@@ -83,6 +83,7 @@ function createToolHandlerCtx() {
       pendingMessagingMediaUrls: new Map<string, string[]>(),
       messagingToolSentTexts: [] as string[],
       messagingToolSentTextsNormalized: [] as string[],
+      messagingToolSentTextsHadExplicitTarget: [] as boolean[],
       messagingToolSentMediaUrls: [] as string[],
       messagingToolSentTargets: [] as unknown[],
       blockBuffer: "",
@@ -233,8 +234,9 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
     const ctx = createToolHandlerCtx();
 
     beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(true);
-    beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockImplementation((id: string) =>
-      id === toolCallId ? adjusted : undefined,
+    beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockImplementation(
+      (id: string, runId?: string) =>
+        id === toolCallId && runId === "integration-test" ? adjusted : undefined,
     );
 
     await emitToolExecutionStartEvent({ ctx, toolName: "read", toolCallId, args });
@@ -247,7 +249,10 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
       result: { content: [{ type: "text", text: "ok" }] },
     });
 
-    expect(beforeToolCallMocks.consumeAdjustedParamsForToolCall).toHaveBeenCalledWith(toolCallId);
+    expect(beforeToolCallMocks.consumeAdjustedParamsForToolCall).toHaveBeenCalledWith(
+      toolCallId,
+      "integration-test",
+    );
     const event = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as { params?: unknown } | undefined;
     expect(event?.params).toEqual(adjusted);
