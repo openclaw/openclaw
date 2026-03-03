@@ -340,6 +340,7 @@ export type PluginHookAgentContext = {
   sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
+  config?: OpenClawConfig;
 };
 
 // before_model_resolve hook
