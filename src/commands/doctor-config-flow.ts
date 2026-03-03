@@ -27,6 +27,11 @@ import {
 } from "../infra/exec-safe-bin-trust.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import {
+  formatChannelAccountsDefaultPath,
+  formatSetExplicitDefaultInstruction,
+  formatSetExplicitDefaultToConfiguredInstruction,
+} from "../routing/default-account-warnings.js";
+import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeOptionalAccountId,
@@ -311,13 +316,13 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
     }
     if (coveredAccountIds.size > 0) {
       warnings.push(
-        `- channels.${channelKey}: accounts.default is missing and account bindings only cover a subset of configured accounts. Uncovered accounts: ${uncoveredAccountIds.join(", ")}. Add bindings[].match.accountId for uncovered accounts (or "*"), or add channels.${channelKey}.accounts.default.`,
+        `- channels.${channelKey}: accounts.default is missing and account bindings only cover a subset of configured accounts. Uncovered accounts: ${uncoveredAccountIds.join(", ")}. Add bindings[].match.accountId for uncovered accounts (or "*"), or add ${formatChannelAccountsDefaultPath(channelKey)}.`,
       );
       continue;
     }
 
     warnings.push(
-      `- channels.${channelKey}: accounts.default is missing and no valid account-scoped binding exists for configured accounts (${normalizedAccountIds.join(", ")}). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add channels.${channelKey}.accounts.default.`,
+      `- channels.${channelKey}: accounts.default is missing and no valid account-scoped binding exists for configured accounts (${normalizedAccountIds.join(", ")}). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add ${formatChannelAccountsDefaultPath(channelKey)}.`,
     );
   }
 
@@ -341,13 +346,13 @@ export function collectMissingExplicitDefaultAccountWarnings(cfg: OpenClawConfig
         continue;
       }
       warnings.push(
-        `- channels.${channelKey}: defaultAccount is set to "${preferredDefault}" but does not match configured accounts (${normalizedAccountIds.join(", ")}). Set channels.${channelKey}.defaultAccount to one of these accounts, or add channels.${channelKey}.accounts.default, to avoid fallback routing.`,
+        `- channels.${channelKey}: defaultAccount is set to "${preferredDefault}" but does not match configured accounts (${normalizedAccountIds.join(", ")}). ${formatSetExplicitDefaultToConfiguredInstruction({ channelKey })} to avoid fallback routing.`,
       );
       continue;
     }
 
     warnings.push(
-      `- channels.${channelKey}: multiple accounts are configured but no explicit default is set. Add channels.${channelKey}.defaultAccount or channels.${channelKey}.accounts.default to avoid fallback routing.`,
+      `- channels.${channelKey}: multiple accounts are configured but no explicit default is set. ${formatSetExplicitDefaultInstruction(channelKey)} to avoid fallback routing.`,
     );
   }
 

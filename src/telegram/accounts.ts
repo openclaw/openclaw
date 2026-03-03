@@ -10,6 +10,7 @@ import {
 } from "../plugin-sdk/account-resolution.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../routing/bindings.js";
+import { formatSetExplicitDefaultInstruction } from "../routing/default-account-warnings.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -90,8 +91,7 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
     emittedMissingDefaultWarn = true;
     log.warn(
       `channels.telegram: accounts.default is missing; falling back to "${ids[0]}". ` +
-        "Set channels.telegram.defaultAccount or add an accounts.default entry " +
-        "to avoid routing surprises in multi-account setups.",
+        `${formatSetExplicitDefaultInstruction("telegram")} to avoid routing surprises in multi-account setups.`,
     );
   }
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
