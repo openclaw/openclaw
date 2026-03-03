@@ -364,4 +364,11 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Maximum number of entries allowed in a single command queue lane.
+   * When exceeded, the oldest queued entry is dropped to prevent unbounded
+   * memory growth. Set to 0 to disable the limit (not recommended).
+   * Default: 500.
+   */
+  maxCommandQueueSize?: number;
 };
