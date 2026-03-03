@@ -156,13 +156,18 @@ function shouldDropMentionOnlyDirectPayload(message: NormalizedWebhookMessage): 
   if (message.isGroup) {
     return false;
   }
-  if (message.explicitWasMentioned !== true) {
-    return false;
-  }
   const hasResolvedChatHandle =
     Boolean(message.chatGuid?.trim()) ||
     Boolean(message.chatIdentifier?.trim()) ||
     (typeof message.chatId === "number" && Number.isFinite(message.chatId));
+  const hasAmbiguousGroupHintWithoutChatContext =
+    message.hasConversationLabel && message.hasExplicitGroupChatFlag && !hasResolvedChatHandle;
+  if (hasAmbiguousGroupHintWithoutChatContext) {
+    return true;
+  }
+  if (message.explicitWasMentioned !== true) {
+    return false;
+  }
   if (
     message.hasConversationLabel &&
     message.hasExplicitGroupChatFlag &&

@@ -398,6 +398,45 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
     });
 
+    it("drops ambiguous group-hint direct payloads even without mention metadata", async () => {
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "keep debugging",
+          handle: { address: "+15551234567" },
+          isFromMe: false,
+          is_group_chat: true,
+          conversation_label: "Group thread",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      const handled = await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe("ok");
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+    });
+
     it("routes metadata-only group-hint payloads to group sessions", async () => {
       const account = createMockAccount();
       const config: OpenClawConfig = {};
