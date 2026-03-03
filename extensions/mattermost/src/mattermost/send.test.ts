@@ -1,5 +1,4 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-
 /**
  * Tests for channel-name → channel-ID resolution in Mattermost send flow.
  *
@@ -7,7 +6,6 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
  * treated a channel name (e.g. "finance") as a channel ID, causing
  * `createMattermostPost` to send `channel_id: "finance"` → 403.
  */
-
 import { isMattermostId } from "./send.js";
 
 describe("isMattermostId", () => {
