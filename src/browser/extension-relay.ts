@@ -99,10 +99,23 @@ function getHeader(req: IncomingMessage, name: string): string | undefined {
   return headerValue(req.headers[name.toLowerCase()]);
 }
 
+function parseBearerToken(value: string | undefined): string | undefined {
+  const raw = value?.trim() ?? "";
+  if (!raw.toLowerCase().startsWith("bearer ")) {
+    return undefined;
+  }
+  const token = raw.slice(7).trim();
+  return token || undefined;
+}
+
 function getRelayAuthTokenFromRequest(req: IncomingMessage, url?: URL): string | undefined {
   const headerToken = getHeader(req, RELAY_AUTH_HEADER)?.trim();
   if (headerToken) {
     return headerToken;
+  }
+  const bearerToken = parseBearerToken(getHeader(req, "authorization"));
+  if (bearerToken) {
+    return bearerToken;
   }
   const queryToken = url?.searchParams.get("token")?.trim();
   if (queryToken) {
