@@ -692,6 +692,8 @@ openclaw message send --channel telegram --target @name --message "hi"
     - Node 22+ + custom fetch/proxy can trigger immediate abort behavior if AbortSignal types mismatch.
     - Some hosts resolve `api.telegram.org` to IPv6 first; broken IPv6 egress can cause intermittent Telegram API failures.
     - If logs include `TypeError: fetch failed` or `Network request for 'getUpdates' failed!`, OpenClaw now retries these as recoverable network errors.
+    - TUN or VPN hosts that fail only on the first undici dispatcher path now auto-retry with a safer fallback path in `2026.3.3+`.
+    - If failures continue on TUN or VPN networks, set an explicit proxy and restart gateway to bypass host egress quirks.
     - On VPS hosts with unstable direct egress/TLS, route Telegram API calls through `channels.telegram.proxy`:
 
 ```yaml
