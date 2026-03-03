@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { __testing } from "./provider.js";
+import { SLACK_SOCKET_DISCONNECT_GRACE_MS } from "./reconnect-policy.js";
 
 class FakeEmitter {
   private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
@@ -22,14 +23,41 @@ class FakeEmitter {
 }
 
 describe("slack socket reconnect helpers", () => {
-  it("resolves disconnect waiter on socket disconnect event", async () => {
+  it("resolves disconnect waiter after disconnect grace period", async () => {
+    vi.useFakeTimers();
     const client = new FakeEmitter();
     const app = { receiver: { client } };
 
     const waiter = __testing.waitForSlackSocketDisconnect(app as never);
     client.emit("disconnected");
 
+    await vi.advanceTimersByTimeAsync(SLACK_SOCKET_DISCONNECT_GRACE_MS - 1);
+    let settled = false;
+    void waiter.then(() => {
+      settled = true;
+    });
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
     await expect(waiter).resolves.toEqual({ event: "disconnect" });
+    vi.useRealTimers();
+  });
+
+  it("ignores transient disconnect when socket reconnects within grace period", async () => {
+    vi.useFakeTimers();
+    const client = new FakeEmitter();
+    const app = { receiver: { client } };
+    const err = new Error("later failure");
+
+    const waiter = __testing.waitForSlackSocketDisconnect(app as never);
+    client.emit("disconnected");
+    await vi.advanceTimersByTimeAsync(Math.floor(SLACK_SOCKET_DISCONNECT_GRACE_MS / 2));
+    client.emit("connected");
+    await vi.advanceTimersByTimeAsync(SLACK_SOCKET_DISCONNECT_GRACE_MS);
+
+    client.emit("error", err);
+    await expect(waiter).resolves.toEqual({ event: "error", error: err });
+    vi.useRealTimers();
   });
 
   it("resolves disconnect waiter on socket error event", async () => {

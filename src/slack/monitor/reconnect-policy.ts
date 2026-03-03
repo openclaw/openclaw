@@ -9,6 +9,8 @@ export const SLACK_SOCKET_RECONNECT_POLICY = {
   maxAttempts: 12,
 } as const;
 
+export const SLACK_SOCKET_DISCONNECT_GRACE_MS = 15_000;
+
 export type SlackSocketDisconnectEvent = "disconnect" | "unable_to_socket_mode_start" | "error";
 
 type EmitterLike = {
@@ -58,14 +60,34 @@ export function waitForSlackSocketDisconnect(
       return;
     }
 
-    const disconnectListener = () => resolveOnce({ event: "disconnect" });
+    let disconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearDisconnectTimer = () => {
+      if (!disconnectTimer) {
+        return;
+      }
+      clearTimeout(disconnectTimer);
+      disconnectTimer = null;
+    };
+    const disconnectListener = () => {
+      // Slack socket mode can emit transient "disconnected" while auto-reconnecting.
+      // Give it a grace window before forcing a full provider restart.
+      clearDisconnectTimer();
+      disconnectTimer = setTimeout(() => {
+        resolveOnce({ event: "disconnect" });
+      }, SLACK_SOCKET_DISCONNECT_GRACE_MS);
+    };
+    const connectedListener = () => {
+      clearDisconnectTimer();
+    };
     const startFailListener = (error?: unknown) =>
       resolveOnce({ event: "unable_to_socket_mode_start", error });
     const errorListener = (error: unknown) => resolveOnce({ event: "error", error });
     const abortListener = () => resolveOnce({ event: "disconnect" });
 
     const cleanup = () => {
+      clearDisconnectTimer();
       emitter.off("disconnected", disconnectListener);
+      emitter.off("connected", connectedListener);
       emitter.off("unable_to_socket_mode_start", startFailListener);
       emitter.off("error", errorListener);
       abortSignal?.removeEventListener("abort", abortListener);
@@ -77,6 +99,7 @@ export function waitForSlackSocketDisconnect(
     };
 
     emitter.on("disconnected", disconnectListener);
+    emitter.on("connected", connectedListener);
     emitter.on("unable_to_socket_mode_start", startFailListener);
     emitter.on("error", errorListener);
     abortSignal?.addEventListener("abort", abortListener, { once: true });
