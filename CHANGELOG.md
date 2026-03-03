@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI: guard `status --deep` health probe against unreachable gateway and capture errors in output instead of crashing. (#17106)
 - LINE/media download synthesis: fix file-media download handling and M4A audio classification across overlapping LINE regressions. (from #26386, #27761, #27787, #29509, #29755, #29776, #29785, #32240) Thanks @kevinWangSheng, @loiie45e, @carrotRakko, @Sid-Qin, @codeafridi, and @bmendonca3.
 - LINE/context and routing synthesis: fix group/room peer routing and command-authorization context propagation, and keep processing later events in mixed-success webhook batches. (from #21955, #24475, #27035, #28286) Thanks @lailoo, @mcaxtr, @jervyclaw, @Glucksberg, and @Takhoffman.
 - LINE/status/config/webhook synthesis: fix status false positives from snapshot/config state and accept LINE webhook HEAD probes for compatibility. (from #10487, #25726, #27537, #27908, #31387) Thanks @BlueBirdBack, @stakeswky, @loiie45e, @puritysb, and @mcaxtr.
