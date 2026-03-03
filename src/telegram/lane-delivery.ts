@@ -101,26 +101,58 @@ type ConsumeArchivedAnswerPreviewParams = {
   canEditViaPreview: boolean;
 };
 
+type PreviewUpdateContext = "final" | "update";
+type RegressiveSkipMode = "always" | "existingOnly";
+
+type ResolvePreviewTargetParams = {
+  lane: DraftLaneState;
+  previewMessageIdOverride?: number;
+  stopBeforeEdit: boolean;
+  context: PreviewUpdateContext;
+};
+
+type PreviewTargetResolution = {
+  hadPreviewMessage: boolean;
+  previewMessageId: number | undefined;
+  stopCreatesFirstPreview: boolean;
+};
+
+function shouldSkipRegressivePreviewUpdate(args: {
+  currentPreviewText: string | undefined;
+  text: string;
+  skipRegressive: RegressiveSkipMode;
+  hadPreviewMessage: boolean;
+}): boolean {
+  const currentPreviewText = args.currentPreviewText;
+  if (currentPreviewText === undefined) {
+    return false;
+  }
+  return (
+    currentPreviewText.startsWith(args.text) &&
+    args.text.length < currentPreviewText.length &&
+    (args.skipRegressive === "always" || args.hadPreviewMessage)
+  );
+}
+
+function resolvePreviewTarget(params: ResolvePreviewTargetParams): PreviewTargetResolution {
+  const lanePreviewMessageId = params.lane.stream?.messageId();
+  const previewMessageId =
+    typeof params.previewMessageIdOverride === "number"
+      ? params.previewMessageIdOverride
+      : lanePreviewMessageId;
+  const hadPreviewMessage =
+    typeof params.previewMessageIdOverride === "number" || typeof lanePreviewMessageId === "number";
+  return {
+    hadPreviewMessage,
+    previewMessageId: typeof previewMessageId === "number" ? previewMessageId : undefined,
+    stopCreatesFirstPreview:
+      params.stopBeforeEdit && !hadPreviewMessage && params.context === "final",
+  };
+}
+
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   const getLanePreviewText = (lane: DraftLaneState) => lane.lastPartialText;
   const isDraftPreviewLane = (lane: DraftLaneState) => lane.stream?.previewMode?.() === "draft";
-
-  const shouldSkipRegressivePreviewUpdate = (args: {
-    currentPreviewText: string | undefined;
-    text: string;
-    skipRegressive: "always" | "existingOnly";
-    hadPreviewMessage: boolean;
-  }): boolean => {
-    const currentPreviewText = args.currentPreviewText;
-    if (currentPreviewText === undefined) {
-      return false;
-    }
-    return (
-      currentPreviewText.startsWith(args.text) &&
-      args.text.length < currentPreviewText.length &&
-      (args.skipRegressive === "always" || args.hadPreviewMessage)
-    );
-  };
 
   const tryEditPreviewMessage = async (args: {
     laneName: LaneName;
@@ -186,6 +218,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     const finalizePreview = (
       previewMessageId: number,
       treatEditFailureAsDelivered: boolean,
+      hadPreviewMessage: boolean,
     ): boolean | Promise<boolean> => {
       const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
       const shouldSkipRegressive = shouldSkipRegressivePreviewUpdate({
@@ -203,32 +236,44 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     if (!lane.stream) {
       return false;
     }
-    const lanePreviewMessageId = lane.stream.messageId();
-    const hadPreviewMessage =
-      typeof previewMessageIdOverride === "number" || typeof lanePreviewMessageId === "number";
-    const stopCreatesFirstPreview = stopBeforeEdit && !hadPreviewMessage && context === "final";
-    if (stopCreatesFirstPreview) {
+    const previewTargetBeforeStop = resolvePreviewTarget({
+      lane,
+      previewMessageIdOverride,
+      stopBeforeEdit,
+      context,
+    });
+    if (previewTargetBeforeStop.stopCreatesFirstPreview) {
       // Final stop() can create the first visible preview message.
       // Prime pending text so the stop flush sends the final text snapshot.
       lane.stream.update(text);
       await params.stopDraftLane(lane);
-      const previewMessageId = lane.stream.messageId();
-      if (typeof previewMessageId !== "number") {
+      const previewTargetAfterStop = resolvePreviewTarget({
+        lane,
+        stopBeforeEdit: false,
+        context,
+      });
+      if (typeof previewTargetAfterStop.previewMessageId !== "number") {
         return false;
       }
-      return finalizePreview(previewMessageId, true);
+      return finalizePreview(previewTargetAfterStop.previewMessageId, true, false);
     }
     if (stopBeforeEdit) {
       await params.stopDraftLane(lane);
     }
-    const previewMessageId =
-      typeof previewMessageIdOverride === "number"
-        ? previewMessageIdOverride
-        : lane.stream.messageId();
-    if (typeof previewMessageId !== "number") {
+    const previewTargetAfterStop = resolvePreviewTarget({
+      lane,
+      previewMessageIdOverride,
+      stopBeforeEdit: false,
+      context,
+    });
+    if (typeof previewTargetAfterStop.previewMessageId !== "number") {
       return false;
     }
-    return finalizePreview(previewMessageId, false);
+    return finalizePreview(
+      previewTargetAfterStop.previewMessageId,
+      false,
+      previewTargetAfterStop.hadPreviewMessage,
+    );
   };
 
   const consumeArchivedAnswerPreviewForFinal = async ({
