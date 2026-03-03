@@ -83,6 +83,9 @@ When a profile fails due to auth/rate‑limit errors (or a timeout that looks
 like rate limiting), OpenClaw marks it in cooldown and moves to the next profile.
 Format/invalid‑request errors (for example Cloud Code Assist tool call ID
 validation failures) are treated as failover‑worthy and use the same cooldowns.
+OpenAI-compatible stop-reason errors such as `Unhandled stop reason: error`,
+`stop reason: error`, and `reason: error` are classified as timeout/failover
+signals.
 
 Cooldowns use exponential backoff:
 
