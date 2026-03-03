@@ -182,11 +182,17 @@ export async function resolveCanvasNodeIds(
   if (q) {
     return [resolveNodeIdFromList(nodes, q)];
   }
-  const canvasConnected = nodes.filter(
-    (n) => n.connected && Array.isArray(n.caps) && n.caps.includes("canvas"),
+  // When caps is available, filter to canvas-capable nodes; when caps is
+  // absent (pair-list fallback), assume the node may support canvas.
+  const withCanvas = nodes.filter((n) =>
+    Array.isArray(n.caps) ? n.caps.includes("canvas") : true,
   );
-  if (canvasConnected.length === 0) {
+  // Prefer connected nodes; fall back to all candidates when the connected
+  // field is missing (pair-list fallback does not populate it).
+  const connected = withCanvas.filter((n) => n.connected);
+  const candidates = connected.length > 0 ? connected : withCanvas;
+  if (candidates.length === 0) {
     throw new Error("no connected canvas-capable nodes");
   }
-  return canvasConnected.map((n) => n.nodeId);
+  return candidates.map((n) => n.nodeId);
 }
