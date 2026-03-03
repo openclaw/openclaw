@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadSecureJsonFile } from "../infra/crypto-store.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -55,7 +56,7 @@ describe("auth profile runtime snapshot persistence", () => {
         agentDir,
       });
 
-      const persisted = JSON.parse(await fs.readFile(authPath, "utf8")) as {
+      const persisted = loadSecureJsonFile(authPath) as {
         profiles: Record<string, { key?: string; keyRef?: unknown }>;
       };
       expect(persisted.profiles["openai:default"]?.key).toBeUndefined();

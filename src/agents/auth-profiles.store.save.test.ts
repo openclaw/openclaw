@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadSecureJsonFile } from "../infra/crypto-store.js";
 import { resolveAuthStorePath } from "./auth-profiles/paths.js";
 import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -35,7 +36,7 @@ describe("saveAuthProfileStore", () => {
 
       saveAuthProfileStore(store, agentDir);
 
-      const parsed = JSON.parse(await fs.readFile(resolveAuthStorePath(agentDir), "utf8")) as {
+      const parsed = loadSecureJsonFile(resolveAuthStorePath(agentDir)) as {
         profiles: Record<
           string,
           { key?: string; keyRef?: unknown; token?: string; tokenRef?: unknown }
