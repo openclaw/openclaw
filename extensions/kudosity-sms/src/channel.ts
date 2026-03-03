@@ -193,16 +193,17 @@ const outbound: ChannelOutboundAdapter = {
       cfg,
       accountId ?? DEFAULT_ACCOUNT_ID,
     );
+    const cleanedSender = cleanPhoneNumber(account.sender);
     const kudosityConfig: KudosityConfig = {
       apiKey: account.apiKey,
-      sender: account.sender,
+      sender: cleanedSender,
     };
 
     const cleaned = cleanPhoneNumber(to);
 
     const result = await sendSMS(kudosityConfig, {
       message: text,
-      sender: kudosityConfig.sender,
+      sender: cleanedSender,
       recipient: cleaned,
       message_ref: generateMessageRef(),
     });
@@ -239,9 +240,10 @@ const outbound: ChannelOutboundAdapter = {
       cfg,
       accountId ?? DEFAULT_ACCOUNT_ID,
     );
+    const cleanedSender = cleanPhoneNumber(account.sender);
     const kudosityConfig: KudosityConfig = {
       apiKey: account.apiKey,
-      sender: account.sender,
+      sender: cleanedSender,
     };
 
     const cleaned = cleanPhoneNumber(to);
@@ -251,7 +253,7 @@ const outbound: ChannelOutboundAdapter = {
 
     const result = await sendSMS(kudosityConfig, {
       message,
-      sender: kudosityConfig.sender,
+      sender: cleanedSender,
       recipient: cleaned,
       message_ref: generateMessageRef(),
     });

@@ -13,6 +13,7 @@ import type {
   ChannelOnboardingStatus,
   ChannelOnboardingStatusContext,
 } from "openclaw/plugin-sdk";
+
 import { validateApiKey, type KudosityConfig } from "./kudosity-api.js";
 
 const CHANNEL_ID = "kudosity-sms";
@@ -41,11 +42,19 @@ function getChannelSection(cfg: unknown): KudositySmsChannelConfig {
 }
 
 function getApiKey(cfg: unknown): string {
-  return getChannelSection(cfg).apiKey || process.env.KUDOSITY_API_KEY || "";
+  return (
+    getChannelSection(cfg).apiKey ||
+    process.env.KUDOSITY_API_KEY ||
+    ""
+  );
 }
 
 function getSender(cfg: unknown): string {
-  return getChannelSection(cfg).sender || process.env.KUDOSITY_SENDER || "";
+  return (
+    getChannelSection(cfg).sender ||
+    process.env.KUDOSITY_SENDER ||
+    ""
+  );
 }
 
 // ─── Onboarding Adapter ──────────────────────────────────────────────────────
@@ -159,7 +168,7 @@ export const kudositySmsOnboarding: ChannelOnboardingAdapter = {
     if (!isValid) {
       await prompter.note(
         "❌ API key validation failed. Please check your key and try again.\n" +
-          "   Get a key at: https://kudosity.com → Settings → API Keys",
+        "   Get a key at: https://kudosity.com → Settings → API Keys",
         "Validation Failed",
       );
       // Return unchanged config on validation failure
@@ -213,7 +222,7 @@ export const kudositySmsOnboarding: ChannelOnboardingAdapter = {
           ...prev.channels?.[CHANNEL_KEY],
           enabled: true,
           apiKey: apiKey.trim(),
-          sender: sender.trim(),
+          sender: sender.trim().replace(/[\s\-\(\)]/g, ""),
         },
       },
     };

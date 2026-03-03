@@ -326,6 +326,34 @@ describe("kudositySmsPlugin", () => {
           } as any),
         ).rejects.toThrow("invalid phone number format");
       });
+
+      it("should normalize sender number with spaces and formatting", async () => {
+        const { sendSMS: mockSendSMS } = await import("./kudosity-api.js");
+
+        const cfg = {
+          channels: {
+            "kudosity-sms": {
+              apiKey: "test-key",
+              sender: "+61 400 000 000",
+            },
+          },
+        };
+
+        await kudositySmsPlugin.outbound!.sendText!({
+          cfg,
+          to: "+61478038915",
+          text: "test",
+        } as any);
+
+        expect(mockSendSMS).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sender: "+61400000000",
+          }),
+          expect.objectContaining({
+            sender: "+61400000000",
+          }),
+        );
+      });
     });
 
     describe("sendMedia", () => {
