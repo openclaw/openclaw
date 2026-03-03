@@ -202,8 +202,7 @@ async function resolveSessionKeyFromSessionId(params: {
       };
     }
     const message = err instanceof Error ? err.message : String(err);
-    const notFoundMessage =
-      `Session not found: ${params.sessionId} (use the full sessionKey from sessions_list)`;
+    const notFoundMessage = `Session not found: ${params.sessionId} (use the full sessionKey from sessions_list)`;
     const isNotFound =
       message.toLowerCase().includes("not found") ||
       message.toLowerCase().includes("no session found");
