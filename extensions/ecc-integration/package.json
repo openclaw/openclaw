@@ -1,0 +1,48 @@
+{
+  "name": "@openclaw/ecc-integration",
+  "version": "2026.3.2",
+  "description": "Everything Claude Code integration for OpenClaw - hybrid AI agent system with governance",
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "default": "./dist/plugin.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts src/plugin.ts --format esm --dts --clean",
+    "dev": "tsup src/index.ts src/plugin.ts --format esm --dts --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^3.22.4",
+    "yaml": "^2.3.4",
+    "commander": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": "^2026.3.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "openclaw",
+    "ecc",
+    "claude-code",
+    "ai-agent",
+    "governance",
+    "self-improvement"
+  ]
+}

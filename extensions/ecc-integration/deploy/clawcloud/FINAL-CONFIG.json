@@ -1,0 +1,97 @@
+{
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "openai": {
+        "baseUrl": "https://integrate.api.nvidia.com/v1",
+        "apiKey": "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",
+        "auth": "api-key",
+        "api": "openai-responses",
+        "models": [
+          {
+            "id": "qwen/qwen3.5-397b-a17b",
+            "name": "qwen/qwen3.5-397b-a17b",
+            "api": "openai-responses",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
+        ],
+        "authHeader": false
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/qwen/qwen3.5-397b-a17b"
+      },
+      "models": {
+        "openai/qwen/qwen3.5-397b-a17b": {}
+      },
+      "workspace": "/home/clawdbot/workspace",
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "trustedProxies": ["172.16.0.0/16", "172.20.0.0/16", "127.0.0.1"],
+    "controlUi": {
+      "enabled": true,
+      "allowInsecureAuth": true
+    }
+  },
+  "plugins": {
+    "entries": {
+      "telegram": {
+        "enabled": true
+      },
+      "ecc-integration": {
+        "enabled": true,
+        "governance": {
+          "enabled": true,
+          "rulesMode": "strict"
+        },
+        "learning": {
+          "enabled": true,
+          "continuous": true
+        },
+        "security": {
+          "enabled": true,
+          "autoAudit": true
+        }
+      }
+    }
+  },
+  "web": {
+    "enabled": true
+  },
+  "cron": {
+    "enabled": true
+  },
+  "approvals": {
+    "exec": {
+      "enabled": true,
+      "mode": "both"
+    }
+  },
+  "media": {
+    "preserveFilenames": true
+  },
+  "broadcast": {
+    "strategy": "parallel"
+  }
+}

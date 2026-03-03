@@ -1,0 +1,129 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openclaw-ecc
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openclaw-secrets
+  namespace: openclaw-ecc
+type: Opaque
+stringData:
+  nvidia-api-key: "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"
+  database-url: "https://ep-blue-morning-a1zjgpm2.apirest.ap-southeast-1.aws.neon.tech/neondb/rest/v1"
+  redis-url: "https://open-bullfrog-15428.upstash.io"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-gateway
+  namespace: openclaw-ecc
+  labels:
+    app: openclaw-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openclaw-gateway
+  template:
+    metadata:
+      labels:
+        app: openclaw-gateway
+    spec:
+      containers:
+      - name: gateway
+        image: node:22-alpine
+        workingDir: /app
+        command: ["sh", "-c"]
+        args:
+          - |
+            apk add --no-cache git &&
+            npm install -g pnpm &&
+            git clone --depth 1 --branch 2026.3.1 https://github.com/openclaw/openclaw.git . &&
+            git submodule update --init --recursive &&
+            pnpm install &&
+            pnpm build &&
+            pnpm start:gateway
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: NVIDIA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: nvidia-api-key
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: redis-url
+        - name: CLAWDBOT_TELEGRAM_USER_ID
+          value: "7848084308"
+        - name: GATEWAY_TRUSTED_PROXIES
+          value: "172.16.0.0/16,172.20.0.0/16,127.0.0.1"
+        - name: GATEWAY_MODE
+          value: "local"
+        - name: GMAIL_WATCHER_ENABLED
+          value: "false"
+        - name: GATEWAY_AUTO_RESTART
+          value: "false"
+        ports:
+        - containerPort: 18789
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 18789
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 18789
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openclaw-gateway
+  namespace: openclaw-ecc
+spec:
+  selector:
+    app: openclaw-gateway
+  ports:
+  - port: 80
+    targetPort: 18789
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openclaw-gateway
+  namespace: openclaw-ecc
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+  - host: openclaw-ecc.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: openclaw-gateway
+            port:
+              number: 80

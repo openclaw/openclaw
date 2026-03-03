@@ -1,0 +1,276 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openclaw-ecc
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openclaw-secrets
+  namespace: openclaw-ecc
+type: Opaque
+stringData:
+  nvidia-api-key: "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"
+  database-url: "https://ep-blue-morning-a1zjgpm2.apirest.ap-southeast-1.aws.neon.tech/neondb/rest/v1"
+  redis-url: "https://open-bullfrog-15428.upstash.io"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-gateway
+  namespace: openclaw-ecc
+  labels:
+    app: openclaw-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openclaw-gateway
+  template:
+    metadata:
+      labels:
+        app: openclaw-gateway
+    spec:
+      containers:
+      - name: gateway
+        image: node:22-alpine
+        workingDir: /app
+        command: ["sh", "-c"]
+        args:
+          - |
+            apk add --no-cache git &&
+            npm install -g pnpm &&
+            git clone --depth 1 https://github.com/openclaw/openclaw.git . &&
+            git submodule update --init --recursive &&
+            pnpm install &&
+            pnpm build &&
+            pnpm start:gateway
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: GATEWAY_PORT
+          value: "3000"
+        - name: NVIDIA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: nvidia-api-key
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: redis-url
+        ports:
+        - containerPort: 3000
+          name: http
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 120
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 60
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openclaw-gateway
+  namespace: openclaw-ecc
+spec:
+  selector:
+    app: openclaw-gateway
+  ports:
+  - port: 80
+    targetPort: 3000
+    name: http
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-api
+  namespace: openclaw-ecc
+  labels:
+    app: openclaw-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openclaw-api
+  template:
+    metadata:
+      labels:
+        app: openclaw-api
+    spec:
+      containers:
+      - name: api
+        image: node:22-alpine
+        workingDir: /app
+        command: ["sh", "-c"]
+        args:
+          - |
+            apk add --no-cache git &&
+            npm install -g pnpm &&
+            git clone --depth 1 https://github.com/openclaw/openclaw.git . &&
+            git submodule update --init --recursive &&
+            pnpm install &&
+            pnpm build &&
+            pnpm start:api
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: API_PORT
+          value: "3001"
+        - name: NVIDIA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: nvidia-api-key
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: redis-url
+        ports:
+        - containerPort: 3001
+          name: http
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 120
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 60
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openclaw-api
+  namespace: openclaw-ecc
+spec:
+  selector:
+    app: openclaw-api
+  ports:
+  - port: 80
+    targetPort: 3001
+    name: http
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-worker
+  namespace: openclaw-ecc
+  labels:
+    app: openclaw-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openclaw-worker
+  template:
+    metadata:
+      labels:
+        app: openclaw-worker
+    spec:
+      containers:
+      - name: worker
+        image: node:22-alpine
+        workingDir: /app
+        command: ["sh", "-c"]
+        args:
+          - |
+            apk add --no-cache git &&
+            npm install -g pnpm &&
+            git clone --depth 1 https://github.com/openclaw/openclaw.git . &&
+            git submodule update --init --recursive &&
+            pnpm install &&
+            pnpm build &&
+            pnpm start:worker
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: NVIDIA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: nvidia-api-key
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: redis-url
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openclaw-ingress
+  namespace: openclaw-ecc
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  rules:
+  - host: openclaw-ecc.run.claw.cloud
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: openclaw-api
+            port:
+              number: 80
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: openclaw-gateway
+            port:
+              number: 80

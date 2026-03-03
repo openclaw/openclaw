@@ -1,0 +1,342 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openclaw-ecc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-gateway
+  namespace: openclaw-ecc
+  labels:
+    app: openclaw-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openclaw-gateway
+  template:
+    metadata:
+      labels:
+        app: openclaw-gateway
+    spec:
+      containers:
+      - name: gateway
+        image: node:22-alpine
+        workingDir: /app
+        command: ["sh", "-c"]
+        args:
+          - |
+            npm install -g pnpm &&
+            pnpm install &&
+            pnpm build &&
+            pnpm start:gateway
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: NVIDIA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: nvidia-api-key
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: redis-url
+        - name: GATEWAY_PORT
+          value: "3000"
+        ports:
+        - containerPort: 3000
+          name: http
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+        - name: node-cache
+          mountPath: /root/.npm
+        - name: pnpm-cache
+          mountPath: /root/.local/share/pnpm
+      volumes:
+      - name: app-code
+        emptyDir: {}
+      - name: node-cache
+        emptyDir: {}
+      - name: pnpm-cache
+        emptyDir: {}
+      initContainers:
+      - name: git-clone
+        image: alpine/git
+        command:
+        - sh
+        - -c
+        - |
+          git clone --depth 1 https://github.com/openclaw/openclaw.git /app &&
+          cd /app &&
+          git submodule update --init --recursive
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openclaw-gateway
+  namespace: openclaw-ecc
+spec:
+  selector:
+    app: openclaw-gateway
+  ports:
+  - port: 80
+    targetPort: 3000
+    name: http
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-api
+  namespace: openclaw-ecc
+  labels:
+    app: openclaw-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openclaw-api
+  template:
+    metadata:
+      labels:
+        app: openclaw-api
+    spec:
+      containers:
+      - name: api
+        image: node:22-alpine
+        workingDir: /app
+        command: ["sh", "-c"]
+        args:
+          - |
+            npm install -g pnpm &&
+            pnpm install &&
+            pnpm build &&
+            pnpm start:api
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: NVIDIA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: nvidia-api-key
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: redis-url
+        - name: API_PORT
+          value: "3001"
+        ports:
+        - containerPort: 3001
+          name: http
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+        - name: node-cache
+          mountPath: /root/.npm
+      volumes:
+      - name: app-code
+        emptyDir: {}
+      - name: node-cache
+        emptyDir: {}
+      initContainers:
+      - name: git-clone
+        image: alpine/git
+        command:
+        - sh
+        - -c
+        - |
+          git clone --depth 1 https://github.com/openclaw/openclaw.git /app &&
+          cd /app &&
+          git submodule update --init --recursive
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openclaw-api
+  namespace: openclaw-ecc
+spec:
+  selector:
+    app: openclaw-api
+  ports:
+  - port: 80
+    targetPort: 3001
+    name: http
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-worker
+  namespace: openclaw-ecc
+  labels:
+    app: openclaw-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openclaw-worker
+  template:
+    metadata:
+      labels:
+        app: openclaw-worker
+    spec:
+      containers:
+      - name: worker
+        image: node:22-alpine
+        workingDir: /app
+        command: ["sh", "-c"]
+        args:
+          - |
+            npm install -g pnpm &&
+            pnpm install &&
+            pnpm build &&
+            pnpm start:worker
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: NVIDIA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: nvidia-api-key
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: openclaw-secrets
+              key: redis-url
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+      volumes:
+      - name: app-code
+        emptyDir: {}
+      initContainers:
+      - name: git-clone
+        image: alpine/git
+        command:
+        - sh
+        - -c
+        - |
+          git clone --depth 1 https://github.com/openclaw/openclaw.git /app &&
+          cd /app &&
+          git submodule update --init --recursive
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openclaw-ingress
+  namespace: openclaw-ecc
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  tls:
+  - hosts:
+    - openclaw-your-domain.run.claw.cloud
+    secretName: openclaw-tls
+  rules:
+  - host: openclaw-your-domain.run.claw.cloud
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: openclaw-api
+            port:
+              number: 80
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: openclaw-gateway
+            port:
+              number: 80
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openclaw-secrets
+  namespace: openclaw-ecc
+type: Opaque
+stringData:
+  nvidia-api-key: "YOUR_NVIDIA_API_KEY_HERE"
+  database-url: "postgresql://user:pass@neon-host:5432/openclaw"
+  redis-url: "redis://default:pass@upstash-host:6379"

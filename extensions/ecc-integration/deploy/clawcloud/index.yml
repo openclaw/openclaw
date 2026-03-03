@@ -1,0 +1,193 @@
+apiVersion: app.claw.cloud/v1
+kind: Template
+metadata:
+  name: openclaw-ecc
+  description: "OpenClaw + ECC Integration - Hybrid AI Agent System with NVIDIA NIM"
+spec:
+  title: "OpenClaw ECC"
+  type: official
+  author: "OpenClaw Community"
+  description: |
+    OpenClaw with Everything-Claude-Code (ECC) Integration is a hybrid AI agent system 
+    combining ECC's expertise with OpenClaw's operational capabilities. Features:
+    
+    - Three Core Rules governance (Rules > Freedom, One Agent/One Task, ECC Integration)
+    - Mandatory skill auditing with 14 security patterns
+    - NVIDIA NIM integration with 11 free AI models
+    - Intelligent model routing based on task analysis
+    - Multi-agent orchestration with self-improvement
+    - Pre-loaded NVIDIA AI Blueprints (RAG, Documentation, Safety)
+    
+  readme: "https://raw.githubusercontent.com/openclaw/openclaw/main/extensions/ecc-integration/deploy/clawcloud/README.md"
+  icon: "https://raw.githubusercontent.com/openclaw/openclaw/main/assets/logo.png"
+  
+  components:
+    - name: gateway
+      type: deployment
+      image: node:22-alpine
+      ports:
+        - port: 3000
+          name: http
+      resources:
+        cpu: 500m
+        memory: 1Gi
+      env:
+        - name: NODE_ENV
+          value: production
+        - name: GATEWAY_PORT
+          value: "3000"
+        - name: NVIDIA_API_KEY
+          value: "${{ secrets.NVIDIA_API_KEY }}"
+        - name: DATABASE_URL
+          value: "${{ secrets.DATABASE_URL }}"
+        - name: REDIS_URL
+          value: "${{ secrets.REDIS_URL }}"
+      healthCheck:
+        path: /health
+        port: 3000
+        initialDelaySeconds: 60
+        periodSeconds: 30
+      
+    - name: api
+      type: deployment
+      image: node:22-alpine
+      ports:
+        - port: 3001
+          name: http
+      resources:
+        cpu: 500m
+        memory: 1Gi
+      env:
+        - name: NODE_ENV
+          value: production
+        - name: API_PORT
+          value: "3001"
+        - name: NVIDIA_API_KEY
+          value: "${{ secrets.NVIDIA_API_KEY }}"
+        - name: DATABASE_URL
+          value: "${{ secrets.DATABASE_URL }}"
+        - name: REDIS_URL
+          value: "${{ secrets.REDIS_URL }}"
+      healthCheck:
+        path: /health
+        port: 3001
+        initialDelaySeconds: 60
+        periodSeconds: 30
+      
+    - name: worker
+      type: deployment
+      image: node:22-alpine
+      resources:
+        cpu: 250m
+        memory: 512Mi
+      env:
+        - name: NODE_ENV
+          value: production
+        - name: NVIDIA_API_KEY
+          value: "${{ secrets.NVIDIA_API_KEY }}"
+        - name: DATABASE_URL
+          value: "${{ secrets.DATABASE_URL }}"
+        - name: REDIS_URL
+          value: "${{ secrets.REDIS_URL }}"
+  
+  services:
+    - name: gateway
+      ports:
+        - port: 80
+          targetPort: 3000
+    - name: api
+      ports:
+        - port: 80
+          targetPort: 3001
+  
+  ingress:
+    enabled: true
+    tls: true
+    rules:
+      - path: /api
+        service: api
+        port: 80
+      - path: /
+        service: gateway
+        port: 80
+  
+  secrets:
+    - name: NVIDIA_API_KEY
+      description: "NVIDIA API Key from build.nvidia.com (free)"
+      required: true
+    - name: DATABASE_URL
+      description: "PostgreSQL connection string (e.g., from Neon.tech)"
+      required: false
+    - name: REDIS_URL
+      description: "Redis connection string (e.g., from Upstash.com)"
+      required: false
+  
+  dependencies:
+    - name: postgresql
+      type: external
+      description: "PostgreSQL database (recommended: Neon.tech free tier)"
+    - name: redis
+      type: external
+      description: "Redis cache (recommended: Upstash.com free tier)"
+  
+  setup:
+    - command: |
+        # Install dependencies and build
+        npm install -g pnpm &&
+        pnpm install &&
+        pnpm build
+    - command: |
+        # Initialize ECC system
+        pnpm openclaw governance init
+    - command: |
+        # Start services
+        pnpm start:gateway &
+        pnpm start:api &
+        pnpm start:worker
+  
+  i18n:
+    en:
+      title: "OpenClaw ECC"
+      description: "Hybrid AI Agent System with NVIDIA NIM Integration"
+    zh:
+      title: "OpenClaw ECC"
+      description: "带有NVIDIA NIM集成的混合AI代理系统"
+  
+  categories:
+    - ai
+    - agent
+    - automation
+    - developer-tools
+  
+  tags:
+    - ai-agent
+    - nvidia-nim
+    - multi-agent
+    - automation
+    - typescript
+    - nodejs
+  
+  version: "2026.3.3"
+  
+  requirements:
+    cpu: 1250m
+    memory: 2.5Gi
+    storage: 5Gi
+  
+  ports:
+    - port: 3000
+      name: gateway
+      protocol: http
+    - port: 3001
+      name: api
+      protocol: http
+  
+  network:
+    expose: true
+    domain: auto
+  
+  features:
+    - auto-scaling: false
+    - persistent-storage: false
+    - ssl: true
+    - websocket: true
