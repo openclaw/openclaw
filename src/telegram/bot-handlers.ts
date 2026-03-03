@@ -143,6 +143,9 @@ export const registerTelegramHandlers = ({
     key: string;
     messages: Array<{ msg: Message; ctx: TelegramContext; receivedAtMs: number }>;
     timer: ReturnType<typeof setTimeout>;
+    // Set to true by whichever path (timer or drain) processes this entry first,
+    // so the other path becomes a no-op and cannot produce duplicate dispatches.
+    flushed?: boolean;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
   let textFragmentProcessing: Promise<void> = Promise.resolve();
@@ -340,6 +343,12 @@ export const registerTelegramHandlers = ({
 
   const processMediaGroup = async (entry: MediaGroupEntry) => {
     try {
+      // Guard against duplicate processing: drain() and a timer callback that
+      // already fired can both enqueue this entry; only the first wins.
+      if (entry.flushed) {
+        return;
+      }
+      entry.flushed = true;
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
       const captionMsg = entry.messages.find((m) => m.msg.caption || m.msg.text);
@@ -378,6 +387,12 @@ export const registerTelegramHandlers = ({
 
   const flushTextFragments = async (entry: TextFragmentEntry) => {
     try {
+      // Guard against duplicate processing: drain() and a timer callback that
+      // already fired can both enqueue this entry; only the first wins.
+      if (entry.flushed) {
+        return;
+      }
+      entry.flushed = true;
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
       const first = entry.messages[0];
@@ -1493,7 +1508,10 @@ export const registerTelegramHandlers = ({
   // confirmed to Telegram via getUpdates are never re-delivered, so without this
   // drain they would be silently lost on systemd restarts.
   const drain = async () => {
-    // Flush pending text-fragment reassembly timers
+    // Flush pending text-fragment reassembly timers.
+    // clearTimeout is a best-effort cancel; if a callback has already fired and
+    // is queued in the event loop, the flushed flag in flushTextFragments ensures
+    // it becomes a no-op so the same entry is never processed twice.
     const textEntries = [...textFragmentBuffer.values()];
     textFragmentBuffer.clear();
     for (const entry of textEntries) {
@@ -1502,11 +1520,14 @@ export const registerTelegramHandlers = ({
         .then(async () => {
           await flushTextFragments(entry);
         })
-        .catch(() => undefined);
+        .catch((err) => {
+          runtime.error?.(danger(`[telegram] drain: text-fragment flush error: ${String(err)}`));
+        });
     }
     await textFragmentProcessing;
 
-    // Flush pending media-group assembly timers
+    // Flush pending media-group assembly timers.
+    // Same flushed-flag guard applies to processMediaGroup.
     const mediaEntries = [...mediaGroupBuffer.values()];
     mediaGroupBuffer.clear();
     for (const entry of mediaEntries) {
@@ -1515,7 +1536,9 @@ export const registerTelegramHandlers = ({
         .then(async () => {
           await processMediaGroup(entry);
         })
-        .catch(() => undefined);
+        .catch((err) => {
+          runtime.error?.(danger(`[telegram] drain: media-group flush error: ${String(err)}`));
+        });
     }
     await mediaGroupProcessing;
 

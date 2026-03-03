@@ -385,13 +385,11 @@ describe("monitorTelegramProvider (grammY)", () => {
 
   it("calls drain before stopping bot on graceful shutdown", async () => {
     const abort = new AbortController();
-    const callOrder: string[] = [];
 
     mockRunOnceAndAbort(abort);
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
-    // Patch the drain and stop mocks captured during createTelegramBot to record order
     const drain = createdBotDrains[0];
     const stop = createdBotStops[0];
     expect(drain).toBeDefined();
@@ -404,7 +402,6 @@ describe("monitorTelegramProvider (grammY)", () => {
     const drainCallIdx = drain.mock.invocationCallOrder[0];
     const stopCallIdx = stop.mock.invocationCallOrder[0];
     expect(drainCallIdx).toBeLessThan(stopCallIdx);
-    void callOrder; // silence unused variable
   });
 
   it("surfaces non-recoverable errors", async () => {
