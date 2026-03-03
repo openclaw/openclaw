@@ -79,6 +79,7 @@ Per-agent override (optional):
 ## Recommended setup
 
 - Start with `enabled: true`, defaults unchanged.
+- Keep thresholds ordered as `warningThreshold < criticalThreshold < globalCircuitBreakerThreshold`.
 - If false positives occur:
   - raise `warningThreshold` and/or `criticalThreshold`
   - (optionally) raise `globalCircuitBreakerThreshold`
