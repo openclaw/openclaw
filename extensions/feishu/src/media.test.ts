@@ -285,6 +285,30 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(getAudioDurationMsMock).not.toHaveBeenCalled();
   });
 
+  it("probes duration when mediaUrl is a file:// URL pointing to opus (#33043 codex-p2)", async () => {
+    getAudioDurationMsMock.mockResolvedValue(8000);
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("opus-audio"),
+      fileName: "tts.opus",
+      kind: "audio",
+      contentType: "audio/ogg",
+    });
+
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaUrl: "file:///tmp/openclaw-tts/audio.opus",
+    });
+
+    // fileURLToPath("file:///tmp/openclaw-tts/audio.opus") === "/tmp/openclaw-tts/audio.opus"
+    expect(getAudioDurationMsMock).toHaveBeenCalledWith("/tmp/openclaw-tts/audio.opus");
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ file_type: "opus", duration: 8000 }),
+      }),
+    );
+  });
+
   it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {
     loadWebMediaMock.mockResolvedValue({
       buffer: Buffer.from("local-file"),

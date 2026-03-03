@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
+import { fileURLToPath } from "url";
 import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -444,9 +445,16 @@ export async function sendMediaFeishu(params: {
     buffer = mediaBuffer;
     name = fileName ?? "file";
   } else if (mediaUrl) {
-    // Detect local file paths (absolute paths not starting with a URL scheme)
+    // Detect local file paths: bare absolute paths and file:// URLs.
+    // file:// is a valid mediaUrl form across the codebase (loadWebMedia supports it).
     if (/^\//.test(mediaUrl) || /^[A-Za-z]:[/\\]/.test(mediaUrl)) {
       localSourcePath = mediaUrl;
+    } else if (mediaUrl.startsWith("file://")) {
+      try {
+        localSourcePath = fileURLToPath(mediaUrl);
+      } catch {
+        // Malformed file:// URL; duration probing skipped, upload still proceeds.
+      }
     }
     const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
       maxBytes: mediaMaxBytes,
