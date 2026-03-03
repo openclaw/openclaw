@@ -21,7 +21,12 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
-import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
+import {
+  createFirecrawlScrapeTool,
+  createFirecrawlSearchTool,
+  createWebFetchTool,
+  createWebSearchTool,
+} from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 export function createOpenClawTools(options?: {
@@ -107,6 +112,8 @@ export function createOpenClawTools(options?: {
     config: options?.config,
     sandboxed: options?.sandboxed,
   });
+  const firecrawlSearchTool = createFirecrawlSearchTool({ config: options?.config });
+  const firecrawlScrapeTool = createFirecrawlScrapeTool({ config: options?.config });
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({
@@ -187,6 +194,8 @@ export function createOpenClawTools(options?: {
     }),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
+    ...(firecrawlSearchTool ? [firecrawlSearchTool] : []),
+    ...(firecrawlScrapeTool ? [firecrawlScrapeTool] : []),
     ...(imageTool ? [imageTool] : []),
     ...(pdfTool ? [pdfTool] : []),
   ];
