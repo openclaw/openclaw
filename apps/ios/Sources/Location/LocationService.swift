@@ -21,7 +21,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         self.manager
     }
 
-    var locationRequestContinuation: CheckedContinuation<CLLocation, Error>? {
+    var locationRequestContinuation: CheckedContinuation<CLLocation, Swift.Error>? {
         get { self.locationContinuation }
         set { self.locationContinuation = newValue }
     }
@@ -65,9 +65,10 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
             desiredAccuracy: desiredAccuracy,
             maxAgeMs: maxAgeMs,
             timeoutMs: timeoutMs,
-            request: { try await self.requestLocationOnce() }) { timeoutMs, operation in
+            request: { try await self.requestLocationOnce() },
+            withTimeout: { timeoutMs, operation in
                 try await self.withTimeout(timeoutMs: timeoutMs, operation: operation)
-        }
+            })
     }
 
     private func awaitAuthorizationChange() async -> CLAuthorizationStatus {
