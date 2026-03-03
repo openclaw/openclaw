@@ -64,7 +64,7 @@ export type HooksImapConfig = {
   allowUnsafeExternalContent?: boolean;
   /** Path to himalaya config file (optional, uses default if omitted) */
   himalayaConfig?: string;
-  /** Filter query for envelopes (default: "flag unseen") */
+  /** Filter query for envelopes (default: "not flag Seen") */
   query?: string;
 };
 

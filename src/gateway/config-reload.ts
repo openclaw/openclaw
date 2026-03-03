@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
 import type { OpenClawConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { getActivePluginRegistry } from "../plugins/runtime.ts";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { isPlainObject } from "../utils.js";
 import { buildGatewayReloadPlan, type GatewayReloadPlan } from "./config-reload-plan.js";
 

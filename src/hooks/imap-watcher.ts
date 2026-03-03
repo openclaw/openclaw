@@ -39,7 +39,10 @@ export type ImapWatcherStartResult = {
  * Start the IMAP watcher service.
  * Called by the gateway if hooks.imap is configured.
  */
-export async function startImapWatcher(cfg: OpenClawConfig): Promise<ImapWatcherStartResult> {
+export async function startImapWatcher(
+  cfg: OpenClawConfig,
+  overrides?: import("./imap.js").ImapHookOverrides,
+): Promise<ImapWatcherStartResult> {
   log.debug("startImapWatcher called");
 
   if (!cfg.hooks?.enabled) {
@@ -60,7 +63,7 @@ export async function startImapWatcher(cfg: OpenClawConfig): Promise<ImapWatcher
   log.debug("himalaya binary found");
 
   log.debug(`resolving imap config for account: ${cfg.hooks.imap.account}`);
-  const resolved = resolveImapHookRuntimeConfig(cfg, {});
+  const resolved = resolveImapHookRuntimeConfig(cfg, overrides ?? {});
   if (!resolved.ok) {
     log.debug(`config resolution failed: ${resolved.error}`);
     return { started: false, reason: resolved.error };

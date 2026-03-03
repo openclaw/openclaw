@@ -5,7 +5,10 @@
  * All commands use `-o json --quiet` for structured, parseable output.
  */
 
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+
+const log = createSubsystemLogger("imap-himalaya");
 
 export type HimalayaEnvelope = {
   id: string;
@@ -64,9 +67,9 @@ export async function listEnvelopes(params: {
   }
 
   const cmdStr = args.join(" ");
-  console.error(`[imap-himalaya] executing: ${cmdStr}`);
+  log.debug(`[imap-himalaya] executing: ${cmdStr}`);
   const result = await runCommandWithTimeout(args, { timeoutMs: 30_000 });
-  console.error(
+  log.debug(
     `[imap-himalaya] exit code: ${result.code}, stdout length: ${result.stdout.length}, stderr: ${result.stderr?.slice(0, 200) || "(none)"}`,
   );
   if (result.code !== 0) {
