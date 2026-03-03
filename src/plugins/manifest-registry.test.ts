@@ -150,7 +150,40 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ];
 
-    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    // Only one record should remain — the higher-precedence origin wins.
+    expect(registry.plugins.length).toBe(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
+  });
+
+  it("prefers globally-installed plugin over bundled copy at a different path (#32879)", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    const manifest = { id: "zalouser", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "zalouser",
+        rootDir: bundledDir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "zalouser",
+        rootDir: globalDir,
+        origin: "global",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    // The warning should still be emitted for visibility.
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    // Only the global (installed) copy should be kept.
+    expect(registry.plugins.length).toBe(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
+    expect(registry.plugins[0]?.rootDir).toBe(globalDir);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {

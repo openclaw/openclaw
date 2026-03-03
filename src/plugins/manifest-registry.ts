@@ -234,6 +234,22 @@ export function loadPluginManifestRegistry(params: {
         source: candidate.source,
         message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
       });
+      // Apply origin precedence for different-path duplicates too: a user-installed
+      // (global) plugin should be preferred over a bundled copy that may lack
+      // node_modules with required dependencies (see #32879).
+      if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
+        records[existing.recordIndex] = buildRecord({
+          manifest,
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+          schemaCacheKey,
+          configSchema,
+        });
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+      }
+      // Whether the new candidate replaced the existing record or not,
+      // skip the push below so we never have two records for the same id.
+      continue;
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }

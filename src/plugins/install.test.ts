@@ -713,6 +713,97 @@ describe("installPluginFromDir", () => {
 
     expectInstalledAsMemoryCognee(res, extensionsDir);
   });
+  it("triggers npm install when plugin has runtime dependencies (#32879)", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/zalouser",
+        version: "2026.3.2",
+        openclaw: { extensions: ["./index.ts"] },
+        dependencies: { "zca-js": "2.1.1" },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "zalouser",
+        configSchema: { type: "object", properties: {} },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export {};", "utf-8");
+
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(res.ok).toBe(true);
+    // npm install must have been called for the plugin's dependencies
+    expect(run).toHaveBeenCalled();
+    const npmCall = run.mock.calls.find(
+      (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "install",
+    );
+    expect(npmCall).toBeDefined();
+  });
+
+  it("triggers npm install when plugin has only peerDependencies", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/peer-only",
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.js"] },
+        peerDependencies: { "some-lib": "^1.0.0" },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "peer-only",
+        configSchema: { type: "object", properties: {} },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};", "utf-8");
+
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(res.ok).toBe(true);
+    const npmCall = run.mock.calls.find(
+      (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "install",
+    );
+    expect(npmCall).toBeDefined();
+  });
 });
 
 describe("installPluginFromPath", () => {
