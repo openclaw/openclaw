@@ -219,6 +219,7 @@ export const ToolsCatalogParamsSchema = Type.Object(
 export const ToolCatalogProfileSchema = Type.Object(
   {
     id: Type.Union([
+      Type.Literal("none"),
       Type.Literal("minimal"),
       Type.Literal("coding"),
       Type.Literal("messaging"),
