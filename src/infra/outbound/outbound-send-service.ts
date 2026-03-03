@@ -104,7 +104,12 @@ export async function executeSendAction(params: {
     return {
       handledBy: "silent",
       payload: { ok: true, reason: SILENT_REPLY_TOKEN },
-      sendResult: { ok: true, delivered: false, discarded: true },
+      sendResult: {
+        channel: params.ctx.channel,
+        to: params.to,
+        via: "direct",
+        mediaUrl: null,
+      },
     };
   }
 
