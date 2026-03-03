@@ -75,6 +75,8 @@ export type BlueBubblesActionConfig = {
 export type BlueBubblesConfig = {
   /** Optional per-account BlueBubbles configuration (multi-account). */
   accounts?: Record<string, BlueBubblesAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: BlueBubblesActionConfig;
 } & BlueBubblesAccountConfig;

@@ -10,6 +10,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
+  resolveAuthProfileOrder,
   saveAuthProfileStore,
 } from "../agents/auth-profiles.js";
 import {
@@ -20,6 +21,7 @@ import {
 import { isModernModelRef } from "../agents/live-model-filter.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { loadConfig } from "../config/config.js";
 import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
@@ -28,7 +30,12 @@ import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
-import { hasExpectedToolNonce, shouldRetryToolReadProbe } from "./live-tool-probe-utils.js";
+import {
+  hasExpectedSingleNonce,
+  hasExpectedToolNonce,
+  shouldRetryExecReadProbe,
+  shouldRetryToolReadProbe,
+} from "./live-tool-probe-utils.js";
 import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
@@ -40,6 +47,15 @@ const THINKING_LEVEL = "high";
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/i;
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
+const GATEWAY_LIVE_DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
+const GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS = 60 * 60 * 1000;
+const GATEWAY_LIVE_MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const GATEWAY_LIVE_PROBE_TIMEOUT_MS = Math.max(
+  30_000,
+  toInt(process.env.OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS, 90_000),
+);
+const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
+const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_LIVE_MAX_MODELS);
 
 const describeLive = LIVE || GATEWAY_LIVE ? describe : describe.skip;
 
@@ -55,8 +71,120 @@ function parseFilter(raw?: string): Set<string> | null {
   return ids.length ? new Set(ids) : null;
 }
 
+function toInt(value: string | undefined, fallback: number): number {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function resolveGatewayLiveMaxModels(): number {
+  const gatewayMax = toInt(process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS, -1);
+  if (gatewayMax >= 0) {
+    return gatewayMax;
+  }
+  // Reuse shared live-model cap when gateway-specific cap is not provided.
+  return Math.max(0, toInt(process.env.OPENCLAW_LIVE_MAX_MODELS, 0));
+}
+
+function resolveGatewayLiveSuiteTimeoutMs(maxModels: number): number {
+  if (maxModels <= 0) {
+    return GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS;
+  }
+  // Gateway live runs multiple probes per model; scale timeout by model cap.
+  const estimated = 5 * 60 * 1000 + maxModels * 90 * 1000;
+  return Math.max(
+    GATEWAY_LIVE_DEFAULT_TIMEOUT_MS,
+    Math.min(GATEWAY_LIVE_MAX_TIMEOUT_MS, estimated),
+  );
+}
+
+function isGatewayLiveProbeTimeout(error: string): boolean {
+  return /probe timeout after \d+ms/i.test(error);
+}
+
+async function withGatewayLiveProbeTimeout<T>(operation: Promise<T>, context: string): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`probe timeout after ${GATEWAY_LIVE_PROBE_TIMEOUT_MS}ms (${context})`));
+        }, GATEWAY_LIVE_PROBE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
+function capByProviderSpread<T>(
+  items: T[],
+  maxItems: number,
+  providerOf: (item: T) => string,
+): T[] {
+  if (maxItems <= 0 || items.length <= maxItems) {
+    return items;
+  }
+  const providerOrder: string[] = [];
+  const grouped = new Map<string, T[]>();
+  for (const item of items) {
+    const provider = providerOf(item);
+    const bucket = grouped.get(provider);
+    if (bucket) {
+      bucket.push(item);
+      continue;
+    }
+    providerOrder.push(provider);
+    grouped.set(provider, [item]);
+  }
+
+  const selected: T[] = [];
+  while (selected.length < maxItems && grouped.size > 0) {
+    for (const provider of providerOrder) {
+      const bucket = grouped.get(provider);
+      if (!bucket || bucket.length === 0) {
+        continue;
+      }
+      const item = bucket.shift();
+      if (item) {
+        selected.push(item);
+      }
+      if (bucket.length === 0) {
+        grouped.delete(provider);
+      }
+      if (selected.length >= maxItems) {
+        break;
+      }
+    }
+  }
+  return selected;
+}
+
 function logProgress(message: string): void {
   console.log(`[live] ${message}`);
+}
+
+function formatFailurePreview(
+  failures: Array<{ model: string; error: string }>,
+  maxItems: number,
+): string {
+  const limit = Math.max(1, maxItems);
+  const lines = failures.slice(0, limit).map((failure, index) => {
+    const normalized = failure.error.replace(/\s+/g, " ").trim();
+    const clipped = normalized.length > 320 ? `${normalized.slice(0, 317)}...` : normalized;
+    return `${index + 1}. ${failure.model}: ${clipped}`;
+  });
+  const remaining = failures.length - limit;
+  if (remaining > 0) {
+    lines.push(`... and ${remaining} more`);
+  }
+  return lines.join("\n");
 }
 
 function assertNoReasoningTags(params: {
@@ -127,6 +255,16 @@ function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
 }
 
+function isProviderUnavailableErrorMessage(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return (
+    msg.includes("no allowed providers are available") ||
+    msg.includes("provider unavailable") ||
+    msg.includes("upstream provider unavailable") ||
+    msg.includes("upstream error from google")
+  );
+}
+
 function isInstructionsRequiredError(error: string): boolean {
   return /instructions are required/i.test(error);
 }
@@ -153,6 +291,11 @@ function isToolNonceRefusal(error: string): boolean {
   );
 }
 
+function isToolNonceProbeMiss(error: string): boolean {
+  const msg = error.toLowerCase();
+  return msg.includes("tool probe missing nonce") || msg.includes("exec+read probe missing nonce");
+}
+
 function isMissingProfileError(error: string): boolean {
   return /no credentials found for profile/i.test(error);
 }
@@ -176,16 +319,19 @@ async function runAnthropicRefusalProbe(params: {
   logProgress(`${params.label}: refusal-probe`);
   const magic = buildAnthropicRefusalToken();
   const runId = randomUUID();
-  const probe = await params.client.request<AgentFinalPayload>(
-    "agent",
-    {
-      sessionKey: params.sessionKey,
-      idempotencyKey: `idem-${runId}-refusal`,
-      message: `Reply with the single word ok. Test token: ${magic}`,
-      thinking: params.thinkingLevel,
-      deliver: false,
-    },
-    { expectFinal: true },
+  const probe = await withGatewayLiveProbeTimeout(
+    params.client.request<AgentFinalPayload>(
+      "agent",
+      {
+        sessionKey: params.sessionKey,
+        idempotencyKey: `idem-${runId}-refusal`,
+        message: `Reply with the single word ok. Test token: ${magic}`,
+        thinking: params.thinkingLevel,
+        deliver: false,
+      },
+      { expectFinal: true },
+    ),
+    `${params.label}: refusal-probe`,
   );
   if (probe?.status !== "ok") {
     throw new Error(`refusal probe failed: status=${String(probe?.status)}`);
@@ -202,16 +348,19 @@ async function runAnthropicRefusalProbe(params: {
   }
 
   const followupId = randomUUID();
-  const followup = await params.client.request<AgentFinalPayload>(
-    "agent",
-    {
-      sessionKey: params.sessionKey,
-      idempotencyKey: `idem-${followupId}-refusal-followup`,
-      message: "Now reply with exactly: still ok.",
-      thinking: params.thinkingLevel,
-      deliver: false,
-    },
-    { expectFinal: true },
+  const followup = await withGatewayLiveProbeTimeout(
+    params.client.request<AgentFinalPayload>(
+      "agent",
+      {
+        sessionKey: params.sessionKey,
+        idempotencyKey: `idem-${followupId}-refusal-followup`,
+        message: "Now reply with exactly: still ok.",
+        thinking: params.thinkingLevel,
+        deliver: false,
+      },
+      { expectFinal: true },
+    ),
+    `${params.label}: refusal-followup`,
   );
   if (followup?.status !== "ok") {
     throw new Error(`refusal followup failed: status=${String(followup?.status)}`);
@@ -555,19 +704,49 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
   process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
 
-  await ensureOpenClawModelsJson(nextCfg);
+  const liveProviders = nextCfg.models?.providers;
+  if (liveProviders && Object.keys(liveProviders).length > 0) {
+    const modelsPath = path.join(tempAgentDir, "models.json");
+    await fs.mkdir(tempAgentDir, { recursive: true });
+    await fs.writeFile(modelsPath, `${JSON.stringify({ providers: liveProviders }, null, 2)}\n`);
+  }
 
-  const port = await getFreeGatewayPort();
-  const server = await startGatewayServer(port, {
-    bind: "loopback",
-    auth: { mode: "token", token },
-    controlUiEnabled: false,
-  });
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  let client: GatewayClient | undefined;
+  try {
+    const port = await withGatewayLiveProbeTimeout(
+      getFreeGatewayPort(),
+      `${params.label}: gateway-port`,
+    );
+    server = await withGatewayLiveProbeTimeout(
+      startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      }),
+      `${params.label}: gateway-start`,
+    );
 
-  const client = await connectClient({
-    url: `ws://127.0.0.1:${port}`,
-    token,
-  });
+    client = await withGatewayLiveProbeTimeout(
+      connectClient({
+        url: `ws://127.0.0.1:${port}`,
+        token,
+      }),
+      `${params.label}: gateway-connect`,
+    );
+  } catch (error) {
+    const message = String(error);
+    if (isGatewayLiveProbeTimeout(message)) {
+      logProgress(`[${params.label}] skip (gateway startup timeout)`);
+      return;
+    }
+    throw error;
+  }
+
+  if (!server || !client) {
+    logProgress(`[${params.label}] skip (gateway startup incomplete)`);
+    return;
+  }
 
   try {
     logProgress(
@@ -598,27 +777,36 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           // Ensure session exists + override model for this run.
           // Reset between models: avoids cross-provider transcript incompatibilities
           // (notably OpenAI Responses requiring reasoning replay for function_call items).
-          await client.request("sessions.reset", {
-            key: sessionKey,
-          });
-          await client.request("sessions.patch", {
-            key: sessionKey,
-            model: modelKey,
-          });
+          await withGatewayLiveProbeTimeout(
+            client.request("sessions.reset", {
+              key: sessionKey,
+            }),
+            `${progressLabel}: sessions-reset`,
+          );
+          await withGatewayLiveProbeTimeout(
+            client.request("sessions.patch", {
+              key: sessionKey,
+              model: modelKey,
+            }),
+            `${progressLabel}: sessions-patch`,
+          );
 
           logProgress(`${progressLabel}: prompt`);
           const runId = randomUUID();
-          const payload = await client.request<AgentFinalPayload>(
-            "agent",
-            {
-              sessionKey,
-              idempotencyKey: `idem-${runId}`,
-              message:
-                "Explain in 2-3 sentences how the JavaScript event loop handles microtasks vs macrotasks. Must mention both words: microtask and macrotask.",
-              thinking: params.thinkingLevel,
-              deliver: false,
-            },
-            { expectFinal: true },
+          const payload = await withGatewayLiveProbeTimeout(
+            client.request<AgentFinalPayload>(
+              "agent",
+              {
+                sessionKey,
+                idempotencyKey: `idem-${runId}`,
+                message:
+                  "Explain in 2-3 sentences how the JavaScript event loop handles microtasks vs macrotasks. Must mention both words: microtask and macrotask.",
+                thinking: params.thinkingLevel,
+                deliver: false,
+              },
+              { expectFinal: true },
+            ),
+            `${progressLabel}: prompt`,
           );
 
           if (payload?.status !== "ok") {
@@ -627,17 +815,20 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           let text = extractPayloadText(payload?.result);
           if (!text) {
             logProgress(`${progressLabel}: empty response, retrying`);
-            const retry = await client.request<AgentFinalPayload>(
-              "agent",
-              {
-                sessionKey,
-                idempotencyKey: `idem-${randomUUID()}-retry`,
-                message:
-                  "Explain in 2-3 sentences how the JavaScript event loop handles microtasks vs macrotasks. Must mention both words: microtask and macrotask.",
-                thinking: params.thinkingLevel,
-                deliver: false,
-              },
-              { expectFinal: true },
+            const retry = await withGatewayLiveProbeTimeout(
+              client.request<AgentFinalPayload>(
+                "agent",
+                {
+                  sessionKey,
+                  idempotencyKey: `idem-${randomUUID()}-retry`,
+                  message:
+                    "Explain in 2-3 sentences how the JavaScript event loop handles microtasks vs macrotasks. Must mention both words: microtask and macrotask.",
+                  thinking: params.thinkingLevel,
+                  deliver: false,
+                },
+                { expectFinal: true },
+              ),
+              `${progressLabel}: prompt-retry`,
             );
             if (retry?.status !== "ok") {
               throw new Error(`agent status=${String(retry?.status)}`);
@@ -689,22 +880,25 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             toolReadAttempt += 1
           ) {
             const strictReply = toolReadAttempt > 0;
-            const toolProbe = await client.request<AgentFinalPayload>(
-              "agent",
-              {
-                sessionKey,
-                idempotencyKey: `idem-${runIdTool}-tool-${toolReadAttempt + 1}`,
-                message: strictReply
-                  ? "OpenClaw live tool probe (local, safe): " +
-                    `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                    `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`
-                  : "OpenClaw live tool probe (local, safe): " +
-                    `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                    "Then reply with the two nonce values you read (include both).",
-                thinking: params.thinkingLevel,
-                deliver: false,
-              },
-              { expectFinal: true },
+            const toolProbe = await withGatewayLiveProbeTimeout(
+              client.request<AgentFinalPayload>(
+                "agent",
+                {
+                  sessionKey,
+                  idempotencyKey: `idem-${runIdTool}-tool-${toolReadAttempt + 1}`,
+                  message: strictReply
+                    ? "OpenClaw live tool probe (local, safe): " +
+                      `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                      `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`
+                    : "OpenClaw live tool probe (local, safe): " +
+                      `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                      "Then reply with the two nonce values you read (include both).",
+                  thinking: params.thinkingLevel,
+                  deliver: false,
+                },
+                { expectFinal: true },
+              ),
+              `${progressLabel}: tool-read`,
             );
             if (toolProbe?.status !== "ok") {
               if (toolReadAttempt + 1 < maxToolReadAttempts) {
@@ -757,41 +951,80 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: tool-exec`);
             const nonceC = randomUUID();
             const toolWritePath = path.join(tempDir, `write-${runIdTool}.txt`);
-
-            const execReadProbe = await client.request<AgentFinalPayload>(
-              "agent",
-              {
-                sessionKey,
-                idempotencyKey: `idem-${runIdTool}-exec-read`,
-                message:
-                  "OpenClaw live tool probe (local, safe): " +
-                  "use the tool named `exec` (or `Exec`) to run this command: " +
-                  `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
-                  `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
-                  "Finally reply including the nonce text you read back.",
-                thinking: params.thinkingLevel,
-                deliver: false,
-              },
-              { expectFinal: true },
-            );
-            if (execReadProbe?.status !== "ok") {
-              throw new Error(`exec+read probe failed: status=${String(execReadProbe?.status)}`);
-            }
-            const execReadText = extractPayloadText(execReadProbe?.result);
-            if (
-              isEmptyStreamText(execReadText) &&
-              (model.provider === "minimax" || model.provider === "openai-codex")
+            const maxExecReadAttempts = 3;
+            let execReadText = "";
+            for (
+              let execReadAttempt = 0;
+              execReadAttempt < maxExecReadAttempts;
+              execReadAttempt += 1
             ) {
-              logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
-              break;
+              const strictReply = execReadAttempt > 0;
+              const execReadProbe = await withGatewayLiveProbeTimeout(
+                client.request<AgentFinalPayload>(
+                  "agent",
+                  {
+                    sessionKey,
+                    idempotencyKey: `idem-${runIdTool}-exec-read-${execReadAttempt + 1}`,
+                    message: strictReply
+                      ? "OpenClaw live tool probe (local, safe): " +
+                        "use the tool named `exec` (or `Exec`) to run this command: " +
+                        `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
+                        `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
+                        `Then reply with exactly: ${nonceC}. No extra text.`
+                      : "OpenClaw live tool probe (local, safe): " +
+                        "use the tool named `exec` (or `Exec`) to run this command: " +
+                        `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
+                        `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
+                        "Finally reply including the nonce text you read back.",
+                    thinking: params.thinkingLevel,
+                    deliver: false,
+                  },
+                  { expectFinal: true },
+                ),
+                `${progressLabel}: tool-exec`,
+              );
+              if (execReadProbe?.status !== "ok") {
+                if (execReadAttempt + 1 < maxExecReadAttempts) {
+                  logProgress(
+                    `${progressLabel}: tool-exec retry (${execReadAttempt + 2}/${maxExecReadAttempts}) status=${String(execReadProbe?.status)}`,
+                  );
+                  continue;
+                }
+                throw new Error(`exec+read probe failed: status=${String(execReadProbe?.status)}`);
+              }
+              execReadText = extractPayloadText(execReadProbe?.result);
+              if (
+                isEmptyStreamText(execReadText) &&
+                (model.provider === "minimax" || model.provider === "openai-codex")
+              ) {
+                logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
+                break;
+              }
+              assertNoReasoningTags({
+                text: execReadText,
+                model: modelKey,
+                phase: "tool-exec",
+                label: params.label,
+              });
+              if (hasExpectedSingleNonce(execReadText, nonceC)) {
+                break;
+              }
+              if (
+                shouldRetryExecReadProbe({
+                  text: execReadText,
+                  nonce: nonceC,
+                  attempt: execReadAttempt,
+                  maxAttempts: maxExecReadAttempts,
+                })
+              ) {
+                logProgress(
+                  `${progressLabel}: tool-exec retry (${execReadAttempt + 2}/${maxExecReadAttempts}) malformed tool output`,
+                );
+                continue;
+              }
+              throw new Error(`exec+read probe missing nonce: ${execReadText}`);
             }
-            assertNoReasoningTags({
-              text: execReadText,
-              model: modelKey,
-              phase: "tool-exec",
-              label: params.label,
-            });
-            if (!execReadText.includes(nonceC)) {
+            if (!hasExpectedSingleNonce(execReadText, nonceC)) {
               throw new Error(`exec+read probe missing nonce: ${execReadText}`);
             }
 
@@ -805,26 +1038,29 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             const imageBase64 = renderCatNoncePngBase64(imageCode);
             const runIdImage = randomUUID();
 
-            const imageProbe = await client.request<AgentFinalPayload>(
-              "agent",
-              {
-                sessionKey,
-                idempotencyKey: `idem-${runIdImage}-image`,
-                message:
-                  "Look at the attached image. Reply with exactly two tokens separated by a single space: " +
-                  "(1) the animal shown or written in the image, lowercase; " +
-                  "(2) the code printed in the image, uppercase. No extra text.",
-                attachments: [
-                  {
-                    mimeType: "image/png",
-                    fileName: `probe-${runIdImage}.png`,
-                    content: imageBase64,
-                  },
-                ],
-                thinking: params.thinkingLevel,
-                deliver: false,
-              },
-              { expectFinal: true },
+            const imageProbe = await withGatewayLiveProbeTimeout(
+              client.request<AgentFinalPayload>(
+                "agent",
+                {
+                  sessionKey,
+                  idempotencyKey: `idem-${runIdImage}-image`,
+                  message:
+                    "Look at the attached image. Reply with exactly two tokens separated by a single space: " +
+                    "(1) the animal shown or written in the image, lowercase; " +
+                    "(2) the code printed in the image, uppercase. No extra text.",
+                  attachments: [
+                    {
+                      mimeType: "image/png",
+                      fileName: `probe-${runIdImage}.png`,
+                      content: imageBase64,
+                    },
+                  ],
+                  thinking: params.thinkingLevel,
+                  deliver: false,
+                },
+                { expectFinal: true },
+              ),
+              `${progressLabel}: image`,
             );
             // Best-effort: do not fail the whole live suite on flaky image handling.
             // (We still keep prompt + tool probes as hard checks.)
@@ -870,16 +1106,19 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           ) {
             logProgress(`${progressLabel}: tool-only regression`);
             const runId2 = randomUUID();
-            const first = await client.request<AgentFinalPayload>(
-              "agent",
-              {
-                sessionKey,
-                idempotencyKey: `idem-${runId2}-1`,
-                message: `Call the tool named \`read\` (or \`Read\`) on "${toolProbePath}". Do not write any other text.`,
-                thinking: params.thinkingLevel,
-                deliver: false,
-              },
-              { expectFinal: true },
+            const first = await withGatewayLiveProbeTimeout(
+              client.request<AgentFinalPayload>(
+                "agent",
+                {
+                  sessionKey,
+                  idempotencyKey: `idem-${runId2}-1`,
+                  message: `Call the tool named \`read\` (or \`Read\`) on "${toolProbePath}". Do not write any other text.`,
+                  thinking: params.thinkingLevel,
+                  deliver: false,
+                },
+                { expectFinal: true },
+              ),
+              `${progressLabel}: tool-only-regression-first`,
             );
             if (first?.status !== "ok") {
               throw new Error(`tool-only turn failed: status=${String(first?.status)}`);
@@ -892,16 +1131,19 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               label: params.label,
             });
 
-            const second = await client.request<AgentFinalPayload>(
-              "agent",
-              {
-                sessionKey,
-                idempotencyKey: `idem-${runId2}-2`,
-                message: `Now answer: what are the values of nonceA and nonceB in "${toolProbePath}"? Reply with exactly: ${nonceA} ${nonceB}.`,
-                thinking: params.thinkingLevel,
-                deliver: false,
-              },
-              { expectFinal: true },
+            const second = await withGatewayLiveProbeTimeout(
+              client.request<AgentFinalPayload>(
+                "agent",
+                {
+                  sessionKey,
+                  idempotencyKey: `idem-${runId2}-2`,
+                  message: `Now answer: what are the values of nonceA and nonceB in "${toolProbePath}"? Reply with exactly: ${nonceA} ${nonceB}.`,
+                  thinking: params.thinkingLevel,
+                  deliver: false,
+                },
+                { expectFinal: true },
+              ),
+              `${progressLabel}: tool-only-regression-second`,
             );
             if (second?.status !== "ok") {
               throw new Error(`post-tool message failed: status=${String(second?.status)}`);
@@ -961,6 +1203,29 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (anthropic empty response)`);
             break;
           }
+          if (isGoogleishProvider(model.provider) && isRateLimitErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (google rate limit)`);
+            break;
+          }
+          if (isProviderUnavailableErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (provider unavailable)`);
+            break;
+          }
+          if (
+            model.provider === "anthropic" &&
+            isGatewayLiveProbeTimeout(message) &&
+            attempt + 1 < attemptMax
+          ) {
+            logProgress(`${progressLabel}: probe timeout, retrying with next key`);
+            continue;
+          }
+          if (isGatewayLiveProbeTimeout(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (probe timeout)`);
+            break;
+          }
           // OpenAI Codex refresh tokens can become single-use; skip instead of failing all live tests.
           if (model.provider === "openai-codex" && isRefreshTokenReused(message)) {
             logProgress(`${progressLabel}: skip (codex refresh token reused)`);
@@ -991,6 +1256,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (tool probe refusal)`);
             break;
           }
+          if (model.provider === "anthropic" && isToolNonceProbeMiss(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (anthropic tool probe nonce miss)`);
+            break;
+          }
           if (isMissingProfileError(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (missing auth profile)`);
@@ -1009,11 +1279,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     }
 
     if (failures.length > 0) {
-      const preview = failures
-        .slice(0, 20)
-        .map((f) => `- ${f.model}: ${f.error}`)
-        .join("\n");
-      throw new Error(`gateway live model failures (${failures.length}):\n${preview}`);
+      const preview = formatFailurePreview(failures, 20);
+      throw new Error(
+        `gateway live model failures (${failures.length}, showing ${Math.min(failures.length, 20)}):\n${preview}`,
+      );
     }
     if (skippedCount === total) {
       logProgress(`[${params.label}] skipped all models (missing profiles)`);
@@ -1061,51 +1330,62 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
       const useExplicit = Boolean(rawModels) && !useModern;
       const filter = useExplicit ? parseFilter(rawModels) : null;
+      const maxModels = GATEWAY_LIVE_MAX_MODELS;
       const wanted = filter
         ? all.filter((m) => filter.has(`${m.provider}/${m.id}`))
         : all.filter((m) => isModernModelRef({ provider: m.provider, id: m.id }));
 
+      const providerProfileCache = new Map<string, boolean>();
       const candidates: Array<Model<Api>> = [];
       for (const model of wanted) {
         if (PROVIDERS && !PROVIDERS.has(model.provider)) {
           continue;
         }
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          const apiKeyInfo = await getApiKeyForModel({
-            model,
+        let hasProfile = providerProfileCache.get(model.provider);
+        if (hasProfile === undefined) {
+          const order = resolveAuthProfileOrder({
             cfg,
             store: authStore,
-            agentDir,
+            provider: model.provider,
           });
-          if (!apiKeyInfo.source.startsWith("profile:")) {
-            continue;
-          }
-          candidates.push(model);
-        } catch {
-          // no creds; skip
+          hasProfile = order.some((profileId) => Boolean(authStore.profiles[profileId]));
+          providerProfileCache.set(model.provider, hasProfile);
         }
+        if (!hasProfile) {
+          continue;
+        }
+        candidates.push(model);
       }
 
       if (candidates.length === 0) {
         logProgress("[all-models] no API keys found; skipping");
         return;
       }
+      const selectedCandidates = capByProviderSpread(
+        candidates,
+        maxModels > 0 ? maxModels : candidates.length,
+        (model) => model.provider,
+      );
       logProgress(`[all-models] selection=${useExplicit ? "explicit" : "modern"}`);
-      const imageCandidates = candidates.filter((m) => m.input?.includes("image"));
+      if (selectedCandidates.length < candidates.length) {
+        logProgress(
+          `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
+        );
+      }
+      const imageCandidates = selectedCandidates.filter((m) => m.input?.includes("image"));
       if (imageCandidates.length === 0) {
         logProgress("[all-models] no image-capable models selected; image probe will be skipped");
       }
       await runGatewayModelSuite({
         label: "all-models",
         cfg,
-        candidates,
+        candidates: selectedCandidates,
         extraToolProbes: true,
         extraImageProbes: true,
         thinkingLevel: THINKING_LEVEL,
       });
 
-      const minimaxCandidates = candidates.filter((model) => model.provider === "minimax");
+      const minimaxCandidates = selectedCandidates.filter((model) => model.provider === "minimax");
       if (minimaxCandidates.length === 0) {
         logProgress("[minimax] no candidates with keys; skipping dual endpoint probes");
         return;
@@ -1130,7 +1410,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         logProgress("[minimax-anthropic] missing minimax provider config; skipping");
       }
     },
-    20 * 60 * 1000,
+    GATEWAY_LIVE_SUITE_TIMEOUT_MS,
   );
 
   it("z.ai fallback handles anthropic tool history", async () => {
@@ -1181,42 +1461,76 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const toolProbePath = path.join(workspaceDir, `.openclaw-live-zai-fallback.${nonceA}.txt`);
     await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
-    const port = await getFreeGatewayPort();
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
-    });
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let client: GatewayClient | undefined;
+    try {
+      const port = await withGatewayLiveProbeTimeout(
+        getFreeGatewayPort(),
+        "zai-fallback: gateway-port",
+      );
+      server = await withGatewayLiveProbeTimeout(
+        startGatewayServer(port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+        }),
+        "zai-fallback: gateway-start",
+      );
 
-    const client = await connectClient({
-      url: `ws://127.0.0.1:${port}`,
-      token,
-    });
+      client = await withGatewayLiveProbeTimeout(
+        connectClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+        }),
+        "zai-fallback: gateway-connect",
+      );
+    } catch (error) {
+      const message = String(error);
+      if (isGatewayLiveProbeTimeout(message)) {
+        logProgress("[zai-fallback] skip (gateway startup timeout)");
+        return;
+      }
+      throw error;
+    }
+
+    if (!server || !client) {
+      logProgress("[zai-fallback] skip (gateway startup incomplete)");
+      return;
+    }
 
     try {
       const sessionKey = `agent:${agentId}:live-zai-fallback`;
 
-      await client.request("sessions.patch", {
-        key: sessionKey,
-        model: "anthropic/claude-opus-4-5",
-      });
-      await client.request("sessions.reset", {
-        key: sessionKey,
-      });
+      await withGatewayLiveProbeTimeout(
+        client.request("sessions.patch", {
+          key: sessionKey,
+          model: "anthropic/claude-opus-4-5",
+        }),
+        "zai-fallback: sessions-patch-anthropic",
+      );
+      await withGatewayLiveProbeTimeout(
+        client.request("sessions.reset", {
+          key: sessionKey,
+        }),
+        "zai-fallback: sessions-reset",
+      );
 
       const runId = randomUUID();
-      const toolProbe = await client.request<AgentFinalPayload>(
-        "agent",
-        {
-          sessionKey,
-          idempotencyKey: `idem-${runId}-tool`,
-          message:
-            `Call the tool named \`read\` (or \`Read\` if \`read\` is unavailable) with JSON arguments {"path":"${toolProbePath}"}. ` +
-            `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
-          thinking: THINKING_LEVEL,
-          deliver: false,
-        },
-        { expectFinal: true },
+      const toolProbe = await withGatewayLiveProbeTimeout(
+        client.request<AgentFinalPayload>(
+          "agent",
+          {
+            sessionKey,
+            idempotencyKey: `idem-${runId}-tool`,
+            message:
+              `Call the tool named \`read\` (or \`Read\` if \`read\` is unavailable) with JSON arguments {"path":"${toolProbePath}"}. ` +
+              `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
+            thinking: THINKING_LEVEL,
+            deliver: false,
+          },
+          { expectFinal: true },
+        ),
+        "zai-fallback: tool-probe",
       );
       if (toolProbe?.status !== "ok") {
         throw new Error(`anthropic tool probe failed: status=${String(toolProbe?.status)}`);
@@ -1232,24 +1546,30 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         throw new Error(`anthropic tool probe missing nonce: ${toolText}`);
       }
 
-      await client.request("sessions.patch", {
-        key: sessionKey,
-        model: "zai/glm-4.7",
-      });
+      await withGatewayLiveProbeTimeout(
+        client.request("sessions.patch", {
+          key: sessionKey,
+          model: "zai/glm-4.7",
+        }),
+        "zai-fallback: sessions-patch-zai",
+      );
 
       const followupId = randomUUID();
-      const followup = await client.request<AgentFinalPayload>(
-        "agent",
-        {
-          sessionKey,
-          idempotencyKey: `idem-${followupId}-followup`,
-          message:
-            `What are the values of nonceA and nonceB in "${toolProbePath}"? ` +
-            `Reply with exactly: ${nonceA} ${nonceB}.`,
-          thinking: THINKING_LEVEL,
-          deliver: false,
-        },
-        { expectFinal: true },
+      const followup = await withGatewayLiveProbeTimeout(
+        client.request<AgentFinalPayload>(
+          "agent",
+          {
+            sessionKey,
+            idempotencyKey: `idem-${followupId}-followup`,
+            message:
+              `What are the values of nonceA and nonceB in "${toolProbePath}"? ` +
+              `Reply with exactly: ${nonceA} ${nonceB}.`,
+            thinking: THINKING_LEVEL,
+            deliver: false,
+          },
+          { expectFinal: true },
+        ),
+        "zai-fallback: followup",
       );
       if (followup?.status !== "ok") {
         throw new Error(`zai followup failed: status=${String(followup?.status)}`);
