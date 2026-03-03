@@ -717,13 +717,25 @@ function wrapHostEditToolWithPostWriteRecovery(base: AnyAgentTool, root: string)
             : record && typeof record.new_string === "string"
               ? record.new_string
               : undefined;
+        const oldText =
+          record && typeof record.oldText === "string"
+            ? record.oldText
+            : record && typeof record.old_string === "string"
+              ? record.old_string
+              : undefined;
         if (!pathParam || !newText) {
           throw err;
         }
         try {
           const absolutePath = resolveHostEditPath(root, pathParam);
           const content = await fs.readFile(absolutePath, "utf-8");
-          if (content.includes(newText)) {
+          // Only recover when the replacement likely occurred: newText is present and oldText
+          // is no longer present. This avoids false success when upstream threw before writing
+          // (e.g. oldText not found) but the file already contained newText (review feedback).
+          const hasNew = content.includes(newText);
+          const stillHasOld =
+            oldText !== undefined && oldText.length > 0 && content.includes(oldText);
+          if (hasNew && !stillHasOld) {
             return {
               content: [
                 {
