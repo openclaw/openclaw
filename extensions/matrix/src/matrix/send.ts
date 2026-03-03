@@ -305,7 +305,23 @@ export async function editMessageMatrix(
       editContent.format = "org.matrix.custom.html";
       editContent.formatted_body = `* ${newContent.formatted_body}`;
     }
-    const resultEventId = await client.sendEvent(resolvedRoom, EventType.RoomMessage, editContent);
+    let resultEventId: unknown;
+    const maxRetries = 3;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        resultEventId = await client.sendEvent(resolvedRoom, EventType.RoomMessage, editContent);
+        break;
+      } catch (err) {
+        const isRateLimit = err instanceof Error && err.message.includes("M_LIMIT_EXCEEDED");
+        if (!isRateLimit || attempt === maxRetries) {
+          throw err;
+        }
+        // Respect retry_after_ms from Synapse, default to 2s
+        const retryMs =
+          (err as { body?: { retry_after_ms?: number } }).body?.retry_after_ms ?? 2000;
+        await new Promise((r) => setTimeout(r, retryMs));
+      }
+    }
     return {
       messageId: (resultEventId as string) ?? "unknown",
       roomId: resolvedRoom,
