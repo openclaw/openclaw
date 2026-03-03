@@ -129,6 +129,10 @@ export function isLocalDirectRequest(
   if (!req) {
     return false;
   }
+  const forwardedHost = headerValue(req.headers?.["x-forwarded-host"]);
+  if (isTailscaleProxyRequest(req) && forwardedHost?.endsWith(".ts.net")) {
+    return true;
+  }
   const clientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback) ?? "";
   if (!isLoopbackAddress(clientIp)) {
     return false;
@@ -373,6 +377,10 @@ export async function authorizeGatewayConnect(
     trustedProxies,
     params.allowRealIpFallback === true,
   );
+  const allowVerifiedTailscaleHeaderAuth =
+    allowTailscaleHeaderAuth &&
+    auth.allowTailscale &&
+    (!localDirect || isTailscaleProxyRequest(req));
 
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
@@ -416,7 +424,7 @@ export async function authorizeGatewayConnect(
     }
   }
 
-  if (allowTailscaleHeaderAuth && auth.allowTailscale && !localDirect) {
+  if (allowVerifiedTailscaleHeaderAuth) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
       req,
       tailscaleWhois,

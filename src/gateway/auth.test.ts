@@ -4,6 +4,7 @@ import {
   authorizeGatewayConnect,
   authorizeHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
+  isLocalDirectRequest,
   resolveGatewayAuth,
 } from "./auth.js";
 
@@ -267,6 +268,27 @@ describe("gateway auth", () => {
 
     expect(res.ok).toBe(true);
     expect(res.method).toBe("token");
+  });
+
+  it("treats proxied tailscale serve requests as direct when trusted proxies are configured", () => {
+    expect(isLocalDirectRequest(createTailscaleForwardedReq(), ["127.0.0.1"])).toBe(true);
+  });
+
+  it("does not treat non-tailscale proxied requests as direct when trusted proxies are configured", () => {
+    expect(
+      isLocalDirectRequest(
+        {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "gateway.local",
+            "x-forwarded-for": "203.0.113.10",
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "example.com",
+          },
+        } as never,
+        ["127.0.0.1"],
+      ),
+    ).toBe(false);
   });
 
   it("does not allow tailscale identity to satisfy token mode auth by default", async () => {
