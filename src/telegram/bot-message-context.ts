@@ -132,6 +132,8 @@ export type BuildTelegramMessageContextParams = {
   dmPolicy: DmPolicy;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
+  /** Include pairing store in group auth. Defaults to true for backward compatibility. */
+  groupAuthIncludesPairingStore?: boolean;
   ackReactionScope: "off" | "none" | "group-mentions" | "group-all" | "direct" | "all";
   logger: TelegramLogger;
   resolveGroupActivation: ResolveGroupActivation;
@@ -175,6 +177,7 @@ export const buildTelegramMessageContext = async ({
   dmPolicy,
   allowFrom,
   groupAllowFrom,
+  groupAuthIncludesPairingStore,
   ackReactionScope,
   logger,
   resolveGroupActivation,
@@ -273,8 +276,19 @@ export const buildTelegramMessageContext = async ({
     storeAllowFrom,
     dmPolicy: effectiveDmPolicy,
   });
-  // Group sender checks are explicit and must not inherit DM pairing-store entries.
-  const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? groupAllowFrom);
+  // Group sender access now includes pairing store by default for backward compatibility.
+  // Users who paired via DM should be allowed in group chats (restores pre-v2026.2.24 behavior).
+  // When dmPolicy is "allowlist", pairing store is never included (explicit allowlist only).
+  // Users can opt out by setting groupAuthIncludesPairingStore: false.
+  const baseGroupAllow = groupAllowOverride ?? groupAllowFrom ?? [];
+  const includePairingStore =
+    (groupAuthIncludesPairingStore ?? true) && effectiveDmPolicy !== "allowlist";
+  const groupAllowWithStore = includePairingStore
+    ? [...(Array.isArray(baseGroupAllow) ? baseGroupAllow : []), ...storeAllowFrom]
+    : baseGroupAllow;
+  const effectiveGroupAllow = normalizeAllowFrom(groupAllowWithStore);
+  // Configured-only group allowlist (no pairing store) for command authorization.
+  const configuredGroupAllowFrom = normalizeAllowFrom(baseGroupAllow);
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
   const senderUsername = msg.from?.username ?? "";
   const baseAccess = evaluateTelegramGroupBaseAccess({
@@ -379,7 +393,8 @@ export const buildTelegramMessageContext = async ({
   });
 
   const botUsername = primaryCtx.me?.username?.toLowerCase();
-  const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
+  // Use configuredGroupAllowFrom (without pairing store) for command authorization
+  const allowForCommands = isGroup ? configuredGroupAllowFrom : effectiveDmAllow;
   const senderAllowedForCommands = isSenderAllowed({
     allow: allowForCommands,
     senderId,

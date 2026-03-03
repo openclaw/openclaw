@@ -68,6 +68,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       dmPolicy,
       allowFrom,
       groupAllowFrom,
+      groupAuthIncludesPairingStore: telegramCfg.groupAuthIncludesPairingStore,
       ackReactionScope,
       logger,
       resolveGroupActivation,
