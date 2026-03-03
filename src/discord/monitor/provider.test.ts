@@ -258,6 +258,14 @@ describe("monitorDiscordProvider", () => {
       },
     }) as OpenClawConfig;
 
+  const getConstructedEventQueue = (): { listenerTimeout?: number } | undefined => {
+    expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
+    const opts = clientConstructorOptionsMock.mock.calls[0]?.[0] as {
+      eventQueue?: { listenerTimeout?: number };
+    };
+    return opts.eventQueue;
+  };
+
   beforeEach(() => {
     clientConstructorOptionsMock.mockClear();
     clientFetchUserMock.mockClear().mockResolvedValue({ id: "bot-1" });
@@ -349,12 +357,9 @@ describe("monitorDiscordProvider", () => {
       runtime: baseRuntime(),
     });
 
-    expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
-    const opts = clientConstructorOptionsMock.mock.calls[0]?.[0] as {
-      eventQueue?: { listenerTimeout?: number };
-    };
-    expect(opts.eventQueue).toBeDefined();
-    expect(opts.eventQueue?.listenerTimeout).toBe(120_000);
+    const eventQueue = getConstructedEventQueue();
+    expect(eventQueue).toBeDefined();
+    expect(eventQueue?.listenerTimeout).toBe(120_000);
   });
 
   it("forwards custom eventQueue config from discord config to Carbon Client", async () => {
@@ -377,10 +382,7 @@ describe("monitorDiscordProvider", () => {
       runtime: baseRuntime(),
     });
 
-    expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
-    const opts = clientConstructorOptionsMock.mock.calls[0]?.[0] as {
-      eventQueue?: { listenerTimeout?: number };
-    };
-    expect(opts.eventQueue?.listenerTimeout).toBe(300_000);
+    const eventQueue = getConstructedEventQueue();
+    expect(eventQueue?.listenerTimeout).toBe(300_000);
   });
 });

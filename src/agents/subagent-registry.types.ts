@@ -34,4 +34,7 @@ export type SubagentRunRecord = {
   endedHookEmittedAt?: number;
   /** Team run ID this subagent belongs to (for auto-updating member state). */
   teamRunId?: string;
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+  retainAttachmentsOnKeep?: boolean;
 };

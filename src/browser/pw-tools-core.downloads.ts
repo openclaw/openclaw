@@ -4,7 +4,11 @@ import path from "node:path";
 import type { Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { writeViaSiblingTempPath } from "./output-atomic.js";
-import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
+import {
+  DEFAULT_DOWNLOAD_DIR,
+  DEFAULT_UPLOAD_DIR,
+  resolveStrictExistingPathsWithinRoot,
+} from "./paths.js";
 import {
   ensurePageState,
   getPageForTargetId,
@@ -19,39 +23,11 @@ import {
   requireRef,
   toAIFriendlyError,
 } from "./pw-tools-core.shared.js";
-
-function sanitizeDownloadFileName(fileName: string): string {
-  const trimmed = String(fileName ?? "").trim();
-  if (!trimmed) {
-    return "download.bin";
-  }
-
-  // `suggestedFilename()` is untrusted (influenced by remote servers). Force a basename so
-  // path separators/traversal can't escape the downloads dir on any platform.
-  let base = path.posix.basename(trimmed);
-  base = path.win32.basename(base);
-  let cleaned = "";
-  for (let i = 0; i < base.length; i++) {
-    const code = base.charCodeAt(i);
-    if (code < 0x20 || code === 0x7f) {
-      continue;
-    }
-    cleaned += base[i];
-  }
-  base = cleaned.trim();
-
-  if (!base || base === "." || base === "..") {
-    return "download.bin";
-  }
-  if (base.length > 200) {
-    base = base.slice(0, 200);
-  }
-  return base;
-}
+import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
 function buildTempDownloadPath(fileName: string): string {
   const id = crypto.randomUUID();
-  const safeName = sanitizeDownloadFileName(fileName);
+  const safeName = sanitizeUntrustedFileName(fileName, "download.bin");
   return path.join(resolvePreferredOpenClawTmpDir(), "downloads", `${id}-${safeName}`);
 }
 
@@ -120,6 +96,7 @@ async function saveDownloadPayload(download: DownloadPayload, outPath: string) {
     await download.saveAs?.(resolvedOutPath);
   } else {
     await writeViaSiblingTempPath({
+      rootDir: DEFAULT_DOWNLOAD_DIR,
       targetPath: resolvedOutPath,
       writeTemp: async (tempPath) => {
         await download.saveAs?.(tempPath);

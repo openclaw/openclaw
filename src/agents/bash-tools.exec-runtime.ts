@@ -4,12 +4,12 @@ import { Type } from "@sinclair/typebox";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
-import { mergePathPrepend } from "../infra/path-prepend.js";
+import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
-export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
+export { applyPathPrepend, findPathKey, normalizePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -210,9 +210,10 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   if (entries.length === 0) {
     return;
   }
-  const merged = mergePathPrepend(env.PATH, entries);
+  const pathKey = findPathKey(env);
+  const merged = mergePathPrepend(env[pathKey], entries);
   if (merged) {
-    env.PATH = merged;
+    env[pathKey] = merged;
   }
 }
 
@@ -534,8 +535,8 @@ export async function runExecProcess(opts: {
           : "Command not executable (permission denied)"
         : exit.reason === "overall-timeout"
           ? typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
-            ? `Command timed out after ${opts.timeoutSec} seconds`
-            : "Command timed out"
+            ? `Command timed out after ${opts.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).`
+            : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300)."
           : exit.reason === "no-output-timeout"
             ? "Command timed out waiting for output"
             : exit.exitSignal != null

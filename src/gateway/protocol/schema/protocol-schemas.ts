@@ -125,7 +125,15 @@ import {
 } from "./nodes.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
+  SecretsReloadParamsSchema,
+  SecretsResolveAssignmentSchema,
+  SecretsResolveParamsSchema,
+  SecretsResolveResultSchema,
+} from "./secrets.js";
+import {
   SessionsCompactParamsSchema,
+  SessionsCompactSmartParamsSchema,
+  SessionsArchiveParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsListParamsSchema,
   SessionsPatchParamsSchema,
@@ -135,6 +143,22 @@ import {
   SessionsUsageParamsSchema,
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
+import {
+  TeamRunsCreateParamsSchema,
+  TeamRunsListParamsSchema,
+  TeamRunsGetParamsSchema,
+  TeamRunsCompleteParamsSchema,
+  TeamRunsDeleteParamsSchema,
+  TeamRunsAddMemberParamsSchema,
+  TeamRunsUpdateMemberParamsSchema,
+  TeamTasksCreateParamsSchema,
+  TeamTasksListParamsSchema,
+  TeamTasksUpdateParamsSchema,
+  TeamTasksDeleteParamsSchema,
+  TeamMessagesSendParamsSchema,
+  TeamMessagesMarkReadParamsSchema,
+  TeamMessagesListParamsSchema,
+} from "./teams.js";
 import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
@@ -146,7 +170,7 @@ import {
   WizardStepSchema,
 } from "./wizard.js";
 
-export const ProtocolSchemas: Record<string, TSchema> = {
+export const ProtocolSchemas = {
   ConnectParams: ConnectParamsSchema,
   HelloOk: HelloOkSchema,
   RequestFrame: RequestFrameSchema,
@@ -179,6 +203,10 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
   PushTestParams: PushTestParamsSchema,
   PushTestResult: PushTestResultSchema,
+  SecretsReloadParams: SecretsReloadParamsSchema,
+  SecretsResolveParams: SecretsResolveParamsSchema,
+  SecretsResolveAssignment: SecretsResolveAssignmentSchema,
+  SecretsResolveResult: SecretsResolveResultSchema,
   SessionsListParams: SessionsListParamsSchema,
   SessionsPreviewParams: SessionsPreviewParamsSchema,
   SessionsResolveParams: SessionsResolveParamsSchema,
@@ -186,7 +214,23 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   SessionsResetParams: SessionsResetParamsSchema,
   SessionsDeleteParams: SessionsDeleteParamsSchema,
   SessionsCompactParams: SessionsCompactParamsSchema,
+  SessionsCompactSmartParams: SessionsCompactSmartParamsSchema,
+  SessionsArchiveParams: SessionsArchiveParamsSchema,
   SessionsUsageParams: SessionsUsageParamsSchema,
+  TeamRunsCreateParams: TeamRunsCreateParamsSchema,
+  TeamRunsListParams: TeamRunsListParamsSchema,
+  TeamRunsGetParams: TeamRunsGetParamsSchema,
+  TeamRunsCompleteParams: TeamRunsCompleteParamsSchema,
+  TeamRunsDeleteParams: TeamRunsDeleteParamsSchema,
+  TeamRunsAddMemberParams: TeamRunsAddMemberParamsSchema,
+  TeamRunsUpdateMemberParams: TeamRunsUpdateMemberParamsSchema,
+  TeamTasksCreateParams: TeamTasksCreateParamsSchema,
+  TeamTasksListParams: TeamTasksListParamsSchema,
+  TeamTasksUpdateParams: TeamTasksUpdateParamsSchema,
+  TeamTasksDeleteParams: TeamTasksDeleteParamsSchema,
+  TeamMessagesSendParams: TeamMessagesSendParamsSchema,
+  TeamMessagesMarkReadParams: TeamMessagesMarkReadParamsSchema,
+  TeamMessagesListParams: TeamMessagesListParamsSchema,
   ConfigGetParams: ConfigGetParamsSchema,
   ConfigSetParams: ConfigSetParamsSchema,
   ConfigApplyParams: ConfigApplyParamsSchema,
@@ -272,6 +316,6 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
-};
+} satisfies Record<string, TSchema>;
 
 export const PROTOCOL_VERSION = 3 as const;
