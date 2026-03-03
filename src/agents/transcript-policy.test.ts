@@ -83,5 +83,17 @@ describe("resolveTranscriptPolicy", () => {
       modelApi: "openai-completions",
     });
     expect(policy.validateAnthropicTurns).toBe(false);
+    expect(policy.sanitizeToolCallIds).toBe(false);
+  });
+
+  it("disables openai-compatible tool id sanitization for custom-ollama-com", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "custom-ollama-com",
+      modelId: "kimi-k2.5",
+      modelApi: "openai-completions",
+    });
+    expect(policy.validateAnthropicTurns).toBe(false);
+    expect(policy.sanitizeToolCallIds).toBe(false);
+    expect(policy.toolCallIdMode).toBeUndefined();
   });
 });
