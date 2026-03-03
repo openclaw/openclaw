@@ -676,6 +676,22 @@ export const MemorySearchSchema = z
   })
   .strict()
   .optional();
+
+const AgentMcpServerSchema = z
+  .object({
+    name: z.string(),
+    command: z.string(),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+  })
+  .strict();
+
+const AgentMcpSchema = z
+  .object({
+    servers: z.array(AgentMcpServerSchema).optional(),
+  })
+  .strict()
+  .optional();
 export { AgentModelSchema };
 export const AgentEntrySchema = z
   .object({
@@ -691,6 +707,7 @@ export const AgentEntrySchema = z
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
+    mcp: AgentMcpSchema,
     subagents: z
       .object({
         allowAgents: z.array(z.string()).optional(),

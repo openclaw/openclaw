@@ -21,6 +21,14 @@ export type AgentConfig = {
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
+  mcp?: {
+    servers?: Array<{
+      name: string;
+      command: string;
+      args?: string[];
+      env?: Record<string, string>;
+    }>;
+  };
   subagents?: {
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];
