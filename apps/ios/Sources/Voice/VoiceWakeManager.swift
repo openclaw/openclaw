@@ -443,13 +443,6 @@ final class VoiceWakeManager: NSObject {
 
     private static func permissionMessage(
         kind: String,
-        status: AVAudioSession.RecordPermission) -> String
-    {
-        self.deniedByDefaultPermissionMessage(kind: kind, isUndetermined: status == .undetermined)
-    }
-
-    private static func permissionMessage(
-        kind: String,
         status: SFSpeechRecognizerAuthorizationStatus) -> String
     {
         switch status {
@@ -466,7 +459,7 @@ final class VoiceWakeManager: NSObject {
         }
     }
 
-    private static func deniedByDefaultPermissionMessage(kind: String, isUndetermined: Bool) -> String {
+    private nonisolated static func deniedByDefaultPermissionMessage(kind: String, isUndetermined: Bool) -> String {
         if isUndetermined {
             return "\(kind) permission not granted"
         }

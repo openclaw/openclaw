@@ -164,7 +164,7 @@ actor CameraCaptureService {
     }
 
     private func ensureAccess(for mediaType: AVMediaType) async throws {
-        if !(await CameraAuthorization.isAuthorized(for: mediaType)) {
+        if await !(CameraAuthorization.isAuthorized(for: mediaType)) {
             throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
         }
     }

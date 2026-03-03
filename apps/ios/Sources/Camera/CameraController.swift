@@ -120,7 +120,8 @@ actor CameraController {
                 Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },
             cameraUnavailableError: CameraError.cameraUnavailable,
-            mapSetupError: Self.mapMovieSetupError) { output in
+            mapSetupError: Self.mapMovieSetupError,
+            operation: { output in
                 var delegate: MovieFileDelegate?
                 let recordedURL: URL = try await withCheckedThrowingContinuation { cont in
                     let d = MovieFileDelegate(cont)
@@ -131,7 +132,7 @@ actor CameraController {
                 // Transcode .mov -> .mp4 for easier downstream handling.
                 try await Self.exportToMP4(inputURL: recordedURL, outputURL: mp4URL)
                 return try Data(contentsOf: mp4URL)
-            }
+            })
         return (
             format: format.rawValue,
             base64: data.base64EncodedString(),

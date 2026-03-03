@@ -64,9 +64,10 @@ final class NotifyOverlayController {
         OverlayPanelFactory.present(
             window: self.window,
             isVisible: &self.model.isVisible,
-            target: target) { window in
-                self.updateWindowFrame(animate: true)
-                window.orderFrontRegardless()
+            target: target)
+        { window in
+            self.updateWindowFrame(animate: true)
+            window.orderFrontRegardless()
         }
     }
 

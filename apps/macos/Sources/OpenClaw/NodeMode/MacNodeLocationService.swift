@@ -39,11 +39,12 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Locatio
             desiredAccuracy: desiredAccuracy,
             maxAgeMs: maxAgeMs,
             timeoutMs: timeoutMs,
-            request: { try await self.requestLocationOnce() }) { timeoutMs, operation in
+            request: { try await self.requestLocationOnce() },
+            withTimeout: { timeoutMs, operation in
                 try await self.withTimeout(timeoutMs: timeoutMs) {
                     try await operation()
                 }
-        }
+            })
     }
 
     private func withTimeout<T: Sendable>(

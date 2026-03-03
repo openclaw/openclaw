@@ -33,9 +33,10 @@ final class TalkOverlayController {
         OverlayPanelFactory.present(
             window: self.window,
             isVisible: &self.model.isVisible,
-            target: target) { window in
-                window.setFrame(target, display: true)
-                window.orderFrontRegardless()
+            target: target)
+        { window in
+            window.setFrame(target, display: true)
+            window.orderFrontRegardless()
         }
     }
 
