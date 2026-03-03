@@ -137,6 +137,7 @@ final class AppState {
 
     var talkEnabled: Bool {
         didSet {
+            guard !self.isInitializing else { return }
             self.ifNotPreview {
                 UserDefaults.standard.set(self.talkEnabled, forKey: talkEnabledKey)
                 Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
