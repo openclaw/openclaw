@@ -111,16 +111,14 @@ export function createLineNodeWebhookHandler(params: {
         return;
       }
 
+      if (body.events && body.events.length > 0) {
+        logVerbose(`line: received ${body.events.length} webhook events`);
+        await params.bot.handleWebhook(body);
+      }
+
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ status: "ok" }));
-
-      if (body.events && body.events.length > 0) {
-        logVerbose(`line: received ${body.events.length} webhook events`);
-        void params.bot.handleWebhook(body).catch((err) => {
-          params.runtime.error?.(danger(`line webhook handler failed: ${String(err)}`));
-        });
-      }
     } catch (err) {
       if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
         res.statusCode = 413;
