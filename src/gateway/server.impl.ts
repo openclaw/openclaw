@@ -67,7 +67,7 @@ import {
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import { startGatewayConfigReloader } from "./config-reload.js";
+import { resolveGatewayReloadSettings, startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -827,8 +827,16 @@ export async function startGatewayServer(
       markChannelLoggedOut,
       wizardRunner,
       broadcastVoiceWakeChanged,
-      refreshRuntimeConfigFromDisk: async () => {
+      refreshRuntimeConfigFromDisk: async (configOverride) => {
         if (!getActiveSecretsRuntimeSnapshot()) {
+          return;
+        }
+        if (configOverride) {
+          await activateRuntimeSecrets(configOverride, { reason: "reload", activate: true });
+          return;
+        }
+        const reloadMode = resolveGatewayReloadSettings(loadConfig()).mode;
+        if (reloadMode === "off" || reloadMode === "restart") {
           return;
         }
         const snapshot = await readConfigFileSnapshot();

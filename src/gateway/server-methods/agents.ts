@@ -619,9 +619,15 @@ export const agentsHandlers: GatewayRequestHandlers = {
     ];
     await fs.appendFile(identityPath, lines.join("\n"), "utf-8");
 
+    const refreshRuntimeConfigForCreate =
+      typeof context.refreshRuntimeConfigFromDisk === "function"
+        ? async () => {
+            await context.refreshRuntimeConfigFromDisk?.(nextConfig);
+          }
+        : undefined;
     const ready = await waitForAgentReady({
       agentId,
-      refreshRuntimeConfigFromDisk: context.refreshRuntimeConfigFromDisk,
+      refreshRuntimeConfigFromDisk: refreshRuntimeConfigForCreate,
     });
     if (!ready.ok) {
       respond(

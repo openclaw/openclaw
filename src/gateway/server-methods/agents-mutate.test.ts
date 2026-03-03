@@ -401,6 +401,11 @@ describe("agents.create", () => {
       undefined,
     );
     expect(mocks.refreshRuntimeConfigFromDisk).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshRuntimeConfigFromDisk).toHaveBeenCalledWith(
+      expect.objectContaining({
+        __agentIds: expect.arrayContaining(["ready-agent"]),
+      }),
+    );
 
     const { respond: filesRespond, promise: filesPromise } = makeCall("agents.files.list", {
       agentId: "ready-agent",
