@@ -40,7 +40,13 @@ import {
   normalizeZulipBaseUrl,
   type ZulipClient,
   type ZulipMessage,
+  type ZulipSubmessageEvent,
 } from "./client.js";
+import {
+  resolveZulipComponentEntry,
+  registerZulipComponentEntries,
+} from "./components-registry.js";
+import { formatZulipComponentEventText } from "./components.js";
 import { createZulipDraftStream, type ZulipDraftTarget } from "./draft-stream.js";
 import { sendMessageZulip } from "./send.js";
 
@@ -1372,6 +1378,160 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
     }
   };
 
+  /**
+   * Handle a submessage event (widget callback).
+   * Resolves the component entry from the registry and dispatches
+   * the callback as an inbound message to the agent session.
+   */
+  const handleSubmessageEvent = async (event: ZulipSubmessageEvent): Promise<void> => {
+    // Only handle widget-type submessages
+    if (event.msg_type !== "widget") {
+      return;
+    }
+
+    // Skip our own submessages (bot clicking its own buttons)
+    if (event.sender_id === botUserId) {
+      return;
+    }
+
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(event.content) as Record<string, unknown>;
+    } catch {
+      return; // Malformed JSON — ignore
+    }
+
+    // Only handle ocform callbacks
+    if (data.type !== "ocform_callback") {
+      return;
+    }
+
+    const buttonId = data.button_id;
+    if (typeof buttonId !== "string") {
+      return;
+    }
+
+    // Resolve the component entry from registry
+    const entry = resolveZulipComponentEntry({ id: buttonId, consume: !data.reusable });
+    if (!entry) {
+      runtime.log?.(`zulip: ocform callback for unknown/expired button '${buttonId}', ignoring`);
+      return;
+    }
+
+    // Check allowedUsers if configured
+    if (entry.allowedUsers && entry.allowedUsers.length > 0) {
+      if (!entry.allowedUsers.includes(event.sender_id)) {
+        runtime.log?.(`zulip: ocform callback from unauthorized user ${event.sender_id}`);
+        return;
+      }
+    }
+
+    // If reusable, re-register entry so it can be used again
+    if (entry.reusable) {
+      registerZulipComponentEntries({
+        entries: [entry],
+        messageId: entry.messageId,
+      });
+    }
+
+    const label = typeof data.label === "string" ? data.label : entry.label;
+    const eventText = formatZulipComponentEventText({
+      label,
+      buttonId,
+      senderName: `user:${event.sender_id}`,
+    });
+
+    runtime.log?.(
+      `zulip: ocform callback from user ${event.sender_id}: ${eventText} (message ${event.message_id})`,
+    );
+
+    // Dispatch the callback as an inbound message to the agent session.
+    // Use the session key stored in the registry entry so the callback
+    // lands in the same conversation that created the widget.
+    const sessionKey = entry.sessionKey;
+    const agentId = entry.agentId;
+
+    const inboundBody = core.channel.reply.formatInboundEnvelope({
+      channel: "Zulip",
+      from: `user:${event.sender_id}`,
+      body: eventText,
+      chatType: "channel",
+      sender: { name: `user:${event.sender_id}`, id: String(event.sender_id) },
+    });
+
+    const ctxPayload = core.channel.reply.finalizeInboundContext({
+      Body: inboundBody,
+      RawBody: eventText,
+      CommandBody: eventText,
+      From: `zulip:ocform:${event.sender_id}`,
+      To: `ocform:${event.message_id}`,
+      SessionKey: sessionKey,
+      AccountId: entry.accountId,
+      ChatType: "channel",
+      ConversationLabel: `ocform callback (message ${event.message_id})`,
+      SenderName: `user:${event.sender_id}`,
+      SenderId: String(event.sender_id),
+      Provider: "zulip" as const,
+      Surface: "zulip" as const,
+      MessageSid: `ocform:${event.submessage_id}`,
+      WasMentioned: true,
+      CommandAuthorized: true,
+      OriginatingChannel: "zulip" as const,
+      OriginatingTo: `ocform:${event.message_id}`,
+    });
+
+    const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "zulip", entry.accountId, {
+      fallbackLimit: account.textChunkLimit ?? 10000,
+    });
+    const tableMode = core.channel.text.resolveMarkdownTableMode({
+      cfg,
+      channel: "zulip",
+      accountId: entry.accountId,
+    });
+    const prefixContext = createReplyPrefixContext({ cfg, agentId });
+
+    const { dispatcher, replyOptions, markDispatchIdle } =
+      core.channel.reply.createReplyDispatcherWithTyping({
+        responsePrefix: prefixContext.responsePrefix,
+        responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+        humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
+        deliver: async (payload: ReplyPayload) => {
+          const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+          const chunkMode = core.channel.text.resolveChunkMode(cfg, "zulip", entry.accountId);
+          const chunks = core.channel.text.chunkMarkdownTextWithMode(text, textLimit, chunkMode);
+          for (const chunk of chunks.length > 0 ? chunks : [text]) {
+            if (!chunk) {
+              continue;
+            }
+            // Reply in the same stream/topic as the original widget message
+            // by using sendMessageZulip with the session-derived target
+            await sendMessageZulip(`dm:${event.sender_id}`, chunk, {
+              accountId: entry.accountId,
+            });
+          }
+        },
+        onError: (err, info) => {
+          runtime.error?.(`zulip ocform ${info.kind} reply failed: ${String(err)}`);
+        },
+      });
+
+    try {
+      await core.channel.reply.dispatchReplyFromConfig({
+        ctx: ctxPayload,
+        cfg,
+        dispatcher,
+        replyOptions: {
+          ...replyOptions,
+          disableBlockStreaming:
+            typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+          onModelSelected: prefixContext.onModelSelected,
+        },
+      });
+    } finally {
+      markDispatchIdle();
+    }
+  };
+
   const handleMessage = async (msg: ZulipMessage) => {
     const msgKey = `${account.accountId}:${msg.id}`;
     if (dedup(msgKey)) {
@@ -2452,7 +2612,7 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
       let lastEventId: number;
 
       try {
-        const reg = await registerZulipQueue(client);
+        const reg = await registerZulipQueue(client, ["message", "submessage"]);
         queueId = reg.queue_id;
         lastEventId = reg.last_event_id;
         opts.statusSink?.({ connected: true, lastConnectedAt: Date.now(), lastError: null });
@@ -2488,6 +2648,11 @@ export async function monitorZulipProvider(opts: MonitorZulipOpts = {}): Promise
               // entire event loop to freeze if one handler stalls (e.g. compaction).
               void handleMessage(event.message).catch((err) => {
                 runtime.error?.(`zulip handler failed: ${String(err)}`);
+              });
+            } else if (event.type === "submessage") {
+              // ocform widget callback — fire-and-forget like message events
+              void handleSubmessageEvent(event as unknown as ZulipSubmessageEvent).catch((err) => {
+                runtime.error?.(`zulip submessage handler failed: ${String(err)}`);
               });
             }
           }

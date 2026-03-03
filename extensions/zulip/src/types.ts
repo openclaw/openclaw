@@ -137,6 +137,8 @@ export type ZulipAccountConfig = {
       requireMention?: boolean;
     }
   >;
+  /** Enable ocform interactive widget support (requires lionroot-zulip fork). */
+  widgetsEnabled?: boolean;
   /** X/Twitter command-post triage workflow. */
   xcase?: ZulipXCaseConfig;
 };

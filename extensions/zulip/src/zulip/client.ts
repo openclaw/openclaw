@@ -76,6 +76,16 @@ export type ZulipUploadResponse = {
   msg?: string;
 };
 
+export type ZulipSubmessageEvent = {
+  id: number;
+  type: "submessage";
+  message_id: number;
+  submessage_id: number;
+  sender_id: number;
+  msg_type: string;
+  content: string;
+};
+
 export function normalizeZulipBaseUrl(raw?: string | null): string | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
@@ -204,6 +214,25 @@ export async function sendZulipStreamMessage(
   });
 }
 
+/** Send a stream message with an attached widget (ocform). */
+export async function sendZulipStreamMessageWithWidget(
+  client: ZulipClient,
+  params: {
+    stream: string;
+    topic: string;
+    content: string;
+    widgetContent: string;
+  },
+): Promise<ZulipSendMessageResponse> {
+  return await client.requestForm<ZulipSendMessageResponse>("/messages", {
+    type: "stream",
+    to: params.stream,
+    topic: params.topic,
+    content: params.content,
+    widget_content: params.widgetContent,
+  });
+}
+
 /** Send a direct (private) message. */
 export async function sendZulipDirectMessage(
   client: ZulipClient,
@@ -213,6 +242,19 @@ export async function sendZulipDirectMessage(
     type: "direct",
     to: JSON.stringify(params.to),
     content: params.content,
+  });
+}
+
+/** Send a direct message with an attached widget (ocform). */
+export async function sendZulipDirectMessageWithWidget(
+  client: ZulipClient,
+  params: { to: number[]; content: string; widgetContent: string },
+): Promise<ZulipSendMessageResponse> {
+  return await client.requestForm<ZulipSendMessageResponse>("/messages", {
+    type: "direct",
+    to: JSON.stringify(params.to),
+    content: params.content,
+    widget_content: params.widgetContent,
   });
 }
 
