@@ -61,7 +61,9 @@ export function evaluateChannelHealth(
         ? snapshot.lastRunActivityAt
         : null;
     const runActivityAge =
-      lastRunActivityAt == null ? Number.POSITIVE_INFINITY : Math.max(0, policy.now - lastRunActivityAt);
+      lastRunActivityAt == null
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, policy.now - lastRunActivityAt);
     if (runActivityAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
       return { healthy: true, reason: "busy" };
     }
