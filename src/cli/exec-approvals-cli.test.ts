@@ -200,6 +200,7 @@ describe("exec approvals CLI", () => {
       "/usr/bin/uname",
     ]);
 
+    expect(saveExecApprovals).toHaveBeenCalledOnce();
     const saved = saveExecApprovals.mock.calls.at(-1)?.[0];
     expect(saved?.agents?.main).toBeUndefined();
     expect(saved?.agents?.minimax).toBeUndefined();
