@@ -650,6 +650,11 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       }
 
       ctx.log?.info(`[${account.accountId}] starting LINE provider${lineBotLabel}`);
+      ctx.setStatus({
+        accountId: account.accountId,
+        mode: "webhook",
+        connectionModel: "stateless",
+      });
 
       const monitor = await getLineRuntime().channel.line.monitorLineProvider({
         channelAccessToken: token,
