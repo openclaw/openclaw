@@ -18,6 +18,18 @@ const FAILURE_REASON_ORDER = new Map<AuthProfileFailureReason, number>(
   FAILURE_REASON_PRIORITY.map((reason, index) => [reason, index]),
 );
 
+// Monotonically increasing timestamp for profile selection events.
+// Ensures two rapid /new selections within the same millisecond still produce
+// strictly increasing lastUsed values, which guarantees correct round-robin
+// ordering in orderProfilesByMode (stable sort on equal timestamps would fall
+// back to insertion order and break rotation).
+let _lastSelectionTimestamp = 0;
+function monotonicSelectionNow(): number {
+  const wall = Date.now();
+  _lastSelectionTimestamp = wall > _lastSelectionTimestamp ? wall : _lastSelectionTimestamp + 1;
+  return _lastSelectionTimestamp;
+}
+
 function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
   return normalizeProviderId(provider ?? "") === "openrouter";
 }
@@ -230,6 +242,10 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
  * Bumps `lastUsed` immediately so rapid /new sequences rotate correctly
  * without waiting for markAuthProfileUsed (called after run completion).
  * Does NOT reset error counts or cooldowns.
+ *
+ * Uses a monotonically increasing timestamp (monotonicSelectionNow) rather
+ * than raw Date.now() so that two /new calls within the same millisecond still
+ * produce strictly ordered lastUsed values and round-robin stays deterministic.
  */
 export async function recordAuthProfileSelected(params: {
   store: AuthProfileStore;
@@ -237,6 +253,7 @@ export async function recordAuthProfileSelected(params: {
   agentDir?: string;
 }): Promise<void> {
   const { store, profileId, agentDir } = params;
+  const ts = monotonicSelectionNow();
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
@@ -246,11 +263,15 @@ export async function recordAuthProfileSelected(params: {
       freshStore.usageStats = freshStore.usageStats ?? {};
       freshStore.usageStats[profileId] = {
         ...freshStore.usageStats[profileId],
-        lastUsed: Date.now(),
+        lastUsed: ts,
       };
       return true;
     },
   });
+  // `updated` is non-null when the file lock was acquired without error —
+  // regardless of whether the updater actually stamped the profile (it returns
+  // false when the profile is absent from the fresh on-disk store). Syncing
+  // store.usageStats here keeps the in-memory snapshot consistent with disk.
   if (updated) {
     store.usageStats = updated.usageStats;
     return;
@@ -261,7 +282,7 @@ export async function recordAuthProfileSelected(params: {
   store.usageStats = store.usageStats ?? {};
   store.usageStats[profileId] = {
     ...store.usageStats[profileId],
-    lastUsed: Date.now(),
+    lastUsed: ts,
   };
   saveAuthProfileStore(store, agentDir);
 }
