@@ -118,6 +118,8 @@ export type ChromeExtensionRelayServer = {
   baseUrl: string;
   cdpWsUrl: string;
   extensionConnected: () => boolean;
+  isLocked: () => boolean;
+  setLocked: (locked: boolean) => void;
   stop: () => Promise<void>;
 };
 
@@ -259,6 +261,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
     "OPENCLAW_EXTENSION_RELAY_COMMAND_RECONNECT_WAIT_MS",
     DEFAULT_EXTENSION_COMMAND_RECONNECT_WAIT_MS,
   );
+  let currentLockTab = !!opts.lockTab;
+  console.log(`[browser/extension-relay] Relay starting on ${info.host}:${info.port} (lockTab=${currentLockTab})`);
 
   const initPromise = (async (): Promise<ChromeExtensionRelayServer> => {
     const relayAuthToken = await resolveRelayAuthTokenForPort(info.port);
@@ -594,8 +598,40 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
 
       if (path === "/extension/status") {
+        if (req.method === "PUT") {
+          const token = getRelayAuthTokenFromRequest(req, url);
+          if (!token || !relayAuthTokens.has(token)) {
+            res.writeHead(401);
+            res.end("Unauthorized");
+            return;
+          }
+
+          let body = "";
+          req.on("data", (chunk) => {
+            body += chunk;
+          });
+          req.on("end", () => {
+            try {
+              const data = JSON.parse(body);
+              if (typeof data.lockTab === "boolean") {
+                currentLockTab = data.lockTab;
+                console.log(`[browser/extension-relay] Relay on ${info.port} lockTab updated to: ${currentLockTab}`);
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ ok: true, lockTab: currentLockTab }));
+              } else {
+                res.writeHead(400);
+                res.end("Invalid input: lockTab required");
+              }
+            } catch {
+              res.writeHead(400);
+              res.end("Invalid JSON");
+            }
+          });
+          return;
+        }
+
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ connected: extensionConnected(), lockTab: !!opts.lockTab }));
+        res.end(JSON.stringify({ connected: extensionConnected(), lockTab: currentLockTab }));
         return;
       }
 
@@ -995,6 +1031,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
           baseUrl: info.baseUrl,
           cdpWsUrl: `ws://${info.host}:${info.port}/cdp`,
           extensionConnected: () => false,
+          isLocked: () => currentLockTab,
+          setLocked: (locked: boolean) => { currentLockTab = locked; },
           stop: async () => {
             relayRuntimeByPort.delete(info.port);
           },
@@ -1004,6 +1042,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
       throw err;
     }
+    console.log(`[browser/extension-relay] Relay server listening on ${info.host}:${info.port} (lockTab=${!!opts.lockTab})`);
 
     const addr = server.address() as AddressInfo | null;
     const port = addr?.port ?? info.port;
@@ -1018,6 +1057,10 @@ export async function ensureChromeExtensionRelayServer(opts: {
       baseUrl,
       cdpWsUrl: `ws://${host}:${port}/cdp`,
       extensionConnected,
+      isLocked: () => currentLockTab,
+      setLocked: (locked: boolean) => {
+        currentLockTab = locked;
+      },
       stop: async () => {
         relayRuntimeByPort.delete(port);
         clearExtensionDisconnectCleanupTimer();

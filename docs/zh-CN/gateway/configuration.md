@@ -1764,7 +1764,7 @@ MiniMax 认证：设置 `MINIMAX_API_KEY`（环境变量）或配置 `models.pro
       },
       imageModel: {
         primary: "openrouter/qwen/qwen-2.5-vl-72b-instruct:free",
-        fallbacks: ["openrouter/google/gemini-2.0-flash-vision:free"],
+        fallbacks: ["openrouter/google/gemini-2.5-flash-lite-vision:free"],
       },
       thinkingDefault: "low",
       verboseDefault: "off",

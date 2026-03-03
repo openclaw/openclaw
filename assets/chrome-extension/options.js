@@ -23,6 +23,29 @@ function setStatus(kind, message) {
   status.textContent = message || ''
 }
 
+function setLockUI(locked) {
+  const toggle = document.getElementById('lock-toggle')
+  const lockIcon = document.getElementById('lock-icon')
+  const statusText = document.getElementById('lock-status-text')
+  if (toggle) toggle.checked = !!locked
+  if (lockIcon) lockIcon.style.display = locked ? 'inline' : 'none'
+  if (statusText) {
+    statusText.dataset.state = locked ? 'locked' : 'unlocked'
+    statusText.textContent = locked
+      ? '🔒 Locked — relay is pinned to the active tab'
+      : '🔓 Unlocked — relay follows whichever tab is active'
+  }
+}
+
+async function refreshLockStatus() {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'getLockStatus' })
+    setLockUI(res?.lockTab ?? false)
+  } catch {
+    // background not ready yet
+  }
+}
+
 async function checkRelayReachable(port, token) {
   const url = `http://127.0.0.1:${port}/json/version`
   const trimmedToken = String(token || '').trim()
@@ -56,6 +79,7 @@ async function load() {
   document.getElementById('token').value = token
   updateRelayUrl(port)
   await checkRelayReachable(port, token)
+  await refreshLockStatus()
 }
 
 async function save() {
@@ -71,4 +95,26 @@ async function save() {
 }
 
 document.getElementById('save').addEventListener('click', () => void save())
+
+// Lock toggle
+document.getElementById('lock-toggle').addEventListener('change', async (e) => {
+  const locked = e.target.checked
+  const statusText = document.getElementById('lock-status-text')
+  if (statusText) {
+    statusText.dataset.state = ''
+    statusText.textContent = 'Updating…'
+  }
+  const res = await chrome.runtime.sendMessage({ type: 'setLock', locked })
+  if (res?.ok) {
+    setLockUI(res.lockTab)
+  } else {
+    // Revert toggle on failure
+    e.target.checked = !locked
+    if (statusText) {
+      statusText.dataset.state = 'unlocked'
+      statusText.textContent = '⚠ Failed to update lock state. Is the relay running?'
+    }
+  }
+})
+
 void load()

@@ -77,7 +77,7 @@ export function formatModelName(modelString?: string | null): string {
     "gpt-4o": "GPT-4o",
     "gpt-4-turbo": "GPT-4 Turbo",
     "gpt-4": "GPT-4",
-    "gemini-2.0-flash": "Gemini 2.0 Flash",
+    "gemini-2.5-flash-lite": "Gemini 2.0 Flash",
     "gemini-pro": "Gemini Pro",
   };
 
