@@ -385,6 +385,7 @@ export const dispatchTelegramMessage = async ({
   };
   const deliveryBaseOptions = {
     chatId: String(chatId),
+    accountId: route.accountId,
     token: opts.token,
     runtime,
     bot,
