@@ -1352,7 +1352,7 @@ describe("BlueBubbles webhook monitor", () => {
       }
     });
 
-    it("retries deferred equivalent replay after pending flush failure", async () => {
+    it("keeps replay key pending when deferred retry is re-enqueued after flush failure", async () => {
       vi.useFakeTimers();
       try {
         const account = createMockAccount({ dmPolicy: "open" });
@@ -1372,9 +1372,16 @@ describe("BlueBubbles webhook monitor", () => {
         const messageId = "dup-msg-pending-flush-fail-1";
         const sender = "+15551234567";
         const text = "Retry pending replay";
+        let resolveSecondFlush: (() => void) | undefined;
+        const secondFlushPromise = new Promise<typeof EMPTY_DISPATCH_RESULT>((resolve) => {
+          resolveSecondFlush = () => resolve(EMPTY_DISPATCH_RESULT);
+        });
 
         mockDispatchReplyWithBufferedBlockDispatcher.mockRejectedValueOnce(
           new Error("synthetic first flush failure"),
+        );
+        mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+          async () => await secondFlushPromise,
         );
 
         await handleBlueBubblesWebhookRequest(
@@ -1410,6 +1417,32 @@ describe("BlueBubbles webhook monitor", () => {
         );
 
         await vi.advanceTimersByTimeAsync(600);
+        await Promise.resolve();
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
+
+        await handleBlueBubblesWebhookRequest(
+          createMockRequest("POST", "/bluebubbles-webhook", {
+            type: "updated-message",
+            data: {
+              text,
+              handle: { address: sender },
+              isGroup: false,
+              isFromMe: false,
+              guid: messageId,
+              chatGuid: "iMessage;-;+15551234567",
+              date: Date.now(),
+            },
+          }),
+          createMockResponse(),
+        );
+
+        // Third equivalent replay should defer while second flush is in-flight,
+        // not enqueue a third dispatch.
+        await Promise.resolve();
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
+
+        resolveSecondFlush?.();
+        await Promise.resolve();
         await Promise.resolve();
         expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
       } finally {

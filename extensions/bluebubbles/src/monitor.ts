@@ -431,6 +431,7 @@ export async function handleBlueBubblesWebhookRequest(
         replayKey: string;
       }) => {
         const debouncer = debounceRegistry.getOrCreateDebouncer(params.entry.target);
+        let retryReenqueuedFromFlushFailure = false;
         pendingInboundWebhookReplayKeys.add(params.replayKey);
         void debouncer
           .enqueue({
@@ -450,6 +451,7 @@ export async function handleBlueBubblesWebhookRequest(
                 if (!deferredRetry) {
                   return;
                 }
+                retryReenqueuedFromFlushFailure = true;
                 enqueueMessageWithReplayLifecycle({
                   entry: deferredRetry,
                   replayKey: params.replayKey,
@@ -458,7 +460,9 @@ export async function handleBlueBubblesWebhookRequest(
             },
           })
           .catch((err) => {
-            pendingInboundWebhookReplayKeys.delete(params.replayKey);
+            if (!retryReenqueuedFromFlushFailure) {
+              pendingInboundWebhookReplayKeys.delete(params.replayKey);
+            }
             params.entry.target.runtime.error?.(
               `[${params.entry.target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
             );
