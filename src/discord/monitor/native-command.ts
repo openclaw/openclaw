@@ -115,9 +115,12 @@ function buildDiscordCommandOptions(params: {
       };
     }
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
-    const shouldAutocomplete =
-      resolvedChoices.length > 0 &&
-      (typeof arg.choices === "function" || resolvedChoices.length > 25);
+    // Always use autocomplete for args with choices so that Discord passes
+    // the typed value through instead of enforcing the fixed-choice dropdown.
+    // Static choices (≤25) registered without autocomplete cause Discord to
+    // send null when the user types inline, triggering the button picker menu
+    // even though a value was provided (regression in #32753).
+    const shouldAutocomplete = resolvedChoices.length > 0;
     const autocomplete = shouldAutocomplete
       ? async (interaction: AutocompleteInteraction) => {
           const focused = interaction.options.getFocused();
