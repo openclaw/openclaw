@@ -23,9 +23,7 @@ function createDeferred<T = void>() {
   return { promise, resolve };
 }
 
-function createHandlerParams(overrides?: {
-  setStatus?: (patch: Record<string, unknown>) => void;
-}) {
+function createHandlerParams(overrides?: { setStatus?: (patch: Record<string, unknown>) => void }) {
   const cfg: OpenClawConfig = {
     channels: {
       discord: {
@@ -103,8 +101,9 @@ describe("createDiscordMessageHandler queue behavior", () => {
       .mockImplementationOnce(async () => {
         await secondRun.promise;
       });
-    preflightDiscordMessageMock.mockImplementation(async (params: { data: { channel_id: string } }) =>
-      createPreflightContext(params.data.channel_id),
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: { channel_id: string } }) =>
+        createPreflightContext(params.data.channel_id),
     );
 
     const setStatus = vi.fn();

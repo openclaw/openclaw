@@ -13,12 +13,12 @@ import type {
   DiscordMessagePreflightParams,
 } from "./message-handler.preflight.types.js";
 import { processDiscordMessage } from "./message-handler.process.js";
-import type { DiscordMonitorStatusSink } from "./status.js";
 import {
   hasDiscordMessageStickers,
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
 } from "./message-utils.js";
+import type { DiscordMonitorStatusSink } from "./status.js";
 
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
