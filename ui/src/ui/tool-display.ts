@@ -3,8 +3,7 @@ import {
   defaultTitle,
   formatToolDetailText,
   normalizeToolName,
-  resolveActionArg,
-  resolveToolVerbAndDetail,
+  resolveToolVerbAndDetailForArgs,
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../src/agents/tool-display-common.js";
 import type { IconName } from "./icons.ts";
@@ -126,12 +125,10 @@ export function resolveToolDisplay(params: {
   const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
-  const action = resolveActionArg(params.args);
-  let { verb, detail } = resolveToolVerbAndDetail({
+  let { verb, detail } = resolveToolVerbAndDetailForArgs({
     toolKey: key,
     args: params.args,
     meta: params.meta,
-    action,
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "first",

@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  readFileUtf8AndCleanup,
+  stubFetchTextResponse,
+} from "../test-utils/camera-url-test-helpers.js";
 
 const { callGateway } = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -43,9 +47,15 @@ async function executeNodes(input: Record<string, unknown>) {
 type NodesToolResult = Awaited<ReturnType<typeof executeNodes>>;
 type GatewayMockResult = Record<string, unknown> | null | undefined;
 
-function mockNodeList(commands?: string[]) {
+function mockNodeList(params?: { commands?: string[]; remoteIp?: string }) {
   return {
-    nodes: [{ nodeId: NODE_ID, ...(commands ? { commands } : {}) }],
+    nodes: [
+      {
+        nodeId: NODE_ID,
+        ...(params?.commands ? { commands: params.commands } : {}),
+        ...(params?.remoteIp ? { remoteIp: params.remoteIp } : {}),
+      },
+    ],
   };
 }
 
@@ -66,12 +76,13 @@ function expectFirstTextContains(result: NodesToolResult, expectedText: string) 
 
 function setupNodeInvokeMock(params: {
   commands?: string[];
+  remoteIp?: string;
   onInvoke?: (invokeParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
   invokePayload?: unknown;
 }) {
   callGateway.mockImplementation(async ({ method, params: invokeParams }: GatewayCall) => {
     if (method === "node.list") {
-      return mockNodeList(params.commands);
+      return mockNodeList({ commands: params.commands, remoteIp: params.remoteIp });
     }
     if (method === "node.invoke") {
       if (params.onInvoke) {
@@ -108,7 +119,7 @@ function setupSystemRunGateway(params: {
 }) {
   callGateway.mockImplementation(async ({ method, params: gatewayParams }: GatewayCall) => {
     if (method === "node.list") {
-      return mockNodeList(["system.run"]);
+      return mockNodeList({ commands: ["system.run"] });
     }
     if (method === "node.invoke") {
       const command = (gatewayParams as { command?: string } | undefined)?.command;
@@ -126,6 +137,7 @@ function setupSystemRunGateway(params: {
 
 beforeEach(() => {
   callGateway.mockClear();
+  vi.unstubAllGlobals();
 });
 
 describe("nodes camera_snap", () => {
@@ -194,6 +206,96 @@ describe("nodes camera_snap", () => {
         deviceId: "cam-123",
       }),
     ).rejects.toThrow(/facing=both is not allowed when deviceId is set/i);
+  });
+
+  it("downloads camera_snap url payloads when node remoteIp is available", async () => {
+    stubFetchTextResponse("url-image");
+    setupNodeInvokeMock({
+      remoteIp: "198.51.100.42",
+      invokePayload: {
+        format: "jpg",
+        url: "https://198.51.100.42/snap.jpg",
+        width: 1,
+        height: 1,
+      },
+    });
+
+    const result = await executeNodes({
+      action: "camera_snap",
+      node: NODE_ID,
+      facing: "front",
+    });
+
+    expect(result.content?.[0]).toMatchObject({ type: "text" });
+    const mediaPath = String((result.content?.[0] as { text?: string } | undefined)?.text ?? "")
+      .replace(/^MEDIA:/, "")
+      .trim();
+    await expect(readFileUtf8AndCleanup(mediaPath)).resolves.toBe("url-image");
+  });
+
+  it("rejects camera_snap url payloads when node remoteIp is missing", async () => {
+    stubFetchTextResponse("url-image");
+    setupNodeInvokeMock({
+      invokePayload: {
+        format: "jpg",
+        url: "https://198.51.100.42/snap.jpg",
+        width: 1,
+        height: 1,
+      },
+    });
+
+    await expect(
+      executeNodes({
+        action: "camera_snap",
+        node: NODE_ID,
+        facing: "front",
+      }),
+    ).rejects.toThrow(/node remoteip/i);
+  });
+});
+
+describe("nodes camera_clip", () => {
+  it("downloads camera_clip url payloads when node remoteIp is available", async () => {
+    stubFetchTextResponse("url-clip");
+    setupNodeInvokeMock({
+      remoteIp: "198.51.100.42",
+      invokePayload: {
+        format: "mp4",
+        url: "https://198.51.100.42/clip.mp4",
+        durationMs: 1200,
+        hasAudio: false,
+      },
+    });
+
+    const result = await executeNodes({
+      action: "camera_clip",
+      node: NODE_ID,
+      facing: "front",
+    });
+    const filePath = String((result.content?.[0] as { text?: string } | undefined)?.text ?? "")
+      .replace(/^FILE:/, "")
+      .trim();
+    await expect(readFileUtf8AndCleanup(filePath)).resolves.toBe("url-clip");
+  });
+
+  it("rejects camera_clip url payloads when node remoteIp is missing", async () => {
+    stubFetchTextResponse("url-clip");
+    setupNodeInvokeMock({
+      invokePayload: {
+        format: "mp4",
+        url: "https://198.51.100.42/clip.mp4",
+        durationMs: 1200,
+        hasAudio: false,
+      },
+    });
+
+    await expect(
+      executeNodes({
+        action: "camera_clip",
+        node: NODE_ID,
+        facing: "front",
+      }),
+    ).rejects.toThrow(/node remoteip/i);
   });
 });
 

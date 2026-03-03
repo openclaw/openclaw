@@ -14,6 +14,17 @@ installPwToolsCoreTestHooks();
 const sessionMocks = getPwToolsCoreSessionMocks();
 const mod = await import("./pw-tools-core.js");
 
+function createFileChooserPageMocks() {
+  const fileChooser = { setFiles: vi.fn(async () => {}) };
+  const press = vi.fn(async () => {});
+  const waitForEvent = vi.fn(async () => fileChooser);
+  setPwToolsCoreCurrentPage({
+    waitForEvent,
+    keyboard: { press },
+  });
+  return { fileChooser, press, waitForEvent };
+}
+
 describe("pw-tools-core", () => {
   it("screenshots an element selector", async () => {
     const elementScreenshot = vi.fn(async () => Buffer.from("E"));
@@ -118,13 +129,7 @@ describe("pw-tools-core", () => {
   });
   it("revalidates file-chooser paths at use-time and cancels missing files", async () => {
     const missingPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-missing-${crypto.randomUUID()}.txt`);
-    const fileChooser = { setFiles: vi.fn(async () => {}) };
-    const press = vi.fn(async () => {});
-    const waitForEvent = vi.fn(async () => fileChooser);
-    setPwToolsCoreCurrentPage({
-      waitForEvent,
-      keyboard: { press },
-    });
+    const { fileChooser, press } = createFileChooserPageMocks();
 
     await mod.armFileUploadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -139,13 +144,7 @@ describe("pw-tools-core", () => {
     expect(fileChooser.setFiles).not.toHaveBeenCalled();
   });
   it("arms the next file chooser and escapes if no paths provided", async () => {
-    const fileChooser = { setFiles: vi.fn(async () => {}) };
-    const press = vi.fn(async () => {});
-    const waitForEvent = vi.fn(async () => fileChooser);
-    setPwToolsCoreCurrentPage({
-      waitForEvent,
-      keyboard: { press },
-    });
+    const { fileChooser, press } = createFileChooserPageMocks();
 
     await mod.armFileUploadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",

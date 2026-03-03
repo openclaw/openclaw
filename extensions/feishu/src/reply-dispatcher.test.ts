@@ -185,6 +185,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("suppresses internal block payload delivery", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "internal reasoning chunk" }, { kind: "block" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("uses streaming session for auto mode markdown payloads", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,
@@ -207,6 +224,24 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("closes streaming with block text when final reply is missing", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```md\npartial answer\n```" }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\npartial answer\n```");
   });
 
   it("sends media-only payloads as attachments", async () => {
@@ -350,6 +385,30 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       replyToMessageId: "om_msg",
       replyInThread: true,
     });
+  });
+
+  it("disables streaming for thread replies and keeps reply metadata", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+      threadReply: true,
+      rootId: "om_root_topic",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_msg",
+        replyInThread: true,
+      }),
+    );
   });
 
   it("passes replyInThread to media attachments", async () => {

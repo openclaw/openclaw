@@ -9,6 +9,10 @@ export function resolveRepoRoot(importMetaUrl) {
   return path.resolve(path.dirname(fileURLToPath(importMetaUrl)), "..", "..");
 }
 
+export function resolveSourceRoots(repoRoot, relativeRoots) {
+  return relativeRoots.map((root) => path.join(repoRoot, ...root.split("/").filter(Boolean)));
+}
+
 export function isTestLikeTypeScriptFile(filePath, options = {}) {
   const extraTestSuffixes = options.extraTestSuffixes ?? [];
   return [...baseTestSuffixes, ...extraTestSuffixes].some((suffix) => filePath.endsWith(suffix));
@@ -68,18 +72,24 @@ export async function collectTypeScriptFiles(targetPath, options = {}) {
   return out;
 }
 
-export async function collectFileViolations(params) {
-  const files = (
+export async function collectTypeScriptFilesFromRoots(sourceRoots, options = {}) {
+  return (
     await Promise.all(
-      params.sourceRoots.map(
+      sourceRoots.map(
         async (root) =>
           await collectTypeScriptFiles(root, {
             ignoreMissing: true,
-            extraTestSuffixes: params.extraTestSuffixes,
+            ...options,
           }),
       ),
     )
   ).flat();
+}
+
+export async function collectFileViolations(params) {
+  const files = await collectTypeScriptFilesFromRoots(params.sourceRoots, {
+    extraTestSuffixes: params.extraTestSuffixes,
+  });
 
   const violations = [];
   for (const filePath of files) {

@@ -31,6 +31,7 @@ import {
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import {
+  hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushPromptForRun,
   resolveMemoryFlushSettings,
@@ -437,7 +438,9 @@ export async function runMemoryFlushIfNeeded(params: {
         reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,
         softThresholdTokens: memoryFlushSettings.softThresholdTokens,
       })) ||
-    shouldForceFlushByTranscriptSize;
+    (shouldForceFlushByTranscriptSize &&
+      entry != null &&
+      !hasAlreadyFlushedForCurrentCompaction(entry));
 
   if (!shouldFlushMemory) {
     return entry ?? params.sessionEntry;
@@ -484,6 +487,7 @@ export async function runMemoryFlushIfNeeded(params: {
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
+          trigger: "memory",
           prompt: resolveMemoryFlushPromptForRun({
             prompt: memoryFlushSettings.prompt,
             cfg: params.cfg,

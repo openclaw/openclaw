@@ -11,6 +11,7 @@ import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   readStoreAllowFromForDmPolicy,
@@ -42,8 +43,13 @@ type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
 type DiscordReactionListenerParams = {
   cfg: LoadedConfig;
-  accountId: string;
   runtime: RuntimeEnv;
+  logger: Logger;
+  onEvent?: () => void;
+} & DiscordReactionRoutingParams;
+
+type DiscordReactionRoutingParams = {
+  accountId: string;
   botUserId?: string;
   dmEnabled: boolean;
   groupDmEnabled: boolean;
@@ -53,8 +59,6 @@ type DiscordReactionListenerParams = {
   groupPolicy: "open" | "allowlist" | "disabled";
   allowNameMatching: boolean;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
-  logger: Logger;
-  onEvent?: () => void;
 };
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
@@ -119,7 +123,7 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
 }
 
 export class DiscordMessageListener extends MessageCreateListener {
-  private messageQueue: Promise<void> = Promise.resolve();
+  private readonly channelQueue = new KeyedAsyncQueue();
 
   constructor(
     private handler: DiscordMessageHandler,
@@ -131,26 +135,22 @@ export class DiscordMessageListener extends MessageCreateListener {
 
   async handle(data: DiscordMessageEvent, client: Client) {
     this.onEvent?.();
-    // Release Carbon's dispatch lane immediately, but keep our message handler
-    // serialized to avoid unbounded parallel model/IO work on traffic bursts.
-    this.messageQueue = this.messageQueue
-      .catch(() => {})
-      .then(() =>
-        runDiscordListenerWithSlowLog({
-          logger: this.logger,
-          listener: this.constructor.name,
-          event: this.type,
-          run: () => this.handler(data, client),
-          onError: (err) => {
-            const logger = this.logger ?? discordEventQueueLog;
-            logger.error(danger(`discord handler failed: ${String(err)}`));
-          },
-        }),
-      );
-    void this.messageQueue.catch((err) => {
-      const logger = this.logger ?? discordEventQueueLog;
-      logger.error(danger(`discord handler failed: ${String(err)}`));
-    });
+    const channelId = data.channel_id;
+    // Serialize messages within the same channel to preserve ordering,
+    // but allow different channels to proceed in parallel so that
+    // channel-bound agents are not blocked by each other.
+    void this.channelQueue.enqueue(channelId, () =>
+      runDiscordListenerWithSlowLog({
+        logger: this.logger,
+        listener: this.constructor.name,
+        event: this.type,
+        run: () => this.handler(data, client),
+        onError: (err) => {
+          const logger = this.logger ?? discordEventQueueLog;
+          logger.error(danger(`discord handler failed: ${String(err)}`));
+        },
+      }),
+    );
   }
 }
 
@@ -318,23 +318,15 @@ async function authorizeDiscordReactionIngress(
   return { allowed: true };
 }
 
-async function handleDiscordReactionEvent(params: {
-  data: DiscordReactionEvent;
-  client: Client;
-  action: "added" | "removed";
-  cfg: LoadedConfig;
-  accountId: string;
-  botUserId?: string;
-  dmEnabled: boolean;
-  groupDmEnabled: boolean;
-  groupDmChannels: string[];
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  allowFrom: string[];
-  groupPolicy: "open" | "allowlist" | "disabled";
-  allowNameMatching: boolean;
-  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
-  logger: Logger;
-}) {
+async function handleDiscordReactionEvent(
+  params: {
+    data: DiscordReactionEvent;
+    client: Client;
+    action: "added" | "removed";
+    cfg: LoadedConfig;
+    logger: Logger;
+  } & DiscordReactionRoutingParams,
+) {
   try {
     const { data, client, action, botUserId, guildEntries } = params;
     if (!("user" in data)) {
@@ -374,7 +366,7 @@ async function handleDiscordReactionEvent(params: {
       channelType === ChannelType.PublicThread ||
       channelType === ChannelType.PrivateThread ||
       channelType === ChannelType.AnnouncementThread;
-    const ingressAccess = await authorizeDiscordReactionIngress({
+    const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
       accountId: params.accountId,
       user,
       isDirectMessage,
@@ -391,7 +383,8 @@ async function handleDiscordReactionEvent(params: {
       groupPolicy: params.groupPolicy,
       allowNameMatching: params.allowNameMatching,
       guildInfo,
-    });
+    };
+    const ingressAccess = await authorizeDiscordReactionIngress(reactionIngressBase);
     if (!ingressAccess.allowed) {
       logVerbose(`discord reaction blocked sender=${user.id} (reason=${ingressAccess.reason})`);
       return;
@@ -486,22 +479,7 @@ async function handleDiscordReactionEvent(params: {
       channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>,
     ) =>
       await authorizeDiscordReactionIngress({
-        accountId: params.accountId,
-        user,
-        isDirectMessage,
-        isGroupDm,
-        isGuildMessage,
-        channelId: data.channel_id,
-        channelName,
-        channelSlug,
-        dmEnabled: params.dmEnabled,
-        groupDmEnabled: params.groupDmEnabled,
-        groupDmChannels: params.groupDmChannels,
-        dmPolicy: params.dmPolicy,
-        allowFrom: params.allowFrom,
-        groupPolicy: params.groupPolicy,
-        allowNameMatching: params.allowNameMatching,
-        guildInfo,
+        ...reactionIngressBase,
         channelConfig,
       });
     const authorizeThreadChannelAccess = async (channelInfo: { parentId?: string } | null) => {

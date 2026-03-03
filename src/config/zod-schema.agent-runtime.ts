@@ -6,6 +6,7 @@ import {
   GroupChatSchema,
   HumanDelaySchema,
   IdentitySchema,
+  SecretInputSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
@@ -102,7 +103,10 @@ export const SandboxDockerSchema = z
     user: z.string().optional(),
     capDrop: z.array(z.string()).optional(),
     env: z.record(z.string(), z.string()).optional(),
-    setupCommand: z.string().optional(),
+    setupCommand: z
+      .union([z.string(), z.array(z.string())])
+      .transform((value) => (Array.isArray(value) ? value.join("\n") : value))
+      .optional(),
     pidsLimit: z.number().int().positive().optional(),
     memory: z.union([z.string(), z.number()]).optional(),
     memorySwap: z.union([z.string(), z.number()]).optional(),
@@ -267,13 +271,13 @@ export const ToolsWebSearchSchema = z
         z.literal("kimi"),
       ])
       .optional(),
-    apiKey: z.string().optional().register(sensitive),
+    apiKey: SecretInputSchema.optional().register(sensitive),
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     perplexity: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -281,7 +285,7 @@ export const ToolsWebSearchSchema = z
       .optional(),
     grok: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         model: z.string().optional(),
         inlineCitations: z.boolean().optional(),
       })
@@ -289,14 +293,14 @@ export const ToolsWebSearchSchema = z
       .optional(),
     gemini: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         model: z.string().optional(),
       })
       .strict()
       .optional(),
     kimi: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -554,12 +558,13 @@ export const MemorySearchSchema = z
         z.literal("gemini"),
         z.literal("voyage"),
         z.literal("mistral"),
+        z.literal("ollama"),
       ])
       .optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         headers: z.record(z.string(), z.string()).optional(),
         batch: z
           .object({
@@ -581,6 +586,7 @@ export const MemorySearchSchema = z
         z.literal("local"),
         z.literal("voyage"),
         z.literal("mistral"),
+        z.literal("ollama"),
         z.literal("none"),
       ])
       .optional(),

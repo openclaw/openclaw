@@ -12,6 +12,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { maxBytesForKind } from "../media/constants.js";
 import { extensionForMime } from "../media/mime.js";
+import { unlinkIfExists } from "../media/temp-files.js";
 import type { PollInput } from "../polls.js";
 import { loadWebMediaRaw } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
@@ -543,18 +544,7 @@ export async function sendVoiceMessageDiscord(
     }
     throw err;
   } finally {
-    // Clean up temporary OGG file if we created one
-    if (oggCleanup && oggPath) {
-      try {
-        await fs.unlink(oggPath);
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
-    try {
-      await fs.unlink(localInputPath);
-    } catch {
-      // Ignore cleanup errors
-    }
+    await unlinkIfExists(oggCleanup ? oggPath : null);
+    await unlinkIfExists(localInputPath);
   }
 }
