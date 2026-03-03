@@ -31,7 +31,7 @@ describe("secret ref resolver", () => {
 
   const createCaseDir = async (label: string): Promise<string> => {
     const dir = path.join(fixtureRoot, `${label}-${caseId++}`);
-    await fs.mkdir(dir, { recursive: true });
+    await fs.mkdir(dir);
     return dir;
   };
 
@@ -202,7 +202,7 @@ describe("secret ref resolver", () => {
         "#!/usr/bin/env node",
         "setTimeout(() => {",
         "  process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { delayed: 'ok' } }));",
-        "}, 120);",
+        "}, 30);",
       ].join("\n"),
       0o700,
     );

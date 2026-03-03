@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Models/MiniMax: add first-class `MiniMax-M2.5-highspeed` support across built-in provider catalogs, onboarding flows, and MiniMax OAuth plugin defaults, while keeping legacy `MiniMax-M2.5-Lightning` compatibility for existing configs.
+- Docs/Models: refresh MiniMax, Moonshot (Kimi), GLM/Z.AI model docs to align with latest defaults (`MiniMax-M2.5`, `MiniMax-M2.5-highspeed`, `moonshot/kimi-k2.5`, `zai/glm-5`) and keep Moonshot model lists synced from shared source data.
 - Outbound adapters/plugins: add shared `sendPayload` support across direct-text-media, Discord, Slack, WhatsApp, Zalo, and Zalouser with multi-media iteration and chunk-aware text fallback. (#30144) Thanks @nohat.
 - Media understanding/audio echo: add optional `tools.media.audio.echoTranscript` + `echoFormat` to send a pre-agent transcript confirmation message to the originating chat, with echo disabled by default. (#32150) Thanks @AytuncYildizli.
 - Plugin runtime/STT: add `api.runtime.stt.transcribeAudioFile(...)` so extensions can transcribe local audio files through OpenClaw's configured media-understanding audio providers. (#22402) Thanks @benthecarman.
@@ -26,9 +28,11 @@ Docs: https://docs.openclaw.ai
 - **BREAKING:** Plugin SDK removed `api.registerHttpHandler(...)`. Plugins must register explicit HTTP routes via `api.registerHttpRoute({ path, auth, match, handler })`, and dynamic webhook lifecycles should use `registerPluginHttpRoute(...)`.
 - **BREAKING:** Zalo Personal plugin (`@openclaw/zalouser`) no longer depends on external `zca`-compatible CLI binaries (`openzca`, `zca-cli`) for runtime send/listen/login; operators should use `openclaw channels login --channel zalouser` after upgrade to refresh sessions in the new JS-native path.
 - **BREAKING:** Onboarding now defaults `tools.profile` to `messaging` for new local installs (interactive + non-interactive). New setups no longer start with broad coding/system tools unless explicitly configured.
+- **BREAKING:** ACP dispatch now defaults to enabled unless explicitly disabled (`acp.dispatch.enabled=false`). If you need to pause ACP turn routing while keeping `/acp` controls, set `acp.dispatch.enabled=false`. Docs: https://docs.openclaw.ai/tools/acp-agents
 
 ### Fixes
 
+- OpenAI/Responses WebSocket tool-call id hygiene: normalize blank/whitespace streamed tool-call ids before persistence, and block empty `function_call_output.call_id` payloads in the WS conversion path to avoid OpenAI 400 errors (`Invalid 'input[n].call_id': empty string`), with regression coverage for both inbound stream normalization and outbound payload guards.
 - Gateway/Control UI basePath webhook passthrough: let non-read methods under configured `controlUiBasePath` fall through to plugin routes (instead of returning Control UI 405), restoring webhook handlers behind basePath mounts. (#32311) Thanks @ademczuk.
 - Models/config env propagation: apply `config.env.vars` before implicit provider discovery in models bootstrap so config-scoped credentials are visible to implicit provider resolution paths. (#32295) Thanks @hsiaoa.
 - Hooks/runtime stability: keep the internal hook handler registry on a `globalThis` singleton so hook registration/dispatch remains consistent when bundling emits duplicate module copies. (#32292) Thanks @Drickon.
