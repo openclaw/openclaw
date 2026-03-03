@@ -42,12 +42,3 @@ fun invokeErrorFromThrowable(err: Throwable): Pair<String, String> {
   val message = if (parsed.hadExplicitCode) parsed.prefixedMessage else parsed.message
   return parsed.code to message
 }
-
-fun normalizeMainKey(raw: String?): String? {
-  val trimmed = raw?.trim().orEmpty()
-  return if (trimmed.isEmpty()) null else trimmed
-}
-
-fun isCanonicalMainSessionKey(key: String): Boolean {
-  return key == "main"
-}

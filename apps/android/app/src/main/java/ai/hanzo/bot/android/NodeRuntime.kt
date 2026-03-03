@@ -445,7 +445,7 @@ class NodeRuntime(context: Context) {
   }
 
   private fun applyMainSessionKey(candidate: String?) {
-    val trimmed = normalizeMainKey(candidate) ?: return
+    val trimmed = normalizeMainKey(candidate)
     if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
     if (_mainSessionKey.value == trimmed) return
     _mainSessionKey.value = trimmed
