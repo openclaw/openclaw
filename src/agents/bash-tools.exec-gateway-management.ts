@@ -39,8 +39,43 @@ const SCHTASKS_ACTIONS = new Map<string, GatewayManagementAction>([
   ["/run", "restart"],
   ["/end", "stop"],
 ]);
-const PNPM_OPTIONS_WITH_VALUE = new Set(["-c", "--dir", "-f", "--filter"]);
-const PNPM_EXEC_OPTIONS_WITH_VALUE = new Set(["--package"]);
+const PNPM_BOOLEAN_OPTIONS = new Set([
+  "-c",
+  "-r",
+  "-w",
+  "--aggregate-output",
+  "--color",
+  "--fail-if-no-match",
+  "--include-workspace-root",
+  "--link-workspace-packages",
+  "--no-bail",
+  "--no-color",
+  "--no-reporter-hide-prefix",
+  "--no-sort",
+  "--parallel",
+  "--reverse",
+  "--recursive",
+  "--report-summary",
+  "--shell-mode",
+  "--shared-workspace-lockfile",
+  "--silent",
+  "--sort",
+  "--stream",
+  "--use-stderr",
+  "--workspace-root",
+]);
+const PNPM_OPTIONS_WITH_VALUE = new Set([
+  "-C",
+  "--changed-files-ignore-pattern",
+  "--dir",
+  "--filter",
+  "--filter-prod",
+  "--loglevel",
+  "--reporter",
+  "--resume-from",
+  "--test-pattern",
+  "--workspace-concurrency",
+]);
 const CLI_HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-v", "--version"]);
 const GATEWAY_SERVICE_BOOLEAN_FLAGS = new Set(["--json"]);
 const GATEWAY_RESTART_EXTRA_FLAGS = new Set(["--hard"]);
@@ -258,6 +293,54 @@ function hasSystemctlHelpOrVersion(argv: string[]): boolean {
   return false;
 }
 
+function consumePnpmOption(argv: string[], idx: number): number | null {
+  const token = argv[idx]?.trim() ?? "";
+  if (!token.startsWith("-")) {
+    return 0;
+  }
+
+  if (token.startsWith("--")) {
+    const equalsIdx = token.indexOf("=");
+    const rawFlag = equalsIdx === -1 ? token : token.slice(0, equalsIdx);
+    const flag = rawFlag.toLowerCase();
+    const hasInlineValue = equalsIdx !== -1;
+    const inlineValue = hasInlineValue ? token.slice(equalsIdx + 1).trim() : "";
+
+    if (PNPM_BOOLEAN_OPTIONS.has(flag)) {
+      return hasInlineValue ? null : 1;
+    }
+    if (!PNPM_OPTIONS_WITH_VALUE.has(flag)) {
+      return null;
+    }
+    if (hasInlineValue) {
+      return inlineValue ? 1 : null;
+    }
+    if (idx + 1 >= argv.length) {
+      return null;
+    }
+    const next = argv[idx + 1]?.trim() ?? "";
+    if (!next || next === FLAG_TERMINATOR) {
+      return null;
+    }
+    return 2;
+  }
+
+  if (token === "-C") {
+    const next = argv[idx + 1]?.trim() ?? "";
+    if (!next || next === FLAG_TERMINATOR) {
+      return null;
+    }
+    return 2;
+  }
+  if (token.startsWith("-C") && token.length > 2) {
+    return 1;
+  }
+  if (PNPM_BOOLEAN_OPTIONS.has(token)) {
+    return token.length === 2 ? 1 : null;
+  }
+  return null;
+}
+
 function readPnpmCliArgv(argv: string[]): string[] | null {
   const second = argv[1]?.trim();
   if (second && normalizeExecutableToken(second) === "openclaw") {
@@ -276,24 +359,11 @@ function readPnpmCliArgv(argv: string[]): string[] | null {
       break;
     }
     if (token.startsWith("-")) {
-      const lower = token.toLowerCase();
-      const [flag] = lower.split("=", 2);
-      if (!PNPM_OPTIONS_WITH_VALUE.has(flag)) {
+      const consumed = consumePnpmOption(argv, idx);
+      if (consumed === null) {
         return null;
       }
-      if (lower.includes("=")) {
-        const inlineValue = lower.slice(flag.length + 1).trim();
-        if (!inlineValue) {
-          return null;
-        }
-        idx += 1;
-      } else {
-        const next = argv[idx + 1]?.trim() ?? "";
-        if (!next || next === FLAG_TERMINATOR) {
-          return null;
-        }
-        idx += 2;
-      }
+      idx += consumed;
       continue;
     }
     break;
@@ -323,24 +393,11 @@ function readPnpmCliArgv(argv: string[]): string[] | null {
       break;
     }
     if (token.startsWith("-")) {
-      const lower = token.toLowerCase();
-      const [flag] = lower.split("=", 2);
-      if (!PNPM_EXEC_OPTIONS_WITH_VALUE.has(flag)) {
+      const consumed = consumePnpmOption(argv, idx);
+      if (consumed === null) {
         return null;
       }
-      if (lower.includes("=")) {
-        const inlineValue = lower.slice(flag.length + 1).trim();
-        if (!inlineValue) {
-          return null;
-        }
-        idx += 1;
-      } else {
-        const next = argv[idx + 1]?.trim() ?? "";
-        if (!next || next === FLAG_TERMINATOR) {
-          return null;
-        }
-        idx += 2;
-      }
+      idx += consumed;
       continue;
     }
     break;
@@ -723,7 +780,7 @@ function buildBlockedMessage(commandMatch: GatewayManagementExecCommand): string
   if (commandMatch.action !== "restart") {
     return (
       "Gateway start/stop via exec is blocked. " +
-      "Use the `gateway` tool or `/restart` so restart coordination and delivery state stay consistent."
+      "Use `openclaw gateway start` / `openclaw gateway stop` instead."
     );
   }
   if (commandMatch.hard) {

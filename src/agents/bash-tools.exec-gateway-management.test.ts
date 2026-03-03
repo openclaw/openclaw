@@ -172,6 +172,66 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
+  it("detects pnpm recursive exec wrapped restart commands", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "pnpm -r exec openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
+  it("detects pnpm recursive exec wrapped restart commands with workspace concurrency", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "pnpm -r --workspace-concurrency 6 exec openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
+  it("detects pnpm exec wrapped restart commands with boolean flags", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "pnpm exec --stream openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
+  it("detects pnpm exec wrapped restart commands with parallel flag", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "pnpm exec --parallel openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
   it("detects pnpm -C exec wrapped restart commands", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "pnpm -C /tmp/openclaw exec openclaw gateway restart",
@@ -574,7 +634,7 @@ describe("exec gateway management interception", () => {
       tool.execute("call3-launchctl-stop", {
         command: "launchctl bootout gui/$UID/ai.openclaw.gateway",
       }),
-    ).rejects.toThrow(/start\/stop/);
+    ).rejects.toThrow(/openclaw gateway stop/);
 
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
   });
@@ -586,7 +646,7 @@ describe("exec gateway management interception", () => {
       tool.execute("call3", {
         command: "openclaw gateway stop",
       }),
-    ).rejects.toThrow(/start\/stop/);
+    ).rejects.toThrow(/openclaw gateway start/);
 
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
   });
