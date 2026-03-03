@@ -17,6 +17,7 @@ export type WorkspaceLockOptions = {
 };
 
 type LockPayload = {
+  token: string;
   pid: number;
   createdAt: string;
   expiresAt: string;
@@ -27,6 +28,7 @@ type LockPayload = {
 type HeldLock = {
   count: number;
   lockPath: string;
+  token: string;
 };
 
 export type WorkspaceLockHandle = {
@@ -74,6 +76,7 @@ async function readPayload(lockPath: string): Promise<LockPayload | null> {
     const raw = await fs.readFile(lockPath, "utf8");
     const parsed = JSON.parse(raw) as Partial<LockPayload>;
     if (
+      typeof parsed.token !== "string" ||
       typeof parsed.pid !== "number" ||
       typeof parsed.createdAt !== "string" ||
       typeof parsed.expiresAt !== "string" ||
@@ -83,6 +86,7 @@ async function readPayload(lockPath: string): Promise<LockPayload | null> {
       return null;
     }
     return {
+      token: parsed.token,
       pid: parsed.pid,
       createdAt: parsed.createdAt,
       expiresAt: parsed.expiresAt,
@@ -126,6 +130,10 @@ async function releaseLock(mapKey: string): Promise<void> {
   }
 
   HELD_WORKSPACE_LOCKS.delete(mapKey);
+  const payload = await readPayload(held.lockPath);
+  if (!payload || payload.token !== held.token) {
+    return;
+  }
   await fs.rm(held.lockPath, { force: true }).catch(() => undefined);
 }
 
@@ -157,6 +165,7 @@ export async function acquireWorkspaceLock(
       const handle = await fs.open(lockPath, "wx");
       const now = Date.now();
       const payload: LockPayload = {
+        token: `${process.pid}-${now}-${Math.random().toString(16).slice(2)}`,
         pid: process.pid,
         createdAt: new Date(now).toISOString(),
         expiresAt: new Date(now + ttlMs).toISOString(),
@@ -165,7 +174,7 @@ export async function acquireWorkspaceLock(
       };
       await handle.writeFile(JSON.stringify(payload), "utf8");
       await handle.close();
-      HELD_WORKSPACE_LOCKS.set(mapKey, { count: 1, lockPath });
+      HELD_WORKSPACE_LOCKS.set(mapKey, { count: 1, lockPath, token: payload.token });
       return {
         lockPath,
         release: () => releaseLock(mapKey),

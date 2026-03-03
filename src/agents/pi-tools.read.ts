@@ -351,10 +351,13 @@ async function normalizeReadImageResult(
   return { ...result, content: nextContent };
 }
 
-
 const workspaceMutationLocks = new Map<string, Promise<void>>();
 
-export function wrapToolMutationLock(tool: AnyAgentTool, root: string): AnyAgentTool {
+export function wrapToolMutationLock(
+  tool: AnyAgentTool,
+  root: string,
+  options?: { containerWorkdir?: string },
+): AnyAgentTool {
   return {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
@@ -367,7 +370,12 @@ export function wrapToolMutationLock(tool: AnyAgentTool, root: string): AnyAgent
         return tool.execute(toolCallId, params, signal, onUpdate);
       }
 
-      const lockKey = path.resolve(root, filePathRaw);
+      const resolvedPath = mapContainerPathToWorkspaceRoot({
+        filePath: filePathRaw,
+        root,
+        containerWorkdir: options?.containerWorkdir,
+      });
+      const lockKey = path.resolve(root, resolvedPath);
       const previous = workspaceMutationLocks.get(lockKey) ?? Promise.resolve();
       let release: (() => void) | undefined;
       const current = new Promise<void>((resolve) => {
@@ -479,6 +487,7 @@ type SandboxToolParams = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
   mutationLockingEnabled?: boolean;
+  containerWorkdir?: string;
 };
 
 export function createSandboxedReadTool(params: SandboxToolParams) {
@@ -496,7 +505,11 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
   const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
-  return params.mutationLockingEnabled ? wrapToolMutationLock(normalized, params.root) : normalized;
+  return params.mutationLockingEnabled
+    ? wrapToolMutationLock(normalized, params.root, {
+        containerWorkdir: params.containerWorkdir,
+      })
+    : normalized;
 }
 
 export function createSandboxedEditTool(params: SandboxToolParams) {
@@ -504,22 +517,34 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
   const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
-  return params.mutationLockingEnabled ? wrapToolMutationLock(normalized, params.root) : normalized;
+  return params.mutationLockingEnabled
+    ? wrapToolMutationLock(normalized, params.root, {
+        containerWorkdir: params.containerWorkdir,
+      })
+    : normalized;
 }
 
-export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceWriteTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; mutationLockingEnabled?: boolean },
+) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  return options?.mutationLockingEnabled ? wrapToolMutationLock(normalized, root) : normalized;
 }
 
-export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceEditTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; mutationLockingEnabled?: boolean },
+) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
   const withRecovery = wrapHostEditToolWithPostWriteRecovery(base, root);
-  return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
+  const normalized = wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
+  return options?.mutationLockingEnabled ? wrapToolMutationLock(normalized, root) : normalized;
 }
 
 export function createOpenClawReadTool(

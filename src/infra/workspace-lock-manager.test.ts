@@ -28,6 +28,7 @@ describe("workspace lock manager", () => {
     const lockPath = `${target}.lock`;
 
     const livePayload = {
+      token: "live-token",
       pid: process.pid,
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -53,6 +54,7 @@ describe("workspace lock manager", () => {
     const lockPath = path.join(workspaceDir, ".openclaw.workspace.lock");
 
     const stalePayload = {
+      token: "stale-token",
       pid: 999_999,
       createdAt: new Date(Date.now() - 20_000).toISOString(),
       expiresAt: new Date(Date.now() - 10_000).toISOString(),
@@ -104,5 +106,35 @@ describe("workspace lock manager", () => {
     });
     expect(lock.lockPath).toBe(`${target}.lock`);
     await lock.release();
+  });
+
+  it("does not remove lock file after ownership changed", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "owner.txt");
+    const lock = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    await fs.writeFile(
+      lock.lockPath,
+      JSON.stringify({
+        token: "foreign-owner",
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        targetPath: target,
+        kind: "file",
+      }),
+      "utf8",
+    );
+
+    await lock.release();
+    const persisted = JSON.parse(await fs.readFile(lock.lockPath, "utf8")) as { token: string };
+    expect(persisted.token).toBe("foreign-owner");
+
+    await fs.rm(lock.lockPath, { force: true });
   });
 });
