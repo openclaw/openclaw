@@ -1073,7 +1073,7 @@ export function renderApp(state: AppViewState) {
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
-                enableResponseChips: state.tab === "chat",
+                enableResponseChips: true,
               })
             : nothing
         }
