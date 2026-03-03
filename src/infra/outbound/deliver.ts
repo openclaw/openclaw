@@ -184,17 +184,26 @@ function createPluginHandler(
             text: caption,
             mediaUrl,
           })
-      : async (caption, mediaUrl, overrides) => {
-          log.warn("plugin sendMedia not defined; degrading media payload to sendText", {
-            channel: params.channel,
-            mediaUrl,
-          });
-          const text = caption || mediaUrl;
-          return sendText({
-            ...resolveCtx(overrides),
-            text,
-          });
-        },
+      : (() => {
+          let warnedOnce = false;
+          return async (
+            caption: string,
+            mediaUrl: string,
+            overrides?: { replyToId?: string | null; threadId?: string | number | null },
+          ) => {
+            if (!warnedOnce) {
+              warnedOnce = true;
+              log.warn("plugin sendMedia not defined; degrading media payloads to sendText", {
+                channel: params.channel,
+              });
+            }
+            const text = caption ? `${caption}\n${mediaUrl}` : mediaUrl;
+            return sendText({
+              ...resolveCtx(overrides),
+              text,
+            });
+          };
+        })(),
   };
 }
 

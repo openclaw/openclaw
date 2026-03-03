@@ -880,7 +880,9 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendText).toHaveBeenCalledTimes(1);
-    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "media caption" }));
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "media caption\nhttps://example.com/a.png" }),
+    );
     expect(results).toEqual([{ channel: "line", messageId: "ln-media-fallback-1" }]);
   });
 
@@ -936,11 +938,8 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(logMocks.warn).toHaveBeenCalledWith(
-      "plugin sendMedia not defined; degrading media payload to sendText",
-      expect.objectContaining({
-        channel: "line",
-        mediaUrl: "https://example.com/a.png",
-      }),
+      "plugin sendMedia not defined; degrading media payloads to sendText",
+      expect.objectContaining({ channel: "line" }),
     );
   });
 
