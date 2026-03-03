@@ -145,6 +145,30 @@ describe("doctor config flow", () => {
     ).toBe(false);
   });
 
+  it("does not warn for accounts explicitly enabled under disabled channels", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        whatsapp: {
+          enabled: false,
+          accounts: {
+            work: {
+              enabled: true,
+              groupPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.whatsapp.accounts.work.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+  });
+
   it("drops unknown keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
