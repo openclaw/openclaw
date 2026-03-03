@@ -245,6 +245,7 @@ function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
 function resolveBrowserBaseUrl(params: {
   target?: "sandbox" | "host";
   sandboxBridgeUrl?: string;
+  hostBridgeUrl?: string;
   allowHostControl?: boolean;
 }): string | undefined {
   const cfg = loadConfig();
@@ -264,6 +265,10 @@ function resolveBrowserBaseUrl(params: {
   if (params.allowHostControl === false) {
     throw new Error("Host browser control is disabled by sandbox policy.");
   }
+  const normalizedHostBridge = params.hostBridgeUrl?.trim() ?? "";
+  if (normalizedHostBridge) {
+    return normalizedHostBridge.replace(/\/$/, "");
+  }
   if (!resolved.enabled) {
     throw new Error(
       "Browser control is disabled. Set browser.enabled=true in ~/.openclaw/openclaw.json.",
@@ -274,6 +279,7 @@ function resolveBrowserBaseUrl(params: {
 
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
+  hostBridgeUrl?: string;
   allowHostControl?: boolean;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
@@ -323,6 +329,7 @@ export function createBrowserTool(opts?: {
         : resolveBrowserBaseUrl({
             target: resolvedTarget,
             sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+            hostBridgeUrl: opts?.hostBridgeUrl,
             allowHostControl: opts?.allowHostControl,
           });
 

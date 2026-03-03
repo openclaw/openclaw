@@ -6,10 +6,12 @@ import {
   __testing,
   assertActorCanSendMessage,
   assertPermissionContractsReadyForActor,
+  resolveActorWebBridgeRoute,
 } from "./tool-permission-contracts.js";
 
 describe("tool permission contracts", () => {
   let workspaceDir: string;
+  const originalPinchtabEnvDir = process.env.OPENCLAW_PINCHTAB_ENV_DIR;
 
   beforeEach(() => {
     workspaceDir = mkdtempSync(join(tmpdir(), "openclaw-tool-permissions-"));
@@ -21,6 +23,11 @@ describe("tool permission contracts", () => {
       rmSync(workspaceDir, { recursive: true, force: true });
     }
     __testing.clearContractsCache();
+    if (originalPinchtabEnvDir === undefined) {
+      delete process.env.OPENCLAW_PINCHTAB_ENV_DIR;
+    } else {
+      process.env.OPENCLAW_PINCHTAB_ENV_DIR = originalPinchtabEnvDir;
+    }
   });
 
   it("fails fast for malformed executive contracts", () => {
@@ -58,5 +65,41 @@ subagents:
         workspaceDir,
       }),
     ).toThrow("forbidden by actor policy");
+  });
+
+  it("resolves actor web bridge route and token from per-instance env file", () => {
+    const coreDir = join(workspaceDir, "01_agent_os/core");
+    const envDir = join(workspaceDir, "bridge-env");
+    mkdirSync(coreDir, { recursive: true });
+    mkdirSync(envDir, { recursive: true });
+    writeFileSync(
+      join(coreDir, "tool_permissions.yaml"),
+      `version: 1
+executive_orchestrator:
+  allowed_tools: [web_browsing]
+  forbidden_tools: []
+  write_scopes: [executive/]
+  max_pages: 30
+  web_bridge_provider: pinchtab
+  web_bridge_instance: don_cordazzo
+  web_bridge_port: 9867
+`,
+      "utf8",
+    );
+    writeFileSync(join(envDir, "don_cordazzo.env"), "BRIDGE_TOKEN=test-token-123\n", "utf8");
+    process.env.OPENCLAW_PINCHTAB_ENV_DIR = envDir;
+    const route = resolveActorWebBridgeRoute({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+    expect(route).toEqual({
+      actor: "executive_orchestrator",
+      provider: "pinchtab",
+      instance: "don_cordazzo",
+      port: 9867,
+      baseUrl: "http://127.0.0.1:9867",
+      token: "test-token-123",
+    });
   });
 });

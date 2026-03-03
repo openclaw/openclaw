@@ -26,6 +26,7 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 export function createOpenClawTools(options?: {
   sandboxBrowserBridgeUrl?: string;
+  hostBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
@@ -127,6 +128,7 @@ export function createOpenClawTools(options?: {
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
+      hostBridgeUrl: options?.hostBrowserBridgeUrl,
       allowHostControl: options?.allowHostBrowserControl,
     }),
     createCanvasTool({ config: options?.config }),

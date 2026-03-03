@@ -1,4 +1,5 @@
 import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
+import { setBridgeAuthForPort } from "../browser/bridge-auth-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -45,7 +46,10 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
-import { assertPermissionContractsReadyForActor } from "./tool-permission-contracts.js";
+import {
+  assertPermissionContractsReadyForActor,
+  resolveActorWebBridgeRoute,
+} from "./tool-permission-contracts.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -319,6 +323,16 @@ export function createOpenClawCodingTools(options?: {
     sessionKey: options?.sessionKey,
     workspaceDir: workspaceRoot,
   });
+  const actorWebBridgeRoute = resolveActorWebBridgeRoute({
+    agentId,
+    sessionKey: options?.sessionKey,
+    workspaceDir: workspaceRoot,
+  });
+  if (actorWebBridgeRoute?.provider === "pinchtab" && actorWebBridgeRoute.token) {
+    setBridgeAuthForPort(actorWebBridgeRoute.port, {
+      token: actorWebBridgeRoute.token,
+    });
+  }
   const workspaceOnly = fsPolicy.workspaceOnly;
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
@@ -465,6 +479,7 @@ export function createOpenClawCodingTools(options?: {
     ...listChannelAgentTools({ cfg: options?.config }),
     ...createOpenClawTools({
       sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
+      hostBrowserBridgeUrl: actorWebBridgeRoute?.baseUrl,
       allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
       agentSessionKey: options?.sessionKey,
       agentChannel: resolveGatewayMessageChannel(options?.messageProvider),

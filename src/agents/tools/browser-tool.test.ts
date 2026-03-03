@@ -276,6 +276,16 @@ describe("browser tool snapshot maxChars", () => {
     );
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
+
+  it("uses actor-specific host bridge url when provided", async () => {
+    const tool = createBrowserTool({ hostBridgeUrl: "http://127.0.0.1:9867" });
+    await tool.execute?.("call-1", { action: "status" });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      "http://127.0.0.1:9867",
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
 });
 
 describe("browser tool url alias support", () => {

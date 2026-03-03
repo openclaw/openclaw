@@ -16,6 +16,9 @@ type ToolPermissionsFile = {
     forbidden_tools?: string[];
     write_scopes?: string[];
     max_pages?: number;
+    web_bridge_provider?: string;
+    web_bridge_instance?: string;
+    web_bridge_port?: number;
   };
 };
 
@@ -26,6 +29,9 @@ type SubagentsRegistryFile = {
     forbidden_tools?: string[];
     write_scopes?: string[];
     max_pages?: number;
+    web_bridge_provider?: string;
+    web_bridge_instance?: string;
+    web_bridge_port?: number;
   }>;
 };
 
@@ -58,6 +64,18 @@ export type ActorPermissionPolicy = {
   forbiddenTools: Set<string>;
   writeScopes: string[];
   maxPages: number;
+  webBridgeProvider?: string;
+  webBridgeInstance?: string;
+  webBridgePort?: number;
+};
+
+export type ActorWebBridgeRoute = {
+  actor: string;
+  provider: string;
+  instance: string;
+  port: number;
+  baseUrl: string;
+  token?: string;
 };
 
 export type ToolPermissionDecision = {
@@ -160,15 +178,65 @@ function toActorPolicy(params: {
     forbidden_tools?: string[];
     write_scopes?: string[];
     max_pages?: number;
+    web_bridge_provider?: string;
+    web_bridge_instance?: string;
+    web_bridge_port?: number;
   };
 }): ActorPermissionPolicy {
+  const provider = normalizePermissionToken(params.value?.web_bridge_provider);
+  const instance =
+    typeof params.value?.web_bridge_instance === "string"
+      ? params.value.web_bridge_instance.trim()
+      : "";
+  const portRaw = params.value?.web_bridge_port;
+  const port =
+    typeof portRaw === "number" && Number.isFinite(portRaw) ? Math.floor(portRaw) : undefined;
   return {
     actor: params.actor,
     allowedTools: new Set((params.value?.allowed_tools ?? []).map(normalizePermissionToken)),
     forbiddenTools: new Set((params.value?.forbidden_tools ?? []).map(normalizePermissionToken)),
     writeScopes: params.value?.write_scopes ?? [],
     maxPages: Number(params.value?.max_pages ?? 0),
+    webBridgeProvider: provider || undefined,
+    webBridgeInstance: instance || undefined,
+    webBridgePort: port && port > 0 ? port : undefined,
   };
+}
+
+function parseSimpleEnv(path: string): Record<string, string> {
+  if (!existsSync(path)) {
+    return {};
+  }
+  const raw = readFileSync(path, "utf8");
+  const entries: Record<string, string> = {};
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) {
+      continue;
+    }
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    entries[key] = value;
+  }
+  return entries;
+}
+
+function resolvePinchtabToken(instance: string): string | undefined {
+  const envDir = process.env.OPENCLAW_PINCHTAB_ENV_DIR?.trim() || "/etc/openclaw/pinchtab";
+  const envPath = join(envDir, `${instance}.env`);
+  const env = parseSimpleEnv(envPath);
+  const token = env.BRIDGE_TOKEN?.trim() || env.DON_TOKEN?.trim();
+  return token && token.length > 0 ? token : undefined;
 }
 
 export function resolveActorPermissionPolicy(
@@ -198,6 +266,29 @@ export function resolveActorPermissionPolicy(
     actor: normalizedAgentId,
     value: subagent,
   });
+}
+
+export function resolveActorWebBridgeRoute(
+  ctx?: ToolPermissionContext,
+): ActorWebBridgeRoute | undefined {
+  const actorPolicy = resolveActorPermissionPolicy(ctx);
+  if (!actorPolicy) {
+    return undefined;
+  }
+  if (actorPolicy.webBridgeProvider !== "pinchtab") {
+    return undefined;
+  }
+  if (!actorPolicy.webBridgeInstance || !actorPolicy.webBridgePort) {
+    return undefined;
+  }
+  return {
+    actor: actorPolicy.actor,
+    provider: "pinchtab",
+    instance: actorPolicy.webBridgeInstance,
+    port: actorPolicy.webBridgePort,
+    baseUrl: `http://127.0.0.1:${actorPolicy.webBridgePort}`,
+    token: resolvePinchtabToken(actorPolicy.webBridgeInstance),
+  };
 }
 
 function shouldRequireContractsForAgent(args: {
@@ -410,4 +501,5 @@ export function assertActorCanSendMessage(ctx?: ToolPermissionContext): void {
 
 export const __testing = {
   clearContractsCache: () => contractsCache.clear(),
+  parseSimpleEnv,
 };
