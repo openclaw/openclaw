@@ -176,6 +176,13 @@ export type LoggingConfig = {
   redactSensitive?: "off" | "tools";
   /** Regex patterns used to redact sensitive tokens (defaults apply when unset). */
   redactPatterns?: string[];
+  /**
+   * Timezone for log timestamps.
+   * - "utc" (default): Use UTC timestamps with Z suffix
+   * - "local": Use system local timezone
+   * - IANA timezone string (e.g., "Asia/Shanghai", "America/New_York")
+   */
+  timezone?: string;
 };
 
 export type DiagnosticsOtelConfig = {

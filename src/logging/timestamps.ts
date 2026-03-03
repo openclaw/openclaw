@@ -7,12 +7,33 @@ export function isValidTimeZone(tz: string): boolean {
   }
 }
 
+/**
+ * Resolve timezone configuration value to an IANA timezone string.
+ * - "utc" → "UTC"
+ * - "local" → system local timezone
+ * - IANA string → validated and returned as-is
+ * - undefined/invalid → falls back to process.env.TZ or system local
+ */
+export function resolveTimezone(timezone?: string): string {
+  if (timezone === "utc") {
+    return "UTC";
+  }
+  if (timezone === "local") {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }
+  if (timezone && isValidTimeZone(timezone)) {
+    return timezone;
+  }
+  // Fallback: check TZ env var, then system local
+  const envTz = process.env.TZ;
+  if (envTz && isValidTimeZone(envTz)) {
+    return envTz;
+  }
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
 export function formatLocalIsoWithOffset(now: Date, timeZone?: string): string {
-  const explicit = timeZone ?? process.env.TZ;
-  const tz =
-    explicit && isValidTimeZone(explicit)
-      ? explicit
-      : Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const tz = resolveTimezone(timeZone);
 
   const fmt = new Intl.DateTimeFormat("en", {
     timeZone: tz,

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatLocalIsoWithOffset, isValidTimeZone } from "./timestamps.js";
+import { formatLocalIsoWithOffset, isValidTimeZone, resolveTimezone } from "./timestamps.js";
 
 describe("formatLocalIsoWithOffset", () => {
   const testDate = new Date("2025-01-01T04:00:00.000Z");
@@ -61,5 +61,33 @@ describe("isValidTimeZone", () => {
     expect(isValidTimeZone("not-a-tz")).toBe(false);
     expect(isValidTimeZone("yo agent's")).toBe(false);
     expect(isValidTimeZone("")).toBe(false);
+  });
+});
+
+describe("resolveTimezone", () => {
+  it("returns 'UTC' for 'utc' input", () => {
+    expect(resolveTimezone("utc")).toBe("UTC");
+  });
+
+  it("returns system local timezone for 'local' input", () => {
+    const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect(resolveTimezone("local")).toBe(localTz);
+  });
+
+  it("returns the IANA timezone string as-is when valid", () => {
+    expect(resolveTimezone("Asia/Shanghai")).toBe("Asia/Shanghai");
+    expect(resolveTimezone("America/New_York")).toBe("America/New_York");
+    expect(resolveTimezone("Europe/London")).toBe("Europe/London");
+  });
+
+  it("falls back to system local timezone for invalid input", () => {
+    const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect(resolveTimezone("not-a-tz")).toBe(localTz);
+    expect(resolveTimezone("")).toBe(localTz);
+  });
+
+  it("falls back to system local timezone for undefined input", () => {
+    const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect(resolveTimezone(undefined)).toBe(localTz);
   });
 });

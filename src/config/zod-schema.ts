@@ -244,6 +244,7 @@ export const OpenClawSchema = z
           .optional(),
         redactSensitive: z.union([z.literal("off"), z.literal("tools")]).optional(),
         redactPatterns: z.array(z.string()).optional(),
+        timezone: z.string().optional(),
       })
       .strict()
       .optional(),
