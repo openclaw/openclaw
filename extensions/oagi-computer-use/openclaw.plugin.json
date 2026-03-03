@@ -1,0 +1,45 @@
+{
+  "id": "oagi-computer-use",
+  "name": "OAGI Computer Use",
+  "description": "Desktop automation via the OAGI Lux computer-use model.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": { "type": "string" },
+      "baseUrl": { "type": "string" },
+      "model": { "type": "string", "default": "lux-actor-1" },
+      "maxSteps": { "type": "number", "default": 20 },
+      "temperature": { "type": "number", "default": 0.5 },
+      "stepDelay": { "type": "number", "default": 1.0 }
+    }
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "OAGI API Key",
+      "sensitive": true,
+      "placeholder": "sk-..."
+    },
+    "baseUrl": {
+      "label": "Base URL",
+      "placeholder": "https://api.agiopen.org",
+      "advanced": true
+    },
+    "model": {
+      "label": "Model",
+      "placeholder": "lux-actor-1"
+    },
+    "maxSteps": {
+      "label": "Max Steps",
+      "advanced": true
+    },
+    "temperature": {
+      "label": "Temperature",
+      "advanced": true
+    },
+    "stepDelay": {
+      "label": "Step Delay (seconds)",
+      "advanced": true
+    }
+  }
+}

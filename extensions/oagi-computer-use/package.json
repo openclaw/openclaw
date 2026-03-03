@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/oagi-computer-use",
+  "version": "2026.3.2",
+  "private": true,
+  "description": "OAGI Lux computer-use agent integration for OpenClaw",
+  "type": "module",
+  "scripts": {
+    "postinstall": "node postinstall.mjs"
+  },
+  "dependencies": {
+    "@oagi/oagi": "^0.2.1",
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
