@@ -7,7 +7,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadConfigReturn: {} as Record<string, unknown>,
-  listAgentEntries: vi.fn(() => [] as Array<{ agentId: string }>),
+  listAgentEntries: vi.fn(() => [] as Array<Record<string, unknown>>),
   findAgentEntryIndex: vi.fn(() => -1),
   applyAgentConfig: vi.fn((_cfg: unknown, _opts: unknown) => ({})),
   pruneAgentConfig: vi.fn(() => ({ config: {}, removedBindings: 0 })),
@@ -15,7 +15,38 @@ const mocks = vi.hoisted(() => ({
   ensureAgentWorkspace: vi.fn(async () => {}),
   resolveAgentDir: vi.fn(() => "/agents/test-agent"),
   resolveAgentWorkspaceDir: vi.fn(() => "/workspace/test-agent"),
+  resolveAgentConfig: vi.fn((..._args: unknown[]) => undefined as unknown),
   resolveSessionTranscriptsDirForAgent: vi.fn(() => "/transcripts/test-agent"),
+  resolveStorePath: vi.fn(
+    (_store?: string, opts?: { agentId?: string }) => `/sessions/${opts?.agentId ?? "main"}.json`,
+  ),
+  loadSessionStore: vi.fn((_storePath: string) => ({
+    "agent:main:main": {
+      sessionId: "session-main",
+      updatedAt: 10,
+      sessionFile: "/transcripts/main/session-main.jsonl",
+      systemPromptReport: {
+        source: "run",
+        generatedAt: 10,
+        sessionId: "session-main",
+        sessionKey: "agent:main:main",
+        provider: "test",
+        model: "test-model",
+        workspaceDir: "/workspace/main",
+        bootstrapMaxChars: 0,
+        bootstrapTotalMaxChars: 0,
+        systemPrompt: {
+          chars: 0,
+          projectContextChars: 0,
+          nonProjectContextChars: 0,
+        },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 0, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      },
+    },
+  })),
+  saveSessionStore: vi.fn(async (_storePath: string, _store: Record<string, unknown>) => {}),
   listAgentsForGateway: vi.fn(() => ({
     defaultId: "main",
     mainKey: "agent:main:main",
@@ -25,6 +56,8 @@ const mocks = vi.hoisted(() => ({
   movePathToTrash: vi.fn(async () => "/trashed"),
   fsAccess: vi.fn(async () => {}),
   fsMkdir: vi.fn(async () => undefined),
+  fsCp: vi.fn(async () => undefined),
+  fsCopyFile: vi.fn(async () => undefined),
   fsAppendFile: vi.fn(async () => {}),
   fsReadFile: vi.fn(async () => ""),
   fsStat: vi.fn(async (..._args: unknown[]) => null as import("node:fs").Stats | null),
@@ -49,6 +82,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  resolveAgentConfig: mocks.resolveAgentConfig,
 }));
 
 vi.mock("../../agents/workspace.js", async () => {
@@ -63,15 +97,25 @@ vi.mock("../../agents/workspace.js", async () => {
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionTranscriptsDirForAgent: mocks.resolveSessionTranscriptsDirForAgent,
+  resolveStorePath: mocks.resolveStorePath,
+}));
+
+vi.mock("../../config/sessions/store.js", () => ({
+  loadSessionStore: mocks.loadSessionStore,
+  saveSessionStore: mocks.saveSessionStore,
 }));
 
 vi.mock("../../browser/trash.js", () => ({
   movePathToTrash: mocks.movePathToTrash,
 }));
 
-vi.mock("../../utils.js", () => ({
-  resolveUserPath: (p: string) => `/resolved${p.startsWith("/") ? "" : "/"}${p}`,
-}));
+vi.mock("../../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
+  return {
+    ...actual,
+    resolveUserPath: (p: string) => `/resolved${p.startsWith("/") ? "" : "/"}${p}`,
+  };
+});
 
 vi.mock("../session-utils.js", () => ({
   listAgentsForGateway: mocks.listAgentsForGateway,
@@ -86,6 +130,8 @@ vi.mock("node:fs/promises", async () => {
     ...actual,
     access: mocks.fsAccess,
     mkdir: mocks.fsMkdir,
+    cp: mocks.fsCp,
+    copyFile: mocks.fsCopyFile,
     appendFile: mocks.fsAppendFile,
     readFile: mocks.fsReadFile,
     stat: mocks.fsStat,
@@ -106,13 +152,17 @@ const { agentsHandlers } = await import("./agents.js");
 /* Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-function makeCall(method: keyof typeof agentsHandlers, params: Record<string, unknown>) {
+function makeCall(
+  method: keyof typeof agentsHandlers,
+  params: Record<string, unknown>,
+  opts?: { context?: unknown },
+) {
   const respond = vi.fn();
   const handler = agentsHandlers[method];
   const promise = handler({
     params,
     respond,
-    context: {} as never,
+    context: (opts?.context ?? {}) as never,
     req: { type: "req" as const, id: "1", method },
     client: null,
     isWebchatConnect: () => false,
@@ -216,6 +266,14 @@ async function expectUnsafeWorkspaceFile(method: "agents.files.get" | "agents.fi
 }
 
 beforeEach(() => {
+  mocks.resolveAgentWorkspaceDir.mockImplementation(() => "/workspace/test-agent");
+  mocks.resolveAgentDir.mockImplementation(() => "/agents/test-agent");
+  mocks.resolveSessionTranscriptsDirForAgent.mockImplementation(() => "/transcripts/test-agent");
+  mocks.resolveStorePath.mockImplementation(
+    (_store?: string, opts?: { agentId?: string }) => `/sessions/${opts?.agentId ?? "main"}.json`,
+  );
+  mocks.resolveAgentConfig.mockImplementation(() => undefined);
+  mocks.fsAccess.mockImplementation(async () => undefined);
   mocks.fsReadFile.mockImplementation(async () => {
     throw createEnoentError();
   });
@@ -226,6 +284,8 @@ beforeEach(() => {
     throw createEnoentError();
   });
   mocks.fsRealpath.mockImplementation(async (p: string) => p);
+  mocks.fsCp.mockImplementation(async () => undefined);
+  mocks.fsCopyFile.mockImplementation(async () => undefined);
   mocks.fsOpen.mockImplementation(
     async () =>
       ({
@@ -361,6 +421,272 @@ describe("agents.create", () => {
       expect.stringContaining("IDENTITY.md"),
       expect.stringMatching(/- Name: Fancy Agent[\s\S]*- Emoji: 🤖[\s\S]*- Avatar:/),
       "utf-8",
+    );
+  });
+});
+
+describe("agents.clone", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadConfigReturn = {
+      session: { store: "/sessions/{agentId}.json" },
+      bindings: [{ agentId: "main", match: { channel: "telegram" } }],
+      tools: { agentToAgent: { allow: ["main"] } },
+    };
+    mocks.listAgentEntries.mockReturnValue([
+      {
+        id: "main",
+        name: "Main Agent",
+        workspace: "/workspace/main",
+        agentDir: "/agents/main",
+        memorySearch: {
+          enabled: true,
+          provider: "auto",
+          model: "text-embedding-3-small",
+          store: { driver: "sqlite", path: "/memory/{agentId}.sqlite", vector: { enabled: false } },
+        },
+      },
+    ]);
+    mocks.resolveAgentConfig.mockImplementation((...args: unknown[]) => {
+      const candidate = args[1];
+      const agentId = typeof candidate === "string" ? candidate : "";
+      if (!agentId) {
+        return undefined;
+      }
+      return {
+        memorySearch: {
+          enabled: true,
+          provider: "auto",
+          model: "text-embedding-3-small",
+          store: { driver: "sqlite", path: "/memory/{agentId}.sqlite", vector: { enabled: false } },
+        },
+      };
+    });
+    mocks.resolveAgentWorkspaceDir.mockImplementation((...args: unknown[]) =>
+      path.join("/workspace", typeof args[1] === "string" ? args[1] : "main"),
+    );
+    mocks.resolveAgentDir.mockImplementation((...args: unknown[]) =>
+      path.join("/agents", typeof args[1] === "string" ? args[1] : "main"),
+    );
+    mocks.resolveSessionTranscriptsDirForAgent.mockImplementation((...args: unknown[]) =>
+      path.join("/transcripts", typeof args[0] === "string" ? args[0] : "main"),
+    );
+
+    const existing = new Set([
+      "/workspace/main",
+      "/agents/main",
+      "/sessions/main.json",
+      "/transcripts/main",
+      "/memory/main.sqlite",
+    ]);
+    mocks.fsAccess.mockImplementation(async (...args: unknown[]) => {
+      const filePath = args[0];
+      if (existing.has(String(filePath))) {
+        return;
+      }
+      throw createEnoentError();
+    });
+  });
+
+  it("clones workspace, sessions, memory, bindings, and cron jobs", async () => {
+    const cronList = vi.fn(async () => [
+      {
+        id: "job-1",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        name: "Morning check",
+        enabled: true,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "status" },
+        state: {},
+      },
+    ]);
+    const cronAdd = vi.fn(async () => ({ id: "job-2" }));
+
+    const { respond, promise } = makeCall(
+      "agents.clone",
+      { sourceAgentId: "main" },
+      {
+        context: {
+          cron: {
+            list: cronList,
+            add: cronAdd,
+          },
+        },
+      },
+    );
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+        sourceAgentId: "main",
+        copied: expect.objectContaining({
+          workspace: true,
+          agentDir: true,
+          sessionsStore: true,
+          sessionsTranscripts: true,
+          memoryStore: expect.any(Boolean),
+          cronJobs: 1,
+          bindings: 1,
+        }),
+      }),
+      undefined,
+    );
+
+    const payload = respond.mock.calls[0]?.[1] as {
+      agentId: string;
+      copied: { cronJobs: number };
+    };
+    expect(payload.agentId).not.toBe("main");
+    expect(payload.copied.cronJobs).toBe(1);
+    expect(mocks.fsCp).toHaveBeenCalledTimes(3);
+    expect(mocks.fsCopyFile).toHaveBeenCalled();
+    expect(mocks.saveSessionStore).toHaveBeenCalledTimes(1);
+    expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(cronAdd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: payload.agentId,
+        sessionKey: `agent:${payload.agentId}:main`,
+      }),
+    );
+
+    const saveCall = mocks.saveSessionStore.mock.calls.at(0);
+    expect(saveCall).toBeDefined();
+    if (!saveCall) {
+      throw new Error("expected saveSessionStore call");
+    }
+    const savedStorePath = String(saveCall[0]);
+    const savedStore = saveCall[1] as Record<
+      string,
+      { sessionFile?: string; systemPromptReport?: { sessionKey?: string; workspaceDir?: string } }
+    >;
+    expect(savedStorePath).toBe(`/sessions/${payload.agentId}.json`);
+    expect(Object.keys(savedStore)).toContain(`agent:${payload.agentId}:main`);
+    expect(savedStore[`agent:${payload.agentId}:main`]?.sessionFile).toBe(
+      `/transcripts/${payload.agentId}/session-main.jsonl`,
+    );
+    expect(savedStore[`agent:${payload.agentId}:main`]?.systemPromptReport?.sessionKey).toBe(
+      `agent:${payload.agentId}:main`,
+    );
+    expect(savedStore[`agent:${payload.agentId}:main`]?.systemPromptReport?.workspaceDir).toBe(
+      `/workspace/${payload.agentId}`,
+    );
+  });
+
+  it("rejects cloning from unknown source agent", async () => {
+    const { respond, promise } = makeCall("agents.clone", { sourceAgentId: "ghost" }, {});
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("not found") }),
+    );
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("skips transcript directory copy when target transcripts already exist", async () => {
+    const existing = new Set([
+      "/workspace/main",
+      "/agents/main",
+      "/sessions/main.json",
+      "/transcripts/main",
+      "/transcripts/coordi",
+      "/memory/main.sqlite",
+    ]);
+    mocks.fsAccess.mockImplementation(async (...args: unknown[]) => {
+      const filePath = args[0];
+      if (existing.has(String(filePath))) {
+        return;
+      }
+      throw createEnoentError();
+    });
+
+    const { respond, promise } = makeCall("agents.clone", {
+      sourceAgentId: "main",
+      name: "coordi",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        agentId: "coordi",
+        copied: expect.objectContaining({ sessionsTranscripts: true }),
+        warnings: expect.arrayContaining([
+          "session transcript directory already present; skipped directory copy",
+        ]),
+      }),
+      undefined,
+    );
+    expect(mocks.fsCp).not.toHaveBeenCalledWith(
+      "/transcripts/main",
+      "/transcripts/coordi",
+      expect.anything(),
+    );
+  });
+
+  it("skips cloning duplicate cron jobs already present for target agent", async () => {
+    const cronList = vi.fn(async () => [
+      {
+        id: "job-source",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        name: "Morning check",
+        enabled: true,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "status" },
+        state: {},
+      },
+      {
+        id: "job-existing-target",
+        agentId: "coordi",
+        name: "Morning check",
+        enabled: true,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "status" },
+        state: {},
+      },
+    ]);
+    const cronAdd = vi.fn(async () => ({ id: "job-new" }));
+
+    const { respond, promise } = makeCall(
+      "agents.clone",
+      { sourceAgentId: "main", name: "coordi" },
+      {
+        context: {
+          cron: {
+            list: cronList,
+            add: cronAdd,
+          },
+        },
+      },
+    );
+    await promise;
+
+    expect(cronAdd).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        agentId: "coordi",
+        copied: expect.objectContaining({ cronJobs: 0 }),
+        warnings: expect.arrayContaining(['skipped 1 duplicate cron job for agent "coordi"']),
+      }),
+      undefined,
     );
   });
 });

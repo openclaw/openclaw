@@ -42,6 +42,8 @@ export type SkillStatusEntry = {
   disabled: boolean;
   blockedByAllowlist: boolean;
   eligible: boolean;
+  type: "default" | "optional";
+  selectedByAgents: string[];
   requirements: Requirements;
   missing: Requirements;
   configChecks: SkillStatusConfigCheck[];
@@ -51,8 +53,53 @@ export type SkillStatusEntry = {
 export type SkillStatusReport = {
   workspaceDir: string;
   managedSkillsDir: string;
+  defaultSkills: string[];
   skills: SkillStatusEntry[];
 };
+
+function normalizeSkillNames(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const value of raw) {
+    const name = String(value).trim();
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
+}
+
+function resolveSelectedByAgents(config?: OpenClawConfig): Map<string, string[]> {
+  const bySkill = new Map<string, string[]>();
+  const agents = config?.agents?.list;
+  if (!Array.isArray(agents)) {
+    return bySkill;
+  }
+  for (const agent of agents) {
+    const agentId = typeof agent?.id === "string" ? agent.id.trim() : "";
+    if (!agentId || !Array.isArray(agent.skills)) {
+      continue;
+    }
+    const normalizedSkills = normalizeSkillNames(agent.skills);
+    for (const skillName of normalizedSkills) {
+      const existing = bySkill.get(skillName);
+      if (existing) {
+        existing.push(agentId);
+      } else {
+        bySkill.set(skillName, [agentId]);
+      }
+    }
+  }
+  for (const [skillName, agentIds] of bySkill.entries()) {
+    bySkill.set(skillName, Array.from(new Set(agentIds)).toSorted());
+  }
+  return bySkill;
+}
 
 function resolveSkillKey(entry: SkillEntry): string {
   return entry.metadata?.skillKey ?? entry.skill.name;
@@ -172,6 +219,8 @@ function buildSkillStatus(
   prefs?: SkillsInstallPreferences,
   eligibility?: SkillEligibilityContext,
   bundledNames?: Set<string>,
+  defaultSkillSet?: ReadonlySet<string>,
+  selectedByAgentsBySkill?: ReadonlyMap<string, string[]>,
 ): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
@@ -179,6 +228,8 @@ function buildSkillStatus(
   const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
   const always = entry.metadata?.always === true;
+  const type = defaultSkillSet?.has(entry.skill.name) ? "default" : "optional";
+  const selectedByAgents = selectedByAgentsBySkill?.get(entry.skill.name) ?? [];
   const isEnvSatisfied = (envName: string) =>
     Boolean(
       process.env[envName] ||
@@ -217,6 +268,8 @@ function buildSkillStatus(
     disabled,
     blockedByAllowlist,
     eligible,
+    type,
+    selectedByAgents,
     requirements: required,
     missing,
     configChecks,
@@ -234,6 +287,9 @@ export function buildWorkspaceSkillStatus(
   },
 ): SkillStatusReport {
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
+  const defaultSkills = normalizeSkillNames(opts?.config?.agents?.defaults?.skills);
+  const defaultSkillSet = new Set(defaultSkills);
+  const selectedByAgentsBySkill = resolveSelectedByAgents(opts?.config);
   const bundledContext = resolveBundledSkillsContext();
   const skillEntries =
     opts?.entries ??
@@ -246,8 +302,17 @@ export function buildWorkspaceSkillStatus(
   return {
     workspaceDir,
     managedSkillsDir,
+    defaultSkills,
     skills: skillEntries.map((entry) =>
-      buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility, bundledContext.names),
+      buildSkillStatus(
+        entry,
+        opts?.config,
+        prefs,
+        opts?.eligibility,
+        bundledContext.names,
+        defaultSkillSet,
+        selectedByAgentsBySkill,
+      ),
     ),
   };
 }

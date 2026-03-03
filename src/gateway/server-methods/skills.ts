@@ -157,48 +157,110 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     const p = params as {
       skillKey: string;
+      skillName?: string;
       enabled?: boolean;
       apiKey?: string;
       env?: Record<string, string>;
+      type?: "default" | "optional";
     };
     const cfg = loadConfig();
-    const skills = cfg.skills ? { ...cfg.skills } : {};
-    const entries = skills.entries ? { ...skills.entries } : {};
-    const current = entries[p.skillKey] ? { ...entries[p.skillKey] } : {};
-    if (typeof p.enabled === "boolean") {
-      current.enabled = p.enabled;
-    }
-    if (typeof p.apiKey === "string") {
-      const trimmed = normalizeSecretInput(p.apiKey);
-      if (trimmed) {
-        current.apiKey = trimmed;
-      } else {
-        delete current.apiKey;
+    const nextConfig: OpenClawConfig = { ...cfg };
+
+    const shouldUpdateSkillEntry =
+      typeof p.enabled === "boolean" || typeof p.apiKey === "string" || Boolean(p.env);
+    let currentSkillConfig: Record<string, unknown> | undefined;
+    if (shouldUpdateSkillEntry) {
+      const skills = cfg.skills ? { ...cfg.skills } : {};
+      const entries = skills.entries ? { ...skills.entries } : {};
+      const current = entries[p.skillKey] ? { ...entries[p.skillKey] } : {};
+      if (typeof p.enabled === "boolean") {
+        current.enabled = p.enabled;
       }
-    }
-    if (p.env && typeof p.env === "object") {
-      const nextEnv = current.env ? { ...current.env } : {};
-      for (const [key, value] of Object.entries(p.env)) {
-        const trimmedKey = key.trim();
-        if (!trimmedKey) {
-          continue;
-        }
-        const trimmedVal = value.trim();
-        if (!trimmedVal) {
-          delete nextEnv[trimmedKey];
+      if (typeof p.apiKey === "string") {
+        const trimmed = normalizeSecretInput(p.apiKey);
+        if (trimmed) {
+          current.apiKey = trimmed;
         } else {
-          nextEnv[trimmedKey] = trimmedVal;
+          delete current.apiKey;
         }
       }
-      current.env = nextEnv;
+      if (p.env && typeof p.env === "object") {
+        const nextEnv = current.env ? { ...current.env } : {};
+        for (const [key, value] of Object.entries(p.env)) {
+          const trimmedKey = key.trim();
+          if (!trimmedKey) {
+            continue;
+          }
+          const trimmedVal = value.trim();
+          if (!trimmedVal) {
+            delete nextEnv[trimmedKey];
+          } else {
+            nextEnv[trimmedKey] = trimmedVal;
+          }
+        }
+        if (Object.keys(nextEnv).length === 0) {
+          delete current.env;
+        } else {
+          current.env = nextEnv;
+        }
+      }
+      if (Object.keys(current).length > 0) {
+        entries[p.skillKey] = current;
+      } else {
+        delete entries[p.skillKey];
+      }
+      if (Object.keys(entries).length > 0) {
+        skills.entries = entries;
+      } else {
+        delete skills.entries;
+      }
+      if (Object.keys(skills).length > 0) {
+        nextConfig.skills = skills;
+      } else {
+        delete nextConfig.skills;
+      }
+      currentSkillConfig = current;
     }
-    entries[p.skillKey] = current;
-    skills.entries = entries;
-    const nextConfig: OpenClawConfig = {
-      ...cfg,
-      skills,
-    };
+
+    let nextDefaultSkills: string[] | undefined;
+    if (p.type) {
+      const skillName = (p.skillName ?? p.skillKey).trim();
+      if (!skillName) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "skills.update requires a non-empty skill name"),
+        );
+        return;
+      }
+      const agents = nextConfig.agents ? { ...nextConfig.agents } : {};
+      const defaults = agents.defaults ? { ...agents.defaults } : {};
+      const currentDefaultSkills = Array.isArray(defaults.skills)
+        ? defaults.skills.map((entry) => String(entry).trim()).filter(Boolean)
+        : [];
+      const dedupedDefaultSkills = Array.from(new Set(currentDefaultSkills));
+      nextDefaultSkills =
+        p.type === "default"
+          ? dedupedDefaultSkills.includes(skillName)
+            ? dedupedDefaultSkills
+            : [...dedupedDefaultSkills, skillName]
+          : dedupedDefaultSkills.filter((name) => name !== skillName);
+      defaults.skills = nextDefaultSkills;
+      agents.defaults = defaults;
+      nextConfig.agents = agents;
+    }
+
     await writeConfigFile(nextConfig);
-    respond(true, { ok: true, skillKey: p.skillKey, config: current }, undefined);
+    respond(
+      true,
+      {
+        ok: true,
+        skillKey: p.skillKey,
+        ...(currentSkillConfig ? { config: currentSkillConfig } : {}),
+        ...(nextDefaultSkills ? { defaultSkills: nextDefaultSkills } : {}),
+        ...(p.type ? { type: p.type } : {}),
+      },
+      undefined,
+    );
   },
 };

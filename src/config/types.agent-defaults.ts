@@ -191,6 +191,8 @@ export type AgentDefaultsConfig = {
   elevatedDefault?: "off" | "on" | "ask" | "full";
   /** Default block streaming level when no override is present. */
   blockStreamingDefault?: "off" | "on";
+  /** Optional default allowlist of skills for agents without per-agent skills config. */
+  skills?: string[];
   /**
    * Block streaming boundary:
    * - "text_end": end of each assistant text content block (before tool calls)

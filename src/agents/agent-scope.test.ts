@@ -7,6 +7,7 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
+  resolveAgentSkillsFilter,
   resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
   resolveAgentModelFallbacksOverride,
@@ -62,6 +63,45 @@ describe("resolveAgentConfig", () => {
       sandbox: undefined,
       tools: undefined,
     });
+  });
+
+  it("uses default skills filter when agent has no explicit skills", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skills: ["playwright", "git-master"],
+        },
+        list: [{ id: "main" }],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfg, "main")).toEqual(["playwright", "git-master"]);
+  });
+
+  it("prefers per-agent skills filter over defaults", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skills: ["playwright", "git-master"],
+        },
+        list: [{ id: "main", skills: ["frontend-ui-ux"] }],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfg, "main")).toEqual(["frontend-ui-ux"]);
+  });
+
+  it("returns empty filter when agent explicitly disables all skills", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skills: ["playwright", "git-master"],
+        },
+        list: [{ id: "main", skills: [] }],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfg, "main")).toEqual([]);
   });
 
   it("resolves explicit and effective model primary separately", () => {

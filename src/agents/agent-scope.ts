@@ -147,7 +147,11 @@ export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {
-  return normalizeSkillFilter(resolveAgentConfig(cfg, agentId)?.skills);
+  const agentSkills = resolveAgentConfig(cfg, agentId)?.skills;
+  if (Array.isArray(agentSkills)) {
+    return normalizeSkillFilter(agentSkills);
+  }
+  return normalizeSkillFilter(cfg.agents?.defaults?.skills);
 }
 
 function resolveModelPrimary(raw: unknown): string | undefined {

@@ -8,6 +8,7 @@ export type SkillsListOptions = {
   json?: boolean;
   eligible?: boolean;
   verbose?: boolean;
+  type?: "all" | "default" | "optional";
 };
 
 export type SkillInfoOptions = {
@@ -38,6 +39,20 @@ function formatSkillStatus(skill: SkillStatusEntry): string {
   return theme.error("✗ missing");
 }
 
+function normalizeListType(raw: unknown): "all" | "default" | "optional" {
+  if (raw === "default" || raw === "optional") {
+    return raw;
+  }
+  return "all";
+}
+
+function formatSkillType(skill: SkillStatusEntry): string {
+  if (skill.type === "default") {
+    return theme.success("default");
+  }
+  return theme.muted("optional");
+}
+
 function formatSkillName(skill: SkillStatusEntry): string {
   const emoji = skill.emoji ?? "📦";
   return `${emoji} ${theme.command(skill.name)}`;
@@ -64,12 +79,20 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
 }
 
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
-  const skills = opts.eligible ? report.skills.filter((s) => s.eligible) : report.skills;
+  const requestedType = normalizeListType(opts.type);
+  const typeFiltered =
+    requestedType === "all" ? report.skills : report.skills.filter((s) => s.type === requestedType);
+  const skills = opts.eligible ? typeFiltered.filter((s) => s.eligible) : typeFiltered;
 
   if (opts.json) {
     const jsonReport = {
       workspaceDir: report.workspaceDir,
       managedSkillsDir: report.managedSkillsDir,
+      defaultSkills: report.defaultSkills,
+      filter: {
+        type: requestedType,
+        eligibleOnly: Boolean(opts.eligible),
+      },
       skills: skills.map((s) => ({
         name: s.name,
         description: s.description,
@@ -78,6 +101,8 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         disabled: s.disabled,
         blockedByAllowlist: s.blockedByAllowlist,
         source: s.source,
+        type: s.type,
+        selectedByAgents: s.selectedByAgents,
         bundled: s.bundled,
         primaryEnv: s.primaryEnv,
         homepage: s.homepage,
@@ -88,9 +113,10 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
   }
 
   if (skills.length === 0) {
+    const scopeLabel = requestedType === "all" ? "" : ` for type \`${requestedType}\``;
     const message = opts.eligible
-      ? `No eligible skills found. Run \`${formatCliCommand("openclaw skills list")}\` to see all skills.`
-      : "No skills found.";
+      ? `No eligible skills found${scopeLabel}. Run \`${formatCliCommand("openclaw skills list")}\` to see all skills.`
+      : `No skills found${scopeLabel}.`;
     return appendClawHubHint(message, opts.json);
   }
 
@@ -102,7 +128,9 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
       Status: formatSkillStatus(skill),
       Skill: formatSkillName(skill),
       Description: theme.muted(skill.description),
+      Type: formatSkillType(skill),
       Source: skill.source ?? "",
+      Selected: skill.selectedByAgents.join(", "),
       Missing: missing ? theme.warn(missing) : "",
     };
   });
@@ -111,9 +139,11 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
     { key: "Status", header: "Status", minWidth: 10 },
     { key: "Skill", header: "Skill", minWidth: 18, flex: true },
     { key: "Description", header: "Description", minWidth: 24, flex: true },
+    { key: "Type", header: "Type", minWidth: 10 },
     { key: "Source", header: "Source", minWidth: 10 },
   ];
   if (opts.verbose) {
+    columns.push({ key: "Selected", header: "Selected By", minWidth: 14, flex: true });
     columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
   }
 
@@ -170,6 +200,10 @@ export function formatSkillInfo(
 
   lines.push(theme.heading("Details:"));
   lines.push(`${theme.muted("  Source:")} ${skill.source}`);
+  lines.push(`${theme.muted("  Type:")} ${skill.type}`);
+  if (skill.selectedByAgents.length > 0) {
+    lines.push(`${theme.muted("  Selected by agents:")} ${skill.selectedByAgents.join(", ")}`);
+  }
   lines.push(`${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`);
   if (skill.homepage) {
     lines.push(`${theme.muted("  Homepage:")} ${skill.homepage}`);
@@ -239,6 +273,7 @@ export function formatSkillInfo(
 
 export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOptions): string {
   const eligible = report.skills.filter((s) => s.eligible);
+  const defaults = report.skills.filter((s) => s.type === "default");
   const disabled = report.skills.filter((s) => s.disabled);
   const blocked = report.skills.filter((s) => s.blockedByAllowlist && !s.disabled);
   const missingReqs = report.skills.filter(
@@ -250,6 +285,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
       {
         summary: {
           total: report.skills.length,
+          defaults: defaults.length,
           eligible: eligible.length,
           disabled: disabled.length,
           blocked: blocked.length,
@@ -273,6 +309,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   lines.push(theme.heading("Skills Status Check"));
   lines.push("");
   lines.push(`${theme.muted("Total:")} ${report.skills.length}`);
+  lines.push(`${theme.muted("Default:")} ${defaults.length}`);
   lines.push(`${theme.success("✓")} ${theme.muted("Eligible:")} ${eligible.length}`);
   lines.push(`${theme.warn("⏸")} ${theme.muted("Disabled:")} ${disabled.length}`);
   lines.push(`${theme.warn("🚫")} ${theme.muted("Blocked by allowlist:")} ${blocked.length}`);

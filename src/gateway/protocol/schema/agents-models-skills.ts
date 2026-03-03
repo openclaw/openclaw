@@ -64,6 +64,41 @@ export const AgentsCreateResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentsCloneParamsSchema = Type.Object(
+  {
+    sourceAgentId: NonEmptyString,
+    name: Type.Optional(NonEmptyString),
+    workspace: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+const AgentsCloneCopiedSchema = Type.Object(
+  {
+    workspace: Type.Boolean(),
+    agentDir: Type.Boolean(),
+    sessionsStore: Type.Boolean(),
+    sessionsTranscripts: Type.Boolean(),
+    memoryStore: Type.Boolean(),
+    cronJobs: Type.Integer({ minimum: 0 }),
+    bindings: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsCloneResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    sourceAgentId: NonEmptyString,
+    agentId: NonEmptyString,
+    name: NonEmptyString,
+    workspace: NonEmptyString,
+    copied: AgentsCloneCopiedSchema,
+    warnings: Type.Optional(Type.Array(NonEmptyString)),
+  },
+  { additionalProperties: false },
+);
+
 export const AgentsUpdateParamsSchema = Type.Object(
   {
     agentId: NonEmptyString,
@@ -201,9 +236,11 @@ export const SkillsInstallParamsSchema = Type.Object(
 export const SkillsUpdateParamsSchema = Type.Object(
   {
     skillKey: NonEmptyString,
+    skillName: Type.Optional(NonEmptyString),
     enabled: Type.Optional(Type.Boolean()),
     apiKey: Type.Optional(Type.String()),
     env: Type.Optional(Type.Record(NonEmptyString, Type.String())),
+    type: Type.Optional(Type.Union([Type.Literal("default"), Type.Literal("optional")])),
   },
   { additionalProperties: false },
 );

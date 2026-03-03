@@ -2,6 +2,8 @@ import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfigMock = vi.fn();
+const readConfigFileSnapshotMock = vi.fn();
+const writeConfigFileMock = vi.fn();
 const resolveAgentWorkspaceDirMock = vi.fn();
 const resolveDefaultAgentIdMock = vi.fn();
 const buildWorkspaceSkillStatusMock = vi.fn();
@@ -17,6 +19,8 @@ const runtime = {
 
 vi.mock("../config/config.js", () => ({
   loadConfig: loadConfigMock,
+  readConfigFileSnapshot: readConfigFileSnapshotMock,
+  writeConfigFile: writeConfigFileMock,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -48,7 +52,13 @@ describe("registerSkillsCli", () => {
   const report = {
     workspaceDir: "/tmp/workspace",
     managedSkillsDir: "/tmp/workspace/.skills",
-    skills: [],
+    defaultSkills: [],
+    skills: [
+      {
+        name: "playwright",
+        skillKey: "playwright",
+      },
+    ],
   };
 
   async function runCli(args: string[]) {
@@ -63,13 +73,20 @@ describe("registerSkillsCli", () => {
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     buildWorkspaceSkillStatusMock.mockReturnValue(report);
+    readConfigFileSnapshotMock.mockResolvedValue({
+      valid: true,
+      path: "/tmp/openclaw.json",
+      resolved: {},
+      issues: [],
+    });
+    writeConfigFileMock.mockResolvedValue(undefined);
     formatSkillsListMock.mockReturnValue("skills-list-output");
     formatSkillInfoMock.mockReturnValue("skills-info-output");
     formatSkillsCheckMock.mockReturnValue("skills-check-output");
   });
 
   it("runs list command with resolved report and formatter options", async () => {
-    await runCli(["skills", "list", "--eligible", "--verbose", "--json"]);
+    await runCli(["skills", "list", "--eligible", "--verbose", "--type", "default", "--json"]);
 
     expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace", {
       config: { gateway: {} },
@@ -79,6 +96,7 @@ describe("registerSkillsCli", () => {
       expect.objectContaining({
         eligible: true,
         verbose: true,
+        type: "default",
         json: true,
       }),
     );
@@ -120,5 +138,28 @@ describe("registerSkillsCli", () => {
     expect(runtime.error).toHaveBeenCalledWith("Error: config exploded");
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
+  });
+
+  it("classifies skill as default and writes config", async () => {
+    await runCli(["skills", "classify", "playwright", "default"]);
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalled();
+    expect(writeConfigFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            skills: ["playwright"],
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects invalid classify type", async () => {
+    await runCli(["skills", "classify", "playwright", "unknown"]);
+
+    expect(runtime.error).toHaveBeenCalledWith('Invalid type. Use "default" or "optional".');
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 });

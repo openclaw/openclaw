@@ -101,6 +101,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",
+    "agents.clone",
     "agents.create",
     "agents.update",
     "agents.delete",

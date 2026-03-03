@@ -5,6 +5,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
+import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -26,17 +27,29 @@ import {
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
-import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
+import {
+  resolveSessionTranscriptsDirForAgent,
+  resolveStorePath,
+} from "../../config/sessions/paths.js";
+import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { CronJob, CronJobCreate } from "../../cron/types.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
 import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
 import { isNotFoundPathError } from "../../infra/path-guards.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import {
+  DEFAULT_AGENT_ID,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  toAgentStoreSessionKey,
+} from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateAgentsCloneParams,
   validateAgentsCreateParams,
   validateAgentsDeleteParams,
   validateAgentsFilesGetParams,
@@ -46,7 +59,7 @@ import {
   validateAgentsUpdateParams,
 } from "../protocol/index.js";
 import { listAgentsForGateway } from "../session-utils.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const BOOTSTRAP_FILE_NAMES = [
   DEFAULT_AGENTS_FILENAME,
@@ -63,7 +76,11 @@ const BOOTSTRAP_FILE_NAMES_POST_ONBOARDING = BOOTSTRAP_FILE_NAMES.filter(
 
 const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME] as const;
 
-const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
+const ALLOWED_FILE_NAMES = new Set<string>([
+  ...BOOTSTRAP_FILE_NAMES,
+  ...MEMORY_FILE_NAMES,
+  "company-config.json",
+]);
 
 function resolveAgentWorkspaceFileOrRespondError(
   params: Record<string, unknown>,
@@ -388,6 +405,267 @@ function respondAgentNotFound(respond: RespondFn, agentId: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
 }
 
+async function pathExists(pathname: string): Promise<boolean> {
+  try {
+    await fs.access(pathname);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sameResolvedPath(a: string, b: string): boolean {
+  return path.resolve(a) === path.resolve(b);
+}
+
+function resolveUniqueCloneName(baseName: string, existingNames: Set<string>): string {
+  const base = sanitizeIdentityLine(baseName) || "Agent Copy";
+  if (!existingNames.has(base.toLowerCase())) {
+    return base;
+  }
+  for (let idx = 2; idx < 5000; idx += 1) {
+    const candidate = `${base} ${idx}`;
+    if (!existingNames.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+  }
+  return `${base} ${Date.now()}`;
+}
+
+function resolveUniqueCloneAgentId(params: {
+  baseName: string;
+  sourceAgentId: string;
+  existingIds: Set<string>;
+}): string {
+  const baseFromName = normalizeAgentId(params.baseName);
+  const preferred =
+    baseFromName && baseFromName !== DEFAULT_AGENT_ID
+      ? baseFromName
+      : normalizeAgentId(`${params.sourceAgentId}-copy`);
+  if (!params.existingIds.has(preferred) && preferred !== DEFAULT_AGENT_ID) {
+    return preferred;
+  }
+  const root = normalizeAgentId(`${params.sourceAgentId}-copy`);
+  if (!params.existingIds.has(root) && root !== DEFAULT_AGENT_ID) {
+    return root;
+  }
+  for (let idx = 2; idx < 5000; idx += 1) {
+    const candidate = normalizeAgentId(`${root}-${idx}`);
+    if (!params.existingIds.has(candidate) && candidate !== DEFAULT_AGENT_ID) {
+      return candidate;
+    }
+  }
+  return normalizeAgentId(`${root}-${Date.now()}`);
+}
+
+async function resolveUniqueClonePath(basePath: string, takenPaths: Set<string>): Promise<string> {
+  const baseResolved = path.resolve(basePath);
+  if (!takenPaths.has(baseResolved) && !(await pathExists(baseResolved))) {
+    takenPaths.add(baseResolved);
+    return baseResolved;
+  }
+  for (let idx = 2; idx < 5000; idx += 1) {
+    const candidate = `${baseResolved}-${idx}`;
+    const resolved = path.resolve(candidate);
+    if (takenPaths.has(resolved)) {
+      continue;
+    }
+    if (await pathExists(resolved)) {
+      continue;
+    }
+    takenPaths.add(resolved);
+    return resolved;
+  }
+  const fallback = `${baseResolved}-${Date.now()}`;
+  const resolvedFallback = path.resolve(fallback);
+  takenPaths.add(resolvedFallback);
+  return resolvedFallback;
+}
+
+async function copyDirectoryIfExists(sourceDir: string, targetDir: string): Promise<boolean> {
+  if (!(await pathExists(sourceDir))) {
+    return false;
+  }
+  if (await pathExists(targetDir)) {
+    throw new Error(`target already exists: ${targetDir}`);
+  }
+  await fs.mkdir(path.dirname(targetDir), { recursive: true });
+  await fs.cp(sourceDir, targetDir, {
+    recursive: true,
+    force: false,
+    errorOnExist: true,
+    preserveTimestamps: true,
+  });
+  return true;
+}
+
+async function copyFileIfExists(sourceFile: string, targetFile: string): Promise<boolean> {
+  if (!(await pathExists(sourceFile))) {
+    return false;
+  }
+  if (await pathExists(targetFile)) {
+    throw new Error(`target already exists: ${targetFile}`);
+  }
+  await fs.mkdir(path.dirname(targetFile), { recursive: true });
+  await fs.copyFile(sourceFile, targetFile);
+  return true;
+}
+
+function rewriteSessionKeyForClone(sessionKey: string | undefined, targetAgentId: string): string {
+  const raw = typeof sessionKey === "string" ? sessionKey.trim() : "";
+  if (!raw) {
+    return toAgentStoreSessionKey({ agentId: targetAgentId, requestKey: "main" });
+  }
+  const parsed = parseAgentSessionKey(raw);
+  const requestKey = parsed?.rest?.trim() || raw;
+  return toAgentStoreSessionKey({ agentId: targetAgentId, requestKey });
+}
+
+function mergeSessionEntriesByRecency(
+  existing: SessionEntry | undefined,
+  candidate: SessionEntry,
+): SessionEntry {
+  if (!existing) {
+    return candidate;
+  }
+  return (candidate.updatedAt ?? 0) >= (existing.updatedAt ?? 0) ? candidate : existing;
+}
+
+async function rewriteClonedSessionStore(params: {
+  targetStorePath: string;
+  targetAgentId: string;
+  sourceWorkspaceDir: string;
+  targetWorkspaceDir: string;
+  targetSessionsDir: string;
+}): Promise<number> {
+  const store = loadSessionStore(params.targetStorePath, { skipCache: true });
+  if (Object.keys(store).length === 0) {
+    return 0;
+  }
+
+  const rewritten: Record<string, SessionEntry> = {};
+  let changedEntries = 0;
+
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    const nextKey = rewriteSessionKeyForClone(sessionKey, params.targetAgentId);
+    const rawSessionFile = typeof entry.sessionFile === "string" ? entry.sessionFile.trim() : "";
+    const nextSessionFile = rawSessionFile
+      ? path.join(params.targetSessionsDir, path.basename(rawSessionFile))
+      : undefined;
+    const nextReport = entry.systemPromptReport
+      ? {
+          ...entry.systemPromptReport,
+          sessionKey: rewriteSessionKeyForClone(
+            entry.systemPromptReport.sessionKey,
+            params.targetAgentId,
+          ),
+          workspaceDir:
+            entry.systemPromptReport.workspaceDir === params.sourceWorkspaceDir
+              ? params.targetWorkspaceDir
+              : entry.systemPromptReport.workspaceDir,
+        }
+      : undefined;
+    const nextEntry: SessionEntry = {
+      ...entry,
+      ...(nextSessionFile ? { sessionFile: nextSessionFile } : {}),
+      ...(nextReport ? { systemPromptReport: nextReport } : {}),
+    };
+
+    if (
+      nextKey !== sessionKey ||
+      nextEntry.sessionFile !== entry.sessionFile ||
+      nextEntry.systemPromptReport?.sessionKey !== entry.systemPromptReport?.sessionKey ||
+      nextEntry.systemPromptReport?.workspaceDir !== entry.systemPromptReport?.workspaceDir
+    ) {
+      changedEntries += 1;
+    }
+
+    rewritten[nextKey] = mergeSessionEntriesByRecency(rewritten[nextKey], nextEntry);
+  }
+
+  if (changedEntries > 0) {
+    await saveSessionStore(params.targetStorePath, rewritten);
+  }
+  return changedEntries;
+}
+
+function normalizeCronFingerprintValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeCronFingerprintValue(entry));
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const entries = Object.entries(record)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, entryValue]) => [key, normalizeCronFingerprintValue(entryValue)] as const);
+    return Object.fromEntries(entries);
+  }
+  return value;
+}
+
+function buildClonedCronJobInput(job: CronJob, targetAgentId: string): CronJobCreate {
+  return {
+    agentId: targetAgentId,
+    sessionKey: rewriteSessionKeyForClone(job.sessionKey, targetAgentId),
+    name: job.name,
+    description: job.description,
+    enabled: job.enabled,
+    deleteAfterRun: job.deleteAfterRun,
+    schedule: structuredClone(job.schedule),
+    sessionTarget: job.sessionTarget,
+    wakeMode: job.wakeMode,
+    payload: structuredClone(job.payload),
+    ...(job.delivery ? { delivery: structuredClone(job.delivery) } : {}),
+  };
+}
+
+function fingerprintClonedCronJob(input: CronJobCreate): string {
+  const canonical = normalizeCronFingerprintValue({
+    agentId: normalizeAgentId(input.agentId ?? DEFAULT_AGENT_ID),
+    sessionKey: input.sessionKey,
+    name: input.name,
+    description: input.description ?? null,
+    enabled: input.enabled,
+    deleteAfterRun: input.deleteAfterRun === true,
+    schedule: input.schedule,
+    sessionTarget: input.sessionTarget,
+    wakeMode: input.wakeMode,
+    payload: input.payload,
+    delivery: input.delivery ?? null,
+  });
+  return JSON.stringify(canonical);
+}
+
+async function cloneAgentCronJobs(params: {
+  context: GatewayRequestContext;
+  sourceAgentId: string;
+  targetAgentId: string;
+}): Promise<{ cloned: number; skippedDuplicates: number }> {
+  const jobs = await params.context.cron.list({ includeDisabled: true });
+  const sourceJobs = jobs.filter(
+    (job) => normalizeAgentId(job.agentId ?? DEFAULT_AGENT_ID) === params.sourceAgentId,
+  );
+  const existingTargetFingerprints = new Set(
+    jobs
+      .filter((job) => normalizeAgentId(job.agentId ?? DEFAULT_AGENT_ID) === params.targetAgentId)
+      .map((job) => fingerprintClonedCronJob(buildClonedCronJobInput(job, params.targetAgentId))),
+  );
+  let cloned = 0;
+  let skippedDuplicates = 0;
+  for (const job of sourceJobs) {
+    const clonedInput = buildClonedCronJobInput(job, params.targetAgentId);
+    const fingerprint = fingerprintClonedCronJob(clonedInput);
+    if (existingTargetFingerprints.has(fingerprint)) {
+      skippedDuplicates += 1;
+      continue;
+    }
+    await params.context.cron.add(clonedInput);
+    existingTargetFingerprints.add(fingerprint);
+    cloned += 1;
+  }
+  return { cloned, skippedDuplicates };
+}
+
 async function moveToTrashBestEffort(pathname: string): Promise<void> {
   if (!pathname) {
     return;
@@ -472,6 +750,239 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const cfg = loadConfig();
     const result = listAgentsForGateway(cfg);
     respond(true, result, undefined);
+  },
+  "agents.clone": async ({ params, respond, context }) => {
+    if (!validateAgentsCloneParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agents.clone params: ${formatValidationErrors(validateAgentsCloneParams.errors)}`,
+        ),
+      );
+      return;
+    }
+
+    const cfg = loadConfig();
+    const sourceAgentIdRaw = typeof params.sourceAgentId === "string" ? params.sourceAgentId : "";
+    const sourceAgentId = normalizeAgentId(sourceAgentIdRaw);
+    const existingIds = new Set(listAgentIds(cfg).map((id) => normalizeAgentId(id)));
+    if (!existingIds.has(sourceAgentId)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `agent "${sourceAgentId}" not found`),
+      );
+      return;
+    }
+
+    const entries = listAgentEntries(cfg);
+    const sourceEntryIndex = findAgentEntryIndex(entries, sourceAgentId);
+    const sourceEntry = sourceEntryIndex >= 0 ? entries[sourceEntryIndex] : undefined;
+    const sourceName = sourceEntry?.name?.trim() || sourceAgentId;
+    const requestedName = resolveOptionalStringParam(params.name);
+    const existingNames = new Set(
+      entries
+        .map((entry) => entry?.name?.trim())
+        .filter((name): name is string => Boolean(name))
+        .map((name) => name.toLowerCase()),
+    );
+    const cloneName = resolveUniqueCloneName(requestedName ?? `${sourceName} Copy`, existingNames);
+    const targetAgentId = resolveUniqueCloneAgentId({
+      baseName: cloneName,
+      sourceAgentId,
+      existingIds,
+    });
+
+    const sourceWorkspaceDir = resolveAgentWorkspaceDir(cfg, sourceAgentId);
+    const sourceAgentDir = resolveAgentDir(cfg, sourceAgentId);
+    const requestedWorkspace = resolveOptionalStringParam(params.workspace);
+    const workspaceBase = requestedWorkspace
+      ? resolveUserPath(requestedWorkspace)
+      : `${sourceWorkspaceDir}-copy`;
+
+    const takenWorkspacePaths = new Set(
+      [...existingIds].map((agentId) => path.resolve(resolveAgentWorkspaceDir(cfg, agentId))),
+    );
+    const targetWorkspaceDir = await resolveUniqueClonePath(workspaceBase, takenWorkspacePaths);
+
+    const takenAgentDirPaths = new Set(
+      [...existingIds].map((agentId) => path.resolve(resolveAgentDir(cfg, agentId))),
+    );
+    const targetAgentDir = await resolveUniqueClonePath(
+      `${sourceAgentDir}-copy`,
+      takenAgentDirPaths,
+    );
+
+    const clonedAgentEntry = {
+      ...(sourceEntry ? structuredClone(sourceEntry) : {}),
+      id: targetAgentId,
+      default: false,
+      name: cloneName,
+      workspace: targetWorkspaceDir,
+      agentDir: targetAgentDir,
+    };
+
+    const nextAgents = entries.length > 0 ? [...entries] : [{ id: DEFAULT_AGENT_ID }];
+    nextAgents.push(clonedAgentEntry);
+
+    const sourceBindings = (cfg.bindings ?? []).filter(
+      (binding) => normalizeAgentId(binding.agentId) === sourceAgentId,
+    );
+    const clonedBindings = sourceBindings.map((binding) => ({
+      ...structuredClone(binding),
+      agentId: targetAgentId,
+    }));
+    const nextBindings =
+      clonedBindings.length > 0 ? [...(cfg.bindings ?? []), ...clonedBindings] : cfg.bindings;
+
+    const allowList = cfg.tools?.agentToAgent?.allow ?? [];
+    const allowHasSource = allowList.some((id) => normalizeAgentId(id) === sourceAgentId);
+    const allowHasTarget = allowList.some((id) => normalizeAgentId(id) === targetAgentId);
+    const nextTools =
+      allowHasSource && !allowHasTarget
+        ? {
+            ...cfg.tools,
+            agentToAgent: {
+              ...cfg.tools?.agentToAgent,
+              allow: [...allowList, targetAgentId],
+            },
+          }
+        : cfg.tools;
+
+    const nextConfig = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        list: nextAgents,
+      },
+      bindings: nextBindings,
+      tools: nextTools,
+    };
+
+    const sourceSessionsStorePath = resolveStorePath(cfg.session?.store, {
+      agentId: sourceAgentId,
+    });
+    const targetSessionsStorePath = resolveStorePath(cfg.session?.store, {
+      agentId: targetAgentId,
+    });
+    const sourceSessionsDir = resolveSessionTranscriptsDirForAgent(sourceAgentId);
+    const targetSessionsDir = resolveSessionTranscriptsDirForAgent(targetAgentId);
+
+    const sourceMemoryStorePath = resolveMemorySearchConfig(cfg, sourceAgentId)?.store.path;
+    const targetMemoryStorePath = resolveMemorySearchConfig(nextConfig, targetAgentId)?.store.path;
+
+    const copied = {
+      workspace: false,
+      agentDir: false,
+      sessionsStore: false,
+      sessionsTranscripts: false,
+      memoryStore: false,
+      cronJobs: 0,
+      bindings: clonedBindings.length,
+    };
+    const warnings: string[] = [];
+
+    copied.workspace = await copyDirectoryIfExists(sourceWorkspaceDir, targetWorkspaceDir);
+    if (!copied.workspace) {
+      const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
+      await ensureAgentWorkspace({
+        dir: targetWorkspaceDir,
+        ensureBootstrapFiles: !skipBootstrap,
+      });
+    }
+
+    copied.agentDir = await copyDirectoryIfExists(sourceAgentDir, targetAgentDir);
+    if (!copied.agentDir) {
+      await fs.mkdir(targetAgentDir, { recursive: true });
+    }
+
+    if (sameResolvedPath(sourceSessionsDir, targetSessionsDir)) {
+      warnings.push(
+        "session transcript directory is shared by configuration; skipped directory copy",
+      );
+    } else if (await pathExists(targetSessionsDir)) {
+      copied.sessionsTranscripts = true;
+      warnings.push("session transcript directory already present; skipped directory copy");
+    } else {
+      copied.sessionsTranscripts = await copyDirectoryIfExists(
+        sourceSessionsDir,
+        targetSessionsDir,
+      );
+    }
+    if (!copied.sessionsTranscripts) {
+      await fs.mkdir(targetSessionsDir, { recursive: true });
+    }
+
+    if (sameResolvedPath(sourceSessionsStorePath, targetSessionsStorePath)) {
+      warnings.push("session store path is shared by configuration; skipped dedicated store copy");
+    } else if (await pathExists(targetSessionsStorePath)) {
+      copied.sessionsStore = true;
+      warnings.push("session store already present after transcript copy; skipped file copy");
+    } else {
+      copied.sessionsStore = await copyFileIfExists(
+        sourceSessionsStorePath,
+        targetSessionsStorePath,
+      );
+    }
+
+    if (sourceMemoryStorePath && targetMemoryStorePath) {
+      if (sameResolvedPath(sourceMemoryStorePath, targetMemoryStorePath)) {
+        warnings.push(
+          "memory store path is shared by configuration; skipped dedicated memory copy",
+        );
+      } else {
+        copied.memoryStore = await copyFileIfExists(sourceMemoryStorePath, targetMemoryStorePath);
+      }
+    }
+
+    const rewrittenSessionEntries = await rewriteClonedSessionStore({
+      targetStorePath: targetSessionsStorePath,
+      targetAgentId,
+      sourceWorkspaceDir,
+      targetWorkspaceDir,
+      targetSessionsDir,
+    });
+    if (rewrittenSessionEntries > 0) {
+      warnings.push(
+        `rewrote ${rewrittenSessionEntries} cloned session store entr${rewrittenSessionEntries === 1 ? "y" : "ies"} for agent "${targetAgentId}"`,
+      );
+    }
+
+    await writeConfigFile(nextConfig);
+
+    try {
+      const cronClone = await cloneAgentCronJobs({
+        context,
+        sourceAgentId,
+        targetAgentId,
+      });
+      copied.cronJobs = cronClone.cloned;
+      if (cronClone.skippedDuplicates > 0) {
+        warnings.push(
+          `skipped ${cronClone.skippedDuplicates} duplicate cron job${
+            cronClone.skippedDuplicates === 1 ? "" : "s"
+          } for agent "${targetAgentId}"`,
+        );
+      }
+    } catch (err) {
+      warnings.push(`failed to clone cron jobs: ${String(err)}`);
+    }
+
+    respond(
+      true,
+      {
+        ok: true,
+        sourceAgentId,
+        agentId: targetAgentId,
+        name: cloneName,
+        workspace: targetWorkspaceDir,
+        copied,
+        ...(warnings.length > 0 ? { warnings } : {}),
+      },
+      undefined,
+    );
   },
   "agents.create": async ({ params, respond }) => {
     if (!validateAgentsCreateParams(params)) {

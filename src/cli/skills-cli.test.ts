@@ -24,6 +24,8 @@ function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatus
     disabled: false,
     blockedByAllowlist: false,
     eligible: true,
+    type: "optional",
+    selectedByAgents: [],
     ...createEmptyInstallChecks(),
     ...overrides,
   };
@@ -33,6 +35,7 @@ function createMockReport(skills: SkillStatusEntry[]): SkillStatusReport {
   return {
     workspaceDir: "/workspace",
     managedSkillsDir: "/managed",
+    defaultSkills: [],
     skills,
   };
 }
@@ -53,12 +56,14 @@ describe("skills-cli", () => {
           description: "Capture UI screenshots",
           emoji: "📸",
           eligible: true,
+          type: "default",
         }),
       ]);
       const output = formatSkillsList(report, {});
       expect(output).toContain("peekaboo");
       expect(output).toContain("📸");
       expect(output).toContain("✓");
+      expect(output).toContain("default");
     });
 
     it("formats skills list with disabled skill", () => {
@@ -107,6 +112,16 @@ describe("skills-cli", () => {
       const output = formatSkillsList(report, { eligible: true });
       expect(output).toContain("eligible-one");
       expect(output).not.toContain("not-eligible");
+    });
+
+    it("filters to default skills with --type default", () => {
+      const report = createMockReport([
+        createMockSkill({ name: "default-skill", type: "default" }),
+        createMockSkill({ name: "optional-skill", type: "optional" }),
+      ]);
+      const output = formatSkillsList(report, { type: "default" });
+      expect(output).toContain("default-skill");
+      expect(output).not.toContain("optional-skill");
     });
   });
 
