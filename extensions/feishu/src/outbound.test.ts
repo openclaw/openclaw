@@ -136,6 +136,25 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "card_msg" }));
   });
+
+  it("forwards replyToId as replyToMessageId on sendText", async () => {
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "hello",
+      replyToId: "om_reply_1",
+      accountId: "main",
+    } as any);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "hello",
+        replyToMessageId: "om_reply_1",
+        accountId: "main",
+      }),
+    );
+  });
 });
 
 describe("feishuOutbound.sendMedia renderMode", () => {
@@ -177,5 +196,25 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "media_msg" }));
+  });
+
+  it("uses threadId fallback as replyToMessageId on sendMedia", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "caption",
+      mediaUrl: "https://example.com/image.png",
+      threadId: "om_thread_1",
+      accountId: "main",
+    } as any);
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        mediaUrl: "https://example.com/image.png",
+        replyToMessageId: "om_thread_1",
+        accountId: "main",
+      }),
+    );
   });
 });
