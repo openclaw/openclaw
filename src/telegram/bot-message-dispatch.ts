@@ -185,7 +185,7 @@ export const dispatchTelegramMessage = async ({
   const canStreamAnswerDraft =
     previewStreamingEnabled && !accountBlockStreamingEnabled && !forceBlockStreamingForReasoning;
   const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
-  streamingLog.info(
+  streamingLog.debug(
     `streaming decision: streamMode=${streamMode} previewEnabled=${previewStreamingEnabled} ` +
       `blockStreaming=${accountBlockStreamingEnabled} reasoningLevel=${resolvedReasoningLevel} ` +
       `forceBlockForReasoning=${forceBlockStreamingForReasoning} ` +
@@ -227,7 +227,7 @@ export const dispatchTelegramMessage = async ({
                 }
               : undefined,
           log: (msg) => streamingLog.debug(msg),
-          warn: (msg) => streamingLog.warn(msg),
+          warn: (msg) => streamingLog.debug(msg),
         })
       : undefined;
     return {
