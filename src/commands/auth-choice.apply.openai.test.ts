@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { setAuthProfileOrder, upsertAuthProfile } from "../agents/auth-profiles.js";
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
 import {
   createAuthTestLifecycle,
@@ -416,5 +416,63 @@ describe("applyAuthChoiceOpenAI", () => {
       provider: "default",
       id: "OPENAI_API_KEY",
     });
+  });
+
+  it("respects persisted auth profile order when selecting reusable OpenAI credentials", async () => {
+    const agentDir = await setupTempState();
+    delete process.env.OPENAI_API_KEY;
+
+    upsertAuthProfile({
+      profileId: "openai:first",
+      agentDir,
+      credential: {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-openai-first",
+      },
+    });
+    upsertAuthProfile({
+      profileId: "openai:second",
+      agentDir,
+      credential: {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-openai-second",
+      },
+    });
+    await setAuthProfileOrder({
+      agentDir,
+      provider: "openai",
+      order: ["openai:second", "openai:first"],
+    });
+
+    const runtime = createExitThrowingRuntime();
+    const confirm = vi.fn(async () => true);
+    const text = vi.fn(async () => "should-not-be-used");
+    const reconfigurePrompter = createWizardPrompter(
+      { confirm, text },
+      { defaultSelect: "plaintext" },
+    );
+    await applyAuthChoiceOpenAI({
+      authChoice: "openai-api-key",
+      config: {},
+      prompter: reconfigurePrompter,
+      runtime,
+      setDefaultModel: true,
+      agentDir,
+    });
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("profile:openai:second"),
+      }),
+    );
+    expect(text).not.toHaveBeenCalled();
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(agentDir);
+    expect(parsed.profiles?.["openai:default"]?.key).toBe("sk-openai-second");
+    expect(parsed.profiles?.["openai:default"]?.keyRef).toBeUndefined();
   });
 });

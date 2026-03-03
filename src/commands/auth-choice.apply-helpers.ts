@@ -109,7 +109,13 @@ async function resolveExistingProviderApiKey(params: {
     let store: AuthProfileStore = { version: 1, profiles: {} };
     try {
       const raw = await fs.readFile(resolveAuthStorePathForDisplay(params.agentDir), "utf-8");
-      const parsed = JSON.parse(raw) as { version?: number; profiles?: Record<string, unknown> };
+      const parsed = JSON.parse(raw) as {
+        version?: number;
+        profiles?: Record<string, unknown>;
+        order?: Record<string, unknown>;
+        lastGood?: Record<string, unknown>;
+        usageStats?: Record<string, unknown>;
+      };
       const profiles: Record<string, AuthProfileCredential> = {};
       if (parsed && typeof parsed === "object" && parsed.profiles) {
         for (const [profileId, profile] of Object.entries(parsed.profiles)) {
@@ -119,9 +125,38 @@ async function resolveExistingProviderApiKey(params: {
           profiles[profileId] = profile as AuthProfileCredential;
         }
       }
+      const order: Record<string, string[]> = {};
+      if (parsed && typeof parsed === "object" && parsed.order) {
+        for (const [provider, value] of Object.entries(parsed.order)) {
+          if (!Array.isArray(value)) {
+            continue;
+          }
+          const list = value
+            .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+            .filter((entry) => entry.length > 0);
+          if (list.length > 0) {
+            order[provider] = list;
+          }
+        }
+      }
+      const lastGood: Record<string, string> = {};
+      if (parsed && typeof parsed === "object" && parsed.lastGood) {
+        for (const [provider, value] of Object.entries(parsed.lastGood)) {
+          if (typeof value === "string" && value.trim().length > 0) {
+            lastGood[provider] = value;
+          }
+        }
+      }
+      const usageStats =
+        parsed && typeof parsed === "object" && parsed.usageStats && typeof parsed.usageStats === "object"
+          ? (parsed.usageStats as AuthProfileStore["usageStats"])
+          : undefined;
       store = {
         version: Number(parsed?.version ?? 1),
         profiles,
+        ...(Object.keys(order).length > 0 ? { order } : {}),
+        ...(Object.keys(lastGood).length > 0 ? { lastGood } : {}),
+        ...(usageStats ? { usageStats } : {}),
       };
     } catch {}
 
