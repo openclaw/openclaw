@@ -1,10 +1,11 @@
 import { describe, expect, test } from "vitest";
 import {
-  buildSystemRunApprovalBindingV1,
+  buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
-  matchSystemRunApprovalBindingV1,
+  matchSystemRunApprovalBinding,
   matchSystemRunApprovalEnvHash,
-} from "./system-run-approval-binding.js";
+  toSystemRunApprovalMismatchError,
+} from "../infra/system-run-approval-binding.js";
 
 describe("buildSystemRunApprovalEnvBinding", () => {
   test("normalizes keys and produces stable hash regardless of input order", () => {
@@ -47,16 +48,16 @@ describe("matchSystemRunApprovalEnvHash", () => {
   });
 });
 
-describe("matchSystemRunApprovalBindingV1", () => {
+describe("matchSystemRunApprovalBinding", () => {
   test("accepts matching binding with reordered env keys", () => {
-    const expected = buildSystemRunApprovalBindingV1({
+    const expected = buildSystemRunApprovalBinding({
       argv: ["git", "diff"],
       cwd: null,
       agentId: null,
       sessionKey: null,
       env: { SAFE_A: "1", SAFE_B: "2" },
     });
-    const actual = buildSystemRunApprovalBindingV1({
+    const actual = buildSystemRunApprovalBinding({
       argv: ["git", "diff"],
       cwd: null,
       agentId: null,
@@ -64,7 +65,7 @@ describe("matchSystemRunApprovalBindingV1", () => {
       env: { SAFE_B: "2", SAFE_A: "1" },
     });
     expect(
-      matchSystemRunApprovalBindingV1({
+      matchSystemRunApprovalBinding({
         expected: expected.binding,
         actual: actual.binding,
         actualEnvKeys: actual.envKeys,
@@ -73,21 +74,21 @@ describe("matchSystemRunApprovalBindingV1", () => {
   });
 
   test("rejects env mismatch", () => {
-    const expected = buildSystemRunApprovalBindingV1({
+    const expected = buildSystemRunApprovalBinding({
       argv: ["git", "diff"],
       cwd: null,
       agentId: null,
       sessionKey: null,
       env: { SAFE: "1" },
     });
-    const actual = buildSystemRunApprovalBindingV1({
+    const actual = buildSystemRunApprovalBinding({
       argv: ["git", "diff"],
       cwd: null,
       agentId: null,
       sessionKey: null,
       env: { SAFE: "2" },
     });
-    const result = matchSystemRunApprovalBindingV1({
+    const result = matchSystemRunApprovalBinding({
       expected: expected.binding,
       actual: actual.binding,
       actualEnvKeys: actual.envKeys,
@@ -97,5 +98,34 @@ describe("matchSystemRunApprovalBindingV1", () => {
       throw new Error("unreachable");
     }
     expect(result.code).toBe("APPROVAL_ENV_MISMATCH");
+  });
+});
+
+describe("toSystemRunApprovalMismatchError", () => {
+  test("includes runId/code and preserves mismatch details", () => {
+    const result = toSystemRunApprovalMismatchError({
+      runId: "approval-123",
+      match: {
+        ok: false,
+        code: "APPROVAL_ENV_MISMATCH",
+        message: "approval id env binding mismatch",
+        details: {
+          envKeys: ["SAFE_A"],
+          expectedEnvHash: "expected-hash",
+          actualEnvHash: "actual-hash",
+        },
+      },
+    });
+    expect(result).toEqual({
+      ok: false,
+      message: "approval id env binding mismatch",
+      details: {
+        code: "APPROVAL_ENV_MISMATCH",
+        runId: "approval-123",
+        envKeys: ["SAFE_A"],
+        expectedEnvHash: "expected-hash",
+        actualEnvHash: "actual-hash",
+      },
+    });
   });
 });

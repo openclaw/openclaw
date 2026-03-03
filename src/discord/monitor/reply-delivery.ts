@@ -4,10 +4,14 @@ import type { ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { loadConfig } from "../../config/config.js";
 import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
+import { createDiscordRetryRunner, type RetryRunner } from "../../infra/retry-policy.js";
+import { resolveRetryConfig, retryAsync, type RetryConfig } from "../../infra/retry.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { resolveDiscordAccount } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
+import { sendDiscordText } from "../send.shared.js";
 
 export type DiscordThreadBindingLookupRecord = {
   accountId: string;
@@ -20,7 +24,56 @@ export type DiscordThreadBindingLookupRecord = {
 
 export type DiscordThreadBindingLookup = {
   listBySessionKey: (targetSessionKey: string) => DiscordThreadBindingLookupRecord[];
+  touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
+
+type ResolvedRetryConfig = Required<RetryConfig>;
+
+const DISCORD_DELIVERY_RETRY_DEFAULTS: ResolvedRetryConfig = {
+  attempts: 3,
+  minDelayMs: 1000,
+  maxDelayMs: 30_000,
+  jitter: 0,
+};
+
+function isRetryableDiscordError(err: unknown): boolean {
+  const status = (err as { status?: number }).status ?? (err as { statusCode?: number }).statusCode;
+  return status === 429 || (status !== undefined && status >= 500);
+}
+
+function getDiscordRetryAfterMs(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  if (
+    "retryAfter" in err &&
+    typeof err.retryAfter === "number" &&
+    Number.isFinite(err.retryAfter)
+  ) {
+    return err.retryAfter * 1000;
+  }
+  const retryAfterRaw = (err as { headers?: Record<string, string> }).headers?.["retry-after"];
+  if (!retryAfterRaw) {
+    return undefined;
+  }
+  const retryAfterMs = Number(retryAfterRaw) * 1000;
+  return Number.isFinite(retryAfterMs) ? retryAfterMs : undefined;
+}
+
+function resolveDeliveryRetryConfig(retry?: RetryConfig): ResolvedRetryConfig {
+  return resolveRetryConfig(DISCORD_DELIVERY_RETRY_DEFAULTS, retry);
+}
+
+async function sendWithRetry(
+  fn: () => Promise<unknown>,
+  retryConfig: ResolvedRetryConfig,
+): Promise<void> {
+  await retryAsync(fn, {
+    ...retryConfig,
+    shouldRetry: (err) => isRetryableDiscordError(err),
+    retryAfterMs: getDiscordRetryAfterMs,
+  });
+}
 
 function resolveTargetChannelId(target: string): string | undefined {
   if (!target.startsWith("channel:")) {
@@ -82,6 +135,12 @@ async function sendDiscordChunkWithFallback(params: {
   binding?: DiscordThreadBindingLookupRecord;
   username?: string;
   avatarUrl?: string;
+  /** Pre-resolved channel ID to bypass redundant resolution per chunk. */
+  channelId?: string;
+  /** Pre-created retry runner to avoid creating one per chunk. */
+  request?: RetryRunner;
+  /** Pre-resolved retry config (account-level). */
+  retryConfig: ResolvedRetryConfig;
 }) {
   if (!params.text.trim()) {
     return;
@@ -104,12 +163,27 @@ async function sendDiscordChunkWithFallback(params: {
       // Fall through to the standard bot sender path.
     }
   }
-  await sendMessageDiscord(params.target, text, {
-    token: params.token,
-    rest: params.rest,
-    accountId: params.accountId,
-    replyTo: params.replyTo,
-  });
+  // When channelId and request are pre-resolved, send directly via sendDiscordText
+  // to avoid per-chunk overhead (channel-type GET, re-chunking, client creation)
+  // that can cause ordering issues under queue contention or rate limiting.
+  if (params.channelId && params.request && params.rest) {
+    const { channelId, request, rest } = params;
+    await sendWithRetry(
+      () => sendDiscordText(rest, channelId, text, params.replyTo, request),
+      params.retryConfig,
+    );
+    return;
+  }
+  await sendWithRetry(
+    () =>
+      sendMessageDiscord(params.target, text, {
+        token: params.token,
+        rest: params.rest,
+        accountId: params.accountId,
+        replyTo: params.replyTo,
+      }),
+    params.retryConfig,
+  );
 }
 
 async function sendAdditionalDiscordMedia(params: {
@@ -118,17 +192,24 @@ async function sendAdditionalDiscordMedia(params: {
   rest?: RequestClient;
   accountId?: string;
   mediaUrls: string[];
+  mediaLocalRoots?: readonly string[];
   resolveReplyTo: () => string | undefined;
+  retryConfig: ResolvedRetryConfig;
 }) {
   for (const mediaUrl of params.mediaUrls) {
     const replyTo = params.resolveReplyTo();
-    await sendMessageDiscord(params.target, "", {
-      token: params.token,
-      rest: params.rest,
-      mediaUrl,
-      accountId: params.accountId,
-      replyTo,
-    });
+    await sendWithRetry(
+      () =>
+        sendMessageDiscord(params.target, "", {
+          token: params.token,
+          rest: params.rest,
+          mediaUrl,
+          accountId: params.accountId,
+          mediaLocalRoots: params.mediaLocalRoots,
+          replyTo,
+        }),
+      params.retryConfig,
+    );
   }
 }
 
@@ -147,6 +228,7 @@ export async function deliverDiscordReply(params: {
   chunkMode?: ChunkMode;
   sessionKey?: string;
   threadBindings?: DiscordThreadBindingLookup;
+  mediaLocalRoots?: readonly string[];
 }) {
   const chunkLimit = Math.min(params.textLimit, 2000);
   const replyTo = params.replyToId?.trim() || undefined;
@@ -173,6 +255,16 @@ export async function deliverDiscordReply(params: {
     target: params.target,
   });
   const persona = resolveBindingPersona(binding);
+  // Pre-resolve channel ID and retry runner once to avoid per-chunk overhead.
+  // This eliminates redundant channel-type GET requests and client creation that
+  // can cause ordering issues when multiple chunks share the RequestClient queue.
+  const channelId = resolveTargetChannelId(params.target);
+  const account = resolveDiscordAccount({ cfg: loadConfig(), accountId: params.accountId });
+  const retryConfig = resolveDeliveryRetryConfig(account.config.retry);
+  const request: RetryRunner | undefined = channelId
+    ? createDiscordRetryRunner({ configRetry: account.config.retry })
+    : undefined;
+  let deliveredAny = false;
   for (const payload of params.replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = payload.text ?? "";
@@ -206,7 +298,11 @@ export async function deliverDiscordReply(params: {
           binding,
           username: persona.username,
           avatarUrl: persona.avatarUrl,
+          channelId,
+          request,
+          retryConfig,
         });
+        deliveredAny = true;
       }
       continue;
     }
@@ -225,6 +321,7 @@ export async function deliverDiscordReply(params: {
         accountId: params.accountId,
         replyTo,
       });
+      deliveredAny = true;
       // Voice messages cannot include text; send remaining text separately if present.
       await sendDiscordChunkWithFallback({
         target: params.target,
@@ -236,6 +333,9 @@ export async function deliverDiscordReply(params: {
         binding,
         username: persona.username,
         avatarUrl: persona.avatarUrl,
+        channelId,
+        request,
+        retryConfig,
       });
       // Additional media items are sent as regular attachments (voice is single-file only).
       await sendAdditionalDiscordMedia({
@@ -244,7 +344,9 @@ export async function deliverDiscordReply(params: {
         rest: params.rest,
         accountId: params.accountId,
         mediaUrls: mediaList.slice(1),
+        mediaLocalRoots: params.mediaLocalRoots,
         resolveReplyTo,
+        retryConfig,
       });
       continue;
     }
@@ -255,15 +357,23 @@ export async function deliverDiscordReply(params: {
       rest: params.rest,
       mediaUrl: firstMedia,
       accountId: params.accountId,
+      mediaLocalRoots: params.mediaLocalRoots,
       replyTo,
     });
+    deliveredAny = true;
     await sendAdditionalDiscordMedia({
       target: params.target,
       token: params.token,
       rest: params.rest,
       accountId: params.accountId,
       mediaUrls: mediaList.slice(1),
+      mediaLocalRoots: params.mediaLocalRoots,
       resolveReplyTo,
+      retryConfig,
     });
+  }
+
+  if (binding && deliveredAny) {
+    params.threadBindings?.touchThread?.({ threadId: binding.threadId });
   }
 }

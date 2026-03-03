@@ -1,8 +1,13 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
 import { resolveTelegramPreviewStreamMode } from "../../config/discord-preview-streaming.js";
-import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/types.js";
+import type {
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../../config/types.js";
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
 import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import type { TelegramStreamMode } from "./types.js";
 
@@ -16,34 +21,43 @@ export type TelegramThreadSpec = {
 export async function resolveTelegramGroupAllowFromContext(params: {
   chatId: string | number;
   accountId?: string;
+  isGroup?: boolean;
   isForum?: boolean;
   messageThreadId?: number | null;
   groupAllowFrom?: Array<string | number>;
   resolveTelegramGroupConfig: (
     chatId: string | number,
     messageThreadId?: number,
-  ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
+  ) => {
+    groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+    topicConfig?: TelegramTopicConfig;
+  };
 }): Promise<{
   resolvedThreadId?: number;
+  dmThreadId?: number;
   storeAllowFrom: string[];
-  groupConfig?: TelegramGroupConfig;
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   groupAllowOverride?: Array<string | number>;
   effectiveGroupAllow: NormalizedAllowFrom;
   hasGroupAllowOverride: boolean;
 }> {
-  const resolvedThreadId = resolveTelegramForumThreadId({
+  const accountId = normalizeAccountId(params.accountId);
+  // Use resolveTelegramThreadSpec to handle both forum groups AND DM topics
+  const threadSpec = resolveTelegramThreadSpec({
+    isGroup: params.isGroup ?? false,
     isForum: params.isForum,
     messageThreadId: params.messageThreadId,
   });
-  const storeAllowFrom = await readChannelAllowFromStore(
-    "telegram",
-    process.env,
-    params.accountId,
-  ).catch(() => []);
+  const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
+  const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+  const threadIdForConfig = resolvedThreadId ?? dmThreadId;
+  const storeAllowFrom = await readChannelAllowFromStore("telegram", process.env, accountId).catch(
+    () => [],
+  );
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
-    resolvedThreadId,
+    threadIdForConfig,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
@@ -52,6 +66,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
   return {
     resolvedThreadId,
+    dmThreadId,
     storeAllowFrom,
     groupConfig,
     topicConfig,
@@ -158,6 +173,24 @@ export function resolveTelegramStreamMode(telegramCfg?: {
 
 export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {
   return messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
+}
+
+/**
+ * Resolve the direct-message peer identifier for Telegram routing/session keys.
+ *
+ * In some Telegram DM deliveries (for example certain business/chat bridge flows),
+ * `chat.id` can differ from the actual sender user id. Prefer sender id when present
+ * so per-peer DM scopes isolate users correctly.
+ */
+export function resolveTelegramDirectPeerId(params: {
+  chatId: number | string;
+  senderId?: number | string | null;
+}) {
+  const senderId = params.senderId != null ? String(params.senderId).trim() : "";
+  if (senderId) {
+    return senderId;
+  }
+  return String(params.chatId);
 }
 
 export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {

@@ -143,4 +143,87 @@ describe("signal createSignalEventHandler inbound contract", () => {
       expect.any(Object),
     );
   });
+
+  it("does not auto-authorize DM commands in open mode without allowlists", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: [] } },
+        },
+        allowFrom: [],
+        groupAllowFrom: [],
+        account: "+15550009999",
+        blockStreaming: false,
+        historyLimit: 0,
+        groupHistories: new Map(),
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "/status",
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.CommandAuthorized).toBe(false);
+  });
+
+  it("drops own UUID inbound messages when only accountUuid is configured", async () => {
+    const ownUuid = "123e4567-e89b-12d3-a456-426614174000";
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"], accountUuid: ownUuid } },
+        },
+        account: undefined,
+        accountUuid: ownUuid,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: null,
+        sourceUuid: ownUuid,
+        dataMessage: {
+          message: "self message",
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("drops sync envelopes when syncMessage is present but null", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        syncMessage: null,
+        dataMessage: {
+          message: "replayed sentTranscript envelope",
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
 });

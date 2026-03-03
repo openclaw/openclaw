@@ -1,11 +1,14 @@
 import crypto from "node:crypto";
 import type {
   EndReason,
+  GetCallStatusInput,
+  GetCallStatusResult,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
   NormalizedEvent,
   PlayTtsInput,
+  WebhookParseOptions,
   ProviderWebhookParseResult,
   StartListeningInput,
   StopListeningInput,
@@ -28,7 +31,10 @@ export class MockProvider implements VoiceCallProvider {
     return { ok: true };
   }
 
-  parseWebhookEvent(ctx: WebhookContext): ProviderWebhookParseResult {
+  parseWebhookEvent(
+    ctx: WebhookContext,
+    _options?: WebhookParseOptions,
+  ): ProviderWebhookParseResult {
     try {
       const payload = JSON.parse(ctx.rawBody);
       const events: NormalizedEvent[] = [];
@@ -161,5 +167,13 @@ export class MockProvider implements VoiceCallProvider {
 
   async stopListening(_input: StopListeningInput): Promise<void> {
     // No-op for mock
+  }
+
+  async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
+    const id = input.providerCallId.toLowerCase();
+    if (id.includes("stale") || id.includes("ended") || id.includes("completed")) {
+      return { status: "completed", isTerminal: true };
+    }
+    return { status: "in-progress", isTerminal: false };
   }
 }
