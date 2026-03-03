@@ -65,9 +65,7 @@ export function normalizeMessageActionInput(params: {
   }
 
   if ((action === "react" || action === "reactions") && !normalizedArgs.messageId) {
-    const inferredMessageId =
-      toolContext?.currentMessageTs?.trim() ??
-      (toolContext?.currentMessageId != null ? String(toolContext.currentMessageId).trim() : "");
+    const inferredMessageId = toolContext?.currentMessageTs?.trim();
     if (inferredMessageId) {
       normalizedArgs.messageId = inferredMessageId;
     }
