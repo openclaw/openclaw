@@ -93,10 +93,18 @@ async function feishuHttpRequest<T>(
 // ============ URL Parsing ============
 
 /**
+ * Valid Feishu/Lark domain suffixes.
+ * Includes both China (feishu.cn) and international (larksuite.com, larkoffice.com) domains.
+ */
+const FEISHU_DOMAINS = ["feishu.cn", "larksuite.com", "larkoffice.com"];
+
+/**
  * Check if a hostname is a valid Feishu/Lark domain.
+ * Accepts both bare domains (feishu.cn) and subdomains (xxx.feishu.cn).
  */
 function isFeishuDomain(hostname: string): boolean {
-  return hostname.endsWith(".feishu.cn") || hostname.endsWith(".larksuite.com");
+  const lowerHost = hostname.toLowerCase();
+  return FEISHU_DOMAINS.some((domain) => lowerHost === domain || lowerHost.endsWith(`.${domain}`));
 }
 
 /**
@@ -181,9 +189,9 @@ export function parseDocUrl(url: string): DocCommentInfo | null {
  * Extract document URLs from message text.
  */
 export function extractDocUrls(text: string): DocCommentInfo[] {
-  // Support both feishu.cn and larksuite.com domains
+  // Support feishu.cn, larksuite.com, and larkoffice.com domains (with or without subdomain)
   const urlPattern =
-    /https?:\/\/[^\s<>"{}|\\^`[\]]+\.(?:feishu\.cn|larksuite\.com)\/(?:docx|docs|sheets|base)\/[A-Za-z0-9]+[^\s<>"{}|\\^`[\]]*/gi;
+    /https?:\/\/(?:[^\s<>"{}|\\^`[\]]+\.)?(?:feishu\.cn|larksuite\.com|larkoffice\.com)\/(?:docx|docs|sheets|base)\/[A-Za-z0-9]+[^\s<>"{}|\\^`[\]]*/gi;
   const matches = text.match(urlPattern) || [];
   const results: DocCommentInfo[] = [];
 

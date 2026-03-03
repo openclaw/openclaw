@@ -68,10 +68,34 @@ describe("parseDocUrl", () => {
     expect(parseDocUrl("https://example.feishu.cn/unknown/ABC")).toBeNull();
   });
 
-  it("should handle Lark international domain", () => {
+  it("should handle Lark international domain (larksuite.com)", () => {
     const result = parseDocUrl("https://example.larksuite.com/docx/ABC123");
-    // Also supports .larksuite.com domain (international Lark)
     expect(result).toEqual({
+      fileToken: "ABC123",
+      fileType: "docx",
+      commentId: undefined,
+      replyId: undefined,
+    });
+  });
+
+  it("should handle Lark international domain (larkoffice.com)", () => {
+    const result = parseDocUrl("https://example.larkoffice.com/docx/ABC123");
+    expect(result).toEqual({
+      fileToken: "ABC123",
+      fileType: "docx",
+      commentId: undefined,
+      replyId: undefined,
+    });
+  });
+
+  it("should handle bare domain without subdomain", () => {
+    expect(parseDocUrl("https://feishu.cn/docx/ABC123")).toEqual({
+      fileToken: "ABC123",
+      fileType: "docx",
+      commentId: undefined,
+      replyId: undefined,
+    });
+    expect(parseDocUrl("https://larksuite.com/docx/ABC123")).toEqual({
       fileToken: "ABC123",
       fileType: "docx",
       commentId: undefined,
