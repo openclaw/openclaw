@@ -137,3 +137,5 @@ extensions/local-voice/moonshine-venv/
 */git-rewrite
 
 agents.db
+
+.specstory
