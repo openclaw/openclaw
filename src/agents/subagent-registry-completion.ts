@@ -1,3 +1,4 @@
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
 import {
@@ -9,6 +10,28 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+/**
+ * Map a SubagentLifecycleEndedReason to an internal hook action string.
+ * This bridges plugin-level lifecycle reasons to the simpler internal hook
+ * action vocabulary that user-authored `.js` hooks subscribe to.
+ */
+function reasonToInternalAction(reason: SubagentLifecycleEndedReason): string {
+  switch (reason) {
+    case "subagent-complete":
+      return "complete";
+    case "subagent-error":
+      return "error";
+    case "subagent-killed":
+      return "killed";
+    case "session-reset":
+      return "reset";
+    case "session-delete":
+      return "delete";
+    default:
+      return "complete";
+  }
+}
 
 export function runOutcomesEqual(
   a: SubagentRunOutcome | undefined,
@@ -85,6 +108,23 @@ export async function emitSubagentEndedHookOnce(params: {
         },
       );
     }
+    // Bridge to internal hook system so user-authored .js hooks can observe
+    // subagent lifecycle events without writing a full plugin.
+    const internalAction = reasonToInternalAction(params.reason);
+    const startedAt = (params.entry as Record<string, unknown>).startedAt as number | undefined;
+    void triggerInternalHook(
+      createInternalHookEvent("subagent", internalAction, params.entry.requesterSessionKey, {
+        childSessionKey: params.entry.childSessionKey,
+        runId: params.entry.runId,
+        reason: params.reason,
+        outcome: params.outcome,
+        error: params.error,
+        endedAt: params.entry.endedAt,
+        startedAt,
+        runtimeMs: params.entry.endedAt && startedAt ? params.entry.endedAt - startedAt : undefined,
+      }),
+    );
+
     params.entry.endedHookEmittedAt = Date.now();
     params.persist();
     return true;
