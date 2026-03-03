@@ -72,6 +72,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { UPCManager } from "../security/upc-manager.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
@@ -717,6 +718,9 @@ export async function startGatewayServer(
   }
 
   const execApprovalManager = new ExecApprovalManager();
+  const upcManager = new UPCManager({
+    enabled: runtimeConfig.upcConfig?.enabled ?? false,
+  });
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
     forwarder: execApprovalForwarder,
@@ -767,6 +771,11 @@ export async function startGatewayServer(
       ...pluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
       ...secretsHandlers,
+      ...Object.fromEntries(
+        Object.entries(coreGatewayHandlers).filter(([key]) =>
+          key.startsWith("security.upc.")
+        )
+      ),
     },
     broadcast,
     context: {
@@ -774,6 +783,7 @@ export async function startGatewayServer(
       cron,
       cronStorePath,
       execApprovalManager,
+      upcManager,
       loadGatewayModelCatalog,
       getHealthCache,
       refreshHealthSnapshot: refreshGatewayHealthSnapshot,
