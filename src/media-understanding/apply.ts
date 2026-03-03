@@ -365,11 +365,12 @@ function hasBinaryFileSignature(buffer?: Buffer): boolean {
   if (buffer[0] === 0x37 && buffer[1] === 0x7a && buffer[2] === 0xbc && buffer[3] === 0xaf) {
     return true;
   }
-  // Mach-O (macOS binary)
+  // Mach-O (macOS binary) + FAT/Universal binaries & Java class files (0xCAFEBABE)
   if (
     (buffer[0] === 0xfe && buffer[1] === 0xed && buffer[2] === 0xfa) ||
     (buffer[0] === 0xce && buffer[1] === 0xfa && buffer[2] === 0xed) ||
-    (buffer[0] === 0xcf && buffer[1] === 0xfa && buffer[2] === 0xed)
+    (buffer[0] === 0xcf && buffer[1] === 0xfa && buffer[2] === 0xed) ||
+    (buffer[0] === 0xca && buffer[1] === 0xfe && buffer[2] === 0xba && buffer[3] === 0xbe)
   ) {
     return true;
   }
@@ -468,10 +469,13 @@ async function extractFileBlocks(params: {
     if (!forcedTextMimeResolved && isBinaryMediaMime(normalizedRawMime)) {
       continue;
     }
-    // Catch binary files when MIME type is missing or not in the binary MIME list.
-    // File extension and magic bytes act as additional safety layers to prevent
-    // binary content from being injected into the prompt as text. (#33320)
-    if (!forcedTextMimeResolved) {
+    // Catch binary files when MIME type is missing or generic. File extension and
+    // magic bytes act as fallback layers to prevent binary content from being
+    // injected into the prompt as text. Only checked when MIME is absent or
+    // uninformative — a known textual MIME (e.g. application/vnd.api+json)
+    // should still be allowed through even on a .bin file. (#33320)
+    const mimeIsAbsentOrGeneric = !normalizedRawMime || normalizedRawMime === "application/octet-stream";
+    if (!forcedTextMimeResolved && mimeIsAbsentOrGeneric) {
       if (isBinaryFileExtension(nameHint)) {
         logVerbose(
           `media: file attachment skipped (binary extension) index=${attachment.index} name=${nameHint}`,
