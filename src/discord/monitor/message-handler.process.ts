@@ -339,7 +339,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     BodyForAgent: text,
     InboundHistory: inboundHistory,
     RawBody: text,
-    CommandBody: text,
+    CommandBody: baseText,
     From: effectiveFrom,
     To: effectiveTo,
     SessionKey: boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
