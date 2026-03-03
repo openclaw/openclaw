@@ -85,7 +85,7 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
-function mergeStreamingText(
+export function mergeStreamingText(
   previousText: string | undefined,
   nextText: string | undefined,
 ): string {
@@ -100,7 +100,8 @@ function mergeStreamingText(
   if (previous.includes(next)) {
     return previous;
   }
-  return `${previous}${previous.endsWith("\n") || next.startsWith("\n") ? "" : "\n"}${next}`;
+  // Fallback for fragmented partial chunks: append as-is to avoid losing tokens.
+  return `${previous}${next}`;
 }
 
 /** Streaming card session manager */
