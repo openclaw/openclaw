@@ -54,6 +54,7 @@ services:
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${MB_REPO_DIR:-/Users/Dave/Documents/reaction_engine_with_decoder_layer_fix4/_references/openclaw}:/home/node/mb-repo
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"

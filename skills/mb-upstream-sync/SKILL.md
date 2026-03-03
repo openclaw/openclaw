@@ -34,6 +34,14 @@ For a preview with no changes:
 bash scripts/mb-sync-upstream.sh --dry-run 2>&1
 ```
 
+To also rebuild Docker images and restart containers after the merge:
+
+```bash
+bash scripts/mb-sync-upstream.sh --deploy 2>&1
+```
+
+> **Note:** `--deploy` shows a 10-second warning countdown before restarting. The UI will disconnect briefly. Signal (+447366270212) is the fallback during that window.
+
 ## What the script does (for your reference only)
 
 1. Pre-flight: checks clean working tree, no ongoing merge

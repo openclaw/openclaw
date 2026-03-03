@@ -33,14 +33,17 @@ hr()   { echo -e "${BOLD}──────────────────�
 # ── CLI flags ─────────────────────────────────────────────────────────────────
 DRY_RUN=false
 SKIP_LINT=false
+DEPLOY=false
 for arg in "$@"; do
   case "$arg" in
     --dry-run)   DRY_RUN=true ;;
     --skip-lint) SKIP_LINT=true ;;
+    --deploy)    DEPLOY=true ;;
     --help|-h)
-      echo "Usage: $0 [--dry-run] [--skip-lint]"
+      echo "Usage: $0 [--dry-run] [--skip-lint] [--deploy]"
       echo "  --dry-run    Preview upstream commits, make no changes"
       echo "  --skip-lint  Skip lint/typecheck after merge"
+      echo "  --deploy     Rebuild Docker images and restart containers after merge"
       exit 0 ;;
   esac
 done
@@ -491,6 +494,91 @@ final_report() {
   echo ""
 }
 
+# ── Deploy ────────────────────────────────────────────────────────────────────
+do_deploy() {
+  hr
+  echo -e "${YELLOW}${BOLD}  ⚠  DOCKER REBUILD — UI will disconnect briefly  ⚠${RESET}"
+  echo ""
+  echo "  The gateway container will be restarted. The MaxBot web UI will"
+  echo "  go offline for ~30–60 seconds while Docker rebuilds and comes back."
+  echo ""
+  echo -e "  ${BOLD}Signal is your fallback during this window.${RESET}"
+  echo "  (+447366270212 — message Davey Dee if needed)"
+  echo ""
+  echo -n "  Starting in "
+  for i in 10 9 8 7 6 5 4 3 2 1; do
+    echo -n "${i}... "
+    sleep 1
+  done
+  echo ""
+  echo ""
+
+  # Detect compose command (v2 plugin or standalone)
+  local compose_cmd
+  if docker compose version >/dev/null 2>&1; then
+    compose_cmd="docker compose"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    compose_cmd="docker-compose"
+  else
+    die "Neither 'docker compose' nor 'docker-compose' found."
+  fi
+
+  # Determine which services need a rebuild:
+  # Always rebuild gateway. If voicebox Dockerfile/patch changed, rebuild that too.
+  local services=("openclaw-gateway")
+  if git diff --name-only ORIG_HEAD..HEAD 2>/dev/null \
+      | grep -qE 'docker/voicebox/|Dockerfile'; then
+    services+=("openclaw-voicebox")
+    log "Voicebox source changed — rebuilding voicebox too."
+  fi
+
+  # Always pass --env-file so docker compose picks up .env.safe
+  local env_file="$REPO_ROOT/.env.safe"
+  local compose_env_flag=""
+  if [[ -f "$env_file" ]]; then
+    compose_env_flag="--env-file $env_file"
+  else
+    warn ".env.safe not found at $env_file — using default env"
+  fi
+
+  log "Building: ${services[*]}..."
+  $compose_cmd $compose_env_flag build "${services[@]}" 2>&1 | sed 's/^/  /'
+
+  log "Restarting containers..."
+  $compose_cmd $compose_env_flag up -d 2>&1 | sed 's/^/  /'
+
+  # Health poll — gateway
+  local gateway_url="http://127.0.0.1:18889/health"
+  local max_wait=120
+  local waited=0
+  log "Waiting for gateway to come back up (max ${max_wait}s)..."
+  until curl -sf "$gateway_url" >/dev/null 2>&1; do
+    if [[ $waited -ge $max_wait ]]; then
+      fail "Gateway did not respond within ${max_wait}s."
+      fail "Check: $compose_cmd $compose_env_flag logs openclaw-gateway"
+      exit 2
+    fi
+    sleep 2
+    waited=$((waited + 2))
+    echo -n "."
+  done
+  echo ""
+  ok "Gateway healthy (${waited}s)"
+
+  # Health poll — signal (best-effort, don't fail if signal is down)
+  local signal_url="http://127.0.0.1:18080/api/v1/check"
+  if curl -sf "$signal_url" >/dev/null 2>&1; then
+    ok "Signal healthy"
+  else
+    warn "Signal health check did not respond — may still be starting up"
+  fi
+
+  echo ""
+  echo -e "${GREEN}${BOLD}  Deploy complete. MaxBot is back online.  ${RESET}"
+  echo ""
+  $compose_cmd $compose_env_flag ps 2>/dev/null | sed 's/^/  /' || true
+}
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 main() {
   echo ""
@@ -504,6 +592,13 @@ main() {
   fix_lint
   do_commit
   final_report
+
+  if [[ "$DEPLOY" == true ]]; then
+    do_deploy
+  else
+    echo "  Tip: run with --deploy to rebuild Docker images and restart containers."
+    echo ""
+  fi
 }
 
 main "$@"

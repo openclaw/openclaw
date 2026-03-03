@@ -1,3 +1,6 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
@@ -19,6 +22,41 @@ type HookOutcome = { blocked: true; reason: string } | { blocked: false; params:
 
 const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
+
+// ── Lockdown helpers ──────────────────────────────────────────────────────────
+
+function resolveLockdownPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), "logs", ".security-lockdown");
+}
+
+/** Returns lockdown reason string if lockdown is active, null otherwise. */
+async function checkLockdownActive(env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(resolveLockdownPath(env), "utf8");
+    const state = JSON.parse(raw) as { reason?: string };
+    return state.reason ?? "security lockdown active";
+  } catch {
+    return null; // file absent = no lockdown
+  }
+}
+
+/** Records each tool call attempt made while lockdown is active. */
+async function recordLockdownAttempt(
+  toolName: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const p = resolveLockdownPath(env);
+  try {
+    const raw = await fs.readFile(p, "utf8");
+    const state = JSON.parse(raw) as Record<string, unknown>;
+    state["attemptsDuringLockdown"] = ((state["attemptsDuringLockdown"] as number) ?? 0) + 1;
+    state["lastAttemptTs"] = new Date().toISOString();
+    state["lastAttemptTool"] = toolName;
+    await fs.writeFile(p, JSON.stringify(state, null, 2) + "\n", "utf8");
+  } catch {
+    // If lockdown file is unreadable/missing, still stay blocked — don't propagate error
+  }
+}
 const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
@@ -97,6 +135,20 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+
+  // Lockdown check — first gate, before all other evaluations.
+  // When a lockdown file is present, ALL tool calls are blocked regardless of type.
+  // Only the external watch script (mb-security-watch.py) can clear this state
+  // via Dave's unlock passphrase over Signal. MB itself cannot lift a lockdown.
+  const lockdownReason = await checkLockdownActive();
+  if (lockdownReason) {
+    await recordLockdownAttempt(toolName);
+    log.warn(`lockdown active — blocked tool call: tool=${toolName}`);
+    return {
+      blocked: true,
+      reason: `SECURITY LOCKDOWN ACTIVE (${lockdownReason}). All tool calls suspended. Send unlock passphrase via Signal to resume.`,
+    };
+  }
 
   const sentinelDecision = evaluateSecuritySentinel({
     toolName,
