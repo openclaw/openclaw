@@ -198,7 +198,6 @@ export function formatUserTime(
  * receives the actual date (e.g. for memory/YYYY-MM-DD.md paths).
  */
 export function getDateStampUTC(nowMs?: number): string {
-  const d =
-    typeof nowMs === "number" && Number.isFinite(nowMs) ? new Date(nowMs) : new Date();
+  const d = typeof nowMs === "number" && Number.isFinite(nowMs) ? new Date(nowMs) : new Date();
   return d.toISOString().slice(0, 10);
 }
