@@ -1,9 +1,11 @@
 export {
   buildBootstrapContextFiles,
   DEFAULT_BOOTSTRAP_MAX_CHARS,
+  DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE,
   DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
   ensureSessionHeader,
   resolveBootstrapMaxChars,
+  resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
   stripThoughtSignatures,
 } from "./pi-embedded-helpers/bootstrap.js";

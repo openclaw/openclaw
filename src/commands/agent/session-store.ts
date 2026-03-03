@@ -76,6 +76,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
   }
   next.abortedLastRun = result.meta.aborted ?? false;
+  if (result.meta.systemPromptReport) {
+    next.systemPromptReport = result.meta.systemPromptReport;
+  }
   if (hasNonzeroUsage(usage)) {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
