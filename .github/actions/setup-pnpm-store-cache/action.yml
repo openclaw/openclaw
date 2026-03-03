@@ -9,6 +9,10 @@ inputs:
     description: Suffix appended to the cache key.
     required: false
     default: "node22"
+  use-sticky-disk:
+    description: Use Blacksmith sticky disks instead of actions/cache for pnpm store.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -38,7 +42,15 @@ runs:
       shell: bash
       run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
+    - name: Mount pnpm store sticky disk
+      if: inputs.use-sticky-disk == 'true'
+      uses: useblacksmith/stickydisk@v1
+      with:
+        key: ${{ github.repository }}-pnpm-store-${{ runner.os }}-${{ inputs.cache-key-suffix }}
+        path: ${{ steps.pnpm-store.outputs.path }}
+
     - name: Restore pnpm store cache
+      if: inputs.use-sticky-disk != 'true'
       uses: actions/cache@v4
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
