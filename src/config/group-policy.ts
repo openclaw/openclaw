@@ -385,6 +385,13 @@ export function resolveChannelGroupRequireMention(params: {
   if (overrideOrder !== "before-config" && typeof requireMentionOverride === "boolean") {
     return requireMentionOverride;
   }
+
+  // When groupPolicy is "open", default to not requiring mention (issue #33218)
+  const groupPolicy = resolveChannelGroupPolicyMode(params.cfg, params.channel, params.accountId);
+  if (groupPolicy === "open") {
+    return false;
+  }
+
   return true;
 }
 
