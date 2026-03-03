@@ -1,4 +1,3 @@
-import { resolveFirecrawlApiKey, resolveFirecrawlConfig } from "../agents/tools/web-fetch.js";
 import { loadConfig } from "../config/config.js";
 import {
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
@@ -36,8 +35,18 @@ import type {
 /** Re-resolve firecrawl API key from current config + env, falling back to the captured opts value. */
 function getFirecrawlApiKey(opts: ContextOptions): string | undefined {
   const cfg = loadConfig();
-  const firecrawl = resolveFirecrawlConfig(cfg.tools?.web?.fetch);
-  return resolveFirecrawlApiKey(firecrawl) || opts.firecrawlApiKey;
+  const fetch = cfg.tools?.web?.fetch;
+  const firecrawl =
+    fetch && typeof fetch === "object" && "firecrawl" in fetch ? fetch.firecrawl : undefined;
+  const fromConfig =
+    firecrawl &&
+    typeof firecrawl === "object" &&
+    "apiKey" in firecrawl &&
+    typeof firecrawl.apiKey === "string"
+      ? firecrawl.apiKey.trim()
+      : "";
+  const fromEnv = (process.env.FIRECRAWL_API_KEY || "").trim();
+  return fromConfig || fromEnv || opts.firecrawlApiKey;
 }
 
 type AvailabilityDeps = {

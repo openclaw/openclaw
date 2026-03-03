@@ -348,11 +348,9 @@ describe("browser config", () => {
     });
 
     it("explicit defaultProfile overrides firecrawl auto-default", () => {
-      const resolved = resolveBrowserConfig(
-        { defaultProfile: "openclaw" },
-        undefined,
-        { firecrawlApiKey: "fc-test-key" },
-      );
+      const resolved = resolveBrowserConfig({ defaultProfile: "openclaw" }, undefined, {
+        firecrawlApiKey: "fc-test-key",
+      });
       expect(resolved.defaultProfile).toBe("openclaw");
       // But firecrawl profile should still be created
       expect(resolved.profiles.firecrawl).toBeDefined();
