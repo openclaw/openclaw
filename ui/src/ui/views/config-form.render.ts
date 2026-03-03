@@ -292,19 +292,20 @@ function matchesSearch(params: {
   const q = criteria.text;
   const meta = SECTION_META[params.key];
 
-  // Check key name
-  if (q && params.key.toLowerCase().includes(q)) {
-    return true;
+  let textMatchesSection = false;
+  if (q) {
+    if (params.key.toLowerCase().includes(q)) {
+      textMatchesSection = true;
+    } else if (
+      meta &&
+      (meta.label.toLowerCase().includes(q) || meta.description.toLowerCase().includes(q))
+    ) {
+      textMatchesSection = true;
+    }
   }
 
-  // Check label and description
-  if (q && meta) {
-    if (meta.label.toLowerCase().includes(q)) {
-      return true;
-    }
-    if (meta.description.toLowerCase().includes(q)) {
-      return true;
-    }
+  if (textMatchesSection && criteria.tags.length === 0) {
+    return true;
   }
 
   return matchesNodeSearch({
@@ -312,7 +313,7 @@ function matchesSearch(params: {
     value: params.sectionValue,
     path: [params.key],
     hints: params.uiHints,
-    criteria,
+    criteria: textMatchesSection ? { text: "", tags: criteria.tags } : criteria,
   });
 }
 

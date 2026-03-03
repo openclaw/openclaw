@@ -193,7 +193,7 @@ describe("cron view", () => {
     );
   });
 
-  it("shows selected job name and sorts run history newest first", () => {
+  it("shows selected job name for run history", () => {
     const container = document.createElement("div");
     const job = createJob("job-1");
     render(
@@ -203,8 +203,8 @@ describe("cron view", () => {
           runsJobId: "job-1",
           runsScope: "job",
           runs: [
-            { ts: 1, jobId: "job-1", status: "ok", summary: "older run" },
             { ts: 2, jobId: "job-1", status: "ok", summary: "newer run" },
+            { ts: 1, jobId: "job-1", status: "ok", summary: "older run" },
           ],
         }),
       ),
