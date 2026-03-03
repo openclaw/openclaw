@@ -167,9 +167,12 @@ export async function overlayHealthSnapshotWithRuntime(
       ...channelSummary,
       accounts: mergedAccounts,
     };
+    const nextChannelRecord = nextChannel as Record<string, unknown>;
+    const defaultAccountRecord = defaultAccount as Record<string, unknown>;
     for (const key of CHANNEL_RUNTIME_OVERLAY_KEYS) {
-      if (defaultAccount[key] !== undefined) {
-        nextChannel[key] = defaultAccount[key];
+      const value = defaultAccountRecord[key];
+      if (value !== undefined) {
+        nextChannelRecord[key] = value;
       }
     }
     if (channelSummary.probe !== undefined) {
