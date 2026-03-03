@@ -132,6 +132,13 @@ export type GatewayManagementExecCommand = {
   json?: boolean;
 };
 
+const GATEWAY_IDENTITY_ENV_KEYS = [
+  "OPENCLAW_PROFILE",
+  "OPENCLAW_SYSTEMD_UNIT",
+  "OPENCLAW_LAUNCHD_LABEL",
+  "OPENCLAW_WINDOWS_TASK_NAME",
+] as const;
+
 function normalizeLower(token: string | undefined): string {
   return token?.trim().toLowerCase() ?? "";
 }
@@ -254,6 +261,46 @@ function isGatewayWindowsTaskName(token: string, env: NodeJS.ProcessEnv): boolea
 
   const known = collectGatewayWindowsTaskNames(env);
   return known.has(normalized);
+}
+
+function normalizeIdentityValue(
+  key: (typeof GATEWAY_IDENTITY_ENV_KEYS)[number],
+  value: string | undefined,
+) {
+  if (!value?.trim()) {
+    return null;
+  }
+  if (key === "OPENCLAW_PROFILE") {
+    return normalizeGatewayProfile(value);
+  }
+  if (key === "OPENCLAW_SYSTEMD_UNIT") {
+    const normalized = normalizeSystemdUnitToken(value);
+    return normalized || null;
+  }
+  return normalizeLower(value) || null;
+}
+
+function requestEnvRetargetsGatewayIdentity(params: {
+  runtimeEnv: NodeJS.ProcessEnv;
+  requestedEnv?: NodeJS.ProcessEnv | null;
+}): boolean {
+  const requestedEnv = params.requestedEnv;
+  if (!requestedEnv) {
+    return false;
+  }
+
+  for (const key of GATEWAY_IDENTITY_ENV_KEYS) {
+    if (!(key in requestedEnv)) {
+      continue;
+    }
+    const runtimeIdentity = normalizeIdentityValue(key, params.runtimeEnv[key]);
+    const requestedIdentity = normalizeIdentityValue(key, requestedEnv[key]);
+    if (runtimeIdentity !== requestedIdentity) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function hasSystemctlRemoteScope(argv: string[]): boolean {
@@ -744,9 +791,11 @@ export function detectGatewayManagementExecCommand(params: {
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  identityEnv?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 }): GatewayManagementExecCommand | null {
   const platform = params.platform ?? process.platform;
+  const identityEnv = params.identityEnv ?? params.env;
   const analysis = analyzeShellCommand({
     command: params.command,
     cwd: params.cwd,
@@ -765,7 +814,7 @@ export function detectGatewayManagementExecCommand(params: {
         : segment.argv;
     const cliArgv = readCliArgv(argv);
     if (cliArgv) {
-      const parsed = parseGatewayActionFromCliArgv(cliArgv, params.env);
+      const parsed = parseGatewayActionFromCliArgv(cliArgv, identityEnv);
       if (parsed) {
         return {
           action: parsed.action,
@@ -777,7 +826,7 @@ export function detectGatewayManagementExecCommand(params: {
       }
     }
 
-    const systemctlAction = parseGatewayActionFromSystemctlArgv(argv, params.env);
+    const systemctlAction = parseGatewayActionFromSystemctlArgv(argv, identityEnv);
     if (systemctlAction) {
       return {
         action: systemctlAction,
@@ -787,7 +836,7 @@ export function detectGatewayManagementExecCommand(params: {
       };
     }
 
-    const launchctlAction = parseGatewayActionFromLaunchctlArgv(argv, params.env, platform);
+    const launchctlAction = parseGatewayActionFromLaunchctlArgv(argv, identityEnv, platform);
     if (launchctlAction) {
       return {
         action: launchctlAction,
@@ -797,7 +846,7 @@ export function detectGatewayManagementExecCommand(params: {
       };
     }
 
-    const schtasksAction = parseGatewayActionFromSchtasksArgv(argv, params.env);
+    const schtasksAction = parseGatewayActionFromSchtasksArgv(argv, identityEnv);
     if (schtasksAction) {
       return {
         action: schtasksAction,
@@ -867,9 +916,16 @@ export async function maybeInterceptGatewayManagementExec(params: {
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  runtimeEnv?: NodeJS.ProcessEnv;
+  requestedEnv?: NodeJS.ProcessEnv;
   sessionKey?: string;
 }): Promise<AgentToolResult<ExecToolDetails> | null> {
   if (params.host !== "gateway") {
+    return null;
+  }
+
+  const runtimeEnv = params.runtimeEnv ?? process.env;
+  if (requestEnvRetargetsGatewayIdentity({ runtimeEnv, requestedEnv: params.requestedEnv })) {
     return null;
   }
 
@@ -877,6 +933,7 @@ export async function maybeInterceptGatewayManagementExec(params: {
     command: params.command,
     cwd: params.cwd,
     env: params.env,
+    identityEnv: runtimeEnv,
   });
   if (!commandMatch) {
     return null;

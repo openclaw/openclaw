@@ -154,6 +154,17 @@ describe("detectGatewayManagementExecCommand", () => {
     expect(detected).toBeNull();
   });
 
+  it("uses runtime identity env for profile-scoped command matching", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "openclaw --profile dev gateway restart",
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_PROFILE: "dev" },
+      identityEnv: { ...process.env, OPENCLAW_PROFILE: "prod" },
+    });
+
+    expect(detected).toBeNull();
+  });
+
   it("detects package-manager wrapped restart commands", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "pnpm openclaw gateway restart",
@@ -686,6 +697,35 @@ describe("exec gateway management interception", () => {
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "exec:gateway-restart" }),
     );
+  });
+
+  it("does not intercept when request env retargets gateway profile identity", async () => {
+    processGatewayAllowlistMock.mockResolvedValueOnce({
+      pendingResult: {
+        content: [{ type: "text", text: "allowlist fallback" }],
+        details: {
+          status: "completed",
+          exitCode: 0,
+          durationMs: 0,
+          aggregated: "allowlist fallback",
+          cwd: process.cwd(),
+        },
+      },
+      execCommandOverride: undefined,
+    });
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    const runtimeProfile = process.env.OPENCLAW_PROFILE?.trim() || "";
+    const retargetProfile = runtimeProfile === "dev" ? "prod" : "dev";
+    const result = await tool.execute("call1-retarget-profile", {
+      command: "openclaw gateway restart",
+      env: { OPENCLAW_PROFILE: retargetProfile },
+    });
+
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(text).toContain("allowlist fallback");
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(processGatewayAllowlistMock).toHaveBeenCalledOnce();
   });
 
   it("intercepts gateway restart --json and preserves json output shape", async () => {

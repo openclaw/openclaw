@@ -430,6 +430,8 @@ export function createExecTool(
         command: params.command,
         cwd: workdir,
         env,
+        runtimeEnv: baseEnv,
+        requestedEnv: params.env,
         sessionKey: defaults?.sessionKey,
       });
       if (gatewayInterceptResult) {
