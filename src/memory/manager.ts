@@ -59,7 +59,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     | "ollama"
     | "openrouter"
     | "auto";
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "openrouter";
+  protected fallbackFrom?:
+    | "openai"
+    | "local"
+    | "gemini"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "openrouter";
   protected fallbackReason?: string;
   private readonly providerUnavailableReason?: string;
   protected openAi?: OpenAiEmbeddingClient;
