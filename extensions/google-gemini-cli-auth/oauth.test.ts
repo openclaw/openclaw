@@ -239,7 +239,7 @@ describe("loginGeminiCliOAuth", () => {
     "GOOGLE_CLOUD_PROJECT_ID",
   ] as const;
 
-  function getExpectedPlatform(): "WINDOWS" | "MACOS" | "LINUX" | "PLATFORM_UNSPECIFIED" {
+  function getExpectedPlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
     if (process.platform === "win32") {
       return "WINDOWS";
     }
