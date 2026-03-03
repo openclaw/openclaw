@@ -153,6 +153,69 @@ describe("temporal decay", () => {
     expect(byPath.get("memory/2000-01-01.md")?.score ?? 1).toBeLessThan(0.001);
   });
 
+  it("applies decay to files with date suffixes (e.g. memory/2026-02-01-blog.md)", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/2026-02-01-blog.md", score: 1, source: "memory" }],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    // 9 days old at NOW_MS (Feb 10), should be decayed
+    expect(decayed[0]?.score).toBeLessThan(1);
+    expect(decayed[0]?.score).toBeGreaterThan(0);
+  });
+
+  it("applies decay to files in memory subdirectories", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [
+        { path: "memory/archive/2026-01-10.md", score: 1, source: "memory" },
+        { path: "memory/reference/2025-12-01-detail.md", score: 1, source: "memory" },
+      ],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    // Both should be decayed (31 and 71 days old)
+    expect(decayed[0]?.score).toBeLessThan(1);
+    expect(decayed[1]?.score).toBeLessThan(decayed[0]?.score ?? 0);
+  });
+
+  it("treats undated memory files without dates as evergreen", async () => {
+    const dir = await makeTempDir();
+    const undatedPath = path.join(dir, "memory", "reference", "spec.md");
+    await fs.mkdir(path.dirname(undatedPath), { recursive: true });
+    await fs.writeFile(undatedPath, "reference");
+    const veryOld = new Date(Date.UTC(2010, 0, 1));
+    await fs.utimes(undatedPath, veryOld, veryOld);
+
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/reference/spec.md", score: 0.9, source: "memory" }],
+      workspaceDir: dir,
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    // Undated memory files are evergreen — no decay
+    expect(decayed[0]?.score).toBeCloseTo(0.9);
+  });
+
+  it("extracts dates from various filename patterns", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [
+        { path: "memory/2026-02-10.md", score: 1, source: "memory" },
+        { path: "memory/2026-02-10-daily.md", score: 1, source: "memory" },
+        { path: "memory/archive/morning-summary-2026-02-10.md", score: 1, source: "memory" },
+      ],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    // All three should have the same score (same date = 0 days old = no decay)
+    expect(decayed[0]?.score).toBeCloseTo(1);
+    expect(decayed[1]?.score).toBeCloseTo(1);
+    expect(decayed[2]?.score).toBeCloseTo(1);
+  });
+
   it("uses file mtime fallback for non-memory sources", async () => {
     const dir = await makeTempDir();
     const sessionPath = path.join(dir, "sessions", "thread.jsonl");

@@ -12,7 +12,9 @@ export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
+// Matches a YYYY-MM-DD date anywhere in a filename (basename), covering patterns
+// like memory/2026-02-28-blog.md, memory/archive/2026-02-27.md, etc.
+const DATED_FILENAME_RE = /(\d{4})-(\d{2})-(\d{2})/;
 
 export function toDecayLambda(halfLifeDays: number): number {
   if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0) {
@@ -43,7 +45,16 @@ export function applyTemporalDecayToScore(params: {
 
 function parseMemoryDateFromPath(filePath: string): Date | null {
   const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "");
-  const match = DATED_MEMORY_PATH_RE.exec(normalized);
+  if (
+    !normalized.startsWith("memory/") &&
+    normalized !== "MEMORY.md" &&
+    normalized !== "memory.md"
+  ) {
+    return null;
+  }
+
+  const basename = path.basename(normalized, path.extname(normalized));
+  const match = DATED_FILENAME_RE.exec(basename);
   if (!match) {
     return null;
   }
@@ -76,7 +87,12 @@ function isEvergreenMemoryPath(filePath: string): boolean {
   if (!normalized.startsWith("memory/")) {
     return false;
   }
-  return !DATED_MEMORY_PATH_RE.test(normalized);
+  const basename = path.basename(normalized, path.extname(normalized));
+  // Files with a date in their name are temporal, not evergreen.
+  if (DATED_FILENAME_RE.test(basename)) {
+    return false;
+  }
+  return true;
 }
 
 async function extractTimestamp(params: {
