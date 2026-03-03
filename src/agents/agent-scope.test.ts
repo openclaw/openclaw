@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   hasConfiguredModelFallbacks,
   resolveAgentConfig,
+  resolveAgentCwd,
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
@@ -54,6 +55,7 @@ describe("resolveAgentConfig", () => {
     expect(result).toEqual({
       name: "Main Agent",
       workspace: "~/openclaw",
+      cwd: undefined,
       agentDir: "~/.openclaw/agents/main",
       model: "anthropic/claude-opus-4",
       identity: undefined,
@@ -426,5 +428,95 @@ describe("resolveAgentConfig", () => {
 
     const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
     expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
+  });
+});
+
+describe("resolveAgentCwd (#32637)", () => {
+  it("returns undefined when no cwd is configured", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", workspace: "~/openclaw" }],
+      },
+    };
+    expect(resolveAgentCwd(cfg, "main")).toBeUndefined();
+  });
+
+  it("returns undefined when no agents config exists", () => {
+    expect(resolveAgentCwd({} as OpenClawConfig, "main")).toBeUndefined();
+  });
+
+  it("returns resolved cwd path when configured", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "worker-1",
+            workspace: "~/shared-workspace",
+            cwd: "/home/user/projects/repo-1",
+          },
+        ],
+      },
+    };
+    expect(resolveAgentCwd(cfg, "worker-1")).toBe("/home/user/projects/repo-1");
+  });
+
+  it("expands tilde in cwd path", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "worker",
+            cwd: "~/projects/my-repo",
+          },
+        ],
+      },
+    };
+    const result = resolveAgentCwd(cfg, "worker");
+    expect(result).toBeDefined();
+    expect(result).not.toContain("~");
+    expect(result!.endsWith("/projects/my-repo") || result!.endsWith("\\projects\\my-repo")).toBe(
+      true,
+    );
+  });
+
+  it("strips null bytes from cwd path", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            cwd: "/home/user\0/projects",
+          },
+        ],
+      },
+    };
+    const result = resolveAgentCwd(cfg, "main");
+    expect(result).toBe("/home/user/projects");
+  });
+
+  it("ignores empty or whitespace-only cwd", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", cwd: "   " }],
+      },
+    };
+    expect(resolveAgentCwd(cfg, "main")).toBeUndefined();
+  });
+
+  it("resolveAgentConfig includes cwd field", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "dev",
+            workspace: "~/shared",
+            cwd: "/opt/projects/repo",
+          },
+        ],
+      },
+    };
+    const result = resolveAgentConfig(cfg, "dev");
+    expect(result?.cwd).toBe("/opt/projects/repo");
+    expect(result?.workspace).toBe("~/shared");
   });
 });

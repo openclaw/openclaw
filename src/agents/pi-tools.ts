@@ -6,7 +6,7 @@ import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentCwd } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import {
   createExecTool,
@@ -313,6 +313,14 @@ export function createOpenClawCodingTools(options?: {
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
+  // Per-agent cwd overrides the tool working directory.  Bootstrap files
+  // (AGENTS.md, SOUL.md) still load from `workspaceDir`; only the tool-facing
+  // root (exec cwd, read/write/edit default path) changes.
+  const agentCwdRaw =
+    options?.config && options?.agentId
+      ? resolveAgentCwd(options.config, options.agentId)
+      : undefined;
+  const effectiveToolRoot = agentCwdRaw ? resolveWorkspaceRoot(agentCwdRaw) : workspaceRoot;
   const workspaceOnly = fsPolicy.workspaceOnly;
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
@@ -349,12 +357,12 @@ export function createOpenClawCodingTools(options?: {
             : sandboxed,
         ];
       }
-      const freshReadTool = createReadTool(workspaceRoot);
+      const freshReadTool = createReadTool(effectiveToolRoot);
       const wrapped = createOpenClawReadTool(freshReadTool, {
         modelContextWindowTokens: options?.modelContextWindowTokens,
         imageSanitization,
       });
-      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, effectiveToolRoot) : wrapped];
     }
     if (tool.name === "bash" || tool.name === execToolName) {
       return [];
@@ -363,15 +371,15 @@ export function createOpenClawCodingTools(options?: {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
-      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+      const wrapped = createHostWorkspaceWriteTool(effectiveToolRoot, { workspaceOnly });
+      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, effectiveToolRoot) : wrapped];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
-      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+      const wrapped = createHostWorkspaceEditTool(effectiveToolRoot, { workspaceOnly });
+      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, effectiveToolRoot) : wrapped];
     }
     return [tool];
   });
@@ -387,7 +395,7 @@ export function createOpenClawCodingTools(options?: {
     safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
     safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
     agentId,
-    cwd: workspaceRoot,
+    cwd: effectiveToolRoot,
     allowBackground,
     scopeKey,
     sessionKey: options?.sessionKey,
@@ -419,7 +427,7 @@ export function createOpenClawCodingTools(options?: {
     !applyPatchEnabled || (sandboxRoot && !allowWorkspaceWrites)
       ? null
       : createApplyPatchTool({
-          cwd: sandboxRoot ?? workspaceRoot,
+          cwd: sandboxRoot ?? effectiveToolRoot,
           sandbox:
             sandboxRoot && allowWorkspaceWrites
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }
@@ -472,7 +480,7 @@ export function createOpenClawCodingTools(options?: {
       sandboxRoot,
       sandboxFsBridge,
       fsPolicy,
-      workspaceDir: workspaceRoot,
+      workspaceDir: effectiveToolRoot,
       sandboxed: !!sandbox,
       config: options?.config,
       pluginToolAllowlist: collectExplicitAllowlist([

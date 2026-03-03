@@ -190,6 +190,111 @@ describe("workspace path resolution", () => {
   });
 });
 
+describe("per-agent cwd (#32637)", () => {
+  it("uses agent cwd as exec default when configured", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      await withTempDir("openclaw-cwd-", async (cwdDir) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            list: [
+              {
+                id: "worker",
+                default: true,
+                workspace: workspaceDir,
+                cwd: cwdDir,
+              },
+            ],
+          },
+        };
+        const tools = createOpenClawCodingTools({
+          workspaceDir,
+          config: cfg,
+          agentId: "worker",
+          exec: { host: "gateway", ask: "off", security: "full" },
+        });
+        const execTool = tools.find((t) => t.name === "exec");
+        expect(execTool).toBeDefined();
+        await expectExecCwdResolvesTo(execTool, "cwd-exec", { command: "echo ok" }, cwdDir);
+      });
+    });
+  });
+
+  it("read/write/edit tools resolve relative paths against agent cwd", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      await withTempDir("openclaw-cwd-", async (cwdDir) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            list: [
+              {
+                id: "worker",
+                default: true,
+                workspace: workspaceDir,
+                cwd: cwdDir,
+              },
+            ],
+          },
+        };
+        const tools = createOpenClawCodingTools({
+          workspaceDir,
+          config: cfg,
+          agentId: "worker",
+        });
+        const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+
+        // Write a file via the write tool — it should land in cwdDir.
+        await writeTool.execute("cwd-write", {
+          path: "hello.txt",
+          content: "from cwd",
+        });
+        expect(await fs.readFile(path.join(cwdDir, "hello.txt"), "utf8")).toBe("from cwd");
+
+        // Read should resolve relative paths from cwdDir.
+        const readResult = await readTool.execute("cwd-read", { path: "hello.txt" });
+        expect(getTextContent(readResult)).toContain("from cwd");
+
+        // Edit should also work against cwdDir.
+        await editTool.execute("cwd-edit", {
+          path: "hello.txt",
+          oldText: "from cwd",
+          newText: "edited in cwd",
+        });
+        expect(await fs.readFile(path.join(cwdDir, "hello.txt"), "utf8")).toBe("edited in cwd");
+      });
+    });
+  });
+
+  it("falls back to workspaceDir when no cwd is configured", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            {
+              id: "main",
+              default: true,
+              workspace: workspaceDir,
+              // No cwd field
+            },
+          ],
+        },
+      };
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        config: cfg,
+        agentId: "main",
+        exec: { host: "gateway", ask: "off", security: "full" },
+      });
+      const execTool = tools.find((t) => t.name === "exec");
+      expect(execTool).toBeDefined();
+      await expectExecCwdResolvesTo(
+        execTool,
+        "fallback-exec",
+        { command: "echo ok" },
+        workspaceDir,
+      );
+    });
+  });
+});
+
 describe("sandboxed workspace paths", () => {
   it("uses sandbox workspace for relative read/write/edit", async () => {
     await withTempDir("openclaw-sandbox-", async (sandboxDir) => {
