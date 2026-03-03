@@ -293,9 +293,15 @@ export async function processMessage(params: {
         )
       : undefined;
 
+  // In DMs, prefix BodyForAgent with the sender name so the LLM can distinguish
+  // who said what.  Groups already have sender attribution via formatInboundEnvelope.
+  const dmSenderPrefix =
+    params.msg.chatType !== "group"
+      ? `[${params.msg.senderName || params.msg.from || "Unknown"}]: `
+      : "";
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
-    BodyForAgent: params.msg.body,
+    BodyForAgent: `${dmSenderPrefix}${params.msg.body}`,
     InboundHistory: inboundHistory,
     RawBody: params.msg.body,
     CommandBody: params.msg.body,
