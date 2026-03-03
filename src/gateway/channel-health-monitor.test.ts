@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
-import { startChannelHealthMonitor } from "./channel-health-monitor.js";
+import {
+  resolveHealthTimingFromConfig,
+  startChannelHealthMonitor,
+} from "./channel-health-monitor.js";
 import type { ChannelManager, ChannelRuntimeSnapshot } from "./server-channels.js";
 
 function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
@@ -457,6 +460,47 @@ describe("channel-health-monitor", () => {
       expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
       expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
       monitor.stop();
+    });
+  });
+});
+
+describe("resolveHealthTimingFromConfig", () => {
+  it("returns undefined when no config is given", () => {
+    expect(resolveHealthTimingFromConfig(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined for an empty config object", () => {
+    expect(resolveHealthTimingFromConfig({})).toBeUndefined();
+  });
+
+  it("converts minutes to milliseconds", () => {
+    const timing = resolveHealthTimingFromConfig({
+      startupGraceMinutes: 2,
+      connectGraceMinutes: 5,
+      staleEventThresholdMinutes: 60,
+    });
+    expect(timing).toEqual({
+      monitorStartupGraceMs: 120_000,
+      channelConnectGraceMs: 300_000,
+      staleEventThresholdMs: 3_600_000,
+    });
+  });
+
+  it("handles partial config", () => {
+    const timing = resolveHealthTimingFromConfig({
+      connectGraceMinutes: 10,
+    });
+    expect(timing).toEqual({
+      channelConnectGraceMs: 600_000,
+    });
+  });
+
+  it("accepts zero values", () => {
+    const timing = resolveHealthTimingFromConfig({
+      startupGraceMinutes: 0,
+    });
+    expect(timing).toEqual({
+      monitorStartupGraceMs: 0,
     });
   });
 });

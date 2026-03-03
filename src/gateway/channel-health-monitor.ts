@@ -74,6 +74,31 @@ function resolveTimingPolicy(
   };
 }
 
+/**
+ * Convert user-facing config (minutes) to the internal timing policy (ms).
+ * Returns undefined when no overrides are present (use defaults).
+ */
+export function resolveHealthTimingFromConfig(config?: {
+  startupGraceMinutes?: number;
+  connectGraceMinutes?: number;
+  staleEventThresholdMinutes?: number;
+}): Partial<ChannelHealthTimingPolicy> | undefined {
+  if (!config) {
+    return undefined;
+  }
+  const timing: Partial<ChannelHealthTimingPolicy> = {};
+  if (config.startupGraceMinutes != null) {
+    timing.monitorStartupGraceMs = config.startupGraceMinutes * 60_000;
+  }
+  if (config.connectGraceMinutes != null) {
+    timing.channelConnectGraceMs = config.connectGraceMinutes * 60_000;
+  }
+  if (config.staleEventThresholdMinutes != null) {
+    timing.staleEventThresholdMs = config.staleEventThresholdMinutes * 60_000;
+  }
+  return Object.keys(timing).length > 0 ? timing : undefined;
+}
+
 export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): ChannelHealthMonitor {
   const {
     channelManager,

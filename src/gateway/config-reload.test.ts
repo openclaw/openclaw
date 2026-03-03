@@ -166,6 +166,13 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.hotReasons).toContain("gateway.channelHealthCheckMinutes");
   });
 
+  it("hot-reloads health monitor when channelHealthTiming changes", () => {
+    const plan = buildGatewayReloadPlan(["gateway.channelHealthTiming.staleEventThresholdMinutes"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHealthMonitor).toBe(true);
+    expect(plan.hotReasons).toContain("gateway.channelHealthTiming.staleEventThresholdMinutes");
+  });
+
   it("treats gateway.remote as no-op", () => {
     const plan = buildGatewayReloadPlan(["gateway.remote.url"]);
     expect(plan.restartGateway).toBe(false);

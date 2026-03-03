@@ -317,6 +317,18 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type ChannelHealthTimingConfig = {
+  /** Grace period in minutes after the monitor starts before health checks begin. Default: 1. */
+  startupGraceMinutes?: number;
+  /** Grace period in minutes for a channel to connect after starting. Default: 2. */
+  connectGraceMinutes?: number;
+  /**
+   * A connected channel with no events for this many minutes triggers a stale-socket restart.
+   * Increase this if long-running AI responses cause spurious restarts. Default: 30.
+   */
+  staleEventThresholdMinutes?: number;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -364,4 +376,10 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Timing thresholds for the channel health monitor.
+   * Tune these to reduce spurious restarts caused by slow AI message processing
+   * or transient WebSocket disconnects.
+   */
+  channelHealthTiming?: ChannelHealthTimingConfig;
 };

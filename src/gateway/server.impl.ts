@@ -64,7 +64,10 @@ import {
 } from "../secrets/runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
-import { startChannelHealthMonitor } from "./channel-health-monitor.js";
+import {
+  resolveHealthTimingFromConfig,
+  startChannelHealthMonitor,
+} from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
@@ -691,11 +694,13 @@ export async function startGatewayServer(
 
   const healthCheckMinutes = cfgAtStart.gateway?.channelHealthCheckMinutes;
   const healthCheckDisabled = healthCheckMinutes === 0;
+  const healthTiming = resolveHealthTimingFromConfig(cfgAtStart.gateway?.channelHealthTiming);
   let channelHealthMonitor = healthCheckDisabled
     ? null
     : startChannelHealthMonitor({
         channelManager,
         checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
+        timing: healthTiming,
       });
 
   if (!minimalTestGateway) {
@@ -905,8 +910,8 @@ export async function startGatewayServer(
           logChannels,
           logCron,
           logReload,
-          createHealthMonitor: (checkIntervalMs: number) =>
-            startChannelHealthMonitor({ channelManager, checkIntervalMs }),
+          createHealthMonitor: (checkIntervalMs, timing) =>
+            startChannelHealthMonitor({ channelManager, checkIntervalMs, timing }),
         });
 
         return startGatewayConfigReloader({

@@ -169,6 +169,54 @@ describe("gateway.channelHealthCheckMinutes", () => {
   });
 });
 
+describe("gateway.channelHealthTiming", () => {
+  it("accepts valid timing config", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthTiming: {
+          startupGraceMinutes: 2,
+          connectGraceMinutes: 5,
+          staleEventThresholdMinutes: 60,
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts partial timing config", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthTiming: {
+          connectGraceMinutes: 10,
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects negative values", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthTiming: {
+          staleEventThresholdMinutes: -1,
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects unknown keys", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthTiming: {
+          unknownKey: 5,
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+});
+
 describe("cron webhook schema", () => {
   it("accepts cron.webhookToken and legacy cron.webhook", () => {
     const res = OpenClawSchema.safeParse({
