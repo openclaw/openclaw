@@ -487,6 +487,7 @@ export async function runMemoryFlushIfNeeded(params: {
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
+          trigger: "memory",
           prompt: resolveMemoryFlushPromptForRun({
             prompt: memoryFlushSettings.prompt,
             cfg: params.cfg,
