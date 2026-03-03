@@ -285,9 +285,11 @@ describe("VoiceCallWebhookServer start idempotency", () => {
       // Second call should return immediately without EADDRINUSE
       const secondUrl = await server.start();
 
-      // Both calls should return a valid URL (port may differ from config
-      // since we use port 0 for dynamic allocation, but paths must match)
+      // Dynamic port allocations should resolve to a real listening port.
       expect(firstUrl).toContain("/voice/webhook");
+      expect(firstUrl).not.toContain(":0/");
+      // Idempotent re-start should return the same already-bound URL.
+      expect(secondUrl).toBe(firstUrl);
       expect(secondUrl).toContain("/voice/webhook");
     } finally {
       await server.stop();
