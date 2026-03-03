@@ -93,11 +93,21 @@ function buildOwnerIdentityLine(
   return `Authorized senders: ${displayOwnerNumbers.join(", ")}. These senders are allowlisted; do not assume they are the owner.`;
 }
 
-function buildTimeSection(params: { userTimezone?: string }) {
-  if (!params.userTimezone) {
+function buildTimeSection(params: { userTimezone?: string; userTime?: string }) {
+  const timezone = params.userTimezone?.trim();
+  const userTime = params.userTime?.trim();
+  if (!timezone && !userTime) {
     return [];
   }
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  const lines = ["## Current Date & Time"];
+  if (userTime) {
+    lines.push(`Local time: ${userTime}`);
+  }
+  if (timezone) {
+    lines.push(`Time zone: ${timezone}`);
+  }
+  lines.push("");
+  return lines;
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
@@ -361,6 +371,7 @@ export function buildAgentSystemPrompt(params: {
     : undefined;
   const reasoningLevel = params.reasoningLevel ?? "off";
   const userTimezone = params.userTimezone?.trim();
+  const userTime = params.userTime?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const heartbeatPromptLine = heartbeatPrompt
@@ -499,7 +510,7 @@ export function buildAgentSystemPrompt(params: {
       ? params.modelAliasLines.join("\n")
       : "",
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-    userTimezone
+    userTimezone && !userTime
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
       : "",
     "## Workspace",
@@ -559,6 +570,7 @@ export function buildAgentSystemPrompt(params: {
     ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildTimeSection({
       userTimezone,
+      userTime,
     }),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
