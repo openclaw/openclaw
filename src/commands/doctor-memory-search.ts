@@ -64,6 +64,12 @@ export async function noteMemorySearchHealth(
         }
         return;
       }
+      // No model path found. If the running gateway reports embeddings ready,
+      // skip the warning — some providers (e.g. node-llama-cpp) can resolve
+      // models from their own cache even without an explicit config path.
+      if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+        return;
+      }
       note(
         [
           'Memory search provider is set to "local" but no local model file was found.',
