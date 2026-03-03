@@ -252,7 +252,11 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
+    const didEnqueue = enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
+    if (!didEnqueue) {
+      typing.cleanup();
+      return undefined;
+    }
     await touchActiveSessionEntry();
     const busyNotice = await maybeBuildBusyQueueNotice();
     typing.cleanup();

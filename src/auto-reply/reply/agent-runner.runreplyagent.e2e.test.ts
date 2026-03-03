@@ -92,6 +92,7 @@ beforeEach(() => {
   state.runEmbeddedPiAgentMock.mockClear();
   state.runCliAgentMock.mockClear();
   vi.mocked(enqueueFollowupRun).mockClear();
+  vi.mocked(enqueueFollowupRun).mockReturnValue(true);
   vi.mocked(scheduleFollowupDrain).mockClear();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
@@ -322,6 +323,28 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toMatchObject({
       text: expect.stringContaining("Still working on your previous request"),
     });
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("does not emit busy notice when followup enqueue is skipped", async () => {
+    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
