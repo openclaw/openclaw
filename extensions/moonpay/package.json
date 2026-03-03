@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/moonpay",
+  "version": "2026.3.3",
+  "private": true,
+  "description": "OpenClaw MoonPay plugin — crypto wallet, swaps, bridges, and fiat ramps",
+  "type": "module",
+  "peerDependencies": {
+    "openclaw": ">=2026.3.1"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
