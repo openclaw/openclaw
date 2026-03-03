@@ -3,7 +3,9 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SkillSnapshot } from "../skills.js";
 
 const hoisted = vi.hoisted(() => ({
-  loadWorkspaceSkillEntries: vi.fn(() => []),
+  loadWorkspaceSkillEntries: vi.fn(
+    (_workspaceDir: string, _options?: { config?: OpenClawConfig }) => [],
+  ),
 }));
 
 vi.mock("../skills.js", async (importOriginal) => {
