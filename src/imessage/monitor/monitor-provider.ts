@@ -50,6 +50,7 @@ import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
+import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { parseIMessageNotification } from "./parse-notification.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
@@ -98,6 +99,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const sentMessageCache = createSentMessageCache();
+  const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
   const groupAllowFrom = normalizeAllowList(
@@ -257,7 +259,21 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
 
+    // Loop rate limiting: suppress conversations that fire too many messages
+    // in a short window, which is a strong signal of recursive echo amplification.
     const chatId = message.chat_id ?? undefined;
+    if (decision.kind === "dispatch") {
+      const conversationKey = decision.isGroup
+        ? `group:${chatId ?? "unknown"}`
+        : `dm:${decision.sender}`;
+      const rateLimitKey = `${accountInfo.accountId}:${conversationKey}`;
+      if (loopRateLimiter.isRateLimited(rateLimitKey)) {
+        logVerbose(`imessage: rate-limited conversation ${conversationKey} (possible echo loop)`);
+        return;
+      }
+      loopRateLimiter.record(rateLimitKey);
+    }
+
     if (decision.kind === "pairing") {
       const sender = (message.sender ?? "").trim();
       if (!sender) {
