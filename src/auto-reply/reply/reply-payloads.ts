@@ -69,6 +69,10 @@ export function isRenderablePayload(payload: ReplyPayload): boolean {
   );
 }
 
+export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
+  return payload.isReasoning === true;
+}
+
 export function applyReplyThreading(params: {
   payloads: ReplyPayload[];
   replyToMode: ReplyToMode;
@@ -141,12 +145,21 @@ export function filterMessagingToolMediaDuplicates(params: {
   });
 }
 
+const PROVIDER_ALIAS_MAP: Record<string, string> = {
+  lark: "feishu",
+};
+
 function normalizeProviderForSuppression(provider?: string): string | undefined {
   const raw = provider?.trim();
   if (!raw) {
     return undefined;
   }
-  return normalizeChannelId(raw) ?? raw.toLowerCase();
+  const lowered = raw.toLowerCase();
+  const normalizedChannel = normalizeChannelId(raw);
+  if (normalizedChannel) {
+    return normalizedChannel;
+  }
+  return PROVIDER_ALIAS_MAP[lowered] ?? lowered;
 }
 
 function resolveTargetProviderForSuppression(params: {
@@ -188,7 +201,7 @@ export function shouldSuppressMessagingToolReplies(params: {
     if (targetProvider !== provider) {
       return false;
     }
-    const targetKey = normalizeTargetForProvider(provider, target.to);
+    const targetKey = normalizeTargetForProvider(targetProvider, target.to);
     if (!targetKey) {
       return false;
     }

@@ -46,4 +46,16 @@ describe("extractMessagingToolSend", () => {
     expect(result?.provider).toBeUndefined();
     expect(result?.to).toBe("268300329");
   });
+
+  it("accepts target alias when to is omitted", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      channel: "telegram",
+      target: "123",
+    });
+
+    expect(result?.tool).toBe("message");
+    expect(result?.provider).toBe("telegram");
+    expect(result?.to).toBe("telegram:123");
+  });
 });

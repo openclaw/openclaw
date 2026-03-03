@@ -18,11 +18,15 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
   // handles reasoning natively via the `reasoning` field in streaming chunks,
   // so tag-based enforcement is unnecessary and causes all output to be
   // discarded as "(no output)" (#2279).
-  if (normalized === "google-gemini-cli" || normalized === "google-generative-ai") {
+  if (
+    normalized === "google" ||
+    normalized === "google-gemini-cli" ||
+    normalized === "google-generative-ai"
+  ) {
     return true;
   }
 
-  // Handle Minimax (M2.1 is chatty/reasoning-like)
+  // Handle Minimax (M2.5 is chatty/reasoning-like)
   if (normalized.includes("minimax")) {
     return true;
   }

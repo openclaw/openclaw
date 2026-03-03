@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -13,6 +16,7 @@ const {
   formatToolFailuresSection,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
+  readWorkspaceContextForSummary,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
@@ -97,6 +101,23 @@ const createCompactionContext = (params: {
       getApiKey: params.getApiKeyMock,
     },
   }) as unknown as Partial<ExtensionContext>;
+
+async function runCompactionScenario(params: {
+  sessionManager: ExtensionContext["sessionManager"];
+  event: unknown;
+  apiKey: string | null;
+}) {
+  const compactionHandler = createCompactionHandler();
+  const getApiKeyMock = vi.fn().mockResolvedValue(params.apiKey);
+  const mockContext = createCompactionContext({
+    sessionManager: params.sessionManager,
+    getApiKeyMock,
+  });
+  const result = (await compactionHandler(params.event, mockContext)) as {
+    cancel?: boolean;
+  };
+  return { result, getApiKeyMock };
+}
 
 describe("compaction-safeguard tool failures", () => {
   it("formats tool failures with meta and summary", () => {
@@ -373,22 +394,15 @@ describe("compaction-safeguard extension model fallback", () => {
     // Set up runtime with model (mimics buildEmbeddedExtensionPaths behavior)
     setCompactionSafeguardRuntime(sessionManager, { model });
 
-    const compactionHandler = createCompactionHandler();
     const mockEvent = createCompactionEvent({
       messageText: "test message",
       tokensBefore: 1000,
     });
-
-    const getApiKeyMock = vi.fn().mockResolvedValue(null);
-    const mockContext = createCompactionContext({
+    const { result, getApiKeyMock } = await runCompactionScenario({
       sessionManager,
-      getApiKeyMock,
+      event: mockEvent,
+      apiKey: null,
     });
-
-    // Call the handler and wait for result
-    const result = (await compactionHandler(mockEvent, mockContext)) as {
-      cancel?: boolean;
-    };
 
     expect(result).toEqual({ cancel: true });
 
@@ -406,25 +420,101 @@ describe("compaction-safeguard extension model fallback", () => {
 
     // Do NOT set runtime.model (both ctx.model and runtime.model will be undefined)
 
-    const compactionHandler = createCompactionHandler();
     const mockEvent = createCompactionEvent({
       messageText: "test",
       tokensBefore: 500,
     });
-
-    const getApiKeyMock = vi.fn().mockResolvedValue(null);
-    const mockContext = createCompactionContext({
+    const { result, getApiKeyMock } = await runCompactionScenario({
       sessionManager,
-      getApiKeyMock,
+      event: mockEvent,
+      apiKey: null,
     });
-
-    const result = (await compactionHandler(mockEvent, mockContext)) as {
-      cancel?: boolean;
-    };
 
     expect(result).toEqual({ cancel: true });
 
     // Verify early return: getApiKey should NOT have been called when both models are missing
     expect(getApiKeyMock).not.toHaveBeenCalled();
   });
+});
+
+describe("compaction-safeguard double-compaction guard", () => {
+  it("cancels compaction when there are no real messages to summarize", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "sk-test",
+    });
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("continues when messages include real conversation content", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = createCompactionEvent({
+      messageText: "real message",
+      tokensBefore: 1500,
+    });
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyMock).toHaveBeenCalled();
+  });
+});
+
+async function expectWorkspaceSummaryEmptyForAgentsAlias(
+  createAlias: (outsidePath: string, agentsPath: string) => void,
+) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
+  const prevCwd = process.cwd();
+  try {
+    const outside = path.join(root, "outside-secret.txt");
+    fs.writeFileSync(outside, "secret");
+    createAlias(outside, path.join(root, "AGENTS.md"));
+    process.chdir(root);
+    await expect(readWorkspaceContextForSummary()).resolves.toBe("");
+  } finally {
+    process.chdir(prevCwd);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe("readWorkspaceContextForSummary", () => {
+  it.runIf(process.platform !== "win32")(
+    "returns empty when AGENTS.md is a symlink escape",
+    async () => {
+      await expectWorkspaceSummaryEmptyForAgentsAlias((outside, agentsPath) => {
+        fs.symlinkSync(outside, agentsPath);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "returns empty when AGENTS.md is a hardlink alias",
+    async () => {
+      await expectWorkspaceSummaryEmptyForAgentsAlias((outside, agentsPath) => {
+        fs.linkSync(outside, agentsPath);
+      });
+    },
+  );
 });

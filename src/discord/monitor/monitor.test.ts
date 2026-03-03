@@ -182,6 +182,44 @@ describe("agent components", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓" });
     expect(enqueueSystemEventMock).toHaveBeenCalled();
   });
+
+  it("accepts cid payloads for agent button interactions", async () => {
+    const button = createAgentComponentButton({
+      cfg: createCfg(),
+      accountId: "default",
+      dmPolicy: "allowlist",
+      allowFrom: ["123456789"],
+    });
+    const { interaction, defer, reply } = createDmButtonInteraction();
+
+    await button.run(interaction, { cid: "hello_cid" } as ComponentData);
+
+    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
+    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("hello_cid"),
+      expect.any(Object),
+    );
+  });
+
+  it("keeps malformed percent cid values without throwing", async () => {
+    const button = createAgentComponentButton({
+      cfg: createCfg(),
+      accountId: "default",
+      dmPolicy: "allowlist",
+      allowFrom: ["123456789"],
+    });
+    const { interaction, defer, reply } = createDmButtonInteraction();
+
+    await button.run(interaction, { cid: "hello%2G" } as ComponentData);
+
+    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
+    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("hello%2G"),
+      expect.any(Object),
+    );
+  });
 });
 
 describe("discord component interactions", () => {
@@ -389,6 +427,70 @@ describe("discord component interactions", () => {
     expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
     expect(deliverDiscordReplyMock.mock.calls[0]?.[0]?.replyToId).toBe("msg-2");
     expect(resolveDiscordModalEntry({ id: "mdl_1" })).toBeNull();
+  });
+
+  it("does not mark guild modal events as command-authorized for non-allowlisted users", async () => {
+    registerDiscordComponentEntries({
+      entries: [],
+      modals: [createModalEntry()],
+    });
+
+    const modal = createDiscordComponentModal(
+      createComponentContext({
+        cfg: {
+          commands: { useAccessGroups: true },
+          channels: { discord: { replyToMode: "first" } },
+        } as OpenClawConfig,
+        allowFrom: ["owner-1"],
+      }),
+    );
+    const { interaction, acknowledge } = createModalInteraction({
+      rawData: {
+        channel_id: "guild-channel",
+        guild_id: "guild-1",
+        id: "interaction-guild-1",
+        member: { roles: [] },
+      } as unknown as ModalInteraction["rawData"],
+      guild: { id: "guild-1", name: "Test Guild" } as unknown as ModalInteraction["guild"],
+    });
+
+    await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
+
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+    expect(lastDispatchCtx?.CommandAuthorized).toBe(false);
+  });
+
+  it("marks guild modal events as command-authorized for allowlisted users", async () => {
+    registerDiscordComponentEntries({
+      entries: [],
+      modals: [createModalEntry()],
+    });
+
+    const modal = createDiscordComponentModal(
+      createComponentContext({
+        cfg: {
+          commands: { useAccessGroups: true },
+          channels: { discord: { replyToMode: "first" } },
+        } as OpenClawConfig,
+        allowFrom: ["123456789"],
+      }),
+    );
+    const { interaction, acknowledge } = createModalInteraction({
+      rawData: {
+        channel_id: "guild-channel",
+        guild_id: "guild-1",
+        id: "interaction-guild-2",
+        member: { roles: [] },
+      } as unknown as ModalInteraction["rawData"],
+      guild: { id: "guild-1", name: "Test Guild" } as unknown as ModalInteraction["guild"],
+    });
+
+    await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
+
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+    expect(lastDispatchCtx?.CommandAuthorized).toBe(true);
   });
 
   it("keeps reusable modal entries active after submission", async () => {
