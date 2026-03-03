@@ -56,6 +56,11 @@ function listConfiguredGuildChannelKeys(
       if (!channelId) {
         continue;
       }
+      // Skip wildcard keys (e.g. "*" meaning "all channels") — they are valid
+      // config but are not real channel IDs and should not be audited.
+      if (channelId === "*") {
+        continue;
+      }
       if (!shouldAuditChannelConfig(value as DiscordGuildChannelConfig | undefined)) {
         continue;
       }
