@@ -38,10 +38,11 @@ export function isSilentReplyPrefixText(
   if (!normalized) {
     return false;
   }
-  if (!normalized.includes("_")) {
-    return false;
-  }
+  // Catch all-uppercase prefixes (e.g. "NO", "N", "HEARTBEAT") that are
+  // prefixes of the silent token. This catches both underscore-separated
+  // fragments (NO_REPLY) and bare prefixes (NO).
   if (/[^A-Z_]/.test(normalized)) {
+    // Mixed-case or lowercase - likely natural language, not a prefix
     return false;
   }
   return token.toUpperCase().startsWith(normalized);
