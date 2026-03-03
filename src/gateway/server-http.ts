@@ -59,6 +59,7 @@ import {
   type PluginHttpRequestHandler,
   type PluginRoutePathContext,
 } from "./server/plugins-http.js";
+import type { ReadinessChecker, ReadinessResult } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
@@ -154,6 +155,7 @@ function handleGatewayProbeRequest(
   req: IncomingMessage,
   res: ServerResponse,
   requestPath: string,
+  getReadiness?: ReadinessChecker,
 ): boolean {
   const status = GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath);
   if (!status) {
@@ -169,13 +171,30 @@ function handleGatewayProbeRequest(
     return true;
   }
 
-  res.statusCode = 200;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
+
   if (method === "HEAD") {
+    res.statusCode = 200;
     res.end();
     return true;
   }
+
+  if (status === "ready" && getReadiness) {
+    let result: ReadinessResult;
+    try {
+      result = getReadiness();
+    } catch {
+      res.statusCode = 503;
+      res.end(JSON.stringify({ ready: false, failing: ["internal"] }));
+      return true;
+    }
+    res.statusCode = result.ready ? 200 : 503;
+    res.end(JSON.stringify(result));
+    return true;
+  }
+
+  res.statusCode = 200;
   res.end(JSON.stringify({ ok: true, status }));
   return true;
 }
@@ -518,6 +537,7 @@ export function createGatewayHttpServer(opts: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  getReadiness?: ReadinessChecker;
   tlsOptions?: TlsOptions;
 }): HttpServer {
   const {
@@ -535,6 +555,7 @@ export function createGatewayHttpServer(opts: {
     shouldEnforcePluginGatewayAuth,
     resolvedAuth,
     rateLimiter,
+    getReadiness,
   } = opts;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
@@ -690,7 +711,7 @@ export function createGatewayHttpServer(opts: {
 
       requestStages.push({
         name: "gateway-probes",
-        run: () => handleGatewayProbeRequest(req, res, requestPath),
+        run: () => handleGatewayProbeRequest(req, res, requestPath, getReadiness),
       });
 
       if (await runGatewayHttpRequestStages(requestStages)) {
