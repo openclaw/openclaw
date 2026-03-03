@@ -295,7 +295,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
           name: "action",
           description: "list | kill | log | info | send | steer | spawn",
           type: "string",
-          choices: ["list", "kill", "log", "info", "send", "steer", "spawn"],
+          choices: () => ["list", "kill", "log", "info", "send", "steer", "spawn"],
         },
         {
           name: "target",
@@ -322,7 +322,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
           name: "action",
           description: "Action to run",
           type: "string",
-          choices: [
+          choices: () => [
             "spawn",
             "cancel",
             "steer",

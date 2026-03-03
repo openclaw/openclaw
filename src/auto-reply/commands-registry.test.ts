@@ -178,7 +178,11 @@ describe("commands registry", () => {
     const acp = listChatCommands().find((command) => command.key === "acp");
     expect(acp).toBeTruthy();
     const actionArg = acp?.args?.find((arg) => arg.name === "action");
-    expect(actionArg?.choices).toEqual([
+    const resolvedChoices =
+      typeof actionArg?.choices === "function"
+        ? actionArg.choices({} as never)
+        : actionArg?.choices;
+    expect(resolvedChoices).toEqual([
       "spawn",
       "cancel",
       "steer",
