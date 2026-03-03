@@ -9,6 +9,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
+import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
 import { normalizeExecutableToken } from "../infra/exec-wrapper-resolution.js";
@@ -365,12 +366,41 @@ function parseGatewayActionFromCliArgv(cliArgv: string[]): {
     return null;
   }
 
-  const gatewayIdx = cliArgv.findIndex((token) => token.trim().toLowerCase() === "gateway");
-  if (gatewayIdx < 0 || gatewayIdx + 1 >= cliArgv.length) {
+  let gatewayIdx = -1;
+  for (let idx = 0; idx < cliArgv.length; idx += 1) {
+    const token = cliArgv[idx]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (token === FLAG_TERMINATOR) {
+      return null;
+    }
+
+    const lower = token.toLowerCase();
+    if (lower === "-h" || lower === "--help" || lower === "-v" || lower === "--version") {
+      return null;
+    }
+
+    if (token.startsWith("-")) {
+      const consumedRootOption = consumeRootOptionToken(cliArgv, idx);
+      if (consumedRootOption > 0) {
+        idx += consumedRootOption - 1;
+      }
+      continue;
+    }
+
+    gatewayIdx = idx;
+    break;
+  }
+
+  if (gatewayIdx < 0 || normalizeLower(cliArgv[gatewayIdx]) !== "gateway") {
+    return null;
+  }
+  if (gatewayIdx + 1 >= cliArgv.length) {
     return null;
   }
 
-  const actionRaw = cliArgv[gatewayIdx + 1]?.trim().toLowerCase();
+  const actionRaw = normalizeLower(cliArgv[gatewayIdx + 1]);
   if (actionRaw !== "restart" && actionRaw !== "start" && actionRaw !== "stop") {
     return null;
   }

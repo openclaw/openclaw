@@ -166,6 +166,26 @@ describe("detectGatewayManagementExecCommand", () => {
     expect(detected).toBeNull();
   });
 
+  it("does not detect root help command paths that contain gateway restart tokens", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "openclaw help gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect root help flag invocations that contain gateway restart tokens", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "openclaw --help gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
   it("detects systemctl restart commands for gateway units", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "systemctl --user restart openclaw-gateway.service",
