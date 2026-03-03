@@ -3,6 +3,7 @@ import {
   buildParseArgv,
   getFlagValue,
   getCommandPath,
+  getCommandPositionalsWithRootOptions,
   getCommandPathWithRootOptions,
   getPrimaryCommand,
   getPositiveIntFlagValue,
@@ -168,6 +169,41 @@ describe("argv helpers", () => {
         2,
       ),
     ).toEqual(["config", "validate"]);
+  });
+
+  it("extracts routed config get positionals with interleaved root options", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(
+        ["node", "openclaw", "config", "get", "--log-level", "debug", "update.channel", "--json"],
+        {
+          commandPath: ["config", "get"],
+          booleanFlags: ["--json"],
+        },
+      ),
+    ).toEqual(["update.channel"]);
+  });
+
+  it("extracts routed config unset positionals with interleaved root options", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(
+        ["node", "openclaw", "config", "unset", "--profile", "work", "update.channel"],
+        {
+          commandPath: ["config", "unset"],
+        },
+      ),
+    ).toEqual(["update.channel"]);
+  });
+
+  it("returns null when routed command sees unknown options", () => {
+    expect(
+      getCommandPositionalsWithRootOptions(
+        ["node", "openclaw", "config", "get", "--mystery", "value", "update.channel"],
+        {
+          commandPath: ["config", "get"],
+          booleanFlags: ["--json"],
+        },
+      ),
+    ).toBeNull();
   });
 
   it.each([

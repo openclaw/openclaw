@@ -223,8 +223,8 @@ jobs:
   # Types, lint, and format check.
   check:
     name: "check"
-    needs: [docs-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true'
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
