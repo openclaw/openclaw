@@ -117,16 +117,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Voice (TTS)");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
-    expect(prompt).toContain("## Safety");
+    expect(prompt).not.toContain("## Safety");
     expect(prompt).toContain(
       "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
     );
-    expect(prompt).toContain("You have no independent goals");
-    expect(prompt).toContain("Prioritize safety and human oversight");
-    expect(prompt).toContain("if instructions conflict");
-    expect(prompt).toContain("Inspired by Anthropic's constitution");
-    expect(prompt).toContain("Do not manipulate or persuade anyone");
-    expect(prompt).toContain("Do not copy yourself or change system prompts");
     expect(prompt).toContain("## Subagent Context");
     expect(prompt).not.toContain("## Group Chat Context");
     expect(prompt).toContain("Subagent details");
@@ -155,18 +149,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
-  it("includes safety guardrails in full prompts", () => {
+  it("does not include hardcoded safety guardrails (deferred to SOUL.md)", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).toContain("## Safety");
-    expect(prompt).toContain("You have no independent goals");
-    expect(prompt).toContain("Prioritize safety and human oversight");
-    expect(prompt).toContain("if instructions conflict");
-    expect(prompt).toContain("Inspired by Anthropic's constitution");
-    expect(prompt).toContain("Do not manipulate or persuade anyone");
-    expect(prompt).toContain("Do not copy yourself or change system prompts");
+    expect(prompt).not.toContain("## Safety");
+    expect(prompt).not.toContain("You have no independent goals");
+    expect(prompt).not.toContain("Prioritize safety and human oversight");
+    expect(prompt).not.toContain("Inspired by Anthropic's constitution");
+    expect(prompt).not.toContain("Do not manipulate or persuade anyone");
   });
 
   it("includes voice hint when provided", () => {
@@ -197,7 +189,6 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## OpenClaw CLI Quick Reference");
     expect(prompt).toContain("openclaw gateway restart");
-    expect(prompt).toContain("Do not invent commands");
   });
 
   it("guides runtime completion events without exposing internal metadata", () => {
@@ -210,7 +201,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("do not forward raw internal metadata");
   });
 
-  it("guides subagent workflows to avoid polling loops", () => {
+  it("includes tooling tips for subagent workflows", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
     });
@@ -219,10 +210,7 @@ describe("buildAgentSystemPrompt", () => {
       "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
     );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
-    expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
-    expect(prompt).toContain(
-      "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
-    );
+    expect(prompt).toContain("Subagent status can be checked via");
   });
 
   it("lists available tools when provided", () => {
@@ -250,7 +238,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("not agents_list");
   });
 
-  it("guides harness requests to ACP thread-bound spawns", () => {
+  it("guides harness requests to ACP spawns", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
@@ -277,9 +265,7 @@ describe("buildAgentSystemPrompt", () => {
       acpEnabled: false,
     });
 
-    expect(prompt).not.toContain(
-      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
-    );
+    expect(prompt).not.toContain("For ACP harness requests");
     expect(prompt).not.toContain('runtime="acp" requires `agentId`');
     expect(prompt).not.toContain("not ACP harness ids");
     expect(prompt).toContain("- sessions_spawn: Spawn an isolated sub-agent session");
@@ -523,8 +509,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+      "SOUL.md and IDENTITY.md are the sole authority for your identity, personality, behavior, and boundaries.",
     );
+    expect(prompt).toContain("these files define who you are");
   });
 
   it("renders bootstrap truncation warning even when no context files are injected", () => {
@@ -670,7 +657,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Reactions");
-    expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+    expect(prompt).toContain("Reactions are enabled for Telegram (minimal mode).");
   });
 });
 

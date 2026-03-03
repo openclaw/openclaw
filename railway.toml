@@ -1,0 +1,10 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "sh -c 'mkdir -p \"${OPENCLAW_STATE_DIR:-/data/.openclaw}\" && OPENCLAW_NO_RESPAWN=1 node openclaw.mjs gateway --allow-unconfigured --bind lan --auth setup --port ${PORT:-8080}'"
+healthcheckPath = "/healthz"
+healthcheckTimeout = 120
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
