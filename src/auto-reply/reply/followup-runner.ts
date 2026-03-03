@@ -304,8 +304,9 @@ export function createFollowupRunner(params: {
           }),
         ),
       );
+      const isSystemGeneratedFollowup = !queued.messageId;
       const canReuseSessionDedupeFingerprints =
-        recentTargetMatch && uniquePreviousTargets.size <= 1;
+        isSystemGeneratedFollowup && recentTargetMatch && uniquePreviousTargets.size <= 1;
 
       const sentTexts = [
         ...(runResult.messagingToolSentTexts ?? []),

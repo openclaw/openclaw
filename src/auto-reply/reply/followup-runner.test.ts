@@ -311,6 +311,38 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("does not reuse session-level dedupe fingerprints for queued user turns", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      lastMessagingToolSessionId: "session",
+      lastMessagingToolSentAt: Date.now(),
+      lastMessagingToolSentTexts: ["hello world!"],
+      lastMessagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "123" }],
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply, {
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+    });
+
+    await runner({
+      ...baseQueuedRun("telegram"),
+      messageId: "user-msg-123",
+      originatingTo: "123",
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
   it("does not use session-level dedupe from a previous session id", async () => {
     const onBlockReply = vi.fn(async () => {});
     const sessionEntry: SessionEntry = {
