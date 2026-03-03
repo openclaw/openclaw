@@ -198,6 +198,20 @@ describe("system run command helpers", () => {
     });
   });
 
+  test("validateSystemRunCommandConsistency rejects relative path basename fallback", () => {
+    // Relative paths (./tool, ../bin/tool) should NOT trigger basename fallback.
+    // The user should see the relative path in approval prompts to know they're
+    // executing a local script, not a system binary.
+    expectRawCommandMismatch({
+      argv: ["./tool", "--flag"],
+      rawCommand: "tool --flag",
+    });
+    expectRawCommandMismatch({
+      argv: ["../bin/tool", "--flag"],
+      rawCommand: "tool --flag",
+    });
+  });
+
   test("validateSystemRunCommandConsistency rejects genuinely different commands even with path prefix", () => {
     // Basename fallback should not weaken security — different command names still fail.
     expectRawCommandMismatch({

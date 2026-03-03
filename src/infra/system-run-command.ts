@@ -126,10 +126,14 @@ export function validateSystemRunCommandConsistency(params: {
   // recognised shell wrapper, `inferred` is the extracted inner command, and comparing
   // against a basename-formatted full argv would cause unintended acceptance of shell-wrapper
   // strings as rawCommand.
+  //
+  // Restrict to absolute paths only. Relative paths (./tool, ../bin/tool) are semantically
+  // different from bare command names — the user should see the relative path in approval
+  // prompts to know they're executing a local script, not a system binary.
   const argv0 = params.argv[0] ?? "";
-  const hasPathSeparator = argv0.includes("/") || argv0.includes("\\");
+  const isAbsolutePath = /^(?:\/|[A-Za-z]:\\)/.test(argv0);
   const inferredBasename =
-    shellCommand === null && params.argv.length > 0 && hasPathSeparator
+    shellCommand === null && params.argv.length > 0 && isAbsolutePath
       ? formatExecCommand([argv0.split(/[/\\]/).pop()!, ...params.argv.slice(1)])
       : null;
 
