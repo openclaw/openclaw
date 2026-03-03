@@ -76,7 +76,9 @@ export async function inspectGatewayRestart(params: {
   const runtimePid = runtime.pid;
   const ownsPort =
     runtimePid != null
-      ? portUsage.listeners.some((listener) => listenerOwnedByRuntimePid({ listener, runtimePid })) ||
+      ? portUsage.listeners.some((listener) =>
+          listenerOwnedByRuntimePid({ listener, runtimePid }),
+        ) ||
         (portUsage.status === "busy" && portUsage.listeners.length === 0)
       : gatewayListeners.length > 0 ||
         (portUsage.status === "busy" && portUsage.listeners.length === 0);
