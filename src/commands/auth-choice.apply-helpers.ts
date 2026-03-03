@@ -130,7 +130,11 @@ async function resolveExistingProviderApiKey(params: {
         return {
           apiKey: profileResolved.apiKey,
           source: `profile:${profileId}`,
-          credential: profile.keyRef ?? profileResolved.apiKey,
+          credential:
+            profile.keyRef ??
+            (typeof profile.key === "string" && profile.key.trim().length > 0
+              ? profile.key
+              : profileResolved.apiKey),
         };
       } catch {}
     }

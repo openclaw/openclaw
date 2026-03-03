@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
 import {
   createAuthTestLifecycle,
@@ -309,6 +310,50 @@ describe("applyAuthChoiceOpenAI", () => {
       prompter: reconfigurePrompter,
       runtime,
       setDefaultModel: true,
+    });
+
+    expect(confirm).toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(agentDir);
+    expect(parsed.profiles?.["openai:default"]?.key).toBeUndefined();
+    expect(parsed.profiles?.["openai:default"]?.keyRef).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
+  });
+
+  it("preserves inline env-ref key strings when reusing OpenAI profile credentials", async () => {
+    const agentDir = await setupTempState();
+    process.env.OPENAI_API_KEY = "sk-openai-inline-ref";
+
+    upsertAuthProfile({
+      profileId: "openai:default",
+      agentDir,
+      credential: {
+        type: "api_key",
+        provider: "openai",
+        key: "${OPENAI_API_KEY}",
+      },
+    });
+
+    const runtime = createExitThrowingRuntime();
+    const confirm = vi.fn(async () => true);
+    const text = vi.fn(async () => "should-not-be-used");
+    const reconfigurePrompter = createWizardPrompter(
+      { confirm, text },
+      { defaultSelect: "plaintext" },
+    );
+    await applyAuthChoiceOpenAI({
+      authChoice: "openai-api-key",
+      config: {},
+      prompter: reconfigurePrompter,
+      runtime,
+      setDefaultModel: true,
+      agentDir,
     });
 
     expect(confirm).toHaveBeenCalled();
