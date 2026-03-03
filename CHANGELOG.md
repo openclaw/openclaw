@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Models/Moonshot CN onboarding: preserve explicit `models.providers.moonshot.baseUrl` when injecting implicit Moonshot provider config, so `.cn` endpoint selections are not overwritten by the default `.ai` base URL. (#32607)
+
 ## 2026.3.2
 
 ### Changes
