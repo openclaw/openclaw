@@ -83,11 +83,15 @@ vi.mock("@grammyjs/transformer-throttler", () => ({
 
 vi.mock("../media/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/store.js")>();
-  return {
-    ...actual,
-    saveMediaBuffer: (...args: Parameters<typeof saveMediaBufferSpy>) =>
-      saveMediaBufferSpy(...args),
-  };
+  const mockModule = Object.create(null) as Record<string, unknown>;
+  Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
+  Object.defineProperty(mockModule, "saveMediaBuffer", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: (...args: Parameters<typeof saveMediaBufferSpy>) => saveMediaBufferSpy(...args),
+  });
+  return mockModule;
 });
 
 vi.mock("../config/config.js", async (importOriginal) => {

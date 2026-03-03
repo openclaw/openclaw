@@ -64,14 +64,23 @@ vi.mock("../../config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../media/store.js", () => ({
-  saveMediaBuffer: vi.fn().mockImplementation(async (_buf: Buffer, contentType?: string) => ({
-    id: "mid",
-    path: "/tmp/mid",
-    size: _buf.length,
-    contentType,
-  })),
-}));
+vi.mock("../media/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/store.js")>();
+  const mockModule = Object.create(null) as Record<string, unknown>;
+  Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
+  Object.defineProperty(mockModule, "saveMediaBuffer", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: vi.fn().mockImplementation(async (_buf: Buffer, contentType?: string) => ({
+      id: "mid",
+      path: "/tmp/mid",
+      size: _buf.length,
+      contentType,
+    })),
+  });
+  return mockModule;
+});
 
 vi.mock("@whiskeysockets/baileys", () => {
   const created = createMockBaileys();
