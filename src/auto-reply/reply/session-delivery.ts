@@ -47,7 +47,7 @@ export function resolveLastChannelRaw(params: {
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
   if (originatingChannel === INTERNAL_MESSAGE_CHANNEL && isMainSessionKey(params.sessionKey)) {
-    return params.originatingChannelRaw || params.persistedLastChannel;
+    return params.originatingChannelRaw;
   }
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
