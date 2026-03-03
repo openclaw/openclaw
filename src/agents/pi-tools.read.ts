@@ -493,6 +493,26 @@ export function createOpenClawReadTool(
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
+      const readPath = typeof record?.path === "string" ? String(record.path).trim() : "";
+      if (readPath) {
+        try {
+          const stat = await fs.stat(readPath);
+          if (stat.isDirectory()) {
+            const entries = await fs.readdir(readPath);
+            const listing = entries.length ? entries.join("\n") : "(empty directory)";
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `The path "${readPath}" is a directory, not a file. Use the LS tool to list directories.\n\nDirectory contents (${entries.length} entries):\n${listing}`,
+                },
+              ],
+            } as AgentToolResult<unknown>;
+          }
+        } catch {
+          // Let the base tool handle missing files and other errors
+        }
+      }
       const result = await executeReadWithAdaptivePaging({
         base,
         toolCallId,
