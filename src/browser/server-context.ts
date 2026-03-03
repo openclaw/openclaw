@@ -170,6 +170,16 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         } catch {
           // Browser might not be responsive
         }
+      } else if (profileState?.firecrawlSession) {
+        // Firecrawl session is active (no RunningChrome process)
+        running = true;
+        try {
+          const ctx = createProfileContext(opts, profile);
+          const tabs = await ctx.listTabs();
+          tabCount = tabs.filter((t) => t.type === "page").length;
+        } catch {
+          // Session might not be responsive
+        }
       } else {
         // Check if something is listening on the port
         try {
@@ -188,7 +198,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
       result.push({
         name,
         cdpPort: profile.cdpPort,
-        cdpUrl: profile.cdpUrl,
+        cdpUrl: profileState?.profile.cdpUrl || profile.cdpUrl,
         color: profile.color,
         running,
         tabCount,

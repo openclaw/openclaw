@@ -106,6 +106,8 @@ export function createProfileSelectionOps({
 
   const focusTab = async (targetId: string): Promise<void> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
+    // Use runtime cdpUrl (may be updated dynamically, e.g. firecrawl sessions)
+    const runtimeCdpUrl = getProfileState().profile.cdpUrl || profile.cdpUrl;
 
     if (!profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
@@ -113,7 +115,7 @@ export function createProfileSelectionOps({
         ?.focusPageByTargetIdViaPlaywright;
       if (typeof focusPageByTargetIdViaPlaywright === "function") {
         await focusPageByTargetIdViaPlaywright({
-          cdpUrl: profile.cdpUrl,
+          cdpUrl: runtimeCdpUrl,
           targetId: resolvedTargetId,
         });
         const profileState = getProfileState();
@@ -122,13 +124,15 @@ export function createProfileSelectionOps({
       }
     }
 
-    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/activate/${resolvedTargetId}`));
+    await fetchOk(appendCdpPath(runtimeCdpUrl, `/json/activate/${resolvedTargetId}`));
     const profileState = getProfileState();
     profileState.lastTargetId = resolvedTargetId;
   };
 
   const closeTab = async (targetId: string): Promise<void> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
+    // Use runtime cdpUrl (may be updated dynamically, e.g. firecrawl sessions)
+    const runtimeCdpUrl = getProfileState().profile.cdpUrl || profile.cdpUrl;
 
     // For remote profiles, use Playwright's persistent connection to close tabs
     if (!profile.cdpIsLoopback) {
@@ -137,14 +141,14 @@ export function createProfileSelectionOps({
         ?.closePageByTargetIdViaPlaywright;
       if (typeof closePageByTargetIdViaPlaywright === "function") {
         await closePageByTargetIdViaPlaywright({
-          cdpUrl: profile.cdpUrl,
+          cdpUrl: runtimeCdpUrl,
           targetId: resolvedTargetId,
         });
         return;
       }
     }
 
-    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${resolvedTargetId}`));
+    await fetchOk(appendCdpPath(runtimeCdpUrl, `/json/close/${resolvedTargetId}`));
   };
 
   return {
