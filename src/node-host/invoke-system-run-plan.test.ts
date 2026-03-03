@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { validateSystemRunCommandConsistency } from "../infra/system-run-command.js";
 import {
   buildSystemRunApprovalPlan,
   hardenApprovedExecutionPaths,
@@ -54,6 +55,44 @@ describe("hardenApprovedExecutionPaths", () => {
       expectedArgv: () => ["env", "poccmd", "SAFE"],
     },
   ];
+
+  it.runIf(process.platform !== "win32")(
+    "rawCommand matches hardened argv when executable is pinned (#33080)",
+    () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-hardening-"));
+      const binDir = path.join(tmp, "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const link = path.join(binDir, "poccmd");
+      fs.symlinkSync("/bin/echo", link);
+      const pinnedPath = fs.realpathSync(link);
+      const oldPath = process.env.PATH;
+      process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+      try {
+        const prepared = buildSystemRunApprovalPlan({
+          command: ["poccmd", "SAFE"],
+          cwd: tmp,
+        });
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          throw new Error("unreachable");
+        }
+        // argv[0] must be the pinned full path
+        expect(prepared.plan.argv[0]).toBe(pinnedPath);
+        // rawCommand must reflect the pinned path, not the original bare name
+        expect(prepared.plan.rawCommand).toContain(pinnedPath);
+        expect(prepared.cmdText).toContain(pinnedPath);
+        // The plan must pass the gateway's consistency check
+        const validation = validateSystemRunCommandConsistency({
+          argv: prepared.plan.argv,
+          rawCommand: prepared.plan.rawCommand,
+        });
+        expect(validation.ok).toBe(true);
+      } finally {
+        process.env.PATH = oldPath ?? "";
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
 
   for (const testCase of cases) {
     it.runIf(process.platform !== "win32")(testCase.name, () => {

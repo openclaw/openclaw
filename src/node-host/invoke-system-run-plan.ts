@@ -3,7 +3,7 @@ import path from "node:path";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import { sameFileIdentity } from "../infra/file-identity.js";
-import { resolveSystemRunCommand } from "../infra/system-run-command.js";
+import { formatExecCommand, resolveSystemRunCommand } from "../infra/system-run-command.js";
 
 export type ApprovedCwdSnapshot = {
   cwd: string;
@@ -239,15 +239,21 @@ export function buildSystemRunApprovalPlan(params: {
   if (!hardening.ok) {
     return { ok: false, message: hardening.message };
   }
+  // When executable pinning changes argv[0], rawCommand must be regenerated
+  // to match the hardened argv — otherwise the gateway's consistency check
+  // rejects the command with RAW_COMMAND_MISMATCH (#33080).
+  const executablePinned = hardening.argv[0] !== command.argv[0];
+  const resolvedCmdText = executablePinned ? formatExecCommand(hardening.argv) : command.cmdText;
+
   return {
     ok: true,
     plan: {
       argv: hardening.argv,
       cwd: hardening.cwd ?? null,
-      rawCommand: command.cmdText.trim() || null,
+      rawCommand: resolvedCmdText.trim() || null,
       agentId: normalizeString(params.agentId),
       sessionKey: normalizeString(params.sessionKey),
     },
-    cmdText: command.cmdText,
+    cmdText: resolvedCmdText,
   };
 }
