@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { writeJsonAtomic } from "../../infra/json-files.js";
 import { resolveProcessScopedMap } from "../../shared/process-scoped-map.js";
+import { acquireSessionWriteLock } from "../session-write-lock.js";
 import { SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_REGISTRY_PATH } from "./constants.js";
 
 export type SandboxRegistryEntry = {
@@ -64,11 +65,22 @@ function isRegistryFile<T extends RegistryEntry>(value: unknown): value is Regis
   return Array.isArray(maybeEntries) && maybeEntries.every(isRegistryEntry);
 }
 
-// In-process async mutex per registry path. Replaces the file-level lock which
-// serialised every sandbox operation (create/status/destroy) through a single
-// flock(), causing O(N) queue build-up at 60+ concurrent containers.
-// The gateway is a single Node.js process, so an in-process promise queue
-// gives the same mutual exclusion with zero filesystem overhead.
+// Timeout for the registry mutation fn() (read + write). 30 s is generous;
+// normal operations complete in <100 ms. If the write stalls (full disk, kernel
+// I/O hang, FUSE mount) this prevents the in-process mutex from blocking all
+// subsequent registry mutations indefinitely.
+const REGISTRY_MUTATION_TIMEOUT_MS = 30_000;
+
+// In-process async mutex per registry path. Eliminates the O(N) retry-storm
+// that the file lock caused when 60+ concurrent gateway containers all queued
+// on containers.json.lock — each attempt had exponential backoff up to 1 s,
+// turning a 30-container burst into 10–30 s waits and timeouts.
+//
+// The gateway is a single Node.js process, so an in-process promise queue gives
+// efficient same-process serialization. Cross-process safety (CLI vs gateway)
+// is preserved by also acquiring the file lock inside the in-process mutex:
+// since only one caller holds the in-process mutex at a time, the file lock is
+// acquired with zero contention from other gateway waiters.
 const REGISTRY_MUTEXES_KEY = Symbol.for("openclaw.sandboxRegistryMutexes");
 type MutexState = { tail: Promise<void> };
 
@@ -92,9 +104,33 @@ async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): 
     release = resolve;
   });
   await prev;
+  // Acquire the file lock for cross-process safety (e.g. `openclaw sandbox
+  // recreate` CLI running concurrently with the gateway). Because the
+  // in-process mutex above serialises all gateway callers, only one waiter
+  // ever contends for the file lock at a time — acquisition is instant.
+  const fileLock = await acquireSessionWriteLock({
+    sessionFile: registryPath,
+    allowReentrant: false,
+  });
   try {
-    return await fn();
+    // Race against a timeout so a stalled file write surfaces as an explicit
+    // error instead of silently blocking all subsequent mutations.
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        fn(),
+        new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(
+            () => reject(new Error(`registry mutation timed out: ${registryPath}`)),
+            REGISTRY_MUTATION_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
   } finally {
+    await fileLock.release();
     release();
   }
 }
