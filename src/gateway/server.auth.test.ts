@@ -561,6 +561,73 @@ describe("gateway server auth/connect", () => {
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     });
 
+    test("rejects device signature when signedAt exceeds configured skew", async () => {
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        gateway: {
+          deviceSignatureSkewMs: 1000,
+        },
+        // oxlint-disable-next-line typescript/no-explicit-any
+      } as any);
+
+      const ws = await openWs(port);
+      const token = resolveGatewayTokenOrEnv();
+      const nonce = await readConnectChallengeNonce(ws);
+
+      const { device } = await createSignedDevice({
+        token,
+        scopes: ["operator.read"],
+        clientId: GATEWAY_CLIENT_NAMES.TEST,
+        clientMode: GATEWAY_CLIENT_MODES.TEST,
+        nonce,
+        signedAtMs: Date.now() - 5000,
+      });
+
+      const connectRes = await sendRawConnectReq(ws, {
+        id: "c-stale-signedat",
+        token,
+        device,
+      });
+      expect(connectRes.ok).toBe(false);
+      expect(connectRes.error?.message ?? "").toContain("device signature expired");
+      expect(connectRes.error?.details?.code).toBe(
+        ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_EXPIRED,
+      );
+      expect(connectRes.error?.details?.reason).toBe("device-signature-stale");
+      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    });
+
+    test("accepts device signature when signedAt is within configured skew", async () => {
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        gateway: {
+          deviceSignatureSkewMs: 2 * 60 * 60 * 1000,
+        },
+        // oxlint-disable-next-line typescript/no-explicit-any
+      } as any);
+
+      const ws = await openWs(port);
+      const token = resolveGatewayTokenOrEnv();
+      const nonce = await readConnectChallengeNonce(ws);
+
+      const { device } = await createSignedDevice({
+        token,
+        scopes: ["operator.read"],
+        clientId: GATEWAY_CLIENT_NAMES.TEST,
+        clientMode: GATEWAY_CLIENT_MODES.TEST,
+        nonce,
+        signedAtMs: Date.now() - 60 * 60 * 1000,
+      });
+
+      const connectRes = await connectReq(ws, {
+        token,
+        scopes: ["operator.read"],
+        device,
+      });
+      expect(connectRes.ok).toBe(true);
+      ws.close();
+    });
+
     test("sends connect challenge on open", async () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`);
       const evtPromise = onceMessage<{
