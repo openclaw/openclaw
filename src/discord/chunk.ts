@@ -243,23 +243,40 @@ function formatReasoningBlockquotes(source: string, chunks: string[]): string[] 
     return chunks;
   }
 
-  return chunks.map((chunk) => {
+  const converted = chunks.map((chunk) => {
     const lines = chunk.split("\n");
-    const converted = lines.map((line) => {
-      // Replace the "Reasoning:" header with a bold blockquoted label.
-      if (line === "Reasoning:") {
-        return "> **Reasoning:**";
-      }
-      // Strip italic markers and convert to blockquote.
-      let content = line;
-      if (content.startsWith("_")) {
-        content = content.slice(1);
-      }
-      if (content.endsWith("_")) {
-        content = content.slice(0, -1);
-      }
-      return content ? `> ${content}` : ">";
-    });
-    return converted.join("\n");
+    return lines
+      .map((line) => {
+        // Replace the "Reasoning:" header with a bold blockquoted label.
+        if (line === "Reasoning:") {
+          return "> **Reasoning:**";
+        }
+        // Strip italic markers and convert to blockquote.
+        let content = line;
+        if (content.startsWith("_")) {
+          content = content.slice(1);
+        }
+        if (content.endsWith("_")) {
+          content = content.slice(0, -1);
+        }
+        return content ? `> ${content}` : ">";
+      })
+      .join("\n");
   });
+
+  // Re-split any chunks that now exceed the Discord character limit after
+  // blockquote conversion (the "> " prefix can push borderline chunks over).
+  const rechunked: string[] = [];
+  for (const chunk of converted) {
+    if (chunk.length <= DEFAULT_MAX_CHARS) {
+      rechunked.push(chunk);
+    } else {
+      const sub = chunkDiscordText(chunk, {
+        maxChars: DEFAULT_MAX_CHARS,
+        maxLines: DEFAULT_MAX_LINES,
+      });
+      rechunked.push(...sub);
+    }
+  }
+  return rechunked;
 }
