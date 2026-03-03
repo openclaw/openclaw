@@ -2,15 +2,16 @@ import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
 import type { FeishuProbeResult } from "./types.js";
 
-/** Cache successful probe results to reduce API calls (bot info is static).
+/** Cache probe results to reduce repeated health-check calls.
  * Gateway health checks call probeFeishu() every minute; without caching this
  * burns ~43,200 calls/month, easily exceeding Feishu's free-tier quota.
- * A 10-min TTL cuts that to ~4,320 calls/month. (#26684) */
+ * Successful bot info is effectively static, while failures are cached briefly
+ * to avoid hammering the API during transient outages. */
 const probeCache = new Map<string, { result: FeishuProbeResult; expiresAt: number }>();
-const PROBE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const PROBE_SUCCESS_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const PROBE_ERROR_TTL_MS = 60 * 1000; // 1 minute
 const MAX_PROBE_CACHE_SIZE = 64;
 export const FEISHU_PROBE_REQUEST_TIMEOUT_MS = 10_000;
-
 export type ProbeFeishuOptions = {
   timeoutMs?: number;
   abortSignal?: AbortSignal;
@@ -22,6 +23,21 @@ type FeishuBotInfoResponse = {
   bot?: { bot_name?: string; open_id?: string };
   data?: { bot?: { bot_name?: string; open_id?: string } };
 };
+
+function setCachedProbeResult(
+  cacheKey: string,
+  result: FeishuProbeResult,
+  ttlMs: number,
+): FeishuProbeResult {
+  probeCache.set(cacheKey, { result, expiresAt: Date.now() + ttlMs });
+  if (probeCache.size > MAX_PROBE_CACHE_SIZE) {
+    const oldest = probeCache.keys().next().value;
+    if (oldest !== undefined) {
+      probeCache.delete(oldest);
+    }
+  }
+  return result;
+}
 
 export async function probeFeishu(
   creds?: FeishuClientCredentials,
@@ -78,11 +94,15 @@ export async function probeFeishu(
       };
     }
     if (responseResult.status === "timeout") {
-      return {
-        ok: false,
-        appId: creds.appId,
-        error: `probe timed out after ${timeoutMs}ms`,
-      };
+      return setCachedProbeResult(
+        cacheKey,
+        {
+          ok: false,
+          appId: creds.appId,
+          error: `probe timed out after ${timeoutMs}ms`,
+        },
+        PROBE_ERROR_TTL_MS,
+      );
     }
 
     const response = responseResult.value;
@@ -95,38 +115,38 @@ export async function probeFeishu(
     }
 
     if (response.code !== 0) {
-      return {
-        ok: false,
-        appId: creds.appId,
-        error: `API error: ${response.msg || `code ${response.code}`}`,
-      };
+      return setCachedProbeResult(
+        cacheKey,
+        {
+          ok: false,
+          appId: creds.appId,
+          error: `API error: ${response.msg || `code ${response.code}`}`,
+        },
+        PROBE_ERROR_TTL_MS,
+      );
     }
 
     const bot = response.bot || response.data?.bot;
-    const result: FeishuProbeResult = {
-      ok: true,
-      appId: creds.appId,
-      botName: bot?.bot_name,
-      botOpenId: bot?.open_id,
-    };
-
-    // Cache successful results only
-    probeCache.set(cacheKey, { result, expiresAt: Date.now() + PROBE_CACHE_TTL_MS });
-    // Evict oldest entry if cache exceeds max size
-    if (probeCache.size > MAX_PROBE_CACHE_SIZE) {
-      const oldest = probeCache.keys().next().value;
-      if (oldest !== undefined) {
-        probeCache.delete(oldest);
-      }
-    }
-
-    return result;
+    return setCachedProbeResult(
+      cacheKey,
+      {
+        ok: true,
+        appId: creds.appId,
+        botName: bot?.bot_name,
+        botOpenId: bot?.open_id,
+      },
+      PROBE_SUCCESS_TTL_MS,
+    );
   } catch (err) {
-    return {
-      ok: false,
-      appId: creds.appId,
-      error: err instanceof Error ? err.message : String(err),
-    };
+    return setCachedProbeResult(
+      cacheKey,
+      {
+        ok: false,
+        appId: creds.appId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      PROBE_ERROR_TTL_MS,
+    );
   }
 }
 
