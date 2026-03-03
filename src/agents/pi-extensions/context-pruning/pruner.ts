@@ -217,7 +217,8 @@ ${tail}`;
   return { ...msg, content: [asText(trimmed + note)] };
 }
 
-const FILE_BLOCK_RE = /<file\s+name="([^"]*)"(?:\s+mime="([^"]*)")?\s*>([\s\S]*?)<\/file>/g;
+const FILE_BLOCK_RE = () =>
+  /<file\s+name="([^"]*)"(?:\s+mime="([^"]*)")?\s*>([\s\S]*?)<\/file>/g;
 
 export function softTrimFileBlocksInText(
   text: string,
