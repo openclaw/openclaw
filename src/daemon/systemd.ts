@@ -143,6 +143,11 @@ async function execSystemctl(
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
+  // When systemctl fails, stderr might be replaced with error.message from execFileUtf8.
+  // Prefer stdout when stderr contains generic error message and stdout has actual output.
+  if (result.stdout && result.stderr.toLowerCase().includes("command failed")) {
+    return result.stdout.trim();
+  }
   return (result.stderr || result.stdout || "").trim();
 }
 
