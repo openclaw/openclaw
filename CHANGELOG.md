@@ -18,6 +18,8 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Docs/security hardening guidance: document Docker `DOCKER-USER` + UFW policy and add cross-linking from Docker install docs for VPS/public-host setups. (#27613) thanks @dorukardahan.
+- iOS/Voice timing safety: guard system speech start/finish callbacks to the active utterance to avoid misattributed start events during rapid stop/restart cycles. (#33304) thanks @mbelinky; original implementation direction by @ngutman.
+- iOS/Talk incremental speech pacing: allow long punctuation-free assistant chunks to start speaking at safe whitespace boundaries so voice responses begin sooner instead of waiting for terminal punctuation. (#33305) thanks @mbelinky; original implementation by @ngutman.
 - Docs/tool-loop detection config keys: align `docs/tools/loop-detection.md` examples and field names with the current `tools.loopDetection` schema to prevent copy-paste validation failures from outdated keys. (#33182) Thanks @Mylszd.
 - Gateway/session agent discovery: include disk-scanned agent IDs in `listConfiguredAgentIds` even when `agents.list` is configured, so disk-only/ACP agent sessions remain visible in gateway session aggregation and listings. (#32831) thanks @Sid-Qin.
 - Discord/inbound debouncer: skip bot-own MESSAGE_CREATE events before they reach the debounce queue to avoid self-triggered slowdowns in busy servers. Thanks @thewilloftheshadow.
@@ -37,6 +39,7 @@ Docs: https://docs.openclaw.ai
 - Discord/chunk delivery reliability: preserve chunk ordering when using a REST client and retry chunk sends on 429/5xx using account retry settings. (#33226) Thanks @thewilloftheshadow.
 - Discord/mention handling: add id-based mention formatting + cached rewrites, resolve inbound mentions to display names, and add optional ignoreOtherMentions gating (excluding @everyone/@here). (#33224) Thanks @thewilloftheshadow.
 - Discord/media SSRF allowlist: allow Discord CDN hostnames (including wildcard domains) in inbound media SSRF policy to prevent proxy/VPN fake-ip blocks. (#33275) Thanks @thewilloftheshadow.
+- Telegram/device pairing notifications: auto-arm one-shot notify on `/pair qr`, auto-ping on new pairing requests, and add manual fallback via `/pair approve latest` if the ping does not arrive. (#33299) thanks @mbelinky.
 - Exec heartbeat routing: scope exec-triggered heartbeat wakes to agent session keys so unrelated agents are no longer awakened by exec events, while preserving legacy unscoped behavior for non-canonical session keys. (#32724) thanks @altaywtf
 - macOS/Tailscale remote gateway discovery: add a Tailscale Serve fallback peer probe path (`wss://<peer>.ts.net`) when Bonjour and wide-area DNS-SD discovery return no gateways, and refresh both discovery paths from macOS onboarding. (#32860) Thanks @ngutman.
 - iOS/Gateway keychain hardening: move gateway metadata and TLS fingerprints to device keychain storage with safer migration behavior and rollback-safe writes to reduce credential loss risk during upgrades. (#33029) thanks @mbelinky.
