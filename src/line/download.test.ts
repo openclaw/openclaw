@@ -81,8 +81,9 @@ describe("downloadLineMedia", () => {
     expect(result.contentType).toBe("audio/mp4");
     expect(result.path).toMatch(/\.m4a$/);
     expect(typeof writtenPath).toBe("string");
-    if (typeof writtenPath === "string") {
-      expect(writtenPath).toMatch(/\.m4a$/);
+    if (typeof writtenPath !== "string") {
+      throw new Error("expected string temp file path");
     }
+    expect(writtenPath).toMatch(/\.m4a$/);
   });
 });
