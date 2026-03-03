@@ -1,5 +1,6 @@
 import {
   createActionGate,
+  readBooleanParam,
   readNumberParam,
   readStringParam,
   type ChannelMessageActionAdapter,
@@ -69,6 +70,8 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       const mediaUrl = readStringParam(params, "media", { trim: false });
       const replyTo = readStringParam(params, "replyTo");
       const threadId = readStringParam(params, "threadId");
+      const audioAsVoice = readBooleanParam(params, "audioAsVoice");
+      const asVoice = readBooleanParam(params, "asVoice");
       return await handleMatrixAction(
         {
           action: "sendMessage",
@@ -77,6 +80,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           mediaUrl: mediaUrl ?? undefined,
           replyToId: replyTo ?? undefined,
           threadId: threadId ?? undefined,
+          audioAsVoice: audioAsVoice ?? asVoice ?? undefined,
         },
         cfg as CoreConfig,
       );
