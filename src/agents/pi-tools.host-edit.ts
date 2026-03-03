@@ -116,7 +116,9 @@ export function wrapHostEditToolWithMismatchContent(
       ) {
         const record =
           params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
-        const pathParam = record?.file_path || record?.path;
+        // Use canonical path key that the edit operation validated against
+        // Do NOT use file_path as it could be used to exfiltrate non-workspace files
+        const pathParam = record?.path;
 
         if (typeof pathParam === "string") {
           try {
