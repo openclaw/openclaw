@@ -41,6 +41,12 @@ const recentInboundWebhookEvents = createDedupeCache({
   maxSize: BLUEBUBBLES_WEBHOOK_REPLAY_CACHE_MAX_SIZE,
 });
 const pendingInboundWebhookReplayKeys = new Set<string>();
+type PendingWebhookReplayRetryEntry = {
+  message: NormalizedWebhookMessage;
+  target: WebhookTarget;
+  eventType: string;
+};
+const pendingInboundWebhookReplayRetries = new Map<string, PendingWebhookReplayRetryEntry>();
 
 export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => void {
   const registered = registerWebhookTargetWithPluginRoute({
@@ -401,12 +407,61 @@ export async function handleBlueBubblesWebhookRequest(
         );
       });
     } else if (message) {
+      const enqueueMessage = (entry: PendingWebhookReplayRetryEntry) => {
+        const debouncer = debounceRegistry.getOrCreateDebouncer(entry.target);
+        void debouncer
+          .enqueue({
+            message: entry.message,
+            target: entry.target,
+            eventType: entry.eventType,
+          })
+          .catch((err) => {
+            entry.target.runtime.error?.(
+              `[${entry.target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
+            );
+          });
+      };
+      const enqueueMessageWithReplayLifecycle = (params: {
+        entry: PendingWebhookReplayRetryEntry;
+        replayKey: string;
+      }) => {
+        const debouncer = debounceRegistry.getOrCreateDebouncer(params.entry.target);
+        pendingInboundWebhookReplayKeys.add(params.replayKey);
+        void debouncer
+          .enqueue({
+            message: params.entry.message,
+            target: params.entry.target,
+            eventType: params.entry.eventType,
+            replayLifecycle: {
+              onFlushSuccess: () => {
+                recentInboundWebhookEvents.check(params.replayKey);
+                pendingInboundWebhookReplayKeys.delete(params.replayKey);
+                pendingInboundWebhookReplayRetries.delete(params.replayKey);
+              },
+              onFlushFailure: () => {
+                pendingInboundWebhookReplayKeys.delete(params.replayKey);
+                const deferredRetry = pendingInboundWebhookReplayRetries.get(params.replayKey);
+                pendingInboundWebhookReplayRetries.delete(params.replayKey);
+                if (!deferredRetry) {
+                  return;
+                }
+                enqueueMessageWithReplayLifecycle({
+                  entry: deferredRetry,
+                  replayKey: params.replayKey,
+                });
+              },
+            },
+          })
+          .catch((err) => {
+            pendingInboundWebhookReplayKeys.delete(params.replayKey);
+            params.entry.target.runtime.error?.(
+              `[${params.entry.target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
+            );
+          });
+      };
+      const entry = { message, target, eventType };
       const replayKey = buildInboundReplayKey({ target, message });
-      if (
-        replayKey &&
-        (pendingInboundWebhookReplayKeys.has(replayKey) ||
-          recentInboundWebhookEvents.peek(replayKey))
-      ) {
+      if (replayKey && recentInboundWebhookEvents.peek(replayKey)) {
         logVerbose(
           target.core,
           target.runtime,
@@ -416,38 +471,24 @@ export async function handleBlueBubblesWebhookRequest(
         res.end("ok");
         return true;
       }
-
-      // Route messages through debouncer to coalesce rapid-fire events
-      // (e.g., text message + URL balloon arriving as separate webhooks)
-      const debouncer = debounceRegistry.getOrCreateDebouncer(target);
       if (replayKey) {
-        pendingInboundWebhookReplayKeys.add(replayKey);
-      }
-      void debouncer
-        .enqueue({
-          message,
-          target,
-          eventType,
-          replayLifecycle: replayKey
-            ? {
-                onFlushSuccess: () => {
-                  recentInboundWebhookEvents.check(replayKey);
-                  pendingInboundWebhookReplayKeys.delete(replayKey);
-                },
-                onFlushFailure: () => {
-                  pendingInboundWebhookReplayKeys.delete(replayKey);
-                },
-              }
-            : undefined,
-        })
-        .catch((err) => {
-          if (replayKey) {
-            pendingInboundWebhookReplayKeys.delete(replayKey);
-          }
-          target.runtime.error?.(
-            `[${target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
+        if (pendingInboundWebhookReplayKeys.has(replayKey)) {
+          pendingInboundWebhookReplayRetries.set(replayKey, entry);
+          logVerbose(
+            target.core,
+            target.runtime,
+            `webhook deferred replay payload pending flush sender=${message.senderId} msg=${message.messageId ?? ""}`,
           );
-        });
+          res.statusCode = 200;
+          res.end("ok");
+          return true;
+        }
+        enqueueMessageWithReplayLifecycle({ entry, replayKey });
+      } else {
+        // Route messages through debouncer to coalesce rapid-fire events
+        // (e.g., text message + URL balloon arriving as separate webhooks)
+        enqueueMessage(entry);
+      }
     }
 
     res.statusCode = 200;
@@ -528,6 +569,7 @@ export async function monitorBlueBubblesProvider(
 function _resetBlueBubblesWebhookReplayState(): void {
   recentInboundWebhookEvents.clear();
   pendingInboundWebhookReplayKeys.clear();
+  pendingInboundWebhookReplayRetries.clear();
 }
 
 export {

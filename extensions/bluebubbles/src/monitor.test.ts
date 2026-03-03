@@ -1352,6 +1352,71 @@ describe("BlueBubbles webhook monitor", () => {
       }
     });
 
+    it("retries deferred equivalent replay after pending flush failure", async () => {
+      vi.useFakeTimers();
+      try {
+        const account = createMockAccount({ dmPolicy: "open" });
+        const config: OpenClawConfig = {};
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        setBlueBubblesRuntime(core);
+
+        unregister = registerBlueBubblesWebhookTarget({
+          account,
+          config,
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        });
+
+        const messageId = "dup-msg-pending-flush-fail-1";
+        const sender = "+15551234567";
+        const text = "Retry pending replay";
+
+        mockDispatchReplyWithBufferedBlockDispatcher.mockRejectedValueOnce(
+          new Error("synthetic first flush failure"),
+        );
+
+        await handleBlueBubblesWebhookRequest(
+          createMockRequest("POST", "/bluebubbles-webhook", {
+            type: "new-message",
+            data: {
+              text,
+              handle: { address: sender },
+              isGroup: false,
+              isFromMe: false,
+              guid: messageId,
+              chatGuid: "iMessage;-;+15551234567",
+              date: Date.now(),
+            },
+          }),
+          createMockResponse(),
+        );
+
+        await handleBlueBubblesWebhookRequest(
+          createMockRequest("POST", "/bluebubbles-webhook", {
+            type: "updated-message",
+            data: {
+              text,
+              handle: { address: sender },
+              isGroup: false,
+              isFromMe: false,
+              guid: messageId,
+              chatGuid: "iMessage;-;+15551234567",
+              date: Date.now(),
+            },
+          }),
+          createMockResponse(),
+        );
+
+        await vi.advanceTimersByTimeAsync(600);
+        await Promise.resolve();
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("does not merge new-message and updated-message text variants into one body", async () => {
       vi.useFakeTimers();
       try {
