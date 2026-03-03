@@ -18,6 +18,10 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveSerperApiKey,
+  resolveSerperConfig,
+  resolveSearchProvider,
+  resolveFallbackProvider,
 } = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
@@ -320,5 +324,73 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("web_search serper config resolution", () => {
+  it("resolves API key from config", () => {
+    const config = resolveSerperConfig({ serper: { apiKey: "test-serper-key" } } as never);
+    expect(resolveSerperApiKey(config)).toBe("test-serper-key");
+  });
+
+  it("falls back to SERPER_API_KEY env var", () => {
+    withEnv({ SERPER_API_KEY: "env-serper-key" }, () => {
+      expect(resolveSerperApiKey({})).toBe("env-serper-key");
+    });
+  });
+
+  it("returns undefined when no key available", () => {
+    withEnv({ SERPER_API_KEY: undefined }, () => {
+      expect(resolveSerperApiKey({})).toBeUndefined();
+    });
+  });
+
+  it("extracts serper config from search config", () => {
+    const config = resolveSerperConfig({
+      serper: { apiKey: "test-key" },
+    } as never);
+    expect(config).toEqual({ apiKey: "test-key" });
+  });
+
+  it("returns empty config when serper not present", () => {
+    const config = resolveSerperConfig({} as never);
+    expect(config).toEqual({});
+  });
+});
+
+describe("web_search resolveSearchProvider with serper", () => {
+  it("returns serper when explicitly configured", () => {
+    expect(resolveSearchProvider({ provider: "serper" } as never)).toBe("serper");
+  });
+
+  it("auto-detects serper from SERPER_API_KEY", () => {
+    withEnv(
+      { SERPER_API_KEY: "test-key", BRAVE_API_KEY: undefined, GEMINI_API_KEY: undefined },
+      () => {
+        expect(resolveSearchProvider({} as never)).toBe("serper");
+      },
+    );
+  });
+});
+
+describe("web_search fallback provider resolution", () => {
+  it("returns undefined when no fallback configured", () => {
+    expect(resolveFallbackProvider({} as never)).toBeUndefined();
+  });
+
+  it("resolves serper as fallback", () => {
+    expect(resolveFallbackProvider({ fallback: "serper" } as never)).toBe("serper");
+  });
+
+  it("resolves brave as fallback", () => {
+    expect(resolveFallbackProvider({ fallback: "brave" } as never)).toBe("brave");
+  });
+
+  it("resolves perplexity as fallback", () => {
+    expect(resolveFallbackProvider({ fallback: "perplexity" } as never)).toBe("perplexity");
+  });
+
+  it("returns undefined for invalid fallback value", () => {
+    expect(resolveFallbackProvider({ fallback: "invalid" } as never)).toBeUndefined();
   });
 });
