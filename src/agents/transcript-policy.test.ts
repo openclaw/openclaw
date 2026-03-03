@@ -76,6 +76,33 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.sanitizeMode).toBe("full");
   });
 
+  it("preserves thinking block signatures for Anthropic providers", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "anthropic",
+      modelId: "claude-opus-4-5",
+      modelApi: "anthropic-messages",
+    });
+    expect(policy.preserveSignatures).toBe(true);
+  });
+
+  it("preserves thinking block signatures for Bedrock Anthropic models", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      modelApi: "bedrock-converse-stream",
+    });
+    expect(policy.preserveSignatures).toBe(true);
+  });
+
+  it("strips thinking block signatures for non-Anthropic providers", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "gpt-4o",
+      modelApi: "openai",
+    });
+    expect(policy.preserveSignatures).toBe(false);
+  });
+
   it("keeps OpenRouter on its existing turn-validation path", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openrouter",
