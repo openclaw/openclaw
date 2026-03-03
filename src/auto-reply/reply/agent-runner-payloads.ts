@@ -51,21 +51,23 @@ export function buildReplyPayloads(params: {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   let errorReactionRequested = false;
 
-  // Apply errorPolicy filtering
+  // Apply errorPolicy filtering (skip for heartbeat to preserve alerts)
   const errorFilteredPayloads =
-    params.errorPolicy === "silent"
-      ? params.payloads.filter((payload) => !payload.isError)
-      : params.errorPolicy === "react-only"
-        ? params.payloads
-            .map((payload) => {
-              if (payload.isError) {
-                errorReactionRequested = true;
-                return null;
-              }
-              return payload;
-            })
-            .filter((p): p is ReplyPayload => p !== null)
-        : params.payloads;
+    params.isHeartbeat || !params.errorPolicy
+      ? params.payloads
+      : params.errorPolicy === "silent"
+        ? params.payloads.filter((payload) => !payload.isError)
+        : params.errorPolicy === "react-only"
+          ? params.payloads
+              .map((payload) => {
+                if (payload.isError) {
+                  errorReactionRequested = true;
+                  return null;
+                }
+                return payload;
+              })
+              .filter((p): p is ReplyPayload => p !== null)
+          : params.payloads;
 
   const sanitizedPayloads = params.isHeartbeat
     ? errorFilteredPayloads
