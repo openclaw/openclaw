@@ -569,7 +569,7 @@ function broadcastChatError(params: {
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
-  "chat.history": async ({ params, respond, context }) => {
+  "chat.history": async ({ params, respond, context, client }) => {
     if (!validateChatHistoryParams(params)) {
       respond(
         false,
@@ -585,6 +585,13 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       limit?: number;
     };
+
+    // Register this client for session-scoped chat events
+    const connId = client?.connId;
+    if (connId) {
+      context.registerChatSession(connId, sessionKey);
+    }
+
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
     const rawMessages =
@@ -729,6 +736,13 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       idempotencyKey: string;
     };
+
+    // Register this client for session-scoped chat events
+    const connId = client?.connId;
+    if (connId) {
+      context.registerChatSession(connId, p.sessionKey);
+    }
+
     const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
     if (!sanitizedMessageResult.ok) {
       respond(

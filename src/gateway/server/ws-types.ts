@@ -10,4 +10,8 @@ export type GatewayWsClient = {
   canvasHostUrl?: string;
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;
+  /** Set of sessionKeys this client has interacted with via chat.send or chat.history.
+   *  Clients with this set populated only receive chat events for these sessions.
+   *  Empty/undefined means client receives all chat events (legacy behavior). */
+  chatSessionKeys?: Set<string>;
 };

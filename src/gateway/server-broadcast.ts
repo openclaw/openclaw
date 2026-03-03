@@ -38,6 +38,10 @@ export type GatewayBroadcastToConnIdsFn = (
   opts?: GatewayBroadcastOpts,
 ) => void;
 
+/** Register a session key for a client connection. Called when a client invokes
+ *  chat.send or chat.history to subscribe to that session's chat events. */
+export type RegisterChatSessionFn = (connId: string, sessionKey: string) => void;
+
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const required = EVENT_SCOPE_GUARDS[event];
   if (!required) {
@@ -54,8 +58,47 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
   return required.some((scope) => scopes.includes(scope));
 }
 
+/** Check if a client should receive a chat event based on session subscriptions.
+ *  - Clients with no chatSessionKeys set receive all chat events (legacy behavior).
+ *  - Clients with chatSessionKeys set only receive events for those sessions.
+ *  - Admin-scoped clients always receive all events. */
+function shouldReceiveChatEvent(client: GatewayWsClient, payload: unknown): boolean {
+  // Admin clients always receive all events
+  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
+  if (scopes.includes(ADMIN_SCOPE)) {
+    return true;
+  }
+
+  // Clients without session tracking receive all events (backward compatibility)
+  if (!client.chatSessionKeys || client.chatSessionKeys.size === 0) {
+    return true;
+  }
+
+  // Check if the event's session is in the client's subscribed sessions
+  const payload_ = payload as { sessionKey?: string };
+  const eventSessionKey = payload_?.sessionKey;
+  if (!eventSessionKey) {
+    // No session key in payload - let it through (shouldn't happen for chat events)
+    return true;
+  }
+
+  return client.chatSessionKeys.has(eventSessionKey);
+}
+
 export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
   let seq = 0;
+
+  const registerChatSession: RegisterChatSessionFn = (connId, sessionKey) => {
+    for (const c of params.clients) {
+      if (c.connId === connId) {
+        if (!c.chatSessionKeys) {
+          c.chatSessionKeys = new Set();
+        }
+        c.chatSessionKeys.add(sessionKey);
+        break;
+      }
+    }
+  };
 
   const broadcastInternal = (
     event: string,
@@ -97,6 +140,10 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       if (!hasEventScope(c, event)) {
         continue;
       }
+      // For "chat" events, filter by session subscription
+      if (event === "chat" && !shouldReceiveChatEvent(c, payload)) {
+        continue;
+      }
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
       if (slow && opts?.dropIfSlow) {
         continue;
@@ -127,5 +174,5 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
     broadcastInternal(event, payload, opts, connIds);
   };
 
-  return { broadcast, broadcastToConnIds };
+  return { broadcast, broadcastToConnIds, registerChatSession };
 }

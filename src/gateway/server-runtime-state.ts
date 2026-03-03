@@ -16,6 +16,7 @@ import {
   createGatewayBroadcaster,
   type GatewayBroadcastFn,
   type GatewayBroadcastToConnIdsFn,
+  type RegisterChatSessionFn,
 } from "./server-broadcast.js";
 import {
   type ChatRunEntry,
@@ -69,6 +70,7 @@ export async function createGatewayRuntimeState(params: {
   clients: Set<GatewayWsClient>;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  registerChatSession: RegisterChatSessionFn;
   agentRunSeq: Map<string, number>;
   dedupe: Map<string, DedupeEntry>;
   chatRunState: ReturnType<typeof createChatRunState>;
@@ -105,7 +107,7 @@ export async function createGatewayRuntimeState(params: {
   }
 
   const clients = new Set<GatewayWsClient>();
-  const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+  const { broadcast, broadcastToConnIds, registerChatSession } = createGatewayBroadcaster({ clients });
 
   const handleHooksRequest = createGatewayHooksRequestHandler({
     deps: params.deps,
@@ -213,6 +215,7 @@ export async function createGatewayRuntimeState(params: {
     clients,
     broadcast,
     broadcastToConnIds,
+    registerChatSession,
     agentRunSeq,
     dedupe,
     chatRunState,
