@@ -2,6 +2,7 @@ import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js"
 import { appendCdpPath } from "./cdp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
+import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
@@ -38,15 +39,19 @@ export function createProfileSelectionOps({
     let tabs1 = await listTabs();
     if (tabs1.length === 0) {
       if (capabilities.requiresAttachedTab) {
-        // Chrome extension relay can briefly drop its WebSocket connection (MV3 service worker
-        // lifecycle, relay restart). If we previously had a target selected, wait briefly for
-        // the extension to reconnect and re-announce its attached tabs before failing.
-        if (profileState.lastTargetId?.trim()) {
-          const deadlineAt = Date.now() + 3_000;
-          while (tabs1.length === 0 && Date.now() < deadlineAt) {
-            await new Promise((resolve) => setTimeout(resolve, 200));
-            tabs1 = await listTabs();
+        // [lilac-start] ask extension to attach a tab instead of throwing
+        await fetch(appendCdpPath(profile.cdpUrl, "/extension/request-tab-attach"), {
+          method: "POST",
+          headers: getChromeExtensionRelayAuthHeaders(profile.cdpUrl),
+        }).catch(() => {});
+        const tabDeadline = Date.now() + 10_000;
+        while (Date.now() < tabDeadline) {
+          const polled = await listTabs().catch(() => [] as BrowserTab[]);
+          if (polled.length > 0) {
+            tabs1 = polled;
+            break;
           }
+          await new Promise((r) => setTimeout(r, 300));
         }
         if (tabs1.length === 0) {
           throw new BrowserTabNotFoundError(
@@ -54,6 +59,7 @@ export function createProfileSelectionOps({
               "Click the OpenClaw Browser Relay toolbar icon on the tab you want to control (badge ON).",
           );
         }
+        // [lilac-end]
       } else {
         await openTab("about:blank");
       }

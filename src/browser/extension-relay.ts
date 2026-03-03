@@ -598,6 +598,21 @@ export async function ensureChromeExtensionRelayServer(opts: {
         return;
       }
 
+      // [lilac-start] push signal asking extension to attach a tab
+      if (path === "/extension/request-tab-attach" && req.method === "POST") {
+        const ws = extensionWs;
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          res.writeHead(503);
+          res.end("extension not connected");
+          return;
+        }
+        ws.send(JSON.stringify({ method: "requestTabAttach" }));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ sent: true }));
+        return;
+      }
+      // [lilac-end]
+
       const hostHeader = req.headers.host?.trim() || `${info.host}:${info.port}`;
       const wsHost = `ws://${hostHeader}`;
       const cdpWsUrl = `${wsHost}/cdp`;
