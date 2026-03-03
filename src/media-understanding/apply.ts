@@ -61,7 +61,7 @@ const BINARY_EXTENSIONS = new Set([
   // Archives
   ".zip", ".gz", ".tar", ".rar", ".7z", ".bz2", ".xz", ".zst",
   // Executables & libraries
-  ".exe", ".dll", ".so", ".dylib", ".bin", ".msi", ".deb", ".rpm", ".dmg", ".app",
+  ".exe", ".dll", ".so", ".dylib", ".msi", ".deb", ".rpm", ".dmg", ".app",
   // Office / document containers
   ".msg", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
   ".odt", ".ods", ".odp",
@@ -72,7 +72,7 @@ const BINARY_EXTENSIONS = new Set([
   // Other binary formats
   ".class", ".pyc", ".pyo", ".wasm", ".o", ".a", ".lib",
   ".iso", ".img", ".vmdk", ".qcow2",
-  ".dat", ".pak", ".cab",
+  ".pak", ".cab",
 ]);
 
 const TEXT_EXT_MIME = new Map<string, string>([
