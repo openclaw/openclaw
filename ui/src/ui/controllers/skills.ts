@@ -19,6 +19,13 @@ export type SkillMessage = {
 
 export type SkillMessageMap = Record<string, SkillMessage>;
 
+export type SkillClassificationType = "default" | "optional";
+
+type SkillTypeUpdateResult = {
+  defaultSkills?: string[];
+  type?: SkillClassificationType;
+};
+
 type LoadSkillsOptions = {
   clearMessages?: boolean;
 };
@@ -41,6 +48,45 @@ function getErrorMessage(err: unknown) {
     return err.message;
   }
   return String(err);
+}
+
+function applySkillTypeUpdate(
+  state: SkillsState,
+  params: { skillKey: string; skillName: string; type: SkillClassificationType },
+  result?: SkillTypeUpdateResult,
+) {
+  const report = state.skillsReport;
+  if (!report) {
+    return;
+  }
+  const defaultSkills = Array.isArray(result?.defaultSkills)
+    ? new Set(result.defaultSkills.map((name) => String(name).trim()).filter(Boolean))
+    : null;
+  const normalizedSkillName = params.skillName.trim();
+  const requestedType = result?.type ?? params.type;
+  const updatedSkills = report.skills.map((skill) => {
+    const isTargetSkill =
+      skill.skillKey === params.skillKey ||
+      (normalizedSkillName.length > 0 && skill.name === normalizedSkillName);
+    if (defaultSkills) {
+      return {
+        ...skill,
+        type: defaultSkills.has(skill.name) ? "default" : "optional",
+      };
+    }
+    if (!isTargetSkill) {
+      return skill;
+    }
+    return {
+      ...skill,
+      type: requestedType,
+    };
+  });
+  state.skillsReport = {
+    ...report,
+    ...(defaultSkills ? { defaultSkills: [...defaultSkills] } : {}),
+    skills: updatedSkills,
+  };
 }
 
 export async function loadSkills(state: SkillsState, options?: LoadSkillsOptions) {
@@ -114,6 +160,38 @@ export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
     const message = getErrorMessage(err);
     state.skillsError = message;
     setSkillMessage(state, skillKey, {
+      kind: "error",
+      message,
+    });
+  } finally {
+    state.skillsBusyKey = null;
+  }
+}
+
+export async function updateSkillType(
+  state: SkillsState,
+  params: { skillKey: string; skillName: string; type: SkillClassificationType },
+) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  state.skillsBusyKey = params.skillKey;
+  state.skillsError = null;
+  try {
+    const result = await state.client.request<SkillTypeUpdateResult>("skills.update", {
+      skillKey: params.skillKey,
+      skillName: params.skillName,
+      type: params.type,
+    });
+    applySkillTypeUpdate(state, params, result);
+    setSkillMessage(state, params.skillKey, {
+      kind: "success",
+      message: params.type === "default" ? "Added to default skills" : "Marked as optional",
+    });
+  } catch (err) {
+    const message = getErrorMessage(err);
+    state.skillsError = message;
+    setSkillMessage(state, params.skillKey, {
       kind: "error",
       message,
     });
