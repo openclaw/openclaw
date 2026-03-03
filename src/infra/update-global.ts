@@ -158,15 +158,17 @@ export type DirectoryOwnershipResult = {
   unwritableFiles: string[];
 };
 
-const UNWRITABLE_FILES_CAP = 10;
+const UNWRITABLE_DIRS_CAP = 10;
 const WRITABLE_DIR_MODE = fs.constants.W_OK | fs.constants.X_OK;
-const WRITABLE_FILE_MODE = fs.constants.W_OK;
 
 export async function checkDirectoryOwnership(dirPath: string): Promise<DirectoryOwnershipResult> {
   const unwritableFiles: string[] = [];
 
-  // Check the package root directory itself first — a non-writable root blocks
-  // npm regardless of whether child entries are writable.
+  // npm mutates package trees by creating/renaming/removing directory entries,
+  // so write access on directories is what matters — individual file modes are
+  // irrelevant (read-only files and unwritable symlink targets are fine).
+
+  // Check the package root directory itself first.
   try {
     await fs.access(dirPath, WRITABLE_DIR_MODE);
   } catch {
@@ -175,7 +177,7 @@ export async function checkDirectoryOwnership(dirPath: string): Promise<Director
   }
 
   async function scan(dir: string): Promise<void> {
-    if (unwritableFiles.length >= UNWRITABLE_FILES_CAP) {
+    if (unwritableFiles.length >= UNWRITABLE_DIRS_CAP) {
       return;
     }
     let entries: import("node:fs").Dirent[];
@@ -187,17 +189,19 @@ export async function checkDirectoryOwnership(dirPath: string): Promise<Director
       return;
     }
     for (const entry of entries) {
-      if (unwritableFiles.length >= UNWRITABLE_FILES_CAP) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      if (unwritableFiles.length >= UNWRITABLE_DIRS_CAP) {
         break;
       }
       const fullPath = path.join(dir, entry.name);
-      const mode = entry.isDirectory() ? WRITABLE_DIR_MODE : WRITABLE_FILE_MODE;
       try {
-        await fs.access(fullPath, mode);
+        await fs.access(fullPath, WRITABLE_DIR_MODE);
       } catch {
         unwritableFiles.push(fullPath);
       }
-      if (entry.isDirectory() && unwritableFiles.length < UNWRITABLE_FILES_CAP) {
+      if (unwritableFiles.length < UNWRITABLE_DIRS_CAP) {
         await scan(fullPath);
       }
     }

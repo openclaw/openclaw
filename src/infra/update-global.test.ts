@@ -19,7 +19,7 @@ describe("checkDirectoryOwnership", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns ok:true when all files are writable by the current process", async () => {
+  it("returns ok:true when all directories are writable", async () => {
     const dir = path.join(tmpDir, "owned");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "file.txt"), "hello");
@@ -32,17 +32,35 @@ describe("checkDirectoryOwnership", () => {
     expect(result.unwritableFiles).toHaveLength(0);
   });
 
-  it("returns ok:false when a file is not writable", async () => {
-    const dir = path.join(tmpDir, "unwritable-file");
+  it("returns ok:true when individual files are read-only (directories are writable)", async () => {
+    const dir = path.join(tmpDir, "readonly-files");
     await fs.mkdir(dir, { recursive: true });
-    const writableFile = path.join(dir, "mine.txt");
-    const unwritableFile = path.join(dir, "locked.txt");
-    await fs.writeFile(writableFile, "mine");
-    await fs.writeFile(unwritableFile, "locked");
+    await fs.writeFile(path.join(dir, "locked.txt"), "locked");
 
     const realAccess = fs.access.bind(fs);
     vi.spyOn(fs, "access").mockImplementation(async (p, mode?) => {
-      if (String(p) === unwritableFile) {
+      // Simulate a read-only file — should not affect the result
+      if (String(p) === path.join(dir, "locked.txt")) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      return realAccess(p as string, mode);
+    });
+
+    const result = await checkDirectoryOwnership(dir);
+
+    expect(result.ok).toBe(true);
+    expect(result.unwritableFiles).toHaveLength(0);
+  });
+
+  it("returns ok:false when a subdirectory is not writable", async () => {
+    const dir = path.join(tmpDir, "unwritable-subdir");
+    await fs.mkdir(dir, { recursive: true });
+    const subDir = path.join(dir, "locked");
+    await fs.mkdir(subDir, { recursive: true });
+
+    const realAccess = fs.access.bind(fs);
+    vi.spyOn(fs, "access").mockImplementation(async (p, mode?) => {
+      if (String(p) === subDir) {
         throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
       }
       return realAccess(p as string, mode);
@@ -51,7 +69,7 @@ describe("checkDirectoryOwnership", () => {
     const result = await checkDirectoryOwnership(dir);
 
     expect(result.ok).toBe(false);
-    expect(result.unwritableFiles).toContain(unwritableFile);
+    expect(result.unwritableFiles).toContain(subDir);
   });
 
   it("returns ok:false when a directory is unreadable", async () => {
