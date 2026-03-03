@@ -245,14 +245,15 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(decision.kind).toBe("drop");
   });
 
-  it("honors group allowlist and ignores pairing-store senders in groups", () => {
+  it("allows pairing-store senders in groups (backward compat)", () => {
     const cfg = baseCfg();
     cfg.channels ??= {};
     cfg.channels.imessage ??= {};
     cfg.channels.imessage.groupPolicy = "allowlist";
 
     const groupHistories = new Map();
-    const denied = resolveIMessageInboundDecision({
+    // Pairing store is included in group auth by default for backward compatibility
+    const allowed = resolveIMessageInboundDecision({
       cfg,
       accountId: "default",
       message: {
@@ -274,8 +275,43 @@ describe("imessage monitor gating + envelope builders", () => {
       historyLimit: 0,
       groupHistories,
     });
+    expect(allowed.kind).toBe("dispatch");
+  });
+
+  it("ignores pairing-store senders in groups when strict mode enabled", () => {
+    const cfg = baseCfg();
+    cfg.channels ??= {};
+    cfg.channels.imessage ??= {};
+    cfg.channels.imessage.groupPolicy = "allowlist";
+
+    const groupHistories = new Map();
+    // Strict mode: pairing store excluded from group auth
+    const denied = resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: 3,
+        chat_id: 202,
+        sender: "+15550003333",
+        is_from_me: false,
+        text: "@openclaw hi",
+        is_group: true,
+      },
+      opts: {},
+      messageText: "@openclaw hi",
+      bodyText: "@openclaw hi",
+      allowFrom: ["*"],
+      groupAllowFrom: ["chat_id:101"],
+      groupPolicy: "allowlist",
+      dmPolicy: "pairing",
+      storeAllowFrom: ["+15550003333"],
+      groupAuthIncludesPairingStore: false,
+      historyLimit: 0,
+      groupHistories,
+    });
     expect(denied.kind).toBe("drop");
 
+    // But chat_id:101 is still allowed via groupAllowFrom
     const allowed = resolveIMessageInboundDecision({
       cfg,
       accountId: "default",
@@ -295,6 +331,7 @@ describe("imessage monitor gating + envelope builders", () => {
       groupPolicy: "allowlist",
       dmPolicy: "pairing",
       storeAllowFrom: ["+15550003333"],
+      groupAuthIncludesPairingStore: false,
       historyLimit: 0,
       groupHistories,
     });

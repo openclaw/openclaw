@@ -47,7 +47,8 @@ const cases: ChannelSmokeCase[] = [
 describe("security/dm-policy-shared channel smoke", () => {
   for (const testCase of cases) {
     for (const ingress of ["message", "reaction"] as const) {
-      it(`[${testCase.name}] blocks group ${ingress} when sender is only in pairing store`, () => {
+      it(`[${testCase.name}] allows group ${ingress} when sender is in pairing store (backward compat)`, () => {
+        // Default behavior: pairing store is included in group auth for backward compatibility
         const access = resolveDmGroupAccessWithLists({
           isGroup: true,
           dmPolicy: "pairing",
@@ -55,6 +56,23 @@ describe("security/dm-policy-shared channel smoke", () => {
           allowFrom: ["owner-user"],
           groupAllowFrom: ["group-owner"],
           storeAllowFrom: testCase.storeAllowFrom,
+          isSenderAllowed: testCase.isSenderAllowed,
+        });
+        expect(access.decision).toBe("allow");
+        expect(access.reasonCode).toBe(DM_GROUP_ACCESS_REASON.GROUP_POLICY_ALLOWED);
+        expect(access.reason).toBe("groupPolicy=allowlist");
+      });
+
+      it(`[${testCase.name}] blocks group ${ingress} when sender is only in pairing store (strict mode)`, () => {
+        // Strict mode: pairing store excluded from group auth
+        const access = resolveDmGroupAccessWithLists({
+          isGroup: true,
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+          allowFrom: ["owner-user"],
+          groupAllowFrom: ["group-owner"],
+          storeAllowFrom: testCase.storeAllowFrom,
+          groupAuthIncludesPairingStore: false,
           isSenderAllowed: testCase.isSenderAllowed,
         });
         expect(access.decision).toBe("block");
