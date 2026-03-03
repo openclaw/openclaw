@@ -1,6 +1,29 @@
 #!/usr/bin/env node
 
+import fs from "node:fs/promises";
 import module from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Fast path for --version and --help: exit before loading heavy modules
+const argv = new Set(process.argv.slice(2));
+if (argv.has("--version") || argv.has("-v") || argv.has("--help") || argv.has("-h")) {
+  if (argv.has("--version") || argv.has("-v")) {
+    try {
+      const pkgPath = path.join(__dirname, "package.json");
+      const pkg = JSON.parse(await fs.readFile(pkgPath, "utf-8"));
+      console.log(pkg.version);
+      process.exit(0);
+    } catch {
+      // Fallback if package.json not found
+      console.log("unknown");
+      process.exit(0);
+    }
+  }
+  // For --help, fall through to normal handling (needs Commander)
+}
 
 // https://nodejs.org/api/module.html#module-compile-cache
 if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
