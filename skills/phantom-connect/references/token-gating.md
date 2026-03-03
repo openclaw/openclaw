@@ -73,8 +73,13 @@ Best for valuable content and actual access control.
 ```tsx
 import { useSolana, useAccounts } from "@phantom/react-sdk";
 
-async function verifyAccess() {
+// Call hooks at component top level, then pass solana into helpers
+function TokenGatedPage() {
   const { solana } = useSolana();
+  // ... use verifyAccess(solana) in an event handler or useEffect
+}
+
+async function verifyAccess(solana: ReturnType<typeof useSolana>["solana"]) {
   const address = await solana.getPublicKey();
   const timestamp = Date.now();
   const message = `Verify ownership\nAddress: ${address}\nTimestamp: ${timestamp}`;
@@ -119,7 +124,9 @@ export async function POST(req: Request) {
     return Response.json({ error: "Expired" }, { status: 400 });
   }
 
-  // 3. Check token balance
+  // 3. Check token balance (account.amount is in raw base units)
+  // For a token with 6 decimals, 1 token = 1_000_000 base units
+  const REQUIRED_BALANCE = 1_000_000; // 1 token (adjust decimals per mint)
   const connection = new Connection("https://api.mainnet-beta.solana.com");
   try {
     const ata = await getAssociatedTokenAddress(new PublicKey(TOKEN_MINT), new PublicKey(address));
