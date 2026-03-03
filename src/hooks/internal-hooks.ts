@@ -18,6 +18,30 @@ export type InternalHookEventType =
   | "message"
   | "subagent";
 
+// ============================================================================
+// Subagent Hook Events
+// ============================================================================
+
+export type SubagentEndedHookContext = {
+  childSessionKey: string;
+  runId: string;
+  reason: string;
+  outcome?: string;
+  error?: string;
+  startedAt?: number;
+  endedAt?: number;
+  runtimeMs?: number;
+};
+
+export type SubagentEndedHookEvent = InternalHookEvent & {
+  type: "subagent";
+  context: SubagentEndedHookContext;
+};
+
+// ============================================================================
+// Agent Hook Events
+// ============================================================================
+
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
   bootstrapFiles: WorkspaceBootstrapFile[];
@@ -451,4 +475,17 @@ export function isMessagePreprocessedEvent(
     return false;
   }
   return hasStringContextField(context, "channelId");
+}
+
+export function isSubagentEndedEvent(event: InternalHookEvent): event is SubagentEndedHookEvent {
+  if (event.type !== "subagent") {
+    return false;
+  }
+  const context = getHookContext<SubagentEndedHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    hasStringContextField(context, "childSessionKey") && hasStringContextField(context, "runId")
+  );
 }
