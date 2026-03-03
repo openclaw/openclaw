@@ -69,6 +69,7 @@ function resolveExecutableCandidate(executable) {
 
 function runCommand(command, args) {
   const executables = resolveExecutables(command);
+  let lastNonZero = null;
   for (const executable of executables) {
     const candidate = resolveExecutableCandidate(executable);
     if (!candidate) {
@@ -82,14 +83,23 @@ function runCommand(command, args) {
     });
     if (!result.error) {
       if (result.status !== 0) {
-        const printable = [command, ...args].join(" ");
-        throw new Error(`Command failed: ${printable}`);
+        lastNonZero = {
+          candidate,
+          status: result.status ?? "unknown",
+        };
+        continue;
       }
       return;
     }
     if (result.error.code !== "ENOENT" && result.error.code !== "EINVAL") {
       throw result.error;
     }
+  }
+  if (lastNonZero) {
+    const printable = [command, ...args].join(" ");
+    throw new Error(
+      `Command failed after trying executable fallbacks: ${printable} (last candidate: ${lastNonZero.candidate}, exit: ${lastNonZero.status})`,
+    );
   }
   throw new Error(`Command not found: ${command}`);
 }
