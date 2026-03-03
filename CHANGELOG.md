@@ -245,6 +245,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Feishu/Streaming card text fidelity: merge throttled/fragmented partial updates without dropping content and avoid newline injection when stitching chunk-style deltas so card-stream output matches final reply text. (#29616) Thanks @HaoHuaqing.
 - Security/Feishu webhook ingress: bound unauthenticated webhook rate-limit state with stale-window pruning and a hard key cap to prevent unbounded pre-auth memory growth from rotating source keys. (#26050) Thanks @bmendonca3.
 - Security/Compaction audit: remove the post-compaction audit injection message. (#28507) Thanks @fuller-stack-dev and @vincentkoc.
 - Web tools/RFC2544 fake-IP compatibility: allow RFC2544 benchmark range (`198.18.0.0/15`) for trusted web-tool fetch endpoints so proxy fake-IP networking modes do not trigger false SSRF blocks. Landed from contributor PR #31176 by @sunkinux. Thanks @sunkinux.
