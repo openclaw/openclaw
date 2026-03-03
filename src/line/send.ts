@@ -1,5 +1,5 @@
 import { messagingApi } from "@line/bot-sdk";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveLineAccount } from "./accounts.js";
@@ -30,6 +30,7 @@ interface LineSendOpts {
   verbose?: boolean;
   mediaUrl?: string;
   replyToken?: string;
+  cfg?: OpenClawConfig;
 }
 
 type LineClientOpts = Pick<LineSendOpts, "channelAccessToken" | "accountId">;
@@ -64,11 +65,11 @@ function normalizeTarget(to: string): string {
   return normalized;
 }
 
-function createLineMessagingClient(opts: LineClientOpts): {
+function createLineMessagingClient(opts: LineClientOpts & { cfg?: OpenClawConfig }): {
   account: ReturnType<typeof resolveLineAccount>;
   client: messagingApi.MessagingApiClient;
 } {
-  const cfg = loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   const account = resolveLineAccount({
     cfg,
     accountId: opts.accountId,
@@ -82,7 +83,7 @@ function createLineMessagingClient(opts: LineClientOpts): {
 
 function createLinePushContext(
   to: string,
-  opts: LineClientOpts,
+  opts: LineClientOpts & { cfg?: OpenClawConfig },
 ): {
   account: ReturnType<typeof resolveLineAccount>;
   client: messagingApi.MessagingApiClient;

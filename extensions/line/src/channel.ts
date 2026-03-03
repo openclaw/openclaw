@@ -348,6 +348,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     sendPayload: async ({ to, payload, accountId, cfg }) => {
       const runtime = getLineRuntime();
       const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+      const sendOpts = { accountId: accountId ?? undefined, cfg };
       const sendText = runtime.channel.line.pushMessageLine;
       const sendBatch = runtime.channel.line.pushMessagesLine;
       const sendFlex = runtime.channel.line.pushFlexMessage;
@@ -372,7 +373,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
           const batch = messages.slice(i, i + 5) as unknown as Parameters<typeof sendBatch>[1];
           const result = await sendBatch(to, batch, {
             verbose: false,
-            accountId: accountId ?? undefined,
+            ...sendOpts,
           });
           lastResult = { messageId: result.messageId, chatId: result.chatId };
         }
@@ -399,7 +400,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
           const flexContents = lineData.flexMessage.contents as Parameters<typeof sendFlex>[2];
           lastResult = await sendFlex(to, lineData.flexMessage.altText, flexContents, {
             verbose: false,
-            accountId: accountId ?? undefined,
+            ...sendOpts,
           });
         }
 
@@ -408,7 +409,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
           if (template) {
             lastResult = await sendTemplate(to, template, {
               verbose: false,
-              accountId: accountId ?? undefined,
+              ...sendOpts,
             });
           }
         }
@@ -416,7 +417,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         if (lineData.location) {
           lastResult = await sendLocation(to, lineData.location, {
             verbose: false,
-            accountId: accountId ?? undefined,
+            ...sendOpts,
           });
         }
 
@@ -425,7 +426,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
           const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
           lastResult = await sendFlex(to, flexMsg.altText, flexContents, {
             verbose: false,
-            accountId: accountId ?? undefined,
+            ...sendOpts,
           });
         }
       }
@@ -436,7 +437,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
           lastResult = await runtime.channel.line.sendMessageLine(to, "", {
             verbose: false,
             mediaUrl: url,
-            accountId: accountId ?? undefined,
+            ...sendOpts,
           });
         }
       }
@@ -447,12 +448,12 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
           if (isLast && hasQuickReplies) {
             lastResult = await sendQuickReplies(to, chunks[i], quickReplies, {
               verbose: false,
-              accountId: accountId ?? undefined,
+              ...sendOpts,
             });
           } else {
             lastResult = await sendText(to, chunks[i], {
               verbose: false,
-              accountId: accountId ?? undefined,
+              ...sendOpts,
             });
           }
         }
@@ -513,7 +514,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
           lastResult = await runtime.channel.line.sendMessageLine(to, "", {
             verbose: false,
             mediaUrl: url,
-            accountId: accountId ?? undefined,
+            ...sendOpts,
           });
         }
       }
@@ -523,10 +524,11 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       }
       return { channel: "line", messageId: "empty", chatId: to };
     },
-    sendText: async ({ to, text, accountId }) => {
+    sendText: async ({ to, text, accountId, cfg }) => {
       const runtime = getLineRuntime();
       const sendText = runtime.channel.line.pushMessageLine;
       const sendFlex = runtime.channel.line.pushFlexMessage;
+      const sendOpts = { accountId: accountId ?? undefined, cfg };
 
       // Process markdown: extract tables/code blocks, strip formatting
       const processed = processLineMessage(text);
@@ -536,7 +538,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       if (processed.text.trim()) {
         result = await sendText(to, processed.text, {
           verbose: false,
-          accountId: accountId ?? undefined,
+          ...sendOpts,
         });
       } else {
         // If text is empty after processing, still need a result
@@ -549,18 +551,19 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
         await sendFlex(to, flexMsg.altText, flexContents, {
           verbose: false,
-          accountId: accountId ?? undefined,
+          ...sendOpts,
         });
       }
 
       return { channel: "line", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) => {
       const send = getLineRuntime().channel.line.sendMessageLine;
       const result = await send(to, text, {
         verbose: false,
         mediaUrl,
         accountId: accountId ?? undefined,
+        cfg,
       });
       return { channel: "line", ...result };
     },
