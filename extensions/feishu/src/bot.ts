@@ -18,12 +18,7 @@ import { tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
-import {
-  escapeRegExp,
-  extractMentionTargets,
-  extractMessageBody,
-  isMentionForwardRequest,
-} from "./mention.js";
+import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
 import {
   resolveFeishuGroupConfig,
   resolveFeishuReplyPolicy,
@@ -455,11 +450,24 @@ function formatSubMessageContent(content: string, contentType: string): string {
   }
 }
 
-function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
+function checkBotMentioned(
+  event: FeishuMessageEvent,
+  botOpenId?: string,
+  botName?: string,
+): boolean {
   if (!botOpenId) return false;
+  // Check for @all (@_all in Feishu) — treat as mentioning every bot
+  const rawContent = event.message.content ?? "";
+  if (rawContent.includes("@_all")) return true;
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
-    return mentions.some((m) => m.id.open_id === botOpenId);
+    return mentions.some((m) => {
+      if (m.id.open_id !== botOpenId) return false;
+      // Guard against Feishu WS open_id remapping in multi-app groups:
+      // if botName is known and mention name differs, this is a false positive.
+      if (botName && m.name && m.name !== botName) return false;
+      return true;
+    });
   }
   // Post (rich text) messages may have empty message.mentions when they contain docs/paste
   if (event.message.message_type === "post") {
@@ -469,17 +477,30 @@ function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boole
   return false;
 }
 
-export function stripBotMention(
+function normalizeMentions(
   text: string,
   mentions?: FeishuMessageEvent["message"]["mentions"],
+  botStripId?: string,
 ): string {
   if (!mentions || mentions.length === 0) return text;
+
+  const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   let result = text;
+
   for (const mention of mentions) {
-    result = result.replace(new RegExp(`@${escapeRegExp(mention.name)}\\s*`, "g"), "");
-    result = result.replace(new RegExp(escapeRegExp(mention.key), "g"), "");
+    const mentionId = mention.id.open_id;
+    const replacement =
+      botStripId && mentionId === botStripId
+        ? ""
+        : mentionId
+          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
+          : `@${mention.name}`;
+
+    result = result.replace(new RegExp(escaped(mention.key), "g"), () => replacement).trim();
   }
-  return result.trim();
+
+  return result;
 }
 
 /**
@@ -747,10 +768,19 @@ export function buildBroadcastSessionKey(
 export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
+  botName?: string,
 ): FeishuMessageContext {
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
-  const mentionedBot = checkBotMentioned(event, botOpenId);
-  const content = stripBotMention(rawContent, event.message.mentions);
+  const mentionedBot = checkBotMentioned(event, botOpenId, botName);
+  const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
+  // In p2p, the bot mention is a pure addressing prefix with no semantic value;
+  // strip it so slash commands like @Bot /help still have a leading /.
+  // Non-bot mentions (e.g. mention-forward targets) are still normalized to <at> tags.
+  const content = normalizeMentions(
+    rawContent,
+    event.message.mentions,
+    event.message.chat_type === "p2p" ? botOpenId : undefined,
+  );
   const senderOpenId = event.sender.sender_id.open_id?.trim();
   const senderUserId = event.sender.sender_id.user_id?.trim();
   const senderFallbackId = senderOpenId || senderUserId || "";
@@ -764,6 +794,7 @@ export function parseFeishuMessageEvent(
     senderOpenId: senderFallbackId,
     chatType: event.message.chat_type,
     mentionedBot,
+    hasAnyMention,
     rootId: event.message.root_id || undefined,
     parentId: event.message.parent_id || undefined,
     threadId: event.message.thread_id || undefined,
@@ -776,9 +807,6 @@ export function parseFeishuMessageEvent(
     const mentionTargets = extractMentionTargets(event, botOpenId);
     if (mentionTargets.length > 0) {
       ctx.mentionTargets = mentionTargets;
-      // Extract message body (remove all @ placeholders)
-      const allMentionKeys = (event.message.mentions ?? []).map((m) => m.key);
-      ctx.mentionMessageBody = extractMessageBody(content, allMentionKeys);
     }
   }
 
@@ -788,12 +816,13 @@ export function parseFeishuMessageEvent(
 export function buildFeishuAgentBody(params: {
   ctx: Pick<
     FeishuMessageContext,
-    "content" | "senderName" | "senderOpenId" | "mentionTargets" | "messageId"
+    "content" | "senderName" | "senderOpenId" | "mentionTargets" | "messageId" | "hasAnyMention"
   >;
   quotedContent?: string;
   permissionErrorForAgent?: PermissionError;
+  botOpenId?: string;
 }): string {
-  const { ctx, quotedContent, permissionErrorForAgent } = params;
+  const { ctx, quotedContent, permissionErrorForAgent, botOpenId } = params;
   let messageBody = ctx.content;
   if (quotedContent) {
     messageBody = `[Replying to: "${quotedContent}"]\n\n${ctx.content}`;
@@ -802,6 +831,16 @@ export function buildFeishuAgentBody(params: {
   // DMs already have per-sender sessions, but this label still improves attribution.
   const speaker = ctx.senderName ?? ctx.senderOpenId;
   messageBody = `${speaker}: ${messageBody}`;
+
+  if (ctx.hasAnyMention) {
+    const botIdHint = botOpenId?.trim();
+    messageBody +=
+      `\n\n[System: The content may include mention tags in the form <at user_id="...">name</at>. ` +
+      `Treat these as real mentions of Feishu entities (users or bots).]`;
+    if (botIdHint) {
+      messageBody += `\n[System: If user_id is "${botIdHint}", that mention refers to you.]`;
+    }
+  }
 
   if (ctx.mentionTargets && ctx.mentionTargets.length > 0) {
     const targetNames = ctx.mentionTargets.map((t) => t.name).join(", ");
@@ -823,11 +862,12 @@ export async function handleFeishuMessage(params: {
   cfg: ClawdbotConfig;
   event: FeishuMessageEvent;
   botOpenId?: string;
+  botName?: string;
   runtime?: RuntimeEnv;
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;
 }): Promise<void> {
-  const { cfg, event, botOpenId, runtime, chatHistories, accountId } = params;
+  const { cfg, event, botOpenId, botName, runtime, chatHistories, accountId } = params;
 
   // Resolve account with merged config
   const account = resolveFeishuAccount({ cfg, accountId });
@@ -850,7 +890,7 @@ export async function handleFeishuMessage(params: {
     return;
   }
 
-  let ctx = parseFeishuMessageEvent(event, botOpenId);
+  let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
@@ -1212,6 +1252,7 @@ export async function handleFeishuMessage(params: {
       ctx,
       quotedContent,
       permissionErrorForAgent,
+      botOpenId,
     });
     const envelopeFrom = isGroup ? `${ctx.chatId}:${ctx.senderOpenId}` : ctx.senderOpenId;
     if (permissionErrorForAgent) {
