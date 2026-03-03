@@ -38,7 +38,7 @@ import type {
 } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { buildAgentSessionKey, resolveAgentRoute } from "../routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -209,9 +209,13 @@ export const buildTelegramMessageContext = async ({
     },
     parentPeer,
   });
-  // Fail closed for named Telegram accounts when route resolution falls back to
-  // default-agent routing. This prevents cross-account DM/session contamination.
-  if (route.accountId !== DEFAULT_ACCOUNT_ID && route.matchedBy === "default") {
+  // Named account with no matching binding: DMs are allowed through with a
+  // per-account session key so multiple named Telegram accounts sharing the
+  // same default agent get fully isolated conversation histories.  Groups still
+  // require an explicit binding to avoid routing messages to the wrong agent.
+  const isNamedAccountFallback =
+    route.accountId !== DEFAULT_ACCOUNT_ID && route.matchedBy === "default";
+  if (isNamedAccountFallback && isGroup) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
@@ -220,7 +224,18 @@ export const buildTelegramMessageContext = async ({
     });
     return null;
   }
-  const baseSessionKey = route.sessionKey;
+  // For DMs without an explicit binding on a named account, derive a
+  // per-account-channel-peer session key so each named account's DMs are
+  // isolated even when they share the same default agent.
+  const baseSessionKey = isNamedAccountFallback
+    ? buildAgentSessionKey({
+        agentId: route.agentId,
+        channel: "telegram",
+        accountId: account.accountId,
+        peer: { kind: "direct", id: peerId },
+        dmScope: "per-account-channel-peer",
+      }).toLowerCase()
+    : route.sessionKey;
   // DMs: use thread suffix for session isolation (works regardless of dmScope)
   const threadKeys =
     dmThreadId != null

@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram/named-account DMs: fix silent message drop for named Telegram accounts (e.g. `accounts.atlas`) that have no explicit bindings — DMs were received (`raw-update` logged) but silently dropped before lane enqueue after the 2026.3.1 fail-closed routing guard. DMs now proceed with a per-account session key that preserves conversation isolation across multiple named accounts sharing the same default agent; groups still require explicit bindings. (#32351)
 - Gateway/message tool reliability: avoid false `Unknown channel` failures when `message.*` actions receive platform-specific channel ids by falling back to `toolContext.currentChannelProvider`, and prevent health-monitor restart thrash for channels that just (re)started by adding a per-channel startup-connect grace window. (from #32367) Thanks @MunemHashmi.
 - Discord/lifecycle startup status: push an immediate `connected` status snapshot when the gateway is already connected before lifecycle debug listeners attach, with abort-guarding to avoid contradictory status flips during pre-aborted startup. (#32336) Thanks @mitchmcalister.
 - Cron/isolated delivery target fallback: remove early unresolved-target return so cron delivery can flow through shared outbound target resolution (including per-channel `resolveDefaultTo` fallback) when `delivery.to` is omitted. (#32364) Thanks @hclsys.

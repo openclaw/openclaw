@@ -16,6 +16,10 @@ type BuildTelegramMessageContextForTestParams = {
   allMedia?: TelegramMediaRef[];
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
+  accountId?: string;
+  dmPolicy?: BuildTelegramMessageContextParams["dmPolicy"];
+  allowFrom?: BuildTelegramMessageContextParams["allowFrom"];
+  storeAllowFrom?: string[];
   resolveGroupActivation?: BuildTelegramMessageContextParams["resolveGroupActivation"];
   resolveGroupRequireMention?: BuildTelegramMessageContextParams["resolveGroupRequireMention"];
   resolveTelegramGroupConfig?: BuildTelegramMessageContextParams["resolveTelegramGroupConfig"];
@@ -36,7 +40,6 @@ export async function buildTelegramMessageContextForTest(
       me: { id: 7, username: "bot" },
     } as never,
     allMedia: params.allMedia ?? [],
-    storeAllowFrom: [],
     options: params.options ?? {},
     bot: {
       api: {
@@ -45,11 +48,12 @@ export async function buildTelegramMessageContextForTest(
       },
     } as never,
     cfg: (params.cfg ?? baseTelegramMessageContextConfig) as never,
-    account: { accountId: "default" } as never,
+    account: { accountId: params.accountId ?? "default" } as never,
     historyLimit: 0,
     groupHistories: new Map(),
-    dmPolicy: "open",
-    allowFrom: [],
+    dmPolicy: params.dmPolicy ?? "open",
+    allowFrom: params.allowFrom ?? [],
+    storeAllowFrom: params.storeAllowFrom ?? [],
     groupAllowFrom: [],
     ackReactionScope: "off",
     logger: { info: vi.fn() },
