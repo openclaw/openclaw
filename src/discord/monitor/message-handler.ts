@@ -194,8 +194,10 @@ export function createDiscordMessageHandler(
       return;
     }
 
-    void debouncer.enqueue({ data, client }).catch((err) => {
+    try {
+      await debouncer.enqueue({ data, client });
+    } catch (err) {
       params.runtime.error?.(danger(`handler failed: ${String(err)}`));
-    });
+    }
   };
 }
