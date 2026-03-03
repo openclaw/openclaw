@@ -38,12 +38,9 @@ let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let fixtureRoot = "";
 let fixtureCount = 0;
 
-const createCaseDir = async (prefix: string, { skipHeartbeatFile = false } = {}) => {
+const createCaseDir = async (prefix: string) => {
   const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
   await fs.mkdir(dir, { recursive: true });
-  if (!skipHeartbeatFile) {
-    await fs.writeFile(path.join(dir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
-  }
   return dir;
 };
 
@@ -322,6 +319,30 @@ describe("resolveHeartbeatDeliveryTarget", () => {
           to: "-100123",
           accountId: undefined,
           lastChannel: undefined,
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "allow direct target by default",
+        cfg: { agents: { defaults: { heartbeat: { target: "last" } } } },
+        entry: { ...baseEntry, lastChannel: "telegram", lastTo: "5232990709" },
+        expected: {
+          channel: "telegram",
+          to: "5232990709",
+          accountId: undefined,
+          lastChannel: "telegram",
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "block direct target when directPolicy is block",
+        cfg: { agents: { defaults: { heartbeat: { target: "last", directPolicy: "block" } } } },
+        entry: { ...baseEntry, lastChannel: "telegram", lastTo: "5232990709" },
+        expected: {
+          channel: "none",
+          reason: "dm-blocked",
+          accountId: undefined,
+          lastChannel: "telegram",
           lastAccountId: undefined,
         },
       },

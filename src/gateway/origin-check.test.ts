@@ -9,6 +9,9 @@ describe("checkBrowserOrigin", () => {
       allowHostHeaderOriginFallback: true,
     });
     expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.matchedBy).toBe("host-header-fallback");
+    }
   });
 
   it("rejects same-origin host matches when legacy host-header fallback is disabled", () => {
@@ -23,8 +26,18 @@ describe("checkBrowserOrigin", () => {
     const result = checkBrowserOrigin({
       requestHost: "127.0.0.1:18789",
       origin: "http://localhost:5173",
+      isLocalClient: true,
     });
     expect(result.ok).toBe(true);
+  });
+
+  it("rejects loopback origin mismatches when request is not local", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "127.0.0.1:18789",
+      origin: "http://localhost:5173",
+      isLocalClient: false,
+    });
+    expect(result.ok).toBe(false);
   });
 
   it("accepts allowlisted origins", () => {
@@ -32,6 +45,15 @@ describe("checkBrowserOrigin", () => {
       requestHost: "gateway.example.com:18789",
       origin: "https://control.example.com",
       allowedOrigins: ["https://control.example.com"],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts wildcard allowedOrigins", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.example.com:18789",
+      origin: "https://any-origin.example.com",
+      allowedOrigins: ["*"],
     });
     expect(result.ok).toBe(true);
   });
@@ -50,5 +72,32 @@ describe("checkBrowserOrigin", () => {
       origin: "https://attacker.example.com",
     });
     expect(result.ok).toBe(false);
+  });
+
+  it('accepts any origin when allowedOrigins includes "*" (regression: #30990)', () => {
+    const result = checkBrowserOrigin({
+      requestHost: "100.86.79.37:18789",
+      origin: "https://100.86.79.37:18789",
+      allowedOrigins: ["*"],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts any origin when allowedOrigins includes "*" alongside specific entries', () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.tailnet.ts.net:18789",
+      origin: "https://gateway.tailnet.ts.net:18789",
+      allowedOrigins: ["https://control.example.com", "*"],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts wildcard entries with surrounding whitespace", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "100.86.79.37:18789",
+      origin: "https://100.86.79.37:18789",
+      allowedOrigins: [" * "],
+    });
+    expect(result.ok).toBe(true);
   });
 });
