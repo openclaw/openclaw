@@ -128,6 +128,31 @@ const HttpUrlSchema = z
     return protocol === "http:" || protocol === "https:";
   }, "Expected http:// or https:// URL");
 
+const ResponsesEndpointUrlFetchShape = {
+  allowUrl: z.boolean().optional(),
+  urlAllowlist: z.array(z.string()).optional(),
+  allowedMimes: z.array(z.string()).optional(),
+  maxBytes: z.number().int().positive().optional(),
+  maxRedirects: z.number().int().nonnegative().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+};
+
+const SkillEntrySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    env: z.record(z.string(), z.string()).optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
+const PluginEntrySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
@@ -687,13 +712,8 @@ export const OpenClawSchema = z
                     maxUrlParts: z.number().int().nonnegative().optional(),
                     files: z
                       .object({
-                        allowUrl: z.boolean().optional(),
-                        urlAllowlist: z.array(z.string()).optional(),
-                        allowedMimes: z.array(z.string()).optional(),
-                        maxBytes: z.number().int().positive().optional(),
+                        ...ResponsesEndpointUrlFetchShape,
                         maxChars: z.number().int().positive().optional(),
-                        maxRedirects: z.number().int().nonnegative().optional(),
-                        timeoutMs: z.number().int().positive().optional(),
                         pdf: z
                           .object({
                             maxPages: z.number().int().positive().optional(),
@@ -707,12 +727,7 @@ export const OpenClawSchema = z
                       .optional(),
                     images: z
                       .object({
-                        allowUrl: z.boolean().optional(),
-                        urlAllowlist: z.array(z.string()).optional(),
-                        allowedMimes: z.array(z.string()).optional(),
-                        maxBytes: z.number().int().positive().optional(),
-                        maxRedirects: z.number().int().nonnegative().optional(),
-                        timeoutMs: z.number().int().positive().optional(),
+                        ...ResponsesEndpointUrlFetchShape,
                       })
                       .strict()
                       .optional(),
@@ -781,19 +796,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-        entries: z
-          .record(
-            z.string(),
-            z
-              .object({
-                enabled: z.boolean().optional(),
-                apiKey: SecretInputSchema.optional().register(sensitive),
-                env: z.record(z.string(), z.string()).optional(),
-                config: z.record(z.string(), z.unknown()).optional(),
-              })
-              .strict(),
-          )
-          .optional(),
+        entries: z.record(z.string(), SkillEntrySchema).optional(),
       })
       .strict()
       .optional(),
@@ -814,17 +817,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-        entries: z
-          .record(
-            z.string(),
-            z
-              .object({
-                enabled: z.boolean().optional(),
-                config: z.record(z.string(), z.unknown()).optional(),
-              })
-              .strict(),
-          )
-          .optional(),
+        entries: z.record(z.string(), PluginEntrySchema).optional(),
         installs: z
           .record(
             z.string(),
