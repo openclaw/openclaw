@@ -176,6 +176,17 @@ describe("infra runtime", () => {
     });
   });
 
+  describe("triggerOpenClawRestart cooldown", () => {
+    it("coalesces rapid triggerOpenClawRestart calls within cooldown window", () => {
+      const { triggerOpenClawRestart } = require("./restart.js");
+      const first = triggerOpenClawRestart();
+      const second = triggerOpenClawRestart();
+
+      expect(first.detail).toBe("test mode");
+      expect(second.detail).toBe("restart already in progress (coalesced)");
+    });
+  });
+
   describe("pre-restart deferral check", () => {
     setupRestartSignalSuite();
 

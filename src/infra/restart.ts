@@ -286,7 +286,19 @@ function normalizeSystemdUnit(raw?: string, profile?: string): string {
   return unit.endsWith(".service") ? unit : `${unit}.service`;
 }
 
+let lastExternalRestartAtMs = 0;
+
 export function triggerOpenClawRestart(): RestartAttempt {
+  const now = Date.now();
+  if (now - lastExternalRestartAtMs < RESTART_COOLDOWN_MS) {
+    return {
+      ok: true,
+      method: "supervisor",
+      detail: "restart already in progress (coalesced)",
+    };
+  }
+  lastExternalRestartAtMs = now;
+
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return { ok: true, method: "supervisor", detail: "test mode" };
   }
