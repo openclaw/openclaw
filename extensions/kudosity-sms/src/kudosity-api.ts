@@ -14,7 +14,6 @@ const BASE_URL = "https://api.transmitmessage.com";
 export interface KudosityConfig {
   apiKey: string;
   sender: string;
-  webhookSecret?: string;
 }
 
 export interface SendSMSParams {

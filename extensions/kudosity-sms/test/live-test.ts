@@ -12,34 +12,13 @@
  *     npx tsx test/live-test.ts
  */
 
-// Since we're outside the OpenClaw monorepo, import directly
-const BASE_URL = "https://api.transmitmessage.com";
-
-interface KudosityConfig {
-  apiKey: string;
-  sender: string;
-}
-
-interface SendSMSParams {
-  message: string;
-  sender: string;
-  recipient: string;
-  message_ref?: string;
-  track_links?: boolean;
-}
-
-function buildHeaders(apiKey: string): Record<string, string> {
-  return {
-    "Content-Type": "application/json",
-    "x-api-key": apiKey,
-  };
-}
+import { sendSMS, getSMS, validateApiKey, type KudosityConfig } from "../src/kudosity-api.js";
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-const apiKey = process.env.KUDOSITY_API_KEY;
-const sender = process.env.KUDOSITY_SENDER;
-const testNumber = process.env.KUDOSITY_TEST_NUMBER;
+const apiKey = process.env.KUDOSITY_API_KEY ?? "";
+const sender = process.env.KUDOSITY_SENDER ?? "";
+const testNumber = process.env.KUDOSITY_TEST_NUMBER ?? "";
 
 if (!apiKey || !sender || !testNumber) {
   console.error("❌ Missing required environment variables:");
@@ -67,18 +46,15 @@ async function runTests() {
   // Test 1: Validate API key
   console.log("🔑 Test 1: Validate API key...");
   try {
-    const validateRes = await fetch(`${BASE_URL}/v2/sms?limit=1`, {
-      method: "GET",
-      headers: buildHeaders(apiKey),
-    });
-    if (validateRes.ok) {
+    const isValid = await validateApiKey(config);
+    if (isValid) {
       console.log("   ✅ API key is valid");
     } else {
-      console.error(`   ❌ API key validation failed (status: ${validateRes.status})`);
+      console.error("   ❌ API key validation failed");
       process.exit(1);
     }
   } catch (error) {
-    console.error("   ❌ Network error:", error);
+    console.error("   ❌ Error validating API key:", error);
     process.exit(1);
   }
 
@@ -89,26 +65,15 @@ async function runTests() {
   let smsId: string;
 
   try {
-    const sendRes = await fetch(`${BASE_URL}/v2/sms`, {
-      method: "POST",
-      headers: buildHeaders(apiKey),
-      body: JSON.stringify({
-        message: `OpenClaw live test — ${new Date().toISOString()}`,
-        sender,
-        recipient: testNumber,
-        message_ref: messageRef,
-      } satisfies SendSMSParams),
+    const smsResponse = await sendSMS(config, {
+      message: `OpenClaw live test — ${new Date().toISOString()}`,
+      sender,
+      recipient: testNumber,
+      message_ref: messageRef,
     });
 
-    if (!sendRes.ok) {
-      const errorText = await sendRes.text();
-      console.error(`   ❌ Send failed (status: ${sendRes.status}): ${errorText}`);
-      process.exit(1);
-    }
-
-    const smsResponse = await sendRes.json();
     smsId = smsResponse.id;
-    console.log(`   ✅ SMS sent successfully`);
+    console.log("   ✅ SMS sent successfully");
     console.log(`      ID:          ${smsId}`);
     console.log(`      Status:      ${smsResponse.status}`);
     console.log(`      SMS count:   ${smsResponse.sms_count}`);
@@ -126,18 +91,8 @@ async function runTests() {
   await new Promise((resolve) => setTimeout(resolve, 3000));
 
   try {
-    const getRes = await fetch(`${BASE_URL}/v2/sms/${smsId}`, {
-      method: "GET",
-      headers: buildHeaders(apiKey),
-    });
-
-    if (!getRes.ok) {
-      console.error(`   ❌ Get failed (status: ${getRes.status})`);
-      process.exit(1);
-    }
-
-    const details = await getRes.json();
-    console.log(`   ✅ SMS details retrieved`);
+    const details = await getSMS(config, smsId);
+    console.log("   ✅ SMS details retrieved");
     console.log(`      Status:      ${details.status}`);
     console.log(`      Created:     ${details.created_at}`);
     console.log(`      Updated:     ${details.updated_at}`);
