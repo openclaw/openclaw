@@ -17,6 +17,30 @@ const CHANNEL_RESTART_POLICY: BackoffPolicy = {
 };
 const MAX_RESTART_ATTEMPTS = 10;
 
+/**
+ * Detect permanent authentication errors that should not be retried.
+ * These errors indicate the channel credentials are invalid and won't recover.
+ */
+function isPermanentAuthError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  // Patterns for permanent auth failures that won't recover
+  const permanentPatterns = [
+    "account_inactive", // Slack: Bot was removed from workspace
+    "invalid_auth", // Slack/other: Invalid token
+    "token_revoked", // Token was explicitly revoked
+    "not_authed", // No token provided
+    "account_suspended", // Workspace was suspended
+    "authentication failed", // Generic auth failure
+    "permanent auth failure", // Our own permanent auth failure marker
+    "bot was likely removed", // Our own descriptive error
+    "token was revoked", // Our own descriptive error
+  ];
+  return permanentPatterns.some((pattern) => message.includes(pattern));
+}
+
 export type ChannelRuntimeSnapshot = {
   channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;
   channelAccounts: Partial<Record<ChannelId, Record<string, ChannelAccountSnapshot>>>;
@@ -205,6 +229,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             const message = formatErrorMessage(err);
             setRuntime(channelId, id, { accountId: id, lastError: message });
             log.error?.(`[${id}] channel exited: ${message}`);
+            // Store the error for the auto-restart check
+            return { error: err };
           })
           .finally(() => {
             setRuntime(channelId, id, {
@@ -213,8 +239,18 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               lastStopAt: Date.now(),
             });
           })
-          .then(async () => {
+          .then(async (result) => {
             if (manuallyStopped.has(rKey)) {
+              return;
+            }
+            // Check for permanent auth errors - don't auto-restart these
+            const exitError =
+              result && typeof result === "object" && "error" in result ? result.error : null;
+            if (exitError && isPermanentAuthError(exitError)) {
+              log.error?.(
+                `[${id}] permanent authentication error detected, skipping auto-restart. ` +
+                  `Update credentials or disable this channel to stop this message.`,
+              );
               return;
             }
             const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
@@ -412,3 +448,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     resetRestartAttempts: resetRestartAttempts_,
   };
 }
+
+// Export for testing
+export const __testing = {
+  isPermanentAuthError,
+};

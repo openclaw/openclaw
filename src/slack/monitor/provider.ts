@@ -142,6 +142,39 @@ function formatUnknownError(error: unknown): string {
   }
 }
 
+/**
+ * Detect permanent Slack API authentication errors that should not be retried.
+ * These errors indicate the bot/app token is invalid, revoked, or the app was removed.
+ */
+function isPermanentSlackAuthError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  // Slack API error patterns that indicate permanent auth failures
+  const permanentPatterns = [
+    "account_inactive", // Bot was removed from workspace
+    "invalid_auth", // Invalid token
+    "token_revoked", // Token was explicitly revoked
+    "not_authed", // No token provided
+    "account_suspended", // Workspace was suspended
+  ];
+  return permanentPatterns.some((pattern) => message.includes(pattern));
+}
+
+/**
+ * Extract the Slack error code from an error for clearer logging.
+ */
+function extractSlackErrorCode(error: unknown): string | null {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+  const message = error.message;
+  // Match "An API error occurred: error_code" pattern
+  const match = /an api error occurred:\s*([a-z_]+)/i.exec(message);
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
 function parseApiAppIdFromAppToken(raw?: string) {
   const token = raw?.trim();
   if (!token) {
@@ -293,8 +326,24 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     botUserId = auth.user_id ?? "";
     teamId = auth.team_id ?? "";
     apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
-  } catch {
-    // auth test failing is non-fatal; message handler falls back to regex mentions.
+  } catch (err) {
+    // Check for permanent auth errors that should fail the provider immediately
+    if (isPermanentSlackAuthError(err)) {
+      const errorCode = extractSlackErrorCode(err) ?? "unknown";
+      const errorMsg = formatUnknownError(err);
+      runtime.error?.(
+        `slack auth.test failed with permanent error (${errorCode}): ${errorMsg}. ` +
+          `The bot may have been removed from the workspace or the token was revoked. ` +
+          `Disable this channel or update the token to continue.`,
+      );
+      throw new Error(
+        `Slack authentication failed (${errorCode}): ${errorMsg}. ` +
+          `The bot was likely removed from the workspace or the token was revoked.`,
+        { cause: err },
+      );
+    }
+    // Other auth test failures are non-fatal; message handler falls back to regex mentions.
+    runtime.log?.(`slack auth.test failed (non-fatal): ${formatUnknownError(err)}`);
   }
 
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
@@ -473,6 +522,22 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           reconnectAttempts = 0;
           runtime.log?.("slack socket mode connected");
         } catch (err) {
+          // Check for permanent auth errors - don't retry these
+          if (isPermanentSlackAuthError(err)) {
+            const errorCode = extractSlackErrorCode(err) ?? "unknown";
+            const errorMsg = formatUnknownError(err);
+            runtime.error?.(
+              `slack socket mode failed with permanent auth error (${errorCode}): ${errorMsg}. ` +
+                `The bot may have been removed from the workspace or the token was revoked. ` +
+                `Disable this channel or update the token to continue.`,
+            );
+            throw new Error(
+              `Slack socket mode permanent auth failure (${errorCode}): ${errorMsg}. ` +
+                `The bot was likely removed from the workspace or the token was revoked.`,
+              { cause: err },
+            );
+          }
+
           reconnectAttempts += 1;
           if (
             SLACK_SOCKET_RECONNECT_POLICY.maxAttempts > 0 &&
@@ -546,4 +611,6 @@ export const __testing = {
   resolveDefaultGroupPolicy,
   getSocketEmitter,
   waitForSlackSocketDisconnect,
+  isPermanentSlackAuthError,
+  extractSlackErrorCode,
 };
