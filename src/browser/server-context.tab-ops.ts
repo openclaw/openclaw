@@ -59,12 +59,15 @@ export function createProfileTabOps({
   getProfileState,
 }: TabOpsDeps): ProfileTabOps {
   const listTabs = async (): Promise<BrowserTab[]> => {
+    // Use runtime profile's cdpUrl (may be updated dynamically, e.g. firecrawl sessions)
+    const runtimeCdpUrl = getProfileState().profile.cdpUrl || profile.cdpUrl;
+
     // For remote profiles, use Playwright's persistent connection to avoid ephemeral sessions
     if (!profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
-        const pages = await listPagesViaPlaywright({ cdpUrl: profile.cdpUrl });
+        const pages = await listPagesViaPlaywright({ cdpUrl: runtimeCdpUrl });
         return pages.map((p) => ({
           targetId: p.targetId,
           title: p.title,
@@ -82,13 +85,13 @@ export function createProfileTabOps({
         webSocketDebuggerUrl?: string;
         type?: string;
       }>
-    >(appendCdpPath(profile.cdpUrl, "/json/list"));
+    >(appendCdpPath(runtimeCdpUrl, "/json/list"));
     return raw
       .map((t) => ({
         targetId: t.id ?? "",
         title: t.title ?? "",
         url: t.url ?? "",
-        wsUrl: normalizeWsUrl(t.webSocketDebuggerUrl, profile.cdpUrl),
+        wsUrl: normalizeWsUrl(t.webSocketDebuggerUrl, runtimeCdpUrl),
         type: t.type,
       }))
       .filter((t) => Boolean(t.targetId));
@@ -129,6 +132,8 @@ export function createProfileTabOps({
 
   const openTab = async (url: string): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
+    // Use runtime profile's cdpUrl (may be updated dynamically, e.g. firecrawl sessions)
+    const runtimeCdpUrl = getProfileState().profile.cdpUrl || profile.cdpUrl;
 
     // For remote profiles, use Playwright's persistent connection to create tabs
     // This ensures the tab persists beyond a single request.
@@ -137,7 +142,7 @@ export function createProfileTabOps({
       const createPageViaPlaywright = (mod as Partial<PwAiModule> | null)?.createPageViaPlaywright;
       if (typeof createPageViaPlaywright === "function") {
         const page = await createPageViaPlaywright({
-          cdpUrl: profile.cdpUrl,
+          cdpUrl: runtimeCdpUrl,
           url,
           ...ssrfPolicyOpts,
         });
@@ -154,7 +159,7 @@ export function createProfileTabOps({
     }
 
     const createdViaCdp = await createTargetViaCdp({
-      cdpUrl: profile.cdpUrl,
+      cdpUrl: runtimeCdpUrl,
       url,
       ...ssrfPolicyOpts,
     })
@@ -180,7 +185,7 @@ export function createProfileTabOps({
     }
 
     const encoded = encodeURIComponent(url);
-    const endpointUrl = new URL(appendCdpPath(profile.cdpUrl, "/json/new"));
+    const endpointUrl = new URL(appendCdpPath(runtimeCdpUrl, "/json/new"));
     await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
     const endpoint = endpointUrl.search
       ? (() => {
@@ -209,7 +214,7 @@ export function createProfileTabOps({
       targetId: created.id,
       title: created.title ?? "",
       url: resolvedUrl,
-      wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl),
+      wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl, runtimeCdpUrl),
       type: created.type,
     };
   };
