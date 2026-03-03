@@ -873,6 +873,7 @@
                 "pages": [
                   "vps",
                   "install/fly",
+                  "install/daytona",
                   "install/hetzner",
                   "install/gcp",
                   "install/macos-vm",

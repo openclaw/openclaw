@@ -637,7 +637,7 @@ Short answer: follow the Linux guide, then run the onboarding wizard.
 
 Any Linux VPS works. Install on the server, then use SSH/Tailscale to reach the Gateway.
 
-Guides: [exe.dev](/install/exe-dev), [Hetzner](/install/hetzner), [Fly.io](/install/fly).
+Guides: [exe.dev](/install/exe-dev), [Hetzner](/install/hetzner), [Fly.io](/install/fly), [Daytona](/install/daytona).
 Remote access: [Gateway remote](/gateway/remote).
 
 ### Where are the cloudVPS install guides
@@ -647,6 +647,7 @@ We keep a **hosting hub** with the common providers. Pick one and follow the gui
 - [VPS hosting](/vps) (all providers in one place)
 - [Fly.io](/install/fly)
 - [Hetzner](/install/hetzner)
+- [Daytona](/install/daytona)
 - [exe.dev](/install/exe-dev)
 
 How it works in the cloud: the **Gateway runs on the server**, and you access it
