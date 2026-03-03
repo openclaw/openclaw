@@ -8,9 +8,44 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Fast path for --version/-V: exit before loading heavy modules (~100x faster)
-// Note: Use -V (uppercase) for version, -v is reserved for --verbose in subcommands
-const argv = new Set(process.argv.slice(2));
-if (argv.has("--version") || argv.has("-V")) {
+// Only trigger for root invocations, not subcommands (mirrors src/cli/argv.ts)
+const VERSION_FLAGS = new Set(["-V", "--version"]);
+const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
+const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
+
+function isRootVersionInvocation(argv) {
+  const args = argv.slice(2);
+  let hasVersion = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg) {
+      continue;
+    }
+    if (arg === "--") {
+      break;
+    }
+    if (VERSION_FLAGS.has(arg)) {
+      hasVersion = true;
+      continue;
+    }
+    if (ROOT_BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (arg.startsWith("--profile=") || arg.startsWith("--log-level=")) {
+      continue;
+    }
+    if (ROOT_VALUE_FLAGS.has(arg)) {
+      if (args[i + 1] && !args[i + 1].startsWith("-")) {
+        i++;
+      }
+      continue;
+    }
+    return false; // Unknown flag or subcommand
+  }
+  return hasVersion;
+}
+
+if (isRootVersionInvocation(process.argv)) {
   try {
     const pkg = JSON.parse(await fs.readFile(path.join(__dirname, "package.json"), "utf-8"));
     console.log(pkg.version);
