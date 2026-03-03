@@ -25,6 +25,11 @@ const tlonCommonConfigFields = {
   autoDiscoverChannels: z.boolean().optional(),
   showModelSignature: z.boolean().optional(),
   responsePrefix: z.string().optional(),
+  // Auto-accept settings
+  autoAcceptDmInvites: z.boolean().optional(), // Auto-accept DMs from ships in dmAllowlist
+  autoAcceptGroupInvites: z.boolean().optional(), // Auto-accept all group invites
+  // Owner ship for approval system
+  ownerShip: ShipSchema.optional(), // Ship that receives approval requests and can approve/deny
 } satisfies z.ZodRawShape;
 
 export const TlonAccountSchema = z.object({
