@@ -382,20 +382,24 @@ export async function handleToolExecutionEnd(
     adjustedArgs && typeof adjustedArgs === "object"
       ? (adjustedArgs as Record<string, unknown>)
       : startArgs;
+  const isMessagingSendCall =
+    isMessagingTool(toolName) &&
+    (isMessagingToolSendAction(toolName, startArgs) ||
+      isMessagingToolSendAction(toolName, afterToolCallArgs));
 
   // Commit messaging tool text on success, discard on error.
   const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
   const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
   const extractedTargetFromResult =
-    !isToolError && isMessagingTool(toolName)
+    !isToolError && isMessagingSendCall
       ? extractMessagingToolSendFromResult(toolName, result)
       : undefined;
   const extractedTargetFromArgs =
-    !isToolError && isMessagingTool(toolName)
+    !isToolError && isMessagingSendCall
       ? extractMessagingToolSend(toolName, afterToolCallArgs)
       : undefined;
   const committedTarget =
-    !isToolError && isMessagingTool(toolName)
+    !isToolError && isMessagingSendCall
       ? pendingTarget
         ? mergeMessagingTarget(pendingTarget, extractedTargetFromResult ?? extractedTargetFromArgs)
         : (extractedTargetFromResult ?? extractedTargetFromArgs)
@@ -425,15 +429,13 @@ export async function handleToolExecutionEnd(
   if (pendingTarget) {
     ctx.state.pendingMessagingTargets.delete(toolCallId);
   }
-  if (!isToolError && committedTarget) {
+  if (!isToolError && isMessagingSendCall && committedTarget) {
     ctx.state.messagingToolSentTargets.push(committedTarget);
     ctx.trimMessagingToolSent();
   }
   const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
   ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
-  const isMessagingSend =
-    pendingMediaUrls.length > 0 ||
-    (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
+  const isMessagingSend = pendingMediaUrls.length > 0 || isMessagingSendCall;
   if (!isToolError && isMessagingSend) {
     const committedMediaUrls = [
       ...pendingMediaUrls,

@@ -386,6 +386,44 @@ describe("messaging tool media URL tracking", () => {
     ]);
   });
 
+  it("does not commit targets from non-send message actions", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-poll",
+      args: {
+        action: "poll",
+        channel: "telegram",
+        to: "123",
+        pollQuestion: "Q",
+        pollOption: ["A", "B"],
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-poll",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              channel: "telegram",
+              to: "123",
+            }),
+          },
+        ],
+      },
+    });
+
+    expect(ctx.state.messagingToolSentTargets).toEqual([]);
+    expect(ctx.state.messagingToolSentRecords).toEqual([]);
+  });
+
   it("trims messagingToolSentMediaUrls to 200 on commit (FIFO)", async () => {
     const { ctx } = createTestContext();
 
