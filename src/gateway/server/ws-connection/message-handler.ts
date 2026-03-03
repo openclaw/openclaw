@@ -77,7 +77,11 @@ import {
 } from "../health-state.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
-import { formatGatewayAuthFailureMessage, type AuthProvidedKind } from "./auth-messages.js";
+import {
+  formatControlUiDeviceIdentityRequiredMessage,
+  formatGatewayAuthFailureMessage,
+  type AuthProvidedKind,
+} from "./auth-messages.js";
 import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
@@ -631,8 +635,7 @@ export function attachGatewayWsMessageHandler(params: {
           }
 
           if (decision.kind === "reject-control-ui-insecure-auth") {
-            const errorMessage =
-              "control ui requires device identity (use HTTPS or localhost secure context)";
+            const errorMessage = formatControlUiDeviceIdentityRequiredMessage();
             markHandshakeFailure("control-ui-insecure-auth", {
               insecureAuthConfigured: controlUiAuthPolicy.allowInsecureAuthConfigured,
             });
