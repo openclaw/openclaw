@@ -177,7 +177,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
       const lastUsedAt = typeof entry.lastUsedAt === "number" ? entry.lastUsedAt : null;
       allowlistRows.push({
         Target: targetLabel,
-        Agent: agentId,
+        Agent: agentId === "*" ? "* (all agents)" : agentId,
         Pattern: pattern,
         LastUsed: lastUsedAt ? formatTimeAgo(Math.max(0, now - lastUsedAt)) : muted("unknown"),
       });
@@ -192,7 +192,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     { Field: "Version", Value: String(file.version ?? 1) },
     { Field: "Socket", Value: file.socket?.path ?? "default" },
     { Field: "Defaults", Value: defaultsParts.length > 0 ? defaultsParts.join(", ") : "none" },
-    { Field: "Agents", Value: String(Object.keys(agents).length) },
+    { Field: "Agents", Value: String(Object.keys(agents).filter((k) => k !== "*").length) },
     { Field: "Allowlist", Value: String(allowlistRows.length) },
   ];
 
