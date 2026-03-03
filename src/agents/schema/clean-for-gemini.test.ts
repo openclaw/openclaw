@@ -21,6 +21,15 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.properties).toEqual({});
   });
 
+  it("coerces array properties to an empty object", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: [],
+    }) as { properties?: unknown };
+
+    expect(cleaned.properties).toEqual({});
+  });
+
   it("coerces nested null properties while preserving valid siblings", () => {
     const cleaned = cleanSchemaForGemini({
       type: "object",
