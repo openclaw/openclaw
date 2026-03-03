@@ -642,29 +642,29 @@ openclaw pairing list feishu
 
 主要选项：
 
-| 配置项                                            | 说明                               | 默认值        |
-| ------------------------------------------------- | ---------------------------------- | ------------- |
-| `channels.feishu.enabled`                         | 启用/禁用渠道                     | `true`        |
-| `channels.feishu.domain`                          | API 域名（`feishu` 或 `lark`）    | `feishu`      |
-| `channels.feishu.connectionMode`                  | 事件传输模式（websocket/webhook） | `websocket`   |
-| `channels.feishu.defaultAccount`                  | 出站路由默认账号 ID               | `default`     |
-| `channels.feishu.verificationToken`               | Webhook 模式必填                   | -             |
-| `channels.feishu.webhookPath`                     | Webhook 路由路径                   | `/feishu/events` |
-| `channels.feishu.webhookHost`                     | Webhook 监听地址                   | `127.0.0.1`   |
-| `channels.feishu.webhookPort`                     | Webhook 监听端口                   | `3000`        |
-| `channels.feishu.accounts.<id>.appId`             | 应用 App ID                        | -             |
-| `channels.feishu.accounts.<id>.appSecret`         | 应用 App Secret                    | -             |
-| `channels.feishu.accounts.<id>.domain`            | 单账号 API 域名覆盖                | `feishu`      |
-| `channels.feishu.dmPolicy`                        | 私聊策略                           | `pairing`     |
-| `channels.feishu.allowFrom`                       | 私聊白名单（open_id 列表）         | -             |
-| `channels.feishu.groupPolicy`                     | 群组策略                           | `open`        |
-| `channels.feishu.groupAllowFrom`                  | 群组白名单                         | -             |
-| `channels.feishu.groups.<chat_id>.requireMention` | 是否需要 @提及                      | `true`        |
-| `channels.feishu.groups.<chat_id>.enabled`        | 是否启用该群组                     | `true`        |
-| `channels.feishu.textChunkLimit`                  | 消息分块大小                       | `2000`        |
-| `channels.feishu.mediaMaxMb`                      | 媒体大小限制                       | `30`          |
-| `channels.feishu.streaming`                       | 启用流式卡片输出                   | `true`        |
-| `channels.feishu.blockStreaming`                  | 启用块级流式                       | `true`        |
+| 配置项                                            | 说明                              | 默认值           |
+| ------------------------------------------------- | --------------------------------- | ---------------- |
+| `channels.feishu.enabled`                         | 启用/禁用渠道                     | `true`           |
+| `channels.feishu.domain`                          | API 域名（`feishu` 或 `lark`）    | `feishu`         |
+| `channels.feishu.connectionMode`                  | 事件传输模式（websocket/webhook） | `websocket`      |
+| `channels.feishu.defaultAccount`                  | 出站路由默认账号 ID               | `default`        |
+| `channels.feishu.verificationToken`               | Webhook 模式必填                  | -                |
+| `channels.feishu.webhookPath`                     | Webhook 路由路径                  | `/feishu/events` |
+| `channels.feishu.webhookHost`                     | Webhook 监听地址                  | `127.0.0.1`      |
+| `channels.feishu.webhookPort`                     | Webhook 监听端口                  | `3000`           |
+| `channels.feishu.accounts.<id>.appId`             | 应用 App ID                       | -                |
+| `channels.feishu.accounts.<id>.appSecret`         | 应用 App Secret                   | -                |
+| `channels.feishu.accounts.<id>.domain`            | 单账号 API 域名覆盖               | `feishu`         |
+| `channels.feishu.dmPolicy`                        | 私聊策略                          | `pairing`        |
+| `channels.feishu.allowFrom`                       | 私聊白名单（open_id 列表）        | -                |
+| `channels.feishu.groupPolicy`                     | 群组策略                          | `open`           |
+| `channels.feishu.groupAllowFrom`                  | 群组白名单                        | -                |
+| `channels.feishu.groups.<chat_id>.requireMention` | 是否需要 @提及                    | `true`           |
+| `channels.feishu.groups.<chat_id>.enabled`        | 是否启用该群组                    | `true`           |
+| `channels.feishu.textChunkLimit`                  | 消息分块大小                      | `2000`           |
+| `channels.feishu.mediaMaxMb`                      | 媒体大小限制                      | `30`             |
+| `channels.feishu.streaming`                       | 启用流式卡片输出                  | `true`           |
+| `channels.feishu.blockStreaming`                  | 启用块级流式                      | `true`           |
 
 ---
 
