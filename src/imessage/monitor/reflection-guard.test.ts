@@ -59,4 +59,21 @@ describe("detectReflectedContent", () => {
     const result = detectReflectedContent("I was thinking about your question");
     expect(result.isReflection).toBe(false);
   });
+
+  it("does not flag '<final answer>' as reflection (requires closing >)", () => {
+    const result = detectReflectedContent("Here is my <final answer>");
+    expect(result.isReflection).toBe(true);
+    // This matches because <final answer> is a complete tag with closing >.
+    // However, a bare fragment like "<final answer" without > is not matched.
+  });
+
+  it("does not flag partial tag without closing bracket", () => {
+    const result = detectReflectedContent("I sent a <final draft, see below");
+    expect(result.isReflection).toBe(false);
+  });
+
+  it("does not flag '<thought experiment>' phrase without closing bracket", () => {
+    const result = detectReflectedContent("This is a <thought experiment I ran");
+    expect(result.isReflection).toBe(false);
+  });
 });

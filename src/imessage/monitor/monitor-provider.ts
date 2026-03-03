@@ -255,23 +255,32 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose,
     });
 
+    // Build conversation key for rate limiting (used by both drop and dispatch paths).
+    const chatId = message.chat_id ?? undefined;
+    const senderForKey = (message.sender ?? "").trim();
+    const conversationKey = chatId != null ? `group:${chatId}` : `dm:${senderForKey}`;
+    const rateLimitKey = `${accountInfo.accountId}:${conversationKey}`;
+
     if (decision.kind === "drop") {
+      // Record echo/reflection drops so the rate limiter can detect sustained loops.
+      // Only loop-related drop reasons feed the counter; policy/mention/empty drops
+      // are normal and should not escalate.
+      const isLoopDrop =
+        decision.reason === "echo" ||
+        decision.reason === "reflected assistant content" ||
+        decision.reason === "from me";
+      if (isLoopDrop) {
+        loopRateLimiter.record(rateLimitKey);
+      }
       return;
     }
 
-    // Loop rate limiting: suppress conversations that fire too many messages
-    // in a short window, which is a strong signal of recursive echo amplification.
-    const chatId = message.chat_id ?? undefined;
-    if (decision.kind === "dispatch") {
-      const conversationKey = decision.isGroup
-        ? `group:${chatId ?? "unknown"}`
-        : `dm:${decision.sender}`;
-      const rateLimitKey = `${accountInfo.accountId}:${conversationKey}`;
-      if (loopRateLimiter.isRateLimited(rateLimitKey)) {
-        logVerbose(`imessage: rate-limited conversation ${conversationKey} (possible echo loop)`);
-        return;
-      }
-      loopRateLimiter.record(rateLimitKey);
+    // After repeated echo/reflection drops for a conversation, suppress all
+    // remaining messages as a safety net against amplification that slips
+    // through the primary guards.
+    if (decision.kind === "dispatch" && loopRateLimiter.isRateLimited(rateLimitKey)) {
+      logVerbose(`imessage: rate-limited conversation ${conversationKey} (echo loop detected)`);
+      return;
     }
 
     if (decision.kind === "pairing") {

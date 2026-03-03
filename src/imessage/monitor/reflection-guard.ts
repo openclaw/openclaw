@@ -6,9 +6,11 @@
 
 const INTERNAL_SEPARATOR_RE = /(?:#\+){2,}#?/;
 const ASSISTANT_ROLE_MARKER_RE = /\bassistant\s+to\s*=\s*\w+/i;
-const THINKING_TAG_RE = /<\s*\/?(?:think(?:ing)?|thought|antthinking)\b/i;
-const RELEVANT_MEMORIES_TAG_RE = /<\s*\/?relevant[-_]memories\b/i;
-const FINAL_TAG_RE = /<\s*\/?final\b/i;
+// Require closing `>` to avoid false-positives on phrases like "<thought experiment>".
+const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/i;
+const RELEVANT_MEMORIES_TAG_RE = /<\s*\/?\s*relevant[-_]memories\b[^<>]*>/i;
+// Require closing `>` to avoid false-positives on phrases like "<final answer>".
+const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/i;
 
 const REFLECTION_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: INTERNAL_SEPARATOR_RE, label: "internal-separator" },
