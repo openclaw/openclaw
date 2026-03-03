@@ -163,9 +163,11 @@ describe("createReadinessChecker", () => {
     expect(result.failing).toEqual([]);
   });
 
-  it("includes stale-socket channel in failing", () => {
+  it("excludes stale-socket channels from failing — idle but connected is still ready", () => {
     const startedAt = Date.now() - 200_000;
-    // Channel started and had its last event 31 minutes ago — past the 30-minute stale threshold
+    // Channel started and had its last event 31 minutes ago — past the 30-minute stale threshold.
+    // Stale-socket is a liveness/zombie concern, not a readiness concern; a quiet overnight
+    // gateway should remain in K8s load-balancer rotation.
     const staleAt = Date.now() - 31 * 60_000;
     const checker = createReadinessChecker({
       channelManager: makeChannelManager({
@@ -185,7 +187,7 @@ describe("createReadinessChecker", () => {
 
     const result = checker();
 
-    expect(result.ready).toBe(false);
-    expect(result.failing).toContain("slack");
+    expect(result.ready).toBe(true);
+    expect(result.failing).not.toContain("slack");
   });
 });

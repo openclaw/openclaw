@@ -45,7 +45,7 @@ export function createReadinessChecker(deps: {
           continue;
         }
         const health = evaluateChannelHealth(accountSnapshot, policy);
-        if (!health.healthy && health.reason !== "unmanaged") {
+        if (!health.healthy && health.reason !== "unmanaged" && health.reason !== "stale-socket") {
           failing.push(channelId);
           break;
         }
