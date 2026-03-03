@@ -174,20 +174,19 @@ async function sendReplyOrFallbackDirect(
   return toFeishuSendResult(response, params.directParams.receiveId);
 }
 
-function parseInteractiveCardContent(parsed: unknown): string {
+function parseInteractiveCardContent(parsed: unknown): string | undefined {
   if (!parsed || typeof parsed !== "object") {
-    return "[Interactive Card]";
+    return undefined;
   }
 
-  // Support both schema 1.0 (top-level `elements`) and 2.0 (`body.elements`).
   const candidate = parsed as { elements?: unknown; body?: { elements?: unknown } };
   const elements = Array.isArray(candidate.elements)
     ? candidate.elements
     : Array.isArray(candidate.body?.elements)
-      ? candidate.body!.elements
+      ? candidate.body.elements
       : null;
   if (!elements) {
-    return "[Interactive Card]";
+    return undefined;
   }
 
   const texts: string[] = [];
@@ -208,7 +207,8 @@ function parseInteractiveCardContent(parsed: unknown): string {
       texts.push(item.content);
     }
   }
-  return texts.join("\n").trim() || "[Interactive Card]";
+  const extracted = texts.join("\n").trim();
+  return extracted || undefined;
 }
 
 function parseFeishuMessageContent(rawContent: string, msgType: string): string {
@@ -233,7 +233,8 @@ function parseFeishuMessageContent(rawContent: string, msgType: string): string 
   }
 
   if (msgType === "interactive") {
-    return parseInteractiveCardContent(parsed);
+    const extracted = parseInteractiveCardContent(parsed);
+    return extracted ?? rawContent;
   }
 
   if (typeof parsed === "string") {

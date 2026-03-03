@@ -96,6 +96,42 @@ describe("getMessageFeishu", () => {
     );
   });
 
+  it("falls back to raw interactive payload when card structure is unknown", async () => {
+    const rawInteractive = JSON.stringify({
+      schema: "2.0",
+      body: { direction: "vertical" },
+    });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_interactive_unknown",
+            chat_id: "oc_interactive_unknown",
+            msg_type: "interactive",
+            body: {
+              content: rawInteractive,
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_interactive_unknown",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_interactive_unknown",
+        chatId: "oc_interactive_unknown",
+        contentType: "interactive",
+        content: rawInteractive,
+      }),
+    );
+  });
+
   it("extracts text content from post messages", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
