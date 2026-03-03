@@ -5,6 +5,7 @@ import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import { enqueueSend } from "./send-queue.js";
 import { resolveMatrixClient, resolveMediaMaxBytes } from "./send/client.js";
 import {
+  applyMatrixFormatting,
   buildReplyRelation,
   buildTextContent,
   buildThreadRelation,
@@ -285,6 +286,8 @@ export async function editMessageMatrix(
     if (opts.formattedText) {
       newContent.format = "org.matrix.custom.html";
       newContent.formatted_body = opts.formattedText;
+    } else {
+      applyMatrixFormatting(newContent, text);
     }
     const editContent: Record<string, unknown> = {
       msgtype: MsgType.Text,
@@ -298,6 +301,9 @@ export async function editMessageMatrix(
     if (opts.formattedText) {
       editContent.format = "org.matrix.custom.html";
       editContent.formatted_body = `* ${opts.formattedText}`;
+    } else if (newContent.formatted_body) {
+      editContent.format = "org.matrix.custom.html";
+      editContent.formatted_body = `* ${newContent.formatted_body}`;
     }
     const resultEventId = await client.sendEvent(resolvedRoom, EventType.RoomMessage, editContent);
     return {
