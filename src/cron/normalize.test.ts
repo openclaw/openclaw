@@ -138,6 +138,25 @@ describe("normalizeCronJobCreate", () => {
     expectNormalizedAtSchedule({ kind: "at", atMs: "2026-01-12T18:00:00" });
   });
 
+  it("migrates legacy schedule.cron into schedule.expr", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "legacy-cron-field",
+      enabled: true,
+      schedule: { kind: "cron", cron: "*/10 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "tick",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    expect(schedule.expr).toBe("*/10 * * * *");
+    expect(schedule.cron).toBeUndefined();
+  });
+
   it("defaults cron stagger for recurring top-of-hour schedules", () => {
     const normalized = normalizeCronJobCreate({
       name: "hourly",

@@ -200,15 +200,14 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Do not invent commands");
   });
 
-  it("marks system message blocks as internal and not user-visible", () => {
+  it("guides runtime completion events without exposing internal metadata", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).toContain("`[System Message] ...` blocks are internal context");
-    expect(prompt).toContain("are not user-visible by default");
-    expect(prompt).toContain("reports completed cron/subagent work");
-    expect(prompt).toContain("rewrite it in your normal assistant voice");
+    expect(prompt).toContain("Runtime-generated completion events may ask for a user update.");
+    expect(prompt).toContain("Rewrite those in your normal assistant voice");
+    expect(prompt).toContain("do not forward raw internal metadata");
   });
 
   it("guides subagent workflows to avoid polling loops", () => {
@@ -266,6 +265,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows",
     );
+    expect(prompt).toContain(
+      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
+    );
   });
 
   it("omits ACP harness guidance when ACP is disabled", () => {
@@ -282,6 +284,28 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("not ACP harness ids");
     expect(prompt).toContain("- sessions_spawn: Spawn an isolated sub-agent session");
     expect(prompt).toContain("- agents_list: List OpenClaw agent ids allowed for sessions_spawn");
+  });
+
+  it("omits ACP harness spawn guidance for sandboxed sessions and shows ACP block note", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
+      sandboxInfo: {
+        enabled: true,
+      },
+    });
+
+    expect(prompt).not.toContain('runtime="acp" requires `agentId`');
+    expect(prompt).not.toContain("ACP harness ids follow acp.allowedAgents");
+    expect(prompt).not.toContain(
+      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+    );
+    expect(prompt).not.toContain(
+      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
+    );
+    expect(prompt).toContain("ACP harness spawns are blocked from sandboxed sessions");
+    expect(prompt).toContain('`runtime: "acp"`');
+    expect(prompt).toContain('Use `runtime: "subagent"` instead.');
   });
 
   it("preserves tool casing in the prompt", () => {

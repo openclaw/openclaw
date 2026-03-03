@@ -15,6 +15,7 @@ import {
   recordPendingHistoryEntryIfEnabled,
 } from "./history.js";
 import {
+  DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushSettings,
@@ -198,6 +199,7 @@ describe("memory flush settings", () => {
     const settings = resolveMemoryFlushSettings();
     expect(settings).not.toBeNull();
     expect(settings?.enabled).toBe(true);
+    expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(settings?.prompt.length).toBeGreaterThan(0);
     expect(settings?.systemPrompt.length).toBeGreaterThan(0);
   });
@@ -244,7 +246,24 @@ describe("memory flush settings", () => {
     });
 
     expect(settings?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
+    expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(settings?.reserveTokensFloor).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
+  });
+
+  it("parses forceFlushTranscriptBytes from byte-size strings", () => {
+    const settings = resolveMemoryFlushSettings({
+      agents: {
+        defaults: {
+          compaction: {
+            memoryFlush: {
+              forceFlushTranscriptBytes: "3mb",
+            },
+          },
+        },
+      },
+    });
+
+    expect(settings?.forceFlushTranscriptBytes).toBe(3 * 1024 * 1024);
   });
 });
 

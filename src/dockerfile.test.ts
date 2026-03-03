@@ -20,4 +20,11 @@ describe("Dockerfile", () => {
     );
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
   });
+
+  it("normalizes plugin and agent paths permissions in image layers", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    expect(dockerfile).toContain("for dir in /app/extensions /app/.agent /app/.agents");
+    expect(dockerfile).toContain('find "$dir" -type d -exec chmod 755 {} +');
+    expect(dockerfile).toContain('find "$dir" -type f -exec chmod 644 {} +');
+  });
 });

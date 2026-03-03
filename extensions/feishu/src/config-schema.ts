@@ -1,3 +1,4 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { z } from "zod";
 export { z };
 
@@ -109,6 +110,9 @@ const GroupSessionScopeSchema = z
  * Topic session isolation mode for group chats.
  * - "disabled" (default): All messages in a group share one session
  * - "enabled": Messages in different topics get separate sessions
+ *
+ * Topic routing uses `root_id` when present to keep session continuity and
+ * falls back to `thread_id` when `root_id` is unavailable.
  */
 const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
 const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
@@ -191,6 +195,7 @@ export const FeishuAccountConfigSchema = z
 export const FeishuConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
+    defaultAccount: z.string().optional(),
     // Top-level credentials (backward compatible for single-account mode)
     appId: z.string().optional(),
     appSecret: z.string().optional(),
@@ -216,6 +221,18 @@ export const FeishuConfigSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
+    const defaultAccount = value.defaultAccount?.trim();
+    if (defaultAccount && value.accounts && Object.keys(value.accounts).length > 0) {
+      const normalizedDefaultAccount = normalizeAccountId(defaultAccount);
+      if (!Object.prototype.hasOwnProperty.call(value.accounts, normalizedDefaultAccount)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["defaultAccount"],
+          message: `channels.feishu.defaultAccount="${defaultAccount}" does not match a configured account key`,
+        });
+      }
+    }
+
     const defaultConnectionMode = value.connectionMode ?? "websocket";
     const defaultVerificationToken = value.verificationToken?.trim();
     if (defaultConnectionMode === "webhook" && !defaultVerificationToken) {

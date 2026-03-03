@@ -1,3 +1,5 @@
+import type { AcpSessionUpdateTag } from "../acp/runtime/types.js";
+
 export type AcpDispatchConfig = {
   /** Master switch for ACP turn dispatch in the reply pipeline. */
   enabled?: boolean;
@@ -8,6 +10,21 @@ export type AcpStreamConfig = {
   coalesceIdleMs?: number;
   /** Maximum text size per streamed chunk. */
   maxChunkChars?: number;
+  /** Suppresses repeated ACP status/tool projection lines within a turn. */
+  repeatSuppression?: boolean;
+  /** Live streams chunks or waits for terminal event before delivery. */
+  deliveryMode?: "live" | "final_only";
+  /** Separator inserted before visible text when hidden tool events occurred. */
+  hiddenBoundarySeparator?: "none" | "space" | "newline" | "paragraph";
+  /** Maximum assistant output characters forwarded per turn. */
+  maxOutputChars?: number;
+  /** Maximum visible characters for projected session/update lines. */
+  maxSessionUpdateChars?: number;
+  /**
+   * Per-sessionUpdate visibility overrides.
+   * Keys not listed here fall back to OpenClaw defaults.
+   */
+  tagVisibility?: Partial<Record<AcpSessionUpdateTag, boolean>>;
 };
 
 export type AcpRuntimeConfig = {

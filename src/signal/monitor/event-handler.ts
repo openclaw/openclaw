@@ -29,15 +29,19 @@ import { resolveChannelGroupRequireMention } from "../../config/group-policy.js"
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { mediaKindFromMime } from "../../media/constants.js";
+import { kindFromMime } from "../../media/mime.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { DM_GROUP_ACCESS_REASON } from "../../security/dm-policy-shared.js";
+import {
+  DM_GROUP_ACCESS_REASON,
+  resolvePinnedMainDmOwnerFromAllowlist,
+} from "../../security/dm-policy-shared.js";
 import { normalizeE164 } from "../../utils.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
   formatSignalSenderId,
   isSignalSenderAllowed,
+  normalizeSignalAllowRecipient,
   resolveSignalPeerId,
   resolveSignalRecipient,
   resolveSignalSender,
@@ -64,6 +68,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     groupName?: string;
     isGroup: boolean;
     bodyText: string;
+    commandBody: string;
     timestamp?: number;
     messageId?: string;
     mediaPath?: string;
@@ -147,7 +152,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       BodyForAgent: entry.bodyText,
       InboundHistory: inboundHistory,
       RawBody: entry.bodyText,
-      CommandBody: entry.bodyText,
+      CommandBody: entry.commandBody,
+      BodyForCommands: entry.commandBody,
       From: entry.isGroup
         ? `group:${entry.groupId ?? "unknown"}`
         : `signal:${entry.senderRecipient}`,
@@ -182,6 +188,25 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             channel: "signal",
             to: entry.senderRecipient,
             accountId: route.accountId,
+            mainDmOwnerPin: (() => {
+              const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
+                dmScope: deps.cfg.session?.dmScope,
+                allowFrom: deps.allowFrom,
+                normalizeEntry: normalizeSignalAllowRecipient,
+              });
+              if (!pinnedOwner) {
+                return undefined;
+              }
+              return {
+                ownerRecipient: pinnedOwner,
+                senderRecipient: entry.senderRecipient,
+                onSkip: ({ ownerRecipient, senderRecipient }) => {
+                  logVerbose(
+                    `signal: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                  );
+                },
+              };
+            })(),
           }
         : undefined,
       onRecordError: (err) => {
@@ -418,18 +443,30 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (!envelope) {
       return;
     }
-    if (envelope.syncMessage) {
-      return;
-    }
 
+    // Check for syncMessage (e.g., sentTranscript from other devices)
+    // We need to check if it's from our own account to prevent self-reply loops
     const sender = resolveSignalSender(envelope);
     if (!sender) {
       return;
     }
-    if (deps.account && sender.kind === "phone") {
-      if (sender.e164 === normalizeE164(deps.account)) {
-        return;
-      }
+
+    // Check if the message is from our own account to prevent loop/self-reply
+    // This handles both phone number and UUID based identification
+    const normalizedAccount = deps.account ? normalizeE164(deps.account) : undefined;
+    const isOwnMessage =
+      (sender.kind === "phone" && normalizedAccount != null && sender.e164 === normalizedAccount) ||
+      (sender.kind === "uuid" && deps.accountUuid != null && sender.raw === deps.accountUuid);
+    if (isOwnMessage) {
+      return;
+    }
+
+    // Filter all sync messages (sentTranscript, readReceipts, etc.).
+    // signal-cli may set syncMessage to null instead of omitting it, so
+    // check property existence rather than truthiness to avoid replaying
+    // the bot's own sent messages on daemon restart.
+    if ("syncMessage" in envelope) {
+      return;
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
@@ -599,7 +636,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           return "<media:attachment>";
         }
         const firstContentType = dataMessage.attachments?.[0]?.contentType;
-        const pendingKind = mediaKindFromMime(firstContentType ?? undefined);
+        const pendingKind = kindFromMime(firstContentType ?? undefined);
         return pendingKind ? `<media:${pendingKind}>` : "<media:attachment>";
       })();
       const pendingBodyText = messageText || pendingPlaceholder || quoteText;
@@ -642,7 +679,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
-    const kind = mediaKindFromMime(mediaType ?? undefined);
+    const kind = kindFromMime(mediaType ?? undefined);
     if (kind) {
       placeholder = `<media:${kind}>`;
     } else if (dataMessage.attachments?.length) {
@@ -691,6 +728,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupName,
       isGroup,
       bodyText,
+      commandBody: messageText,
       timestamp: envelope.timestamp ?? undefined,
       messageId,
       mediaPath,

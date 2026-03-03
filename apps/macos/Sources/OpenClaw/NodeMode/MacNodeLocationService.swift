@@ -3,7 +3,7 @@ import Foundation
 import OpenClawKit
 
 @MainActor
-final class MacNodeLocationService: NSObject, CLLocationManagerDelegate {
+final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, LocationServiceCommon {
     enum Error: Swift.Error {
         case timeout
         case unavailable
@@ -12,21 +12,18 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
 
+    var locationManager: CLLocationManager {
+        self.manager
+    }
+
+    var locationRequestContinuation: CheckedContinuation<CLLocation, Swift.Error>? {
+        get { self.locationContinuation }
+        set { self.locationContinuation = newValue }
+    }
+
     override init() {
         super.init()
-        self.manager.delegate = self
-        self.manager.desiredAccuracy = kCLLocationAccuracyBest
-    }
-
-    func authorizationStatus() -> CLAuthorizationStatus {
-        self.manager.authorizationStatus
-    }
-
-    func accuracyAuthorization() -> CLAccuracyAuthorization {
-        if #available(macOS 11.0, *) {
-            return self.manager.accuracyAuthorization
-        }
-        return .fullAccuracy
+        self.configureLocationManager()
     }
 
     func currentLocation(
@@ -37,26 +34,15 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate {
         guard CLLocationManager.locationServicesEnabled() else {
             throw Error.unavailable
         }
-
-        let now = Date()
-        if let maxAgeMs,
-           let cached = self.manager.location,
-           now.timeIntervalSince(cached.timestamp) * 1000 <= Double(maxAgeMs)
-        {
-            return cached
-        }
-
-        self.manager.desiredAccuracy = Self.accuracyValue(desiredAccuracy)
-        let timeout = max(0, timeoutMs ?? 10000)
-        return try await self.withTimeout(timeoutMs: timeout) {
-            try await self.requestLocation()
-        }
-    }
-
-    private func requestLocation() async throws -> CLLocation {
-        try await withCheckedThrowingContinuation { cont in
-            self.locationContinuation = cont
-            self.manager.requestLocation()
+        return try await LocationCurrentRequest.resolve(
+            manager: self.manager,
+            desiredAccuracy: desiredAccuracy,
+            maxAgeMs: maxAgeMs,
+            timeoutMs: timeoutMs,
+            request: { try await self.requestLocationOnce() }) { timeoutMs, operation in
+                try await self.withTimeout(timeoutMs: timeoutMs) {
+                    try await operation()
+                }
         }
     }
 
@@ -100,17 +86,6 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate {
                     finish(throwing: error)
                 }
             }
-        }
-    }
-
-    private static func accuracyValue(_ accuracy: OpenClawLocationAccuracy) -> CLLocationAccuracy {
-        switch accuracy {
-        case .coarse:
-            kCLLocationAccuracyKilometer
-        case .balanced:
-            kCLLocationAccuracyHundredMeters
-        case .precise:
-            kCLLocationAccuracyBest
         }
     }
 
