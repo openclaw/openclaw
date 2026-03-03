@@ -50,7 +50,6 @@ export type MatrixMonitorHandlerParams = {
   logVerboseMessage: (message: string) => void;
   allowFrom: string[];
   roomsConfig: Record<string, MatrixRoomConfig> | undefined;
-  mentionRegexes: ReturnType<PluginRuntime["channel"]["mentions"]["buildMentionRegexes"]>;
   groupPolicy: "open" | "allowlist" | "disabled";
   replyToMode: ReplyToMode;
   threadReplies: "off" | "inbound" | "always";
@@ -84,7 +83,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     logVerboseMessage,
     allowFrom,
     roomsConfig,
-    mentionRegexes,
     groupPolicy,
     replyToMode,
     threadReplies,
@@ -342,6 +340,16 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
+      const baseRoute = core.channel.routing.resolveAgentRoute({
+        cfg,
+        channel: "matrix",
+        accountId,
+        peer: {
+          kind: isDirectMessage ? "direct" : "channel",
+          id: isDirectMessage ? senderId : roomId,
+        },
+      });
+      const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, baseRoute.agentId);
       const { wasMentioned, hasExplicitMention } = resolveMentions({
         content,
         userId: selfUserId,
@@ -422,16 +430,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         messageId,
         threadRootId,
         isThreadRoot: false, // @vector-im/matrix-bot-sdk doesn't have this info readily available
-      });
-
-      const baseRoute = core.channel.routing.resolveAgentRoute({
-        cfg,
-        channel: "matrix",
-        accountId,
-        peer: {
-          kind: isDirectMessage ? "direct" : "channel",
-          id: isDirectMessage ? senderId : roomId,
-        },
       });
 
       const route = {
