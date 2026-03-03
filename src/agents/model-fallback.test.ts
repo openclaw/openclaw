@@ -996,7 +996,7 @@ describe("runWithModelFallback", () => {
   describe("fallback behavior with provider cooldowns", () => {
     async function makeAuthStoreWithCooldown(
       provider: string,
-      reason: "rate_limit" | "auth" | "billing",
+      reason: "rate_limit" | "timeout" | "auth" | "billing",
     ): Promise<{ store: AuthProfileStore; dir: string }> {
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
       const now = Date.now();
@@ -1007,12 +1007,12 @@ describe("runWithModelFallback", () => {
         },
         usageStats: {
           [`${provider}:default`]:
-            reason === "rate_limit"
+            reason === "rate_limit" || reason === "timeout"
               ? {
                   // Real rate-limit cooldowns are tracked through cooldownUntil
                   // and failureCounts, not disabledReason.
                   cooldownUntil: now + 300000,
-                  failureCounts: { rate_limit: 1 },
+                  failureCounts: { [reason]: 1 },
                 }
               : {
                   // Auth/billing issues use disabledUntil
@@ -1050,6 +1050,34 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("sonnet success");
       expect(run).toHaveBeenCalledTimes(1); // Primary skipped, fallback attempted
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5");
+    });
+
+    it("attempts same-provider fallbacks during timeout cooldown", async () => {
+      const { dir } = await makeAuthStoreWithCooldown("anthropic", "timeout");
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
+            },
+          },
+        },
+      });
+
+      const run = vi.fn().mockResolvedValueOnce("sonnet success");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        run,
+        agentDir: dir,
+      });
+
+      expect(result.result).toBe("sonnet success");
+      expect(run).toHaveBeenCalledTimes(1);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5");
     });
 
