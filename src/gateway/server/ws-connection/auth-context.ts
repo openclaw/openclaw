@@ -11,6 +11,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../../auth.js";
+import type { ScopedTokenPayload } from "../../scoped-token.js";
 
 type HandshakeConnectAuth = {
   token?: string;
@@ -28,6 +29,8 @@ export type ConnectAuthState = {
   sharedAuthProvided: boolean;
   deviceTokenCandidate?: string;
   deviceTokenCandidateSource?: DeviceTokenCandidateSource;
+  /** Populated when auth succeeded via scoped token. */
+  scopedTokenPayload?: ScopedTokenPayload;
 };
 
 type VerifyDeviceTokenResult = { ok: boolean };
@@ -81,6 +84,7 @@ export async function resolveConnectAuthState(params: {
   allowRealIpFallback: boolean;
   rateLimiter?: AuthRateLimiter;
   clientIp?: string;
+  stateDir?: string;
 }): Promise<ConnectAuthState> {
   const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth);
   const sharedAuthProvided = Boolean(sharedConnectAuth);
@@ -97,6 +101,7 @@ export async function resolveConnectAuthState(params: {
     rateLimiter: hasDeviceTokenCandidate ? undefined : params.rateLimiter,
     clientIp: params.clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+    stateDir: params.stateDir,
   });
 
   if (
@@ -150,6 +155,7 @@ export async function resolveConnectAuthState(params: {
     sharedAuthProvided,
     deviceTokenCandidate,
     deviceTokenCandidateSource,
+    scopedTokenPayload: authResult.scopedTokenPayload,
   };
 }
 

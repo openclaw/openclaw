@@ -3,10 +3,12 @@ import type {
   GatewayAuthConfig,
   GatewayTailscaleMode,
   GatewayTrustedProxyConfig,
+  ScopedTokenConfig,
 } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
+  AUTH_RATE_LIMIT_SCOPE_SCOPED_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
   type RateLimitCheckResult,
@@ -18,6 +20,8 @@ import {
   isTrustedProxyAddress,
   resolveClientIp,
 } from "./net.js";
+import { isScopedToken, validateScopedToken, type ScopedTokenPayload } from "./scoped-token.js";
+import { isTokenRevoked, loadTokenStore } from "./token-store.js";
 
 export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
 export type ResolvedGatewayAuthModeSource =
@@ -34,17 +38,29 @@ export type ResolvedGatewayAuth = {
   password?: string;
   allowTailscale: boolean;
   trustedProxy?: GatewayTrustedProxyConfig;
+  scopedTokens?: ScopedTokenConfig;
+  /** Loaded signing key for scoped token validation (populated when scopedTokens.enabled). */
+  scopedTokenSigningKey?: Buffer;
 };
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?: "none" | "token" | "password" | "tailscale" | "device-token" | "trusted-proxy";
+  method?:
+    | "none"
+    | "token"
+    | "password"
+    | "tailscale"
+    | "device-token"
+    | "trusted-proxy"
+    | "scoped-token";
   user?: string;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
   rateLimited?: boolean;
   /** Milliseconds the client should wait before retrying (when rate-limited). */
   retryAfterMs?: number;
+  /** Present when auth succeeded via scoped token — carries the decoded claims. */
+  scopedTokenPayload?: ScopedTokenPayload;
 };
 
 type ConnectAuth = {
@@ -73,6 +89,8 @@ export type AuthorizeGatewayConnectParams = {
   rateLimitScope?: string;
   /** Trust X-Real-IP only when explicitly enabled. */
   allowRealIpFallback?: boolean;
+  /** State directory for loading the token store (revocation checks). */
+  stateDir?: string;
 };
 
 type TailscaleUser = {
@@ -241,6 +259,9 @@ export function resolveGatewayAuth(params: {
     if (authOverride.trustedProxy !== undefined) {
       authConfig.trustedProxy = authOverride.trustedProxy;
     }
+    if (authOverride.scopedTokens !== undefined) {
+      authConfig.scopedTokens = authOverride.scopedTokens;
+    }
   }
   const env = params.env ?? process.env;
   const resolvedCredentials = resolveGatewayCredentialsFromValues({
@@ -285,6 +306,7 @@ export function resolveGatewayAuth(params: {
     password,
     allowTailscale,
     trustedProxy,
+    scopedTokens: authConfig.scopedTokens,
   };
 }
 
@@ -429,6 +451,46 @@ export async function authorizeGatewayConnect(
         user: tailscaleCheck.user.login,
       };
     }
+  }
+
+  // Scoped token path: if the provided token has the osc_ prefix, validate it
+  // before falling through to legacy static token auth.
+  const scopedTokenCfg = auth.scopedTokens;
+  const providedToken = connectAuth?.token;
+  if (providedToken && isScopedToken(providedToken) && scopedTokenCfg?.enabled) {
+    const signingKey = auth.scopedTokenSigningKey;
+    if (!signingKey) {
+      return { ok: false, reason: "scoped_token_signing_key_missing" };
+    }
+    const result = validateScopedToken({ token: providedToken, signingKey });
+    if (!result.valid) {
+      limiter?.recordFailure(ip, AUTH_RATE_LIMIT_SCOPE_SCOPED_TOKEN);
+      return { ok: false, reason: `scoped_token_${result.reason}` };
+    }
+    // Check revocation in token store
+    const store = loadTokenStore(params.stateDir);
+    if (isTokenRevoked(store, result.payload.jti)) {
+      limiter?.recordFailure(ip, AUTH_RATE_LIMIT_SCOPE_SCOPED_TOKEN);
+      return { ok: false, reason: "scoped_token_revoked" };
+    }
+    limiter?.reset(ip, AUTH_RATE_LIMIT_SCOPE_SCOPED_TOKEN);
+    return {
+      ok: true,
+      method: "scoped-token",
+      user: result.payload.sub,
+      scopedTokenPayload: result.payload,
+    };
+  }
+
+  // If scoped tokens are enabled and legacy static tokens are disallowed,
+  // reject non-scoped tokens in token mode.
+  if (
+    scopedTokenCfg?.enabled &&
+    scopedTokenCfg.allowLegacyStaticTokens === false &&
+    auth.mode === "token"
+  ) {
+    limiter?.recordFailure(ip, rateLimitScope);
+    return { ok: false, reason: "legacy_static_tokens_disabled" };
   }
 
   if (auth.mode === "token") {

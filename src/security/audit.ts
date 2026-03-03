@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
@@ -10,8 +11,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import { CLI_DEFAULT_OPERATOR_SCOPES } from "../gateway/method-scopes.js";
 import { resolveGatewayProbeAuth } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
+import { loadTokenStore } from "../gateway/token-store.js";
 import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
@@ -655,6 +658,105 @@ function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
   return false;
 }
 
+function collectScopedTokenFindings(params: {
+  cfg: OpenClawConfig;
+  stateDir: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  execIcacls?: ExecFn;
+}): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const scopedCfg = params.cfg.gateway?.auth?.scopedTokens;
+
+  if (!scopedCfg?.enabled) {
+    findings.push({
+      checkId: "gateway.auth.scoped_tokens_disabled",
+      severity: "info",
+      title: "Scoped tokens are not enabled",
+      detail:
+        "Scoped token authentication is available but not enabled. " +
+        "All gateway access uses static shared secrets.",
+    });
+    return findings;
+  }
+
+  const allowLegacy = scopedCfg.allowLegacyStaticTokens !== false;
+  if (allowLegacy) {
+    findings.push({
+      checkId: "gateway.auth.legacy_static_tokens_allowed",
+      severity: "warn",
+      title: "Legacy static tokens still permitted",
+      detail:
+        "Scoped tokens are enabled but legacy static tokens are also allowed. " +
+        "A stolen static token grants full operator access with no expiry.",
+      remediation:
+        "Set gateway.auth.scopedTokens.allowLegacyStaticTokens to false after migrating all clients to scoped tokens.",
+    });
+  }
+
+  const defaultTtl = scopedCfg.defaultTtlSeconds ?? 86_400;
+  const sevenDays = 7 * 24 * 60 * 60;
+  if (defaultTtl > sevenDays) {
+    findings.push({
+      checkId: "gateway.auth.scoped_token_long_ttl",
+      severity: "warn",
+      title: "Default scoped token TTL exceeds 7 days",
+      detail: `gateway.auth.scopedTokens.defaultTtlSeconds is ${defaultTtl}s (${Math.round(defaultTtl / 86_400)}d). Long-lived tokens increase exposure if stolen.`,
+      remediation: "Reduce defaultTtlSeconds to 86400 (24h) or less and rotate tokens regularly.",
+    });
+  }
+
+  // Check for tokens with all operator scopes (effectively admin)
+  try {
+    const store = loadTokenStore(params.stateDir);
+    const allScopesSet = new Set(CLI_DEFAULT_OPERATOR_SCOPES);
+    for (const meta of Object.values(store.tokens)) {
+      if (meta.revokedAt) {
+        continue;
+      }
+      const tokenScopes = new Set(meta.scopes);
+      const hasAll = [...allScopesSet].every((s) => tokenScopes.has(s));
+      if (hasAll) {
+        findings.push({
+          checkId: "gateway.auth.scoped_token_all_scopes",
+          severity: "warn",
+          title: `Scoped token "${meta.subject}" has all operator scopes`,
+          detail: `Token ${meta.jti} (subject: ${meta.subject}) carries all operator scopes, making it effectively an admin token.`,
+          remediation:
+            "Create tokens with minimal required scopes (e.g. operator.read for read-only access).",
+        });
+      }
+    }
+  } catch {
+    // Token store unreadable; skip
+  }
+
+  // Check signing key permissions
+  const signingKeyPath =
+    scopedCfg.signingKeyPath ?? path.join(params.stateDir, "identity", "token-signing.key");
+  try {
+    if (fs.existsSync(signingKeyPath)) {
+      const stat = fs.statSync(signingKeyPath);
+      const mode = stat.mode & 0o777;
+      const groupReadable = (mode & 0o040) !== 0;
+      const worldReadable = (mode & 0o004) !== 0;
+      if (groupReadable || worldReadable) {
+        findings.push({
+          checkId: "gateway.auth.signing_key_permissions",
+          severity: "critical",
+          title: "Signing key file is readable by others",
+          detail: `${signingKeyPath} has mode ${mode.toString(8)}. Other users can read the signing key and forge tokens.`,
+          remediation: `chmod 600 ${signingKeyPath}`,
+        });
+      }
+    }
+  } catch {
+    // Skip if file can't be stat'd
+  }
+
+  return findings;
+}
+
 function collectBrowserControlFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -1013,6 +1115,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectSyncedFolderFindings({ stateDir, configPath }));
 
   findings.push(...collectGatewayConfigFindings(cfg, env));
+  findings.push(...collectScopedTokenFindings({ cfg, stateDir, env, platform, execIcacls }));
   findings.push(...collectBrowserControlFindings(cfg, env));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));

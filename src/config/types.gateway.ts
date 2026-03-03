@@ -131,6 +131,21 @@ export type GatewayTrustedProxyConfig = {
   allowUsers?: string[];
 };
 
+export type ScopedTokenConfig = {
+  /** Enable scoped token authentication. @default false */
+  enabled?: boolean;
+  /** Path to the HMAC-SHA256 signing key. @default ~/.openclaw/identity/token-signing.key */
+  signingKeyPath?: string;
+  /** Default TTL for new tokens in seconds. @default 86400 (24h) */
+  defaultTtlSeconds?: number;
+  /** Maximum allowed TTL for tokens in seconds. @default 2592000 (30d) */
+  maxTtlSeconds?: number;
+  /** Grace period in seconds during key rotation when old tokens still validate. @default 300 (5min) */
+  rotationGraceSeconds?: number;
+  /** Allow legacy static tokens alongside scoped tokens. @default true */
+  allowLegacyStaticTokens?: boolean;
+};
+
 export type GatewayAuthConfig = {
   /** Authentication mode for Gateway connections. Defaults to token when unset. */
   mode?: GatewayAuthMode;
@@ -147,6 +162,8 @@ export type GatewayAuthConfig = {
    * Required when mode is "trusted-proxy".
    */
   trustedProxy?: GatewayTrustedProxyConfig;
+  /** Scoped & short-lived token configuration. */
+  scopedTokens?: ScopedTokenConfig;
 };
 
 export type GatewayAuthRateLimitConfig = {
