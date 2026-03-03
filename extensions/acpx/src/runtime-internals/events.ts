@@ -265,6 +265,24 @@ export function parsePromptEventLine(
   }
 
   if (!isAcpJsonRpcMessage(parsed)) {
+    const bareType = asTrimmedString(parsed.type);
+    if (bareType === "done") {
+      const stopReason = asTrimmedString(parsed.stopReason);
+      return { type: "done", ...(stopReason ? { stopReason } : {}) };
+    }
+    if (bareType === "error") {
+      const message = asTrimmedString(parsed.message) || "acpx runtime error";
+      const codeValue = parsed.code;
+      return {
+        type: "error",
+        message,
+        code:
+          typeof codeValue === "number" && Number.isFinite(codeValue)
+            ? String(codeValue)
+            : asOptionalString(codeValue),
+        retryable: asOptionalBoolean(parsed.retryable),
+      };
+    }
     const fallbackError = toAcpxErrorEvent(parsed);
     if (fallbackError) {
       return {

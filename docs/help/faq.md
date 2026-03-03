@@ -23,7 +23,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [It is stuck on "wake up my friend" / onboarding will not hatch. What now?](#it-is-stuck-on-wake-up-my-friend-onboarding-will-not-hatch-what-now)
   - [Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?](#can-i-migrate-my-setup-to-a-new-machine-mac-mini-without-redoing-onboarding)
   - [Where do I see what is new in the latest version?](#where-do-i-see-what-is-new-in-the-latest-version)
-  - [I can't access docs.bot.ai (SSL error). What now?](#i-cant-access-docshanzoai-ssl-error-what-now)
+  - [I can't access docs.bot.ai (SSL error). What now?](#i-cant-access-docsbotai-ssl-error-what-now)
   - [What's the difference between stable and beta?](#whats-the-difference-between-stable-and-beta)
   - [How do I install the beta version, and what's the difference between beta and dev?](#how-do-i-install-the-beta-version-and-whats-the-difference-between-beta-and-dev)
   - [How do I try the latest bits?](#how-do-i-try-the-latest-bits)
