@@ -14,8 +14,13 @@ LABEL org.opencontainers.image.base.name="docker.io/library/node:22-bookworm" \
   org.opencontainers.image.description="OpenClaw gateway and CLI runtime container image"
 
 # Install Bun (required for build scripts)
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${PATH}"
+# SECURITY FIX: Use direct binary download from GitHub Releases instead of curl|bash
+# This avoids executing unsigned remote scripts and allows version pinning
+ARG BUN_VERSION="1.1.20"
+RUN curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" -o /tmp/bun.zip \
+    && unzip /tmp/bun.zip -d /usr/local/bin \
+    && rm /tmp/bun.zip \
+    && chmod +x /usr/local/bin/bun
 
 RUN corepack enable
 
