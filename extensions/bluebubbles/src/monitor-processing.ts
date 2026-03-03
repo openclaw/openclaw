@@ -535,6 +535,7 @@ export async function processMessage(
   });
   const effectiveAllowFrom = accessDecision.effectiveAllowFrom;
   const effectiveGroupAllowFrom = accessDecision.effectiveGroupAllowFrom;
+  const configuredGroupAllowFrom = accessDecision.configuredGroupAllowFrom;
   const groupAllowEntry = formatGroupAllowlistEntry({
     chatGuid: message.chatGuid,
     chatId: message.chatId ?? undefined,
@@ -686,10 +687,11 @@ export async function processMessage(
           chatIdentifier: message.chatIdentifier ?? undefined,
         })
       : false;
+  // Use configuredGroupAllowFrom (without pairing store) for command authorization
   const groupAllowedForCommands =
-    effectiveGroupAllowFrom.length > 0
+    configuredGroupAllowFrom.length > 0
       ? isAllowedBlueBubblesSender({
-          allowFrom: effectiveGroupAllowFrom,
+          allowFrom: configuredGroupAllowFrom,
           sender: message.senderId,
           chatId: message.chatId ?? undefined,
           chatGuid: message.chatGuid ?? undefined,
@@ -700,7 +702,7 @@ export async function processMessage(
     useAccessGroups,
     authorizers: [
       { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
-      { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+      { configured: configuredGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
     ],
     allowTextCommands: true,
     hasControlCommand: hasControlCmd,

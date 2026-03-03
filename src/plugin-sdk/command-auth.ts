@@ -89,19 +89,21 @@ export async function resolveSenderCommandAuthorization(
   });
   const effectiveAllowFrom = access.effectiveAllowFrom;
   const effectiveGroupAllowFrom = access.effectiveGroupAllowFrom;
+  // Use configuredGroupAllowFrom (without pairing store) for command authorization
+  const configuredGroupAllowFrom = access.configuredGroupAllowFrom;
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
   const senderAllowedForCommands = params.isSenderAllowed(
     params.senderId,
-    params.isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,
+    params.isGroup ? configuredGroupAllowFrom : effectiveAllowFrom,
   );
   const ownerAllowedForCommands = params.isSenderAllowed(params.senderId, effectiveAllowFrom);
-  const groupAllowedForCommands = params.isSenderAllowed(params.senderId, effectiveGroupAllowFrom);
+  const groupAllowedForCommands = params.isSenderAllowed(params.senderId, configuredGroupAllowFrom);
   const commandAuthorized = shouldComputeAuth
     ? params.resolveCommandAuthorizedFromAuthorizers({
         useAccessGroups,
         authorizers: [
           { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
-          { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+          { configured: configuredGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
         ],
       })
     : undefined;

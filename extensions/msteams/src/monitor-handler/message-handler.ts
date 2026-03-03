@@ -163,6 +163,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         ? (msteamsCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist")
         : "disabled";
     const effectiveGroupAllowFrom = resolvedAllowFromLists.effectiveGroupAllowFrom;
+    // Use configuredGroupAllowFrom (without pairing store) for command authorization
+    const configuredGroupAllowFrom = resolvedAllowFromLists.configuredGroupAllowFrom;
     const teamId = activity.channelData?.team?.id;
     const teamName = activity.channelData?.team?.name;
     const channelName = activity.channelData?.channel?.name;
@@ -283,7 +285,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
     const groupAllowedForCommands = isMSTeamsGroupAllowed({
       groupPolicy: "allowlist",
-      allowFrom: effectiveGroupAllowFrom,
+      allowFrom: configuredGroupAllowFrom,
       senderId,
       senderName,
       allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
@@ -293,7 +295,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       useAccessGroups,
       authorizers: [
         { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
-        { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+        { configured: configuredGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
       ],
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
