@@ -15,6 +15,7 @@ __pycache__/
 .DS_Store
 **/.DS_Store
 ui/src/ui/__screenshots__/
+ui/src/**/__screenshots__/
 ui/playwright-report/
 ui/test-results/
 packages/dashboard-next/.next/
@@ -81,6 +82,7 @@ apps/ios/*.mobileprovision
 # Local untracked files
 .local/
 docs/.local/
+logs/
 IDENTITY.md
 USER.md
 .tgz
