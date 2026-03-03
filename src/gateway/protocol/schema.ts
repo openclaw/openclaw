@@ -15,4 +15,5 @@ export * from "./schema/secrets.js";
 export * from "./schema/sessions.js";
 export * from "./schema/snapshot.js";
 export * from "./schema/types.js";
+export * from "./schema/upc.js";
 export * from "./schema/wizard.js";
