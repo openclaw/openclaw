@@ -12,7 +12,7 @@ read_when:
 
 `diffs` is an optional plugin tool that turns change content into a read-only diff artifact for agents.
 
-When the plugin is enabled, it can also provide a companion skill with usage guidance. It does not rely on unconditional `before_prompt_build` prompt injection.
+When the plugin is enabled, it also ships a companion skill with usage guidance.
 
 It accepts either:
 
