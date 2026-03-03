@@ -213,6 +213,16 @@ describe("workspace profiles", () => {
       );
       expect(getEffectiveProfile()).toBe("trimme");
     });
+
+    it("uses persisted profile in non-test runtime", async () => {
+      process.env.NODE_ENV = "production";
+      process.env.VITEST = "false";
+      const { getEffectiveProfile, mockReadFile } = await importWorkspace();
+      mockReadFile.mockReturnValue(
+        JSON.stringify({ activeProfile: "personal" }) as never,
+      );
+      expect(getEffectiveProfile()).toBe("personal");
+    });
   });
 
   // ─── setUIActiveProfile ──────────────────────────────────────────
@@ -474,6 +484,16 @@ describe("workspace profiles", () => {
       });
       expect(resolveWebChatDir()).toBe(join("/custom/state", "web-chat"));
     });
+
+    it("uses default web-chat dir in non-test runtime when no profile is set", async () => {
+      process.env.NODE_ENV = "production";
+      process.env.VITEST = "false";
+      const { resolveWebChatDir, mockReadFile } = await importWorkspace();
+      mockReadFile.mockImplementation(() => {
+        throw new Error("ENOENT");
+      });
+      expect(resolveWebChatDir()).toBe(join(DEFAULT_STATE_DIR, "web-chat"));
+    });
   });
 
   // ─── resolveWorkspaceRoot (profile-aware) ─────────────────────────
@@ -569,6 +589,21 @@ describe("workspace profiles", () => {
 
       expect(resolveWorkspaceRoot()).toBe(targetDir);
       expect(mockRename).toHaveBeenCalledWith(legacyDir, targetDir);
+    });
+
+    it("uses legacy workspace fallback when profile workspace is missing", async () => {
+      const { resolveWorkspaceRoot, setUIActiveProfile, mockExists, mockReadFile, mockRename } =
+        await importWorkspace();
+      const legacyDir = join(DEFAULT_STATE_DIR, "workspace-ironclaw");
+      mockReadFile.mockReturnValue(JSON.stringify({}) as never);
+      setUIActiveProfile("ironclaw");
+      mockRename.mockImplementation(() => {
+        throw new Error("EPERM");
+      });
+      mockExists.mockImplementation((p) => String(p) === legacyDir);
+
+      expect(resolveWorkspaceRoot()).toBe(legacyDir);
+      expect(mockRename).toHaveBeenCalled();
     });
   });
 
