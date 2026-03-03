@@ -76,8 +76,12 @@ export class A2AConcurrencyGateImpl implements A2AConcurrencyGate {
         const queue = this.waitQueues.get(agentId);
         if (queue) {
           const idx = queue.indexOf(entry);
-          if (idx !== -1) queue.splice(idx, 1);
-          if (queue.length === 0) this.waitQueues.delete(agentId);
+          if (idx !== -1) {
+            queue.splice(idx, 1);
+          }
+          if (queue.length === 0) {
+            this.waitQueues.delete(agentId);
+          }
         }
 
         log.warn(
@@ -108,23 +112,30 @@ export class A2AConcurrencyGateImpl implements A2AConcurrencyGate {
       this.waitQueues.set(agentId, queue);
     });
 
-    // Permit acquired after wait
-    this.active.set(agentId, (this.active.get(agentId) ?? 0) + 1);
+    // Permit was already transferred by release() — no need to increment active count.
   }
 
   release(agentId: string, _flowId: string): void {
-    const current = this.active.get(agentId) ?? 0;
-    if (current > 0) {
-      this.active.set(agentId, current - 1);
-      if (current - 1 === 0) this.active.delete(agentId);
-    }
-
-    // Wake next queued flow
+    // Wake next queued flow — transfer the permit directly without
+    // decrementing first, preventing a window where a new acquire()
+    // could slip in and exceed maxConcurrentFlows.
     const queue = this.waitQueues.get(agentId);
     if (queue && queue.length > 0) {
       const next = queue.shift()!;
-      if (queue.length === 0) this.waitQueues.delete(agentId);
+      if (queue.length === 0) {
+        this.waitQueues.delete(agentId);
+      }
       next.resolve();
+      return;
+    }
+
+    // No waiters — decrement active count
+    const current = this.active.get(agentId) ?? 0;
+    if (current > 0) {
+      this.active.set(agentId, current - 1);
+      if (current - 1 === 0) {
+        this.active.delete(agentId);
+      }
     }
   }
 
