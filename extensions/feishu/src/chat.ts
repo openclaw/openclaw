@@ -12,7 +12,7 @@ function json(data: unknown) {
   };
 }
 
-async function getChatInfo(client: Lark.Client, chatId: string) {
+export async function getChatInfo(client: Lark.Client, chatId: string) {
   const res = await client.im.chat.get({ path: { chat_id: chatId } });
   if (res.code !== 0) {
     throw new Error(res.msg);

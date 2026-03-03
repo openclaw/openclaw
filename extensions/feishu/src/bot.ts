@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { getChatInfo } from "./chat.js";
 import { tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -1208,6 +1209,20 @@ export async function handleFeishuMessage(params: {
           }))
         : undefined;
 
+    // Resolve group name for better session labeling (best-effort)
+    let groupSubject: string | undefined = isGroup ? ctx.chatId : undefined;
+    if (isGroup && (feishuCfg?.resolveGroupNames ?? true)) {
+      try {
+        const client = createFeishuClient(account);
+        const chatInfo = await getChatInfo(client, ctx.chatId);
+        if (chatInfo?.name) {
+          groupSubject = chatInfo.name;
+        }
+      } catch {
+        // Fall back to chatId on error
+      }
+    }
+
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
       BodyForAgent: messageBody,
@@ -1223,7 +1238,7 @@ export async function handleFeishuMessage(params: {
       SessionKey: route.sessionKey,
       AccountId: route.accountId,
       ChatType: isGroup ? "group" : "direct",
-      GroupSubject: isGroup ? ctx.chatId : undefined,
+      GroupSubject: groupSubject,
       SenderName: ctx.senderName ?? ctx.senderOpenId,
       SenderId: ctx.senderOpenId,
       Provider: "feishu" as const,
