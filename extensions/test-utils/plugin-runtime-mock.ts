@@ -75,10 +75,14 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         chunkMarkdownTextWithMode: vi.fn((text: string) => (text ? [text] : [])),
         chunkText: vi.fn((text: string) => (text ? [text] : [])),
         chunkTextWithMode: vi.fn((text: string) => (text ? [text] : [])),
-        resolveChunkMode: vi.fn(() => "length"),
+        resolveChunkMode: vi.fn(
+          () => "length",
+        ) as unknown as PluginRuntime["channel"]["text"]["resolveChunkMode"],
         resolveTextChunkLimit: vi.fn(() => 4000),
         hasControlCommand: vi.fn(() => false),
-        resolveMarkdownTableMode: vi.fn(() => "code"),
+        resolveMarkdownTableMode: vi.fn(
+          () => "code",
+        ) as unknown as PluginRuntime["channel"]["text"]["resolveMarkdownTableMode"],
         convertMarkdownTables: vi.fn((text: string) => text),
       },
       reply: {
