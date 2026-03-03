@@ -1,9 +1,20 @@
+import { resolveEnvApiKey } from "../agents/model-auth.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
 
 export type OllamaEmbeddingClient = {
+  baseUrl: string;
+  headers: Record<string, string>;
+  ssrfPolicy?: SsrFPolicy;
+  model: string;
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
+type OllamaEmbeddingClientConfig = Omit<OllamaEmbeddingClient, "embedBatch">;
+
+const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
+const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 
 function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
@@ -14,33 +25,83 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
   return sanitized.map((value) => value / magnitude);
 }
 
+function normalizeOllamaModel(model: string): string {
+  const trimmed = model.trim();
+  if (!trimmed) {
+    return DEFAULT_OLLAMA_EMBEDDING_MODEL;
+  }
+  if (trimmed.startsWith("ollama/")) {
+    return trimmed.slice("ollama/".length);
+  }
+  return trimmed;
+}
+
+function resolveOllamaApiBase(configuredBaseUrl?: string): string {
+  if (!configuredBaseUrl) {
+    return DEFAULT_OLLAMA_BASE_URL;
+  }
+  const trimmed = configuredBaseUrl.replace(/\/+$/, "");
+  return trimmed.replace(/\/v1$/i, "");
+}
+
+function resolveOllamaApiKey(options: EmbeddingProviderOptions): string | undefined {
+  const remoteApiKey = options.remote?.apiKey?.trim();
+  if (remoteApiKey) {
+    return remoteApiKey;
+  }
+  const providerApiKey = options.config.models?.providers?.ollama?.apiKey?.trim();
+  if (providerApiKey) {
+    return providerApiKey;
+  }
+  return resolveEnvApiKey("ollama")?.apiKey;
+}
+
+function resolveOllamaEmbeddingClient(
+  options: EmbeddingProviderOptions,
+): OllamaEmbeddingClientConfig {
+  const providerConfig = options.config.models?.providers?.ollama;
+  const rawBaseUrl = options.remote?.baseUrl?.trim() || providerConfig?.baseUrl?.trim();
+  const baseUrl = resolveOllamaApiBase(rawBaseUrl);
+  const model = normalizeOllamaModel(options.model);
+  const headerOverrides = Object.assign({}, providerConfig?.headers, options.remote?.headers);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...headerOverrides,
+  };
+  const apiKey = resolveOllamaApiKey(options);
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+  return {
+    baseUrl,
+    headers,
+    ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
+    model,
+  };
+}
+
 export async function createOllamaEmbeddingProvider(
   options: EmbeddingProviderOptions,
 ): Promise<{ provider: EmbeddingProvider; client: OllamaEmbeddingClient }> {
-  const baseUrl = options.remote?.baseUrl?.trim() || "http://127.0.0.1:11434";
-  const model = options.model || "nomic-embed-text";
-
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    ...options.remote?.headers,
-  };
-
-  // Ollama doesn't require an API key by default. If users set one (proxy), allow it.
-  const apiKey = options.remote?.apiKey;
-  if (apiKey) {
-    headers.authorization = `Bearer ${apiKey}`;
-  }
+  const client = resolveOllamaEmbeddingClient(options);
+  const embedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embeddings`;
 
   const embedOne = async (text: string): Promise<number[]> => {
-    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/embeddings`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ model, prompt: text }),
+    const json = await withRemoteHttpResponse({
+      url: embedUrl,
+      ssrfPolicy: client.ssrfPolicy,
+      init: {
+        method: "POST",
+        headers: client.headers,
+        body: JSON.stringify({ model: client.model, prompt: text }),
+      },
+      onResponse: async (res) => {
+        if (!res.ok) {
+          throw new Error(`Ollama embeddings HTTP ${res.status}: ${await res.text()}`);
+        }
+        return (await res.json()) as { embedding?: number[] };
+      },
     });
-    if (!res.ok) {
-      throw new Error(`Ollama embeddings HTTP ${res.status}: ${await res.text()}`);
-    }
-    const json = (await res.json()) as { embedding?: number[] };
     if (!Array.isArray(json.embedding)) {
       throw new Error(`Ollama embeddings response missing embedding[]`);
     }
@@ -49,24 +110,25 @@ export async function createOllamaEmbeddingProvider(
 
   const provider: EmbeddingProvider = {
     id: "ollama",
-    model,
+    model: client.model,
     embedQuery: embedOne,
     embedBatch: async (texts: string[]) => {
-      // Ollama /api/embeddings is single-prompt; parallelize with a small fanout.
-      // Keep it simple and let caller batch size control overall load.
+      // Ollama /api/embeddings accepts one prompt per request.
       return await Promise.all(texts.map(embedOne));
     },
   };
 
-  const client: OllamaEmbeddingClient = {
-    embedBatch: async (texts) => {
-      try {
-        return await provider.embedBatch(texts);
-      } catch (err) {
-        throw new Error(formatErrorMessage(err), { cause: err });
-      }
+  return {
+    provider,
+    client: {
+      ...client,
+      embedBatch: async (texts) => {
+        try {
+          return await provider.embedBatch(texts);
+        } catch (err) {
+          throw new Error(formatErrorMessage(err), { cause: err });
+        }
+      },
     },
   };
-
-  return { provider, client };
 }
