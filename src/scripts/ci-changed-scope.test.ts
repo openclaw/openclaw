@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
+
+const require = createRequire(import.meta.url);
+const { detectChangedScope } = require("../../scripts/ci-changed-scope.mjs") as {
+  detectChangedScope: (paths: string[]) => {
+    runNode: boolean;
+    runMacos: boolean;
+    runAndroid: boolean;
+    runWindows: boolean;
+  };
+};
 
 describe("detectChangedScope", () => {
   it("fails safe when no paths are provided", () => {
@@ -7,6 +16,7 @@ describe("detectChangedScope", () => {
       runNode: true,
       runMacos: true,
       runAndroid: true,
+      runWindows: true,
     });
   });
 
@@ -15,6 +25,7 @@ describe("detectChangedScope", () => {
       runNode: false,
       runMacos: false,
       runAndroid: false,
+      runWindows: false,
     });
   });
 
@@ -23,6 +34,7 @@ describe("detectChangedScope", () => {
       runNode: true,
       runMacos: false,
       runAndroid: false,
+      runWindows: true,
     });
   });
 
@@ -31,11 +43,13 @@ describe("detectChangedScope", () => {
       runNode: false,
       runMacos: true,
       runAndroid: false,
+      runWindows: false,
     });
     expect(detectChangedScope(["apps/shared/OpenClawKit/Sources/Foo.swift"])).toEqual({
       runNode: false,
       runMacos: true,
       runAndroid: true,
+      runWindows: false,
     });
   });
 
@@ -45,6 +59,7 @@ describe("detectChangedScope", () => {
         runNode: false,
         runMacos: false,
         runAndroid: false,
+        runWindows: false,
       },
     );
   });
@@ -54,12 +69,23 @@ describe("detectChangedScope", () => {
       runNode: false,
       runMacos: false,
       runAndroid: false,
+      runWindows: false,
     });
 
     expect(detectChangedScope(["assets/icon.png"])).toEqual({
       runNode: true,
       runMacos: false,
       runAndroid: false,
+      runWindows: false,
+    });
+  });
+
+  it("keeps windows lane off for non-runtime GitHub metadata files", () => {
+    expect(detectChangedScope([".github/labeler.yml"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
     });
   });
 });
