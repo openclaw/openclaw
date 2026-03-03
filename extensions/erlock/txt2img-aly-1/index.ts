@@ -238,56 +238,7 @@ export function createTxt2ImgAlyTool(options?: {
               description: "随机种子，范围[0,2147483647]",
             },
           },
-          anyOf: [
-            {
-              properties: {
-                negative_prompt: {
-                  anyOf: [
-                    {
-                      maxLength: 500,
-                      type: "string",
-                    },
-                    { type: "null" },
-                  ],
-                  default: null,
-                  description: "反向提示词，最长500字符",
-                  title: "Negative Prompt",
-                },
-                size: {
-                  anyOf: [
-                    {
-                      enum: ["1664*928", "1472*1104", "1328*1328", "1104*1472", "928*1664"],
-                      type: "string",
-                    },
-                    { type: "null" },
-                  ],
-                  default: null,
-                  description: "输出图像分辨率",
-                  title: "Size",
-                },
-                n: {
-                  anyOf: [{ const: 1, type: "integer" }, { type: "null" }],
-                  default: null,
-                  description: "生成图像数量，仅支持1",
-                  title: "N",
-                },
-                seed: {
-                  anyOf: [
-                    { exclusiveMaximum: 2147483648, minimum: 0, type: "integer" },
-                    { type: "null" },
-                  ],
-                  default: null,
-                  description: "随机种子，范围[0,2147483647]",
-                  title: "Seed",
-                },
-              },
-              title: "Parameters",
-              type: "object",
-            },
-            { type: "null" },
-          ],
-          default: null,
-          description: "图像生成参数",
+          additionalProperties: false,
         },
       },
       required: ["model", "input_"],

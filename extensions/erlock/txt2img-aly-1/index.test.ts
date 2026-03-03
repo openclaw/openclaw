@@ -20,6 +20,21 @@ describe("txt2img-aly-1 tool", () => {
     expect((result.content[0] as { text?: string }).text).toContain("qwen-image-max");
   });
 
+  it("exposes a simplified parameters schema", () => {
+    const tool = createTxt2ImgAlyTool();
+    const schema = tool.parameters as {
+      properties?: { parameters?: Record<string, unknown> };
+    };
+
+    const paramsSchema = schema.properties?.parameters;
+    expect(paramsSchema).toBeDefined();
+    expect(paramsSchema).not.toHaveProperty("anyOf");
+    expect(paramsSchema).toMatchObject({
+      additionalProperties: false,
+      type: "object",
+    });
+  });
+
   it("returns error when API key is missing", async () => {
     const tool = createTxt2ImgAlyTool();
     const current = process.env.OPENCLAW_ALY_API_KEY;
