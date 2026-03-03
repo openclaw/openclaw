@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
@@ -7,6 +8,7 @@ import type { CronStoreFile } from "./types.js";
 
 export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
 export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
+const serializedStoreCache = new Map<string, string>();
 
 export function resolveCronStorePath(storePath?: string) {
   if (storePath?.trim()) {
@@ -35,12 +37,15 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
         ? (parsed as Record<string, unknown>)
         : {};
     const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
-    return {
-      version: 1,
+    const store = {
+      version: 1 as const,
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
     };
+    serializedStoreCache.set(storePath, JSON.stringify(store, null, 2));
+    return store;
   } catch (err) {
     if ((err as { code?: unknown })?.code === "ENOENT") {
+      serializedStoreCache.delete(storePath);
       return { version: 1, jobs: [] };
     }
     throw err;
@@ -49,17 +54,24 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
 
 export async function saveCronStore(storePath: string, store: CronStoreFile) {
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  const { randomBytes } = await import("node:crypto");
   const json = JSON.stringify(store, null, 2);
-  let previous: string | null = null;
-  try {
-    previous = await fs.promises.readFile(storePath, "utf-8");
-  } catch (err) {
-    if ((err as { code?: unknown }).code !== "ENOENT") {
-      throw err;
+  const cached = serializedStoreCache.get(storePath);
+  if (cached === json) {
+    return;
+  }
+
+  let previous: string | null = cached ?? null;
+  if (previous === null) {
+    try {
+      previous = await fs.promises.readFile(storePath, "utf-8");
+    } catch (err) {
+      if ((err as { code?: unknown }).code !== "ENOENT") {
+        throw err;
+      }
     }
   }
   if (previous === json) {
+    serializedStoreCache.set(storePath, json);
     return;
   }
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
@@ -72,6 +84,7 @@ export async function saveCronStore(storePath: string, store: CronStoreFile) {
     }
   }
   await renameWithRetry(tmp, storePath);
+  serializedStoreCache.set(storePath, json);
 }
 
 const RENAME_MAX_RETRIES = 3;

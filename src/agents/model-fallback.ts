@@ -109,6 +109,62 @@ type ModelFallbackRunResult<T> = {
   attempts: FallbackAttempt[];
 };
 
+function buildFallbackSuccess<T>(params: {
+  result: T;
+  provider: string;
+  model: string;
+  attempts: FallbackAttempt[];
+}): ModelFallbackRunResult<T> {
+  return {
+    result: params.result,
+    provider: params.provider,
+    model: params.model,
+    attempts: params.attempts,
+  };
+}
+
+async function runFallbackCandidate<T>(params: {
+  run: (provider: string, model: string) => Promise<T>;
+  provider: string;
+  model: string;
+}): Promise<{ ok: true; result: T } | { ok: false; error: unknown }> {
+  try {
+    return {
+      ok: true,
+      result: await params.run(params.provider, params.model),
+    };
+  } catch (err) {
+    if (shouldRethrowAbort(err)) {
+      throw err;
+    }
+    return { ok: false, error: err };
+  }
+}
+
+async function runFallbackAttempt<T>(params: {
+  run: (provider: string, model: string) => Promise<T>;
+  provider: string;
+  model: string;
+  attempts: FallbackAttempt[];
+}): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
+  const runResult = await runFallbackCandidate({
+    run: params.run,
+    provider: params.provider,
+    model: params.model,
+  });
+  if (runResult.ok) {
+    return {
+      success: buildFallbackSuccess({
+        result: runResult.result,
+        provider: params.provider,
+        model: params.model,
+        attempts: params.attempts,
+      }),
+    };
+  }
+  return { error: runResult.error };
+}
+
 function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
   return a.provider === b.provider && a.model === b.model;
 }
@@ -444,18 +500,12 @@ export async function runWithModelFallback<T>(params: {
       }
     }
 
-    try {
-      const result = await params.run(candidate.provider, candidate.model);
-      return {
-        result,
-        provider: candidate.provider,
-        model: candidate.model,
-        attempts,
-      };
-    } catch (err) {
-      if (shouldRethrowAbort(err)) {
-        throw err;
-      }
+    const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
+    if ("success" in attemptRun) {
+      return attemptRun.success;
+    }
+    const err = attemptRun.error;
+    {
       // Context overflow errors should be handled by the inner runner's
       // compaction/retry logic, not by model fallback.  If one escapes as a
       // throw, rethrow it immediately rather than trying a different model
@@ -532,18 +582,12 @@ export async function runWithImageModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
-    try {
-      const result = await params.run(candidate.provider, candidate.model);
-      return {
-        result,
-        provider: candidate.provider,
-        model: candidate.model,
-        attempts,
-      };
-    } catch (err) {
-      if (shouldRethrowAbort(err)) {
-        throw err;
-      }
+    const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
+    if ("success" in attemptRun) {
+      return attemptRun.success;
+    }
+    {
+      const err = attemptRun.error;
       lastError = err;
       attempts.push({
         provider: candidate.provider,

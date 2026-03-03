@@ -45,15 +45,23 @@ function createCtx(resolved: BrowserServerState["resolved"]) {
   return { state, ctx };
 }
 
+async function createWorkProfileWithConfig(params: {
+  resolved: BrowserServerState["resolved"];
+  browserConfig: Record<string, unknown>;
+}) {
+  const { ctx, state } = createCtx(params.resolved);
+  vi.mocked(loadConfig).mockReturnValue({ browser: params.browserConfig });
+  const service = createBrowserProfilesService(ctx);
+  const result = await service.createProfile({ name: "work" });
+  return { result, state };
+}
+
 describe("BrowserProfilesService", () => {
   it("allocates next local port for new profiles", async () => {
-    const resolved = resolveBrowserConfig({});
-    const { ctx, state } = createCtx(resolved);
-
-    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const service = createBrowserProfilesService(ctx);
-    const result = await service.createProfile({ name: "work" });
+    const { result, state } = await createWorkProfileWithConfig({
+      resolved: resolveBrowserConfig({}),
+      browserConfig: { profiles: {} },
+    });
 
     expect(result.cdpPort).toBe(18801);
     expect(result.isRemote).toBe(false);
@@ -74,12 +82,10 @@ describe("BrowserProfilesService", () => {
       ...baseWithoutRange,
       controlPort: 30000,
     } as BrowserServerState["resolved"];
-    const { ctx, state } = createCtx(resolved);
-
-    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const service = createBrowserProfilesService(ctx);
-    const result = await service.createProfile({ name: "work" });
+    const { result, state } = await createWorkProfileWithConfig({
+      resolved,
+      browserConfig: { profiles: {} },
+    });
 
     expect(result.cdpPort).toBe(30009);
     expect(state.resolved.profiles.work?.cdpPort).toBe(30009);
@@ -87,13 +93,10 @@ describe("BrowserProfilesService", () => {
   });
 
   it("allocates from configured cdpPortRangeStart for new local profiles", async () => {
-    const resolved = resolveBrowserConfig({ cdpPortRangeStart: 19000 });
-    const { ctx, state } = createCtx(resolved);
-
-    vi.mocked(loadConfig).mockReturnValue({ browser: { cdpPortRangeStart: 19000, profiles: {} } });
-
-    const service = createBrowserProfilesService(ctx);
-    const result = await service.createProfile({ name: "work" });
+    const { result, state } = await createWorkProfileWithConfig({
+      resolved: resolveBrowserConfig({ cdpPortRangeStart: 19000 }),
+      browserConfig: { cdpPortRangeStart: 19000, profiles: {} },
+    });
 
     expect(result.cdpPort).toBe(19001);
     expect(result.isRemote).toBe(false);

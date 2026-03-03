@@ -187,9 +187,10 @@ export function createDiffsTool(params: {
           content: [
             {
               type: "text",
-              text:
-                `Diff ${image.format.toUpperCase()} generated at: ${artifactFile.path}\n` +
-                "Use the `message` tool with `path` or `filePath` to send this file.",
+              text: buildFileArtifactMessage({
+                format: image.format,
+                filePath: artifactFile.path,
+              }),
             },
           ],
           details: buildArtifactDetails({
@@ -257,10 +258,11 @@ export function createDiffsTool(params: {
           content: [
             {
               type: "text",
-              text:
-                `Diff viewer: ${viewerUrl}\n` +
-                `Diff ${image.format.toUpperCase()} generated at: ${artifactFile.path}\n` +
-                "Use the `message` tool with `path` or `filePath` to send this file.",
+              text: buildFileArtifactMessage({
+                format: image.format,
+                filePath: artifactFile.path,
+                viewerUrl,
+              }),
             },
           ],
           details: buildArtifactDetails({
@@ -328,6 +330,17 @@ function buildArtifactDetails(params: {
     fileMaxWidth: params.image.maxWidth,
     imageMaxWidth: params.image.maxWidth,
   };
+}
+
+function buildFileArtifactMessage(params: {
+  format: DiffOutputFormat;
+  filePath: string;
+  viewerUrl?: string;
+}): string {
+  const lines = params.viewerUrl ? [`Diff viewer: ${params.viewerUrl}`] : [];
+  lines.push(`Diff ${params.format.toUpperCase()} generated at: ${params.filePath}`);
+  lines.push("Use the `message` tool with `path` or `filePath` to send this file.");
+  return lines.join("\n");
 }
 
 async function renderDiffArtifactFile(params: {

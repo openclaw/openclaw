@@ -76,6 +76,28 @@ function resolveVersionFromPackage(command: string, cwd: string): string | null 
   }
 }
 
+function resolveVersionCheckResult(params: {
+  expectedVersion?: string;
+  installedVersion: string;
+  installCommand: string;
+}): AcpxVersionCheckResult {
+  if (params.expectedVersion && params.installedVersion !== params.expectedVersion) {
+    return {
+      ok: false,
+      reason: "version-mismatch",
+      message: `acpx version mismatch: found ${params.installedVersion}, expected ${params.expectedVersion}`,
+      expectedVersion: params.expectedVersion,
+      installCommand: params.installCommand,
+      installedVersion: params.installedVersion,
+    };
+  }
+  return {
+    ok: true,
+    version: params.installedVersion,
+    expectedVersion: params.expectedVersion,
+  };
+}
+
 export async function checkAcpxVersion(params: {
   command: string;
   cwd?: string;
@@ -131,21 +153,7 @@ export async function checkAcpxVersion(params: {
     if (hasExpectedVersion && isUnsupportedVersionProbe(result.stdout, result.stderr)) {
       const installedVersion = resolveVersionFromPackage(params.command, cwd);
       if (installedVersion) {
-        if (expectedVersion && installedVersion !== expectedVersion) {
-          return {
-            ok: false,
-            reason: "version-mismatch",
-            message: `acpx version mismatch: found ${installedVersion}, expected ${expectedVersion}`,
-            expectedVersion,
-            installCommand,
-            installedVersion,
-          };
-        }
-        return {
-          ok: true,
-          version: installedVersion,
-          expectedVersion,
-        };
+        return resolveVersionCheckResult({ expectedVersion, installedVersion, installCommand });
       }
     }
     const stderr = result.stderr.trim();
@@ -179,22 +187,7 @@ export async function checkAcpxVersion(params: {
     };
   }
 
-  if (expectedVersion && installedVersion !== expectedVersion) {
-    return {
-      ok: false,
-      reason: "version-mismatch",
-      message: `acpx version mismatch: found ${installedVersion}, expected ${expectedVersion}`,
-      expectedVersion,
-      installCommand,
-      installedVersion,
-    };
-  }
-
-  return {
-    ok: true,
-    version: installedVersion,
-    expectedVersion,
-  };
+  return resolveVersionCheckResult({ expectedVersion, installedVersion, installCommand });
 }
 
 let pendingEnsure: Promise<void> | null = null;

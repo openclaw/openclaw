@@ -630,6 +630,52 @@ describe("cron controller", () => {
           cooldownMs: 120_000,
           channel: "telegram",
           to: "123456",
+          mode: "announce",
+          accountId: undefined,
+        },
+      },
+    });
+  });
+
+  it("includes failure alert mode/accountId in cron.update patch", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-alert-mode" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-alert-mode" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronEditingJobId: "job-alert-mode",
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "alert mode job",
+        payloadKind: "agentTurn",
+        payloadText: "run it",
+        failureAlertMode: "custom",
+        failureAlertAfter: "1",
+        failureAlertDeliveryMode: "webhook",
+        failureAlertAccountId: "bot-a",
+      },
+    });
+
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]).toMatchObject({
+      id: "job-alert-mode",
+      patch: {
+        failureAlert: {
+          after: 1,
+          mode: "webhook",
+          accountId: "bot-a",
         },
       },
     });
@@ -780,6 +826,8 @@ describe("cron controller", () => {
     expect(state.cronForm.failureAlertCooldownSeconds).toBe("30");
     expect(state.cronForm.failureAlertChannel).toBe("telegram");
     expect(state.cronForm.failureAlertTo).toBe("999");
+    expect(state.cronForm.failureAlertDeliveryMode).toBe("announce");
+    expect(state.cronForm.failureAlertAccountId).toBe("");
   });
 
   it("validates key cron form errors", () => {
