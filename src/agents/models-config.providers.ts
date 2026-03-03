@@ -4,20 +4,6 @@ import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
-import {
-  KILOCODE_BASE_URL,
-  KILOCODE_DEFAULT_CONTEXT_WINDOW,
-  KILOCODE_DEFAULT_COST,
-  KILOCODE_DEFAULT_MAX_TOKENS,
-  KILOCODE_MODEL_CATALOG,
-} from "../providers/kilocode-shared.js";
-import {
-  QINIU_BASE_URL,
-  QINIU_DEFAULT_CONTEXT_WINDOW,
-  QINIU_DEFAULT_COST,
-  QINIU_DEFAULT_MAX_TOKENS,
-  QINIU_MODEL_CATALOG,
-} from "../providers/qiniu-shared.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
@@ -48,6 +34,7 @@ import {
   buildOpenAICodexProvider,
   buildOpenrouterProvider,
   buildQianfanProvider,
+  buildQiniuProvider,
   buildQwenPortalProvider,
   buildSyntheticProvider,
   buildTogetherProvider,
@@ -746,8 +733,8 @@ export async function resolveImplicitProviders(
   }
 
   const qiniuKey =
-    resolveEnvApiKeyVarName("qiniu") ??
-    resolveApiKeyFromProfiles({ provider: "qiniu", store: authStore });
+    resolveEnvApiKeyVarName("qiniu", env) ??
+    resolveApiKeyFromProfiles({ provider: "qiniu", store: authStore, env })?.apiKey;
   if (qiniuKey) {
     providers.qiniu = { ...buildQiniuProvider(), apiKey: qiniuKey };
   }

@@ -1,12 +1,12 @@
 ---
-summary: "Use Qiniu MaaS unified API to access many models in OpenClaw"
+summary: "Use Qiniu unified API to access many models in OpenClaw"
 read_when:
   - You want a single API key for many Chinese and international LLMs
-  - You need Qiniu MaaS setup guidance
+  - You need Qiniu setup guidance
 title: "Qiniu"
 ---
 
-# Qiniu MaaS Provider Guide
+# Qiniu Provider Guide
 
 Qiniu (七牛云) MaaS is a Chinese cloud provider that offers a **unified API** routing to many
 LLMs behind a single endpoint (`https://api.qnaigc.com`) and API key. It uses an
@@ -17,12 +17,12 @@ structure as Anthropic's API.
 
 1. A Qiniu Cloud account with MaaS access
 2. A minimum balance of ¥100 on your account
-3. An API key from the Qiniu MaaS console
+3. An API key from the Qiniu console
 4. OpenClaw installed on your system
 
 ## Getting Your API Key
 
-1. Visit the [Qiniu MaaS console](https://portal.qiniu.com/ai-inference/api-key)
+1. Visit the [Qiniu console](https://portal.qiniu.com/ai-inference/api-key)
 2. Create a new API key
 3. Copy the key — it starts with `sk-`
 
@@ -248,5 +248,5 @@ Add it manually under `models.providers.qiniu.models` in `openclaw.json`:
 - [OpenClaw Configuration](/gateway/configuration)
 - [Model Providers](/concepts/model-providers)
 - [Agent Setup](/concepts/agent)
-- [Qiniu MaaS OpenClaw Deployment Guide](https://developer.qiniu.com/las/13329/las-one-click-deployment-of-openclaw)
-- [Qiniu MaaS API Key Console](https://portal.qiniu.com/ai-inference/api-key)
+- [Qiniu OpenClaw Deployment Guide](https://developer.qiniu.com/las/13329/las-one-click-deployment-of-openclaw)
+- [Qiniu API Key Console](https://portal.qiniu.com/ai-inference/api-key)
