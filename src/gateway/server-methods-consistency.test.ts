@@ -39,6 +39,11 @@ describe("gateway method catalog consistency", () => {
     const supplementalHandlers = createExecApprovalHandlers(new ExecApprovalManager());
     const secretsHandlers = createSecretsHandlers({
       reloadSecrets: async () => ({ warningCount: 0 }),
+      resolveSecrets: async () => ({
+        assignments: [],
+        diagnostics: [],
+        inactiveRefPaths: [],
+      }),
     });
     const implementedHandlers = new Set([
       ...Object.keys(coreGatewayHandlers),
