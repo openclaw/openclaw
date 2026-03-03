@@ -218,13 +218,15 @@ function parseInteractiveCardContent(parsed: unknown): string {
     texts.push(card.title);
   }
 
-  // Extract header title if present (sits outside the elements array)
+  // Extract header title + subtitle if present (sit outside the elements array)
   if (card.header && typeof card.header === "object") {
-    texts.push(
-      ...extractCardTextElements([
-        { tag: "header", title: (card.header as Record<string, unknown>).title },
-      ]),
-    );
+    const h = card.header as Record<string, unknown>;
+    texts.push(...extractCardTextElements([{ tag: "header", title: h.title }]));
+    // subtitle: same shape as title — {tag: "plain_text"|"lark_md", content: "..."}
+    if (h.subtitle && typeof h.subtitle === "object") {
+      const c = (h.subtitle as Record<string, unknown>).content;
+      if (typeof c === "string" && c.trim()) texts.push(c.trim());
+    }
   }
 
   // Extract body — priority order:
