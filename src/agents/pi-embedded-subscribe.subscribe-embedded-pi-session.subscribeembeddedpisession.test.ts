@@ -279,6 +279,52 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads[1]?.delta).toBe(" world");
   });
 
+  it("emits partial updates from non-text assistant update snapshots", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+      assistantMessageEvent: { type: "start" },
+    });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello world" }],
+      },
+      assistantMessageEvent: { type: "toolcall_delta", delta: '{"path":"README.md"}' },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads[0]?.text).toBe("Hello");
+    expect(payloads[0]?.delta).toBe("Hello");
+    expect(payloads[1]?.text).toBe("Hello world");
+    expect(payloads[1]?.delta).toBe(" world");
+
+    expect(onPartialReply).toHaveBeenNthCalledWith(1, {
+      text: "Hello",
+      mediaUrls: undefined,
+    });
+    expect(onPartialReply).toHaveBeenNthCalledWith(2, {
+      text: "Hello world",
+      mediaUrls: undefined,
+    });
+  });
+
   it("emits agent events on message_end for non-streaming assistant text", () => {
     const { session, emit } = createStubSessionHarness();
 

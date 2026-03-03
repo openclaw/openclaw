@@ -124,6 +124,69 @@ export function handleMessageUpdate(
   }
 
   if (evtType !== "text_delta" && evtType !== "text_start" && evtType !== "text_end") {
+    // Some providers emit non-text assistant update events (for example
+    // toolcall/start markers) while still mutating the partial assistant text.
+    // Fall back to diffing the current assistant snapshot so channel preview
+    // streaming continues to receive incremental updates.
+    if (evtType) {
+      const snapshot = ctx
+        .stripBlockTags(extractAssistantText(msg), {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        })
+        .trim();
+      if (!snapshot) {
+        return;
+      }
+
+      const parsedSnapshot = parseReplyDirectives(stripTrailingDirective(snapshot));
+      const cleanedText = parsedSnapshot.text;
+      const mediaUrls = parsedSnapshot.mediaUrls;
+      const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
+      const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+
+      let shouldEmit = false;
+      let deltaText = "";
+      if (!cleanedText && !hasMedia) {
+        shouldEmit = false;
+      } else if (previousCleaned && !cleanedText.startsWith(previousCleaned)) {
+        shouldEmit = false;
+      } else {
+        deltaText = cleanedText.slice(previousCleaned.length);
+        shouldEmit = Boolean(deltaText || hasMedia);
+      }
+
+      ctx.state.lastStreamedAssistant = snapshot;
+      ctx.state.lastStreamedAssistantCleaned = cleanedText;
+
+      if (shouldEmit) {
+        emitAgentEvent({
+          runId: ctx.params.runId,
+          stream: "assistant",
+          data: {
+            text: cleanedText,
+            delta: deltaText,
+            mediaUrls: hasMedia ? mediaUrls : undefined,
+          },
+        });
+        void ctx.params.onAgentEvent?.({
+          stream: "assistant",
+          data: {
+            text: cleanedText,
+            delta: deltaText,
+            mediaUrls: hasMedia ? mediaUrls : undefined,
+          },
+        });
+        ctx.state.emittedAssistantUpdate = true;
+        if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
+          void ctx.params.onPartialReply({
+            text: cleanedText,
+            mediaUrls: hasMedia ? mediaUrls : undefined,
+          });
+        }
+      }
+    }
     return;
   }
 
