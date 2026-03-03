@@ -16,7 +16,10 @@
     "PS4",
     "GCONV_PATH",
     "IFS",
-    "SSLKEYLOGFILE"
+    "SSLKEYLOGFILE",
+    "GLIBC_TUNABLES",
+    "JAVA_TOOL_OPTIONS",
+    "JDK_JAVA_OPTIONS"
   ],
   "blockedOverrideKeys": ["HOME", "ZDOTDIR"],
   "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]
