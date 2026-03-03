@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import { noteSlackTokenHelp } from "./slack.js";
 
 type NoteRecord = { message: string; title?: string };
+const originalStdoutIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 
 function createBasePrompter(note: WizardPrompter["note"]): WizardPrompter {
   return {
@@ -21,25 +22,30 @@ function createBasePrompter(note: WizardPrompter["note"]): WizardPrompter {
 }
 
 describe("noteSlackTokenHelp", () => {
-  it("emits manifest through codeBlock when prompter supports raw blocks", async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalStdoutIsTTY) {
+      Object.defineProperty(process.stdout, "isTTY", originalStdoutIsTTY);
+    } else {
+      Reflect.deleteProperty(process.stdout, "isTTY");
+    }
+  });
+
+  it("prints manifest as raw JSON on TTY for copy/paste", async () => {
     const notes: NoteRecord[] = [];
-    const blocks: Array<{ code: string; language?: string; title?: string }> = [];
     const prompter = createBasePrompter(async (message, title) => {
       notes.push({ message, title });
     });
-    prompter.codeBlock = async (params) => {
-      blocks.push(params);
-    };
+    const writeSpy = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
 
     await noteSlackTokenHelp(prompter, "Ops Bot");
 
     expect(notes).toHaveLength(1);
     expect(notes[0]?.message).toContain("use the JSON block shown after this note");
     expect(notes[0]?.message).not.toContain('"display_information"');
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]?.title).toBe("Manifest (JSON)");
-    expect(blocks[0]?.language).toBe("json");
-    const parsed = JSON.parse(blocks[0]?.code ?? "{}") as {
+    const writes = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
+    const parsed = JSON.parse(writes) as {
       display_information?: { name?: string };
       features?: { slash_commands?: Array<{ command?: string }> };
     };
@@ -47,11 +53,12 @@ describe("noteSlackTokenHelp", () => {
     expect(parsed.features?.slash_commands?.[0]?.command).toBe("/openclaw");
   });
 
-  it("falls back to note-only output when codeBlock is unavailable", async () => {
+  it("falls back to note output for non-TTY prompters", async () => {
     const notes: NoteRecord[] = [];
     const prompter = createBasePrompter(async (message, title) => {
       notes.push({ message, title });
     });
+    Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
 
     await noteSlackTokenHelp(prompter, "OpenClaw");
 

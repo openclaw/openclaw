@@ -69,13 +69,6 @@ class WizardSessionPrompter implements WizardPrompter {
     await this.prompt({ type: "note", title, message, executor: "client" });
   }
 
-  async codeBlock(params: { code: string; language?: string; title?: string }): Promise<void> {
-    const language = params.language?.trim() || "";
-    const fence = `\`\`\`${language}`;
-    const message = [fence, params.code, "```"].join("\n");
-    await this.note(message, params.title);
-  }
-
   async select<T>(params: {
     message: string;
     options: Array<{ value: T; label: string; hint?: string }>;
