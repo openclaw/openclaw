@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import http from "node:http";
 import { URL } from "node:url";
 import {
@@ -18,6 +17,12 @@ import type { NormalizedEvent, WebhookContext } from "./types.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
+
+type WebhookResponsePayload = {
+  statusCode: number;
+  body: string;
+  headers?: Record<string, string>;
+};
 
 /**
  * HTTP server for receiving voice call webhooks from providers.
@@ -282,52 +287,49 @@ export class VoiceCallWebhookServer {
     res: http.ServerResponse,
     webhookPath: string,
   ): Promise<void> {
+    const payload = await this.runWebhookPipeline(req, webhookPath);
+    this.writeWebhookResponse(res, payload);
+  }
+
+  private async runWebhookPipeline(
+    req: http.IncomingMessage,
+    webhookPath: string,
+  ): Promise<WebhookResponsePayload> {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
-    // Serve hold-music TwiML for call-waiting queue (Twilio waitUrl sends GET or POST)
     if (url.pathname === "/voice/hold-music") {
-      res.setHeader("Content-Type", "text/xml");
-      res.end(`<?xml version="1.0" encoding="UTF-8"?>
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "text/xml" },
+        body: `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="alice">All agents are currently busy. Please hold.</Say>
   <Play loop="0">http://com.twilio.sounds.music.s3.amazonaws.com/MARKOVICHAMP-B8.mp3</Play>
-</Response>`);
-      return;
+</Response>`,
+      };
     }
 
-    // Check path
     if (!this.isWebhookPathMatch(url.pathname, webhookPath)) {
-      res.statusCode = 404;
-      res.end("Not Found");
-      return;
+      return { statusCode: 404, body: "Not Found" };
     }
 
-    // Only accept POST
     if (req.method !== "POST") {
-      res.statusCode = 405;
-      res.end("Method Not Allowed");
-      return;
+      return { statusCode: 405, body: "Method Not Allowed" };
     }
 
-    // Read body
     let body = "";
     try {
       body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES);
     } catch (err) {
       if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-        res.statusCode = 413;
-        res.end("Payload Too Large");
-        return;
+        return { statusCode: 413, body: "Payload Too Large" };
       }
       if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-        res.statusCode = 408;
-        res.end(requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
-        return;
+        return { statusCode: 408, body: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") };
       }
       throw err;
     }
 
-    // Build webhook context
     const ctx: WebhookContext = {
       headers: req.headers as Record<string, string | string[] | undefined>,
       rawBody: body,
@@ -337,49 +339,51 @@ export class VoiceCallWebhookServer {
       remoteAddress: req.socket.remoteAddress ?? undefined,
     };
 
-    // Verify signature
     const verification = this.provider.verifyWebhook(ctx);
     if (!verification.ok) {
       console.warn(`[voice-call] Webhook verification failed: ${verification.reason}`);
-      res.statusCode = 401;
-      res.end("Unauthorized");
-      return;
+      return { statusCode: 401, body: "Unauthorized" };
     }
     if (!verification.verifiedRequestKey) {
       console.warn("[voice-call] Webhook verification succeeded without request identity key");
-      res.statusCode = 401;
-      res.end("Unauthorized");
-      return;
+      return { statusCode: 401, body: "Unauthorized" };
     }
 
-    // Parse events
-    const result = this.provider.parseWebhookEvent(ctx, {
+    const parsed = this.provider.parseWebhookEvent(ctx, {
       verifiedRequestKey: verification.verifiedRequestKey,
     });
 
-    // Process each event
     if (verification.isReplay) {
       console.warn("[voice-call] Replay detected; skipping event side effects");
     } else {
-      for (const event of result.events) {
-        try {
-          this.manager.processEvent(event);
-        } catch (err) {
-          console.error(`[voice-call] Error processing event ${event.type}:`, err);
-        }
-      }
+      this.processParsedEvents(parsed.events);
     }
 
-    // Send response
-    res.statusCode = result.statusCode || 200;
+    return {
+      statusCode: parsed.statusCode || 200,
+      headers: parsed.providerResponseHeaders,
+      body: parsed.providerResponseBody || "OK",
+    };
+  }
 
-    if (result.providerResponseHeaders) {
-      for (const [key, value] of Object.entries(result.providerResponseHeaders)) {
+  private processParsedEvents(events: NormalizedEvent[]): void {
+    for (const event of events) {
+      try {
+        this.manager.processEvent(event);
+      } catch (err) {
+        console.error(`[voice-call] Error processing event ${event.type}:`, err);
+      }
+    }
+  }
+
+  private writeWebhookResponse(res: http.ServerResponse, payload: WebhookResponsePayload): void {
+    res.statusCode = payload.statusCode;
+    if (payload.headers) {
+      for (const [key, value] of Object.entries(payload.headers)) {
         res.setHeader(key, value);
       }
     }
-
-    res.end(result.providerResponseBody || "OK");
+    res.end(payload.body);
   }
 
   /**
@@ -437,132 +441,4 @@ export class VoiceCallWebhookServer {
       console.error(`[voice-call] Auto-response error:`, err);
     }
   }
-}
-
-/**
- * Resolve the current machine's Tailscale DNS name.
- */
-export type TailscaleSelfInfo = {
-  dnsName: string | null;
-  nodeId: string | null;
-};
-
-/**
- * Run a tailscale command with timeout, collecting stdout.
- */
-function runTailscaleCommand(
-  args: string[],
-  timeoutMs = 2500,
-): Promise<{ code: number; stdout: string }> {
-  return new Promise((resolve) => {
-    const proc = spawn("tailscale", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    proc.stdout.on("data", (data) => {
-      stdout += data;
-    });
-
-    const timer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      resolve({ code: -1, stdout: "" });
-    }, timeoutMs);
-
-    proc.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code: code ?? -1, stdout });
-    });
-  });
-}
-
-export async function getTailscaleSelfInfo(): Promise<TailscaleSelfInfo | null> {
-  const { code, stdout } = await runTailscaleCommand(["status", "--json"]);
-  if (code !== 0) {
-    return null;
-  }
-
-  try {
-    const status = JSON.parse(stdout);
-    return {
-      dnsName: status.Self?.DNSName?.replace(/\.$/, "") || null,
-      nodeId: status.Self?.ID || null,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export async function getTailscaleDnsName(): Promise<string | null> {
-  const info = await getTailscaleSelfInfo();
-  return info?.dnsName ?? null;
-}
-
-export async function setupTailscaleExposureRoute(opts: {
-  mode: "serve" | "funnel";
-  path: string;
-  localUrl: string;
-}): Promise<string | null> {
-  const dnsName = await getTailscaleDnsName();
-  if (!dnsName) {
-    console.warn("[voice-call] Could not get Tailscale DNS name");
-    return null;
-  }
-
-  const { code } = await runTailscaleCommand([
-    opts.mode,
-    "--bg",
-    "--yes",
-    "--set-path",
-    opts.path,
-    opts.localUrl,
-  ]);
-
-  if (code === 0) {
-    const publicUrl = `https://${dnsName}${opts.path}`;
-    console.log(`[voice-call] Tailscale ${opts.mode} active: ${publicUrl}`);
-    return publicUrl;
-  }
-
-  console.warn(`[voice-call] Tailscale ${opts.mode} failed`);
-  return null;
-}
-
-export async function cleanupTailscaleExposureRoute(opts: {
-  mode: "serve" | "funnel";
-  path: string;
-}): Promise<void> {
-  await runTailscaleCommand([opts.mode, "off", opts.path]);
-}
-
-/**
- * Setup Tailscale serve/funnel for the webhook server.
- * This is a helper that shells out to `tailscale serve` or `tailscale funnel`.
- */
-export async function setupTailscaleExposure(config: VoiceCallConfig): Promise<string | null> {
-  if (config.tailscale.mode === "off") {
-    return null;
-  }
-
-  const mode = config.tailscale.mode === "funnel" ? "funnel" : "serve";
-  // Include the path suffix so tailscale forwards to the correct endpoint
-  // (tailscale strips the mount path prefix when proxying)
-  const localUrl = `http://127.0.0.1:${config.serve.port}${config.serve.path}`;
-  return setupTailscaleExposureRoute({
-    mode,
-    path: config.tailscale.path,
-    localUrl,
-  });
-}
-
-/**
- * Cleanup Tailscale serve/funnel.
- */
-export async function cleanupTailscaleExposure(config: VoiceCallConfig): Promise<void> {
-  if (config.tailscale.mode === "off") {
-    return;
-  }
-
-  const mode = config.tailscale.mode === "funnel" ? "funnel" : "serve";
-  await cleanupTailscaleExposureRoute({ mode, path: config.tailscale.path });
 }
