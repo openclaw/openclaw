@@ -1,14 +1,14 @@
 import { html, nothing } from "lit";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
-import { refreshChatAvatar } from "./app-chat.ts";
+import { CHAT_SESSIONS_ACTIVE_MINUTES, refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
+import { cloneAgent, createAgent, loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -62,6 +62,7 @@ import {
   saveSkillApiKey,
   updateSkillEdit,
   updateSkillEnabled,
+  updateSkillType,
 } from "./controllers/skills.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
@@ -587,6 +588,45 @@ export function renderApp(state: AppViewState) {
                     void loadAgentIdentities(state, agentIds);
                   }
                 },
+                onCreateGeneral: async () => {
+                  const created = await createAgent(state, {
+                    name: "General",
+                    workspace: "~/.openclaw/workspace-general",
+                  });
+                  if (!created?.ok) {
+                    return;
+                  }
+                  await loadAgents(state);
+                  state.agentsSelectedId = created.agentId;
+                  void loadAgentIdentity(state, created.agentId);
+                  if (state.agentsPanel === "tools") {
+                    void loadToolsCatalog(state, created.agentId);
+                  }
+                  if (state.agentsPanel === "files") {
+                    void loadAgentFiles(state, created.agentId);
+                  }
+                  if (state.agentsPanel === "skills") {
+                    void loadAgentSkills(state, created.agentId);
+                  }
+                },
+                onCloneAgent: async (sourceAgentId) => {
+                  const cloned = await cloneAgent(state, { sourceAgentId });
+                  if (!cloned?.ok) {
+                    return;
+                  }
+                  await loadAgents(state);
+                  state.agentsSelectedId = cloned.agentId;
+                  void loadAgentIdentity(state, cloned.agentId);
+                  if (state.agentsPanel === "tools") {
+                    void loadToolsCatalog(state, cloned.agentId);
+                  }
+                  if (state.agentsPanel === "files") {
+                    void loadAgentFiles(state, cloned.agentId);
+                  }
+                  if (state.agentsPanel === "skills") {
+                    void loadAgentSkills(state, cloned.agentId);
+                  }
+                },
                 onSelectAgent: (agentId) => {
                   if (state.agentsSelectedId === agentId) {
                     return;
@@ -912,6 +952,12 @@ export function renderApp(state: AppViewState) {
                 onToggle: (key, enabled) => updateSkillEnabled(state, key, enabled),
                 onEdit: (key, value) => updateSkillEdit(state, key, value),
                 onSaveKey: (key) => saveSkillApiKey(state, key),
+                onSetType: (skillKey, skillName, type) =>
+                  updateSkillType(state, {
+                    skillKey,
+                    skillName,
+                    type,
+                  }),
                 onInstall: (skillKey, name, installId) =>
                   installSkill(state, skillKey, name, installId),
               })
@@ -1018,8 +1064,12 @@ export function renderApp(state: AppViewState) {
                   });
                   void state.loadAssistantIdentity();
                   void loadChatHistory(state);
+                  void loadSessions(state, {
+                    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+                  });
                   void refreshChatAvatar(state);
                 },
+                agents: state.agentsList,
                 thinkingLevel: state.chatThinkingLevel,
                 showThinking,
                 loading: state.chatLoading,
@@ -1041,7 +1091,11 @@ export function renderApp(state: AppViewState) {
                 focusMode: chatFocus,
                 onRefresh: () => {
                   state.resetToolStream();
-                  return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
+                  return Promise.all([
+                    loadChatHistory(state),
+                    loadSessions(state, { activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES }),
+                    refreshChatAvatar(state),
+                  ]);
                 },
                 onToggleFocusMode: () => {
                   if (state.onboarding) {

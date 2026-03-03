@@ -329,6 +329,31 @@ export type AgentsListResult = {
   agents: GatewayAgentRow[];
 };
 
+export type AgentsCreateResult = {
+  ok: true;
+  agentId: string;
+  name: string;
+  workspace: string;
+};
+
+export type AgentsCloneResult = {
+  ok: true;
+  sourceAgentId: string;
+  agentId: string;
+  name: string;
+  workspace: string;
+  copied: {
+    workspace: boolean;
+    agentDir: boolean;
+    sessionsStore: boolean;
+    sessionsTranscripts: boolean;
+    memoryStore: boolean;
+    cronJobs: number;
+    bindings: number;
+  };
+  warnings?: string[];
+};
+
 export type ToolCatalogProfile = {
   id: "minimal" | "coding" | "messaging" | "full";
   label: string;
@@ -569,7 +594,7 @@ export type SkillsStatusConfigCheck = {
 
 export type SkillInstallOption = {
   id: string;
-  kind: "brew" | "node" | "go" | "uv";
+  kind: "brew" | "node" | "go" | "uv" | "download";
   label: string;
   bins: string[];
 };
@@ -589,14 +614,18 @@ export type SkillStatusEntry = {
   disabled: boolean;
   blockedByAllowlist: boolean;
   eligible: boolean;
+  type?: "default" | "optional";
+  selectedByAgents?: string[];
   requirements: {
     bins: string[];
+    anyBins?: string[];
     env: string[];
     config: string[];
     os: string[];
   };
   missing: {
     bins: string[];
+    anyBins?: string[];
     env: string[];
     config: string[];
     os: string[];
@@ -608,6 +637,7 @@ export type SkillStatusEntry = {
 export type SkillStatusReport = {
   workspaceDir: string;
   managedSkillsDir: string;
+  defaultSkills?: string[];
   skills: SkillStatusEntry[];
 };
 

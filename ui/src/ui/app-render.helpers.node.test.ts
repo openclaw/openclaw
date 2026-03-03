@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   isCronSessionKey,
   parseSessionKey,
+  resolveChatControlsRunStatus,
   resolveSessionDisplayName,
+  resolveSessionOptions,
 } from "./app-render.helpers.ts";
 import type { SessionsListResult } from "./types.ts";
 
@@ -10,6 +12,16 @@ type SessionRow = SessionsListResult["sessions"][number];
 
 function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
   return { kind: "direct", updatedAt: 0, ...overrides };
+}
+
+function sessionsResult(sessions: SessionRow[]): SessionsListResult {
+  return {
+    ts: 0,
+    path: "sessions.json",
+    count: sessions.length,
+    defaults: { model: null, contextTokens: null },
+    sessions,
+  };
 }
 
 /* ================================================================
@@ -282,5 +294,89 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("resolveChatControlsRunStatus", () => {
+  it("returns idle when no run is active", () => {
+    const result = resolveChatControlsRunStatus({
+      chatSending: false,
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatQueue: [],
+    });
+    expect(result).toEqual({
+      phase: "idle",
+      label: "Idle",
+      elapsedLabel: null,
+      queuedCount: 0,
+    });
+  });
+
+  it("returns waiting with elapsed time when run is active but no stream text", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    const result = resolveChatControlsRunStatus({
+      chatSending: false,
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 7_000,
+      chatQueue: [{ id: "q-1", text: "queued", createdAt: 6_000 }],
+    });
+    expect(result).toEqual({
+      phase: "waiting",
+      label: "Running",
+      elapsedLabel: "3s",
+      queuedCount: 1,
+    });
+    nowSpy.mockRestore();
+  });
+
+  it("returns streaming when stream text is present", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(71_000);
+    const result = resolveChatControlsRunStatus({
+      chatSending: false,
+      chatRunId: "run-2",
+      chatStream: "hello",
+      chatStreamStartedAt: 6_000,
+      chatQueue: [],
+    });
+    expect(result).toEqual({
+      phase: "streaming",
+      label: "Streaming",
+      elapsedLabel: "1m 05s",
+      queuedCount: 0,
+    });
+    nowSpy.mockRestore();
+  });
+});
+
+describe("resolveSessionOptions", () => {
+  it("keeps options scoped to the active agent", () => {
+    const options = resolveSessionOptions(
+      "agent:coordi:main",
+      sessionsResult([
+        row({ key: "agent:main:main", displayName: "Main Primary" }),
+        row({ key: "agent:coordi:main", displayName: "Coordi Main" }),
+        row({ key: "agent:coordi:cron:daily", displayName: "Daily" }),
+      ]),
+      "agent:main:main",
+    );
+
+    expect(options.map((entry) => entry.key)).toEqual([
+      "agent:coordi:main",
+      "agent:coordi:cron:daily",
+    ]);
+  });
+
+  it("omits mainSessionKey when it belongs to a different agent", () => {
+    const options = resolveSessionOptions(
+      "agent:coordi:main",
+      sessionsResult([row({ key: "agent:coordi:main", displayName: "Coordi Main" })]),
+      "agent:main:main",
+    );
+
+    expect(options.some((entry) => entry.key === "agent:main:main")).toBe(false);
+    expect(options.map((entry) => entry.key)).toEqual(["agent:coordi:main"]);
   });
 });

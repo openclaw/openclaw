@@ -1699,6 +1699,62 @@
   line-height: 1;
 }
 
+.chat-run-status {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-strong);
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.chat-run-status__icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  color: currentColor;
+}
+
+.chat-run-status__icon svg {
+  width: 100%;
+  height: 100%;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-run-status__icon--spinning {
+  animation: compaction-spin 1s linear infinite;
+}
+
+.chat-run-status__elapsed,
+.chat-run-status__queue {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.chat-run-status--sending,
+.chat-run-status--streaming,
+.chat-run-status--waiting {
+  color: var(--info);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.chat-run-status--idle {
+  color: var(--ok);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
 /* New messages indicator */
 .chat-new-messages {
   align-self: center;
@@ -2223,6 +2279,31 @@
   display: grid;
   gap: 12px;
   align-self: start;
+}
+
+.agents-sidebar-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.agents-sidebar-header__meta {
+  min-width: 0;
+}
+
+.agents-sidebar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.agents-sidebar-actions .btn {
+  white-space: nowrap;
 }
 
 .agents-main {

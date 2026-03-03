@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import type { SkillMessageMap } from "../controllers/skills.ts";
+import type { SkillClassificationType, SkillMessageMap } from "../controllers/skills.ts";
 import { clampText } from "../format.ts";
 import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import { groupSkills } from "./skills-grouping.ts";
@@ -22,11 +22,13 @@ export type SkillsProps = {
   onToggle: (skillKey: string, enabled: boolean) => void;
   onEdit: (skillKey: string, value: string) => void;
   onSaveKey: (skillKey: string) => void;
+  onSetType: (skillKey: string, skillName: string, type: SkillClassificationType) => void;
   onInstall: (skillKey: string, name: string, installId: string) => void;
 };
 
 export function renderSkills(props: SkillsProps) {
   const skills = props.report?.skills ?? [];
+  const defaultCount = skills.filter((skill) => (skill.type ?? "optional") === "default").length;
   const filter = props.filter.trim().toLowerCase();
   const filtered = filter
     ? skills.filter((skill) =>
@@ -56,7 +58,7 @@ export function renderSkills(props: SkillsProps) {
             placeholder="Search skills"
           />
         </label>
-        <div class="muted">${filtered.length} shown</div>
+        <div class="muted">${filtered.length} shown · ${defaultCount} default</div>
       </div>
 
       ${
@@ -95,6 +97,9 @@ export function renderSkills(props: SkillsProps) {
 
 function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
   const busy = props.busyKey === skill.skillKey;
+  const skillType = skill.type ?? "optional";
+  const selectedByAgents = skill.selectedByAgents ?? [];
+  const nextType: SkillClassificationType = skillType === "default" ? "optional" : "default";
   const apiKey = props.edits[skill.skillKey] ?? "";
   const message = props.messages[skill.skillKey] ?? null;
   const canInstall = skill.install.length > 0 && skill.missing.bins.length > 0;
@@ -109,6 +114,15 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
         </div>
         <div class="list-sub">${clampText(skill.description, 140)}</div>
         ${renderSkillStatusChips({ skill, showBundledBadge })}
+        ${
+          selectedByAgents.length > 0
+            ? html`
+              <div class="muted" style="margin-top: 6px;">
+                Selected by agents: ${selectedByAgents.join(", ")}
+              </div>
+            `
+            : nothing
+        }
         ${
           missing.length > 0
             ? html`
@@ -130,6 +144,13 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
       </div>
       <div class="list-meta">
         <div class="row" style="justify-content: flex-end; flex-wrap: wrap;">
+          <button
+            class="btn"
+            ?disabled=${busy}
+            @click=${() => props.onSetType(skill.skillKey, skill.name, nextType)}
+          >
+            ${skillType === "default" ? "Set optional" : "Set default"}
+          </button>
           <button
             class="btn"
             ?disabled=${busy}

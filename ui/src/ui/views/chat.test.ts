@@ -17,6 +17,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
   return {
     sessionKey: "main",
     onSessionKeyChange: () => undefined,
+    agents: null,
     thinkingLevel: null,
     showThinking: false,
     loading: false,
@@ -50,6 +51,33 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
 }
 
 describe("chat view", () => {
+  it("shows explicit idle run status when no run is active", () => {
+    const container = document.createElement("div");
+    render(renderChat(createProps()), container);
+
+    const indicator = container.querySelector(".chat-run-status--idle");
+    expect(indicator).not.toBeNull();
+    expect(indicator?.textContent).toContain("Idle (no active run)");
+  });
+
+  it("shows explicit running status while waiting for a streamed response", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          canAbort: true,
+          stream: "",
+          streamStartedAt: Date.now() - 4_000,
+        }),
+      ),
+      container,
+    );
+
+    const indicator = container.querySelector(".chat-run-status--waiting");
+    expect(indicator).not.toBeNull();
+    expect(indicator?.textContent).toContain("Agent is running");
+  });
+
   it("renders compacting indicator as a badge", () => {
     const container = document.createElement("div");
     render(

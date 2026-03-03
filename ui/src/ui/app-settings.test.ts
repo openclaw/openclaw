@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setTabFromRoute } from "./app-settings.ts";
+import { applySettingsFromUrl, setTabFromRoute } from "./app-settings.ts";
 import type { Tab } from "./navigation.ts";
 
 type SettingsHost = Parameters<typeof setTabFromRoute>[0] & {
@@ -35,6 +35,7 @@ const createHost = (tab: Tab): SettingsHost => ({
   themeMediaHandler: null,
   logsPollInterval: null,
   debugPollInterval: null,
+  pendingGatewayUrl: null,
 });
 
 describe("setTabFromRoute", () => {
@@ -66,5 +67,36 @@ describe("setTabFromRoute", () => {
 
     setTabFromRoute(host, "chat");
     expect(host.debugPollInterval).toBeNull();
+  });
+});
+
+describe("applySettingsFromUrl", () => {
+  afterEach(() => {
+    window.history.replaceState({}, "", "/");
+    window.localStorage.clear();
+  });
+
+  it("auto-applies loopback gatewayUrl without confirmation", () => {
+    const host = createHost("chat");
+    host.settings.gatewayUrl = `ws://${window.location.host}`;
+    window.history.replaceState({}, "", "/?gatewayUrl=ws://127.0.0.1:18789&token=dev-token");
+
+    applySettingsFromUrl(host);
+
+    expect(host.settings.gatewayUrl).toBe("ws://127.0.0.1:18789");
+    expect(host.settings.token).toBe("dev-token");
+    expect(host.pendingGatewayUrl).toBeNull();
+    expect(window.location.search).toBe("");
+  });
+
+  it("requires confirmation for non-loopback gatewayUrl", () => {
+    const host = createHost("chat");
+    host.settings.gatewayUrl = `ws://${window.location.host}`;
+    window.history.replaceState({}, "", "/?gatewayUrl=ws://192.168.31.10:18789");
+
+    applySettingsFromUrl(host);
+
+    expect(host.settings.gatewayUrl).toBe(`ws://${window.location.host}`);
+    expect(host.pendingGatewayUrl).toBe("ws://192.168.31.10:18789");
   });
 });

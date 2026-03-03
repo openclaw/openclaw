@@ -26,10 +26,12 @@ export function renderSkillStatusChips(params: {
   showBundledBadge?: boolean;
 }) {
   const skill = params.skill;
+  const skillType = skill.type ?? "optional";
   const showBundledBadge = Boolean(params.showBundledBadge);
   return html`
     <div class="chip-row" style="margin-top: 6px;">
       <span class="chip">${skill.source}</span>
+      <span class="chip">${skillType}</span>
       ${
         showBundledBadge
           ? html`

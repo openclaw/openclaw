@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteSession, deleteSessionAndRefresh, type SessionsState } from "./sessions.ts";
+import {
+  deleteSession,
+  deleteSessionAndRefresh,
+  loadSessions,
+  type SessionsState,
+} from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -33,7 +38,7 @@ describe("deleteSessionAndRefresh", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const state = createState(request);
+    const state = createState(request, { sessionKey: "agent:main:main" });
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
     const deleted = await deleteSessionAndRefresh(state, "agent:main:test");
@@ -47,6 +52,7 @@ describe("deleteSessionAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      agentId: "main",
     });
     expect(state.sessionsError).toBeNull();
     expect(state.sessionsLoading).toBe(false);
@@ -88,6 +94,26 @@ describe("deleteSessionAndRefresh", () => {
     });
     expect(state.sessionsError).toContain("delete boom");
     expect(state.sessionsLoading).toBe(false);
+  });
+});
+
+describe("loadSessions", () => {
+  it("passes session agentId when sessionKey is agent-scoped", async () => {
+    const request = vi.fn(async () => ({
+      ts: Date.now(),
+      path: "(multiple)",
+      count: 0,
+      sessions: [],
+    }));
+    const state = createState(request, { sessionKey: "agent:coordi:main" });
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      agentId: "coordi",
+    });
   });
 });
 

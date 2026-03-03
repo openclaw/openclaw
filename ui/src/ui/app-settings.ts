@@ -61,6 +61,28 @@ type SettingsHost = {
   pendingGatewayUrl?: string | null;
 };
 
+function isLoopbackGatewayHostname(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized === "[::1]" ||
+    normalized === "::1" ||
+    normalized.startsWith("127.")
+  );
+}
+
+function shouldAutoApplyGatewayUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return false;
+    }
+    return isLoopbackGatewayHostname(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
     ...next,
@@ -132,7 +154,11 @@ export function applySettingsFromUrl(host: SettingsHost) {
   if (gatewayUrlRaw != null) {
     const gatewayUrl = gatewayUrlRaw.trim();
     if (gatewayUrl && gatewayUrl !== host.settings.gatewayUrl) {
-      host.pendingGatewayUrl = gatewayUrl;
+      if (shouldAutoApplyGatewayUrl(gatewayUrl)) {
+        applySettings(host, { ...host.settings, gatewayUrl });
+      } else {
+        host.pendingGatewayUrl = gatewayUrl;
+      }
     }
     params.delete("gatewayUrl");
     hashParams.delete("gatewayUrl");

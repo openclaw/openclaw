@@ -1,3 +1,4 @@
+import { parseAgentSessionKey } from "../../../../src/routing/session-key.js";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -5,6 +6,8 @@ import type { SessionsListResult } from "../types.ts";
 export type SessionsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  sessionKey?: string;
+  agentsSelectedId?: string | null;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;
@@ -21,6 +24,7 @@ export async function loadSessions(
     limit?: number;
     includeGlobal?: boolean;
     includeUnknown?: boolean;
+    agentId?: string | null;
   },
 ) {
   if (!state.client || !state.connected) {
@@ -45,6 +49,20 @@ export async function loadSessions(
     }
     if (limit > 0) {
       params.limit = limit;
+    }
+    const overrideAgentId =
+      typeof overrides?.agentId === "string" ? overrides.agentId.trim() : overrides?.agentId;
+    const parsedSessionAgentId = parseAgentSessionKey(state.sessionKey ?? "")?.agentId;
+    const selectedAgentId =
+      typeof state.agentsSelectedId === "string" ? state.agentsSelectedId.trim() : "";
+    const agentId =
+      overrideAgentId === null
+        ? ""
+        : typeof overrideAgentId === "string" && overrideAgentId
+          ? overrideAgentId
+          : parsedSessionAgentId?.trim() || selectedAgentId;
+    if (agentId) {
+      params.agentId = agentId;
     }
     const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {

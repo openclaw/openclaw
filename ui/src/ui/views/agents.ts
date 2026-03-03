@@ -68,6 +68,8 @@ export type AgentsProps = {
   toolsCatalogResult: ToolsCatalogResult | null;
   skillsFilter: string;
   onRefresh: () => void;
+  onCreateGeneral: () => void;
+  onCloneAgent: (agentId: string) => void;
   onSelectAgent: (agentId: string) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
   onLoadFiles: (agentId: string) => void;
@@ -106,18 +108,47 @@ export function renderAgents(props: AgentsProps) {
   const selectedAgent = selectedId
     ? (agents.find((agent) => agent.id === selectedId) ?? null)
     : null;
+  const hasGeneral = agents.some((agent) => agent.id === "general");
 
   return html`
     <div class="agents-layout">
       <section class="card agents-sidebar">
-        <div class="row" style="justify-content: space-between;">
-          <div>
+        <div class="agents-sidebar-header">
+          <div class="agents-sidebar-header__meta">
             <div class="card-title">Agents</div>
             <div class="card-sub">${agents.length} configured.</div>
           </div>
-          <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onRefresh}>
-            ${props.loading ? "Loading…" : "Refresh"}
-          </button>
+          <div class="agents-sidebar-actions">
+            ${
+              !hasGeneral
+                ? html`
+                    <button
+                      class="btn btn--sm"
+                      ?disabled=${props.loading}
+                      @click=${props.onCreateGeneral}
+                      title="Create a second agent you can switch to"
+                    >
+                      Create General
+                    </button>
+                  `
+                : nothing
+            }
+            <button
+              class="btn btn--sm"
+              ?disabled=${props.loading || !selectedId}
+              @click=${() => {
+                if (selectedId) {
+                  props.onCloneAgent(selectedId);
+                }
+              }}
+              title="Clone selected agent with sessions, memory, and cron jobs"
+            >
+              Clone Selected
+            </button>
+            <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onRefresh}>
+              ${props.loading ? "Loading…" : "Refresh"}
+            </button>
+          </div>
         </div>
         ${
           props.error

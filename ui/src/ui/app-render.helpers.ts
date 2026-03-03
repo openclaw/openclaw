@@ -1,5 +1,6 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
@@ -16,6 +17,69 @@ type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
   mainKey?: string;
 };
+
+type ChatControlsStatusContext = Pick<
+  AppViewState,
+  "chatSending" | "chatRunId" | "chatStream" | "chatStreamStartedAt" | "chatQueue"
+>;
+
+export type ChatControlsRunStatusPhase = "idle" | "sending" | "waiting" | "streaming";
+
+export type ChatControlsRunStatus = {
+  phase: ChatControlsRunStatusPhase;
+  label: string;
+  elapsedLabel: string | null;
+  queuedCount: number;
+};
+
+function formatRunElapsedLabel(startedAt: number | null): string | null {
+  if (!startedAt) {
+    return null;
+  }
+  const elapsedMs = Date.now() - startedAt;
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+    return null;
+  }
+  const totalSec = Math.max(1, Math.floor(elapsedMs / 1000));
+  if (totalSec < 60) {
+    return `${totalSec}s`;
+  }
+  const minutes = Math.floor(totalSec / 60);
+  const seconds = String(totalSec % 60).padStart(2, "0");
+  return `${minutes}m ${seconds}s`;
+}
+
+export function resolveChatControlsRunStatus(
+  context: ChatControlsStatusContext,
+): ChatControlsRunStatus {
+  const hasStream = context.chatStream !== null;
+  const hasStreamText = Boolean(context.chatStream && context.chatStream.trim().length > 0);
+  const isActive = context.chatSending || hasStream || Boolean(context.chatRunId);
+  let phase: ChatControlsRunStatusPhase = "idle";
+  if (context.chatSending) {
+    phase = "sending";
+  } else if (isActive && hasStreamText) {
+    phase = "streaming";
+  } else if (isActive) {
+    phase = "waiting";
+  }
+
+  const label =
+    phase === "sending"
+      ? "Sending"
+      : phase === "streaming"
+        ? "Streaming"
+        : phase === "waiting"
+          ? "Running"
+          : "Idle";
+
+  return {
+    phase,
+    label,
+    elapsedLabel: phase === "idle" ? null : formatRunElapsedLabel(context.chatStreamStartedAt),
+    queuedCount: context.chatQueue.length,
+  };
+}
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
@@ -134,10 +198,62 @@ export function renderChatControls(state: AppViewState) {
     mainSessionKey,
     hideCron,
   );
+  const agents = state.agentsList?.agents ?? [];
+  const currentAgentId =
+    parseAgentSessionKey(state.sessionKey)?.agentId ??
+    state.agentsList?.defaultId?.trim() ??
+    "main";
+  const hasCurrentAgent = agents.some((agent) => agent.id === currentAgentId);
+  const showAgentSelector = agents.length > 1;
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const runStatus = resolveChatControlsRunStatus(state);
+
+  const resolveSessionRequestKey = (sessionKey: string): string => {
+    const parsed = parseAgentSessionKey(sessionKey);
+    if (parsed?.rest) {
+      return parsed.rest;
+    }
+    const trimmed = sessionKey.trim();
+    if (!trimmed) {
+      return "main";
+    }
+    if (trimmed.toLowerCase().startsWith("agent:")) {
+      const unwrapped = parseAgentSessionKey(trimmed);
+      return unwrapped?.rest || "main";
+    }
+    return trimmed;
+  };
+
+  const resolveAgentLabel = (agent: { id: string; name?: string; identity?: { name?: string } }) =>
+    agent.name?.trim() || agent.identity?.name?.trim() || agent.id;
+
+  const switchChatSessionKey = (next: string) => {
+    state.sessionKey = next;
+    state.chatMessage = "";
+    state.chatAttachments = [];
+    state.chatStream = null;
+    (state as unknown as OpenClawApp).chatStreamStartedAt = null;
+    state.chatRunId = null;
+    state.chatQueue = [];
+    (state as unknown as OpenClawApp).resetToolStream();
+    (state as unknown as OpenClawApp).resetChatScroll();
+    state.applySettings({
+      ...state.settings,
+      sessionKey: next,
+      lastActiveSessionKey: next,
+    });
+    void state.loadAssistantIdentity();
+    syncUrlWithSessionKey(
+      state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+      next,
+      true,
+    );
+    void loadChatHistory(state as unknown as ChatState);
+  };
+
   // Refresh icon
   const refreshIcon = html`
     <svg
@@ -180,26 +296,9 @@ export function renderChatControls(state: AppViewState) {
           ?disabled=${!state.connected}
           @change=${(e: Event) => {
             const next = (e.target as HTMLSelectElement).value;
-            state.sessionKey = next;
-            state.chatMessage = "";
-            state.chatStream = null;
-            (state as unknown as OpenClawApp).chatStreamStartedAt = null;
-            state.chatRunId = null;
-            (state as unknown as OpenClawApp).resetToolStream();
-            (state as unknown as OpenClawApp).resetChatScroll();
-            state.applySettings({
-              ...state.settings,
-              sessionKey: next,
-              lastActiveSessionKey: next,
-            });
-            void state.loadAssistantIdentity();
-            syncUrlWithSessionKey(
-              state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
-              next,
-              true,
-            );
-            void loadChatHistory(state as unknown as ChatState);
+            switchChatSessionKey(next);
           }}
+          aria-label="Session"
         >
           ${repeat(
             sessionOptions,
@@ -211,6 +310,50 @@ export function renderChatControls(state: AppViewState) {
           )}
         </select>
       </label>
+      ${
+        showAgentSelector
+          ? html`
+            <label class="field chat-controls__session">
+              <select
+                .value=${currentAgentId}
+                ?disabled=${!state.connected}
+                @change=${(e: Event) => {
+                  const nextAgentId = (e.target as HTMLSelectElement).value;
+                  const requestKey = resolveSessionRequestKey(state.sessionKey);
+                  const next = toAgentStoreSessionKey({ agentId: nextAgentId, requestKey });
+                  switchChatSessionKey(next);
+                }}
+                aria-label="Agent"
+              >
+                ${
+                  !hasCurrentAgent
+                    ? html`<option value=${currentAgentId}>${currentAgentId}</option>`
+                    : nothing
+                }
+                ${agents.map((agent) => html`<option value=${agent.id}>${resolveAgentLabel(agent)}</option>`)}
+              </select>
+            </label>
+          `
+          : nothing
+      }
+      <div
+        class="chat-controls__status chat-controls__status--${runStatus.phase}"
+        role="status"
+        aria-live="polite"
+      >
+        <span class="chat-controls__status-dot" aria-hidden="true"></span>
+        <span class="chat-controls__status-label">${runStatus.label}</span>
+        ${
+          runStatus.elapsedLabel
+            ? html`<span class="chat-controls__status-meta">${runStatus.elapsedLabel}</span>`
+            : nothing
+        }
+        ${
+          runStatus.queuedCount > 0
+            ? html`<span class="chat-controls__status-meta">Q${runStatus.queuedCount}</span>`
+            : nothing
+        }
+      </div>
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
@@ -431,7 +574,29 @@ export function isCronSessionKey(key: string): boolean {
   return rest.startsWith("cron:");
 }
 
-function resolveSessionOptions(
+function resolveActiveAgentId(
+  sessionKey: string,
+  mainSessionKey: string | null | undefined,
+): string | null {
+  return (
+    parseAgentSessionKey(sessionKey)?.agentId ??
+    parseAgentSessionKey(mainSessionKey ?? "")?.agentId ??
+    null
+  );
+}
+
+function shouldKeepSessionForAgent(sessionKey: string, activeAgentId: string | null): boolean {
+  if (!activeAgentId) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed?.agentId) {
+    return true;
+  }
+  return parsed.agentId === activeAgentId;
+}
+
+export function resolveSessionOptions(
   sessionKey: string,
   sessions: SessionsListResult | null,
   mainSessionKey?: string | null,
@@ -439,12 +604,16 @@ function resolveSessionOptions(
 ) {
   const seen = new Set<string>();
   const options: Array<{ key: string; displayName?: string }> = [];
+  const activeAgentId = resolveActiveAgentId(sessionKey, mainSessionKey);
 
-  const resolvedMain = mainSessionKey && sessions?.sessions?.find((s) => s.key === mainSessionKey);
-  const resolvedCurrent = sessions?.sessions?.find((s) => s.key === sessionKey);
+  const filteredSessions = (sessions?.sessions ?? []).filter((entry) =>
+    shouldKeepSessionForAgent(entry.key, activeAgentId),
+  );
+  const resolvedMain = mainSessionKey && filteredSessions.find((s) => s.key === mainSessionKey);
+  const resolvedCurrent = filteredSessions.find((s) => s.key === sessionKey);
 
   // Add main session key first
-  if (mainSessionKey) {
+  if (mainSessionKey && shouldKeepSessionForAgent(mainSessionKey, activeAgentId)) {
     seen.add(mainSessionKey);
     options.push({
       key: mainSessionKey,
@@ -462,9 +631,8 @@ function resolveSessionOptions(
     });
   }
 
-  // Add sessions from the result, optionally filtering out cron sessions.
-  if (sessions?.sessions) {
-    for (const s of sessions.sessions) {
+  if (filteredSessions.length > 0) {
+    for (const s of filteredSessions) {
       if (!seen.has(s.key) && !(hideCron && isCronSessionKey(s.key))) {
         seen.add(s.key);
         options.push({

@@ -9,6 +9,7 @@ import {
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
+import type { AgentsListResult } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
@@ -34,6 +35,7 @@ export type FallbackIndicatorStatus = {
 export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
+  agents: AgentsListResult | null;
   thinkingLevel: string | null;
   showThinking: boolean;
   loading: boolean;
@@ -84,6 +86,8 @@ export type ChatProps = {
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
+
+type ChatRunPhase = "sending" | "waiting" | "streaming" | "idle";
 
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
@@ -154,6 +158,67 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
       title=${details}
     >
       ${icon} ${message}
+    </div>
+  `;
+}
+
+function formatElapsedLabel(startedAt: number | null): string | null {
+  if (!startedAt) {
+    return null;
+  }
+  const elapsedMs = Date.now() - startedAt;
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+    return null;
+  }
+  const elapsedSec = Math.max(1, Math.floor(elapsedMs / 1000));
+  return `${elapsedSec}s`;
+}
+
+function resolveRunPhase(props: ChatProps, canAbort: boolean): ChatRunPhase {
+  const hasStream = props.stream !== null;
+  const hasStreamText = Boolean(props.stream && props.stream.trim().length > 0);
+  const isActive = props.sending || hasStream || canAbort;
+  if (props.sending) {
+    return "sending";
+  }
+  if (isActive && hasStreamText) {
+    return "streaming";
+  }
+  if (isActive) {
+    return "waiting";
+  }
+  return "idle";
+}
+
+function renderRunStatus(props: ChatProps, canAbort: boolean) {
+  const phase = resolveRunPhase(props, canAbort);
+  const elapsed = phase === "idle" ? null : formatElapsedLabel(props.streamStartedAt);
+  const queuedCount = props.queue.length;
+  const queuedText = queuedCount > 0 ? ` · queued ${queuedCount}` : "";
+  const label =
+    phase === "sending"
+      ? "Sending request"
+      : phase === "streaming"
+        ? "Streaming response"
+        : phase === "waiting"
+          ? "Agent is running"
+          : "Idle (no active run)";
+  const icon = phase === "idle" ? icons.check : icons.loader;
+  const iconClass =
+    phase === "idle"
+      ? "chat-run-status__icon"
+      : "chat-run-status__icon chat-run-status__icon--spinning";
+
+  return html`
+    <div
+      class="chat-run-status chat-run-status--${phase}"
+      role="status"
+      aria-live="polite"
+    >
+      <span class=${iconClass}>${icon}</span>
+      <span class="chat-run-status__label">${label}</span>
+      ${elapsed ? html`<span class="chat-run-status__elapsed">${elapsed}</span>` : nothing}
+      ${queuedCount > 0 ? html`<span class="chat-run-status__queue">${queuedText}</span>` : nothing}
     </div>
   `;
 }
@@ -405,6 +470,7 @@ export function renderChat(props: ChatProps) {
 
       ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
+      ${renderRunStatus(props, canAbort)}
 
       ${
         props.showNewMessages

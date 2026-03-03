@@ -1,5 +1,10 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { AgentsListResult, ToolsCatalogResult } from "../types.ts";
+import type {
+  AgentsCloneResult,
+  AgentsCreateResult,
+  AgentsListResult,
+  ToolsCatalogResult,
+} from "../types.ts";
 
 export type AgentsState = {
   client: GatewayBrowserClient | null;
@@ -12,6 +17,61 @@ export type AgentsState = {
   toolsCatalogError: string | null;
   toolsCatalogResult: ToolsCatalogResult | null;
 };
+
+export async function createAgent(
+  state: AgentsState,
+  params: {
+    name: string;
+    workspace: string;
+    emoji?: string;
+    avatar?: string;
+  },
+): Promise<AgentsCreateResult | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  if (state.agentsLoading) {
+    return null;
+  }
+  state.agentsLoading = true;
+  state.agentsError = null;
+  try {
+    const res = await state.client.request<AgentsCreateResult>("agents.create", params);
+    return res ?? null;
+  } catch (err) {
+    state.agentsError = String(err);
+    return null;
+  } finally {
+    state.agentsLoading = false;
+  }
+}
+
+export async function cloneAgent(
+  state: AgentsState,
+  params: {
+    sourceAgentId: string;
+    name?: string;
+    workspace?: string;
+  },
+): Promise<AgentsCloneResult | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  if (state.agentsLoading) {
+    return null;
+  }
+  state.agentsLoading = true;
+  state.agentsError = null;
+  try {
+    const res = await state.client.request<AgentsCloneResult>("agents.clone", params);
+    return res ?? null;
+  } catch (err) {
+    state.agentsError = String(err);
+    return null;
+  } finally {
+    state.agentsLoading = false;
+  }
+}
 
 export async function loadAgents(state: AgentsState) {
   if (!state.client || !state.connected) {
