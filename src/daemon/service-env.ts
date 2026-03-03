@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { VERSION } from "../version.js";
@@ -19,6 +20,7 @@ export type MinimalServicePathOptions = {
   extraDirs?: string[];
   home?: string;
   env?: Record<string, string | undefined>;
+  dirExists?: (dir: string) => boolean;
 };
 
 type BuildServicePathOptions = MinimalServicePathOptions & {
@@ -198,6 +200,7 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
       : platform === "darwin"
         ? resolveDarwinUserBinDirs(options.home, options.env)
         : [];
+  const dirExists = options.dirExists ?? fs.existsSync;
 
   const add = (dir: string) => {
     if (!dir) {
@@ -207,13 +210,26 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
       parts.push(dir);
     }
   };
+  const addUserDir = (dir: string) => {
+    if (!dir) {
+      return;
+    }
+    try {
+      if (!dirExists(dir)) {
+        return;
+      }
+    } catch {
+      return;
+    }
+    add(dir);
+  };
 
   for (const dir of extraDirs) {
     add(dir);
   }
   // User dirs first so user-installed binaries take precedence
   for (const dir of userDirs) {
-    add(dir);
+    addUserDir(dir);
   }
   for (const dir of systemDirs) {
     add(dir);

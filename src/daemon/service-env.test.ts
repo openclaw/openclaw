@@ -11,8 +11,11 @@ import {
 } from "./service-env.js";
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
+  const assumeDirsExist = { dirExists: () => true };
+
   it("includes user bin directories when HOME is set on Linux", () => {
     const result = getMinimalServicePathParts({
+      ...assumeDirsExist,
       platform: "linux",
       home: "/home/testuser",
     });
@@ -46,6 +49,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
   it("places user directories before system directories on Linux", () => {
     const result = getMinimalServicePathParts({
+      ...assumeDirsExist,
       platform: "linux",
       home: "/home/testuser",
     });
@@ -60,6 +64,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
   it("places extraDirs before user directories on Linux", () => {
     const result = getMinimalServicePathParts({
+      ...assumeDirsExist,
       platform: "linux",
       home: "/home/testuser",
       extraDirs: ["/custom/bin"],
@@ -75,6 +80,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
   it("includes env-configured bin roots when HOME is set on Linux", () => {
     const result = getMinimalServicePathPartsFromEnv({
+      ...assumeDirsExist,
       platform: "linux",
       env: {
         HOME: "/home/testuser",
@@ -99,6 +105,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
   it("includes version manager directories on macOS when HOME is set", () => {
     const result = getMinimalServicePathParts({
+      ...assumeDirsExist,
       platform: "darwin",
       home: "/Users/testuser",
     });
@@ -125,6 +132,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
   it("includes env-configured version manager dirs on macOS", () => {
     const result = getMinimalServicePathPartsFromEnv({
+      ...assumeDirsExist,
       platform: "darwin",
       env: {
         HOME: "/Users/testuser",
@@ -144,6 +152,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
   it("places version manager dirs before system dirs on macOS", () => {
     const result = getMinimalServicePathParts({
+      ...assumeDirsExist,
       platform: "darwin",
       home: "/Users/testuser",
     });
@@ -168,9 +177,25 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     // Windows returns empty array (uses existing PATH)
     expect(result).toEqual([]);
   });
+
+  it("filters out user directories that do not exist", () => {
+    const result = getMinimalServicePathParts({
+      platform: "linux",
+      home: "/home/testuser",
+      dirExists: (dir) =>
+        dir === "/home/testuser/.local/bin" || dir === "/home/testuser/.volta/bin",
+    });
+
+    expect(result).toContain("/home/testuser/.local/bin");
+    expect(result).toContain("/home/testuser/.volta/bin");
+    expect(result).not.toContain("/home/testuser/.npm-global/bin");
+    expect(result).not.toContain("/home/testuser/.nvm/current/bin");
+    expect(result).toContain("/usr/bin");
+  });
 });
 
 describe("buildMinimalServicePath", () => {
+  const assumeDirsExist = { dirExists: () => true };
   const splitPath = (value: string, platform: NodeJS.Platform) =>
     value.split(platform === "win32" ? path.win32.delimiter : path.posix.delimiter);
 
@@ -195,6 +220,7 @@ describe("buildMinimalServicePath", () => {
 
   it("includes Linux user directories when HOME is set in env", () => {
     const result = buildMinimalServicePath({
+      ...assumeDirsExist,
       platform: "linux",
       env: { HOME: "/home/alice" },
     });
@@ -227,6 +253,7 @@ describe("buildMinimalServicePath", () => {
 
   it("ensures user directories come before system directories on Linux", () => {
     const result = buildMinimalServicePath({
+      ...assumeDirsExist,
       platform: "linux",
       env: { HOME: "/home/bob" },
     });
