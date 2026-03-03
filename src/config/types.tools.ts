@@ -440,8 +440,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
-      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+      /** Search provider ("brave", "perplexity", "grok", "gemini", "kimi", or "searxng"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "searxng";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -483,6 +483,11 @@ export type ToolsConfig = {
         baseUrl?: string;
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
+      };
+      /** SearXNG-specific configuration (used when provider="searxng"). */
+      searxng?: {
+        /** Base URL for SearXNG instance (defaults to SEARXNG_BASE_URL env var or http://localhost:8888). */
+        baseUrl?: string;
       };
     };
     fetch?: {
