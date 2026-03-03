@@ -1,4 +1,4 @@
-import type { MessageEvent } from "@line/bot-sdk";
+import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
@@ -16,15 +16,10 @@ vi.mock("../pairing/pairing-messages.js", () => ({
   buildPairingReply: () => "pairing-reply",
 }));
 
-const { downloadLineMediaMock } = vi.hoisted(() => ({
-  downloadLineMediaMock: vi.fn(async () => ({
-    path: "/tmp/line-media-file.pdf",
-    contentType: "application/pdf",
-  })),
-}));
-
 vi.mock("./download.js", () => ({
-  downloadLineMedia: downloadLineMediaMock,
+  downloadLineMedia: async () => {
+    throw new Error("downloadLineMedia should not be called from bot-handlers tests");
+  },
 }));
 
 vi.mock("./send.js", () => ({
@@ -44,7 +39,7 @@ const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted
     isGroup: true,
     accountId: "default",
   })),
-  buildLinePostbackContextMock: vi.fn(async () => null),
+  buildLinePostbackContextMock: vi.fn(async () => null as unknown),
 }));
 
 vi.mock("./bot-message-context.js", () => ({
@@ -86,7 +81,6 @@ describe("handleLineWebhookEvents", () => {
   beforeEach(() => {
     buildLineMessageContextMock.mockClear();
     buildLinePostbackContextMock.mockClear();
-    downloadLineMediaMock.mockClear();
     readAllowFromStoreMock.mockClear();
     upsertPairingRequestMock.mockClear();
   });
@@ -222,6 +216,7 @@ describe("handleLineWebhookEvents", () => {
 
     expect(processMessage).not.toHaveBeenCalled();
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(readAllowFromStoreMock).toHaveBeenCalledWith("line", undefined, "default");
   });
 
   it("does not authorize group messages from DM pairing-store entries when group allowlist is empty", async () => {
@@ -463,21 +458,27 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("downloads file attachments and forwards media refs to message context", async () => {
+  it("deduplicates postback redeliveries by webhookEventId when replyToken changes", async () => {
     const processMessage = vi.fn();
+    buildLinePostbackContextMock.mockResolvedValue({
+      ctxPayload: { From: "line:user:user-postback" },
+      route: { agentId: "default" },
+      isGroup: false,
+      accountId: "default",
+    });
     const event = {
-      type: "message",
-      message: { id: "mf-1", type: "file", fileName: "doc.pdf", fileSize: "42" },
-      replyToken: "reply-token",
+      type: "postback",
+      postback: { data: "action=confirm" },
+      replyToken: "reply-token-1",
       timestamp: Date.now(),
-      source: { type: "user", userId: "user-file" },
+      source: { type: "user", userId: "user-postback" },
       mode: "active",
-      webhookEventId: "evt-file-1",
+      webhookEventId: "evt-postback-1",
       deliveryContext: { isRedelivery: false },
-    } as MessageEvent;
+    } as PostbackEvent;
 
-    await handleLineWebhookEvents([event], {
-      cfg: { channels: { line: {} } },
+    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
+      cfg: { channels: { line: { dmPolicy: "open" } } },
       account: {
         accountId: "default",
         enabled: true,
@@ -487,69 +488,66 @@ describe("handleLineWebhookEvents", () => {
         config: { dmPolicy: "open" },
       },
       runtime: createRuntime(),
-      mediaMaxBytes: 1234,
+      mediaMaxBytes: 1,
       processMessage,
-    });
+      replayCache: createLineWebhookReplayCache(),
+    };
 
-    expect(downloadLineMediaMock).toHaveBeenCalledTimes(1);
-    expect(downloadLineMediaMock).toHaveBeenCalledWith("mf-1", "token", 1234);
-    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
-    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commandAuthorized: false,
-        allMedia: [
-          {
-            path: "/tmp/line-media-file.pdf",
-            contentType: "application/pdf",
-          },
-        ],
-      }),
+    await handleLineWebhookEvents([event], context);
+    await handleLineWebhookEvents(
+      [
+        {
+          ...event,
+          replyToken: "reply-token-2",
+          deliveryContext: { isRedelivery: true },
+        } as PostbackEvent,
+      ],
+      context,
     );
+
+    expect(buildLinePostbackContextMock).toHaveBeenCalledTimes(1);
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("continues processing later events when one event handler fails", async () => {
-    const failingEvent = {
+  it("does not mark replay cache when event processing fails", async () => {
+    const processMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("transient failure"))
+      .mockResolvedValueOnce(undefined);
+    const event = {
       type: "message",
-      message: { id: "m-err", type: "text", text: "hi" },
+      message: { id: "m-fail-then-retry", type: "text", text: "hello" },
       replyToken: "reply-token",
       timestamp: Date.now(),
-      source: { type: "user", userId: "user-err" },
+      source: { type: "group", groupId: "group-retry", userId: "user-retry" },
       mode: "active",
-      webhookEventId: "evt-err",
+      webhookEventId: "evt-fail-then-retry",
       deliveryContext: { isRedelivery: false },
     } as MessageEvent;
-    const laterEvent = {
-      ...failingEvent,
-      message: { id: "m-later", type: "text", text: "hello" },
-      webhookEventId: "evt-later",
-    } as MessageEvent;
-    const runtime = createRuntime();
-    let invocation = 0;
-    const processMessage = vi.fn(async () => {
-      if (invocation === 0) {
-        invocation += 1;
-        throw new Error("boom");
-      }
-      invocation += 1;
-    });
 
-    await handleLineWebhookEvents([failingEvent, laterEvent], {
-      cfg: { channels: { line: {} } },
+    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
+      cfg: { channels: { line: { groupPolicy: "open" } } },
       account: {
         accountId: "default",
         enabled: true,
         channelAccessToken: "token",
         channelSecret: "secret",
         tokenSource: "config",
-        config: { dmPolicy: "open" },
+        config: { groupPolicy: "open" },
       },
-      runtime,
-      mediaMaxBytes: 1234,
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
       processMessage,
-    });
+      replayCache: createLineWebhookReplayCache(),
+    };
 
+    await expect(handleLineWebhookEvents([event], context)).rejects.toThrow("transient failure");
+    await handleLineWebhookEvents([event], context);
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(2);
     expect(processMessage).toHaveBeenCalledTimes(2);
-    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(context.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("line: event handler failed: Error: transient failure"),
+    );
   });
 });
