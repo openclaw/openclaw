@@ -29,6 +29,34 @@ const archiveFixturePathCache = new Map<string, string>();
 const dynamicArchiveTemplatePathCache = new Map<string, string>();
 let installPluginFromDirTemplateDir = "";
 let manifestInstallTemplateDir = "";
+const DYNAMIC_ARCHIVE_TEMPLATE_PRESETS = [
+  {
+    outName: "traversal.tgz",
+    withDistIndex: true,
+    packageJson: {
+      name: "@evil/..",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+    } as Record<string, unknown>,
+  },
+  {
+    outName: "reserved.tgz",
+    withDistIndex: true,
+    packageJson: {
+      name: "@evil/.",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+    } as Record<string, unknown>,
+  },
+  {
+    outName: "bad.tgz",
+    withDistIndex: false,
+    packageJson: {
+      name: "@openclaw/nope",
+      version: "0.0.1",
+    } as Record<string, unknown>,
+  },
+];
 
 function ensureSuiteTempRoot() {
   if (suiteTempRoot) {
@@ -41,7 +69,7 @@ function ensureSuiteTempRoot() {
 function makeTempDir() {
   const dir = path.join(ensureSuiteTempRoot(), `case-${String(tempDirCounter)}`);
   tempDirCounter += 1;
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir);
   return dir;
 }
 
@@ -157,8 +185,10 @@ function setupPluginInstallDirs() {
 }
 
 function setupInstallPluginFromDirFixture(params?: { devDependencies?: Record<string, string> }) {
-  const stateDir = makeTempDir();
-  const pluginDir = path.join(makeTempDir(), "plugin");
+  const caseDir = makeTempDir();
+  const stateDir = path.join(caseDir, "state");
+  const pluginDir = path.join(caseDir, "plugin");
+  fs.mkdirSync(stateDir, { recursive: true });
   fs.cpSync(installPluginFromDirTemplateDir, pluginDir, { recursive: true });
   if (params?.devDependencies) {
     const packageJsonPath = path.join(pluginDir, "package.json");
@@ -185,8 +215,10 @@ async function installFromDirWithWarnings(params: { pluginDir: string; extension
 }
 
 function setupManifestInstallFixture(params: { manifestId: string }) {
-  const stateDir = makeTempDir();
-  const pluginDir = path.join(makeTempDir(), "plugin-src");
+  const caseDir = makeTempDir();
+  const stateDir = path.join(caseDir, "state");
+  const pluginDir = path.join(caseDir, "plugin-src");
+  fs.mkdirSync(stateDir, { recursive: true });
   fs.cpSync(manifestInstallTemplateDir, pluginDir, { recursive: true });
   fs.writeFileSync(
     path.join(pluginDir, "openclaw.plugin.json"),
@@ -226,31 +258,11 @@ async function installArchivePackageAndReturnResult(params: {
   withDistIndex?: boolean;
 }) {
   const stateDir = makeTempDir();
-  const templateKey = JSON.stringify({
+  const archivePath = await ensureDynamicArchiveTemplate({
+    outName: params.outName,
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex === true,
   });
-  let archivePath = dynamicArchiveTemplatePathCache.get(templateKey);
-  if (!archivePath) {
-    const templateDir = makeTempDir();
-    const pkgDir = path.join(templateDir, "package");
-    fs.mkdirSync(pkgDir, { recursive: true });
-    if (params.withDistIndex) {
-      fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
-      fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {};", "utf-8");
-    }
-    fs.writeFileSync(
-      path.join(pkgDir, "package.json"),
-      JSON.stringify(params.packageJson),
-      "utf-8",
-    );
-    archivePath = await packToArchive({
-      pkgDir,
-      outDir: ensureSuiteFixtureRoot(),
-      outName: params.outName,
-    });
-    dynamicArchiveTemplatePathCache.set(templateKey, archivePath);
-  }
 
   const extensionsDir = path.join(stateDir, "extensions");
   const result = await installPluginFromArchive({
@@ -258,6 +270,46 @@ async function installArchivePackageAndReturnResult(params: {
     extensionsDir,
   });
   return result;
+}
+
+function buildDynamicArchiveTemplateKey(params: {
+  packageJson: Record<string, unknown>;
+  withDistIndex: boolean;
+}): string {
+  return JSON.stringify({
+    packageJson: params.packageJson,
+    withDistIndex: params.withDistIndex,
+  });
+}
+
+async function ensureDynamicArchiveTemplate(params: {
+  packageJson: Record<string, unknown>;
+  outName: string;
+  withDistIndex: boolean;
+}): Promise<string> {
+  const templateKey = buildDynamicArchiveTemplateKey({
+    packageJson: params.packageJson,
+    withDistIndex: params.withDistIndex,
+  });
+  const cachedPath = dynamicArchiveTemplatePathCache.get(templateKey);
+  if (cachedPath) {
+    return cachedPath;
+  }
+  const templateDir = makeTempDir();
+  const pkgDir = path.join(templateDir, "package");
+  fs.mkdirSync(pkgDir, { recursive: true });
+  if (params.withDistIndex) {
+    fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {};", "utf-8");
+  }
+  fs.writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify(params.packageJson), "utf-8");
+  const archivePath = await packToArchive({
+    pkgDir,
+    outDir: ensureSuiteFixtureRoot(),
+    outName: params.outName,
+  });
+  dynamicArchiveTemplatePathCache.set(templateKey, archivePath);
+  return archivePath;
 }
 
 afterAll(() => {
@@ -327,6 +379,14 @@ beforeAll(async () => {
     }),
     "utf-8",
   );
+
+  for (const preset of DYNAMIC_ARCHIVE_TEMPLATE_PRESETS) {
+    await ensureDynamicArchiveTemplate({
+      packageJson: preset.packageJson,
+      outName: preset.outName,
+      withDistIndex: preset.withDistIndex,
+    });
+  }
 });
 
 beforeEach(() => {
