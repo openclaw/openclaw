@@ -262,4 +262,15 @@ Current time: 2026-03-03 12:00 (Asia/Taipei)`;
       undefined,
     );
   });
+
+  it("accepts short legacy heartbeat poll command text", () => {
+    expect(isHeartbeatPollText("heartbeat poll")).toBe(true);
+    expect(isHeartbeatPollText("heartbeat wake")).toBe(true);
+  });
+
+  it("does not classify incidental heartbeat poll mentions in normal sentences", () => {
+    const text = "I want to configure the heartbeat poll interval for this room";
+    expect(isHeartbeatPollText(text)).toBe(false);
+    expect(normalizeHeartbeatPollForDedupe(text)).toBe(undefined);
+  });
 });

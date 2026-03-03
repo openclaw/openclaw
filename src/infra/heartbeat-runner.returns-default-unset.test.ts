@@ -645,6 +645,78 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("does not immediately re-open the circuit on the first failure after cooldown expiry", async () => {
+    const tmpDir = await createCaseDir("hb-delivery-circuit-half-open");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "Final alert" }]);
+      const failingSend = vi
+        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .mockRejectedValue(new Error("Network request for 'sendMessage' failed!"));
+
+      for (let i = 0; i < 3; i += 1) {
+        await runHeartbeatOnce({
+          cfg,
+          deps: createHeartbeatDeps(failingSend, 10_000 + i),
+        });
+      }
+
+      const stillBlocked = await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(failingSend, 20_000),
+      });
+      expect(stillBlocked).toEqual({ status: "skipped", reason: "delivery-circuit-open" });
+
+      const firstAfterCooldown = await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(failingSend, 16 * 60_000),
+      });
+      expect(firstAfterCooldown.status).toBe("failed");
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(failingSend, 16 * 60_000 + 1_000),
+      });
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(failingSend, 16 * 60_000 + 2_000),
+      });
+
+      const blockedAgain = await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(failingSend, 16 * 60_000 + 3_000),
+      });
+      expect(blockedAgain).toEqual({ status: "skipped", reason: "delivery-circuit-open" });
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
   it("uses the last non-empty payload for delivery", async () => {
     const tmpDir = await createCaseDir("hb-last-payload");
     const storePath = path.join(tmpDir, "sessions.json");

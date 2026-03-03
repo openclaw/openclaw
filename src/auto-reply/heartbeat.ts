@@ -7,7 +7,9 @@ export const HEARTBEAT_PROMPT =
   "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
-const HEARTBEAT_POLL_NOISE_RE = /\bheartbeat\s+(poll|wake)\b/i;
+// Legacy fallback for short "heartbeat poll"/"heartbeat wake" commands only.
+// Keep this strict so normal user sentences are not silently deduplicated.
+const HEARTBEAT_POLL_NOISE_RE = /^heartbeat\s+(poll|wake)\s*$/i;
 const CURRENT_TIME_LINE_RE = /^current time:/i;
 
 /**

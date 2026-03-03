@@ -166,13 +166,17 @@ function getHeartbeatDeliveryCircuitState(key: string, nowMs: number) {
 
 function recordHeartbeatDeliveryFailure(key: string, nowMs: number): HeartbeatDeliveryCircuitState {
   const prev = heartbeatDeliveryCircuit.get(key);
-  const next: HeartbeatDeliveryCircuitState = prev
-    ? { ...prev }
-    : {
-        consecutiveFailures: 0,
-        cooldownMs: HEARTBEAT_DELIVERY_BASE_COOLDOWN_MS,
-        openCount: 0,
-      };
+  const circuitNaturallyExpired = prev?.openUntil != null && nowMs >= prev.openUntil;
+  const next: HeartbeatDeliveryCircuitState =
+    prev && !circuitNaturallyExpired
+      ? { ...prev }
+      : {
+          // After cooldown expiry, start a fresh failure window so a single
+          // transient failure does not immediately re-open the circuit.
+          consecutiveFailures: 0,
+          cooldownMs: prev?.cooldownMs ?? HEARTBEAT_DELIVERY_BASE_COOLDOWN_MS,
+          openCount: prev?.openCount ?? 0,
+        };
   next.consecutiveFailures += 1;
   if (next.consecutiveFailures >= HEARTBEAT_DELIVERY_FAILURE_THRESHOLD) {
     if (next.openCount > 0) {
