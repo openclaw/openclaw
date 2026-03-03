@@ -87,7 +87,8 @@ import { resolveDiscordThreadParentInfo } from "./threading.js";
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 const log = createSubsystemLogger("discord/native-command");
 
-function buildDiscordCommandOptions(params: {
+/** @internal exported for testing only */
+export function buildDiscordCommandOptions(params: {
   command: ChatCommandDefinition;
   cfg: ReturnType<typeof loadConfig>;
 }): CommandOptions | undefined {
@@ -115,9 +116,11 @@ function buildDiscordCommandOptions(params: {
       };
     }
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
-    const shouldAutocomplete =
-      resolvedChoices.length > 0 &&
-      (typeof arg.choices === "function" || resolvedChoices.length > 25);
+    // Always use autocomplete when choices exist.  Static `choices` force
+    // Discord's dropdown UI which sends `null` for typed-in values (e.g.
+    // `/acp close`).  Autocomplete lets users both pick from suggestions AND
+    // type inline, with Discord passing the typed value through.  (#32753)
+    const shouldAutocomplete = resolvedChoices.length > 0;
     const autocomplete = shouldAutocomplete
       ? async (interaction: AutocompleteInteraction) => {
           const focused = interaction.options.getFocused();
