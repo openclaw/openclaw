@@ -305,6 +305,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       (acc, next) => ({
         ...mergeBeforePromptBuild(acc, next),
         ...mergeBeforeModelResolve(acc, next),
+        skip: acc?.skip || next.skip,
       }),
     );
   }

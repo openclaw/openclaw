@@ -379,7 +379,10 @@ export type PluginHookBeforeAgentStartEvent = {
 };
 
 export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
-  PluginHookBeforeModelResolveResult;
+  PluginHookBeforeModelResolveResult & {
+    /** When true, skip the agent run entirely (no LLM call, no session write). */
+    skip?: boolean;
+  };
 
 // llm_input hook
 export type PluginHookLlmInputEvent = {

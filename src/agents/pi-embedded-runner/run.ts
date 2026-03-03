@@ -295,6 +295,15 @@ export async function runEmbeddedPiAgent(
           );
         }
       }
+
+      // If a before_agent_start hook returned { skip: true }, skip the entire
+      // agent run — no LLM call, no session write. This is useful for plugins
+      // that observe messages (e.g. group monitoring) without triggering the agent.
+      if (legacyBeforeAgentStartResult?.skip) {
+        log.info("[hooks] before_agent_start returned skip=true; skipping agent run");
+        return { payloads: [], meta: { durationMs: Date.now() - started } };
+      }
+
       if (modelResolveOverride?.providerOverride) {
         provider = modelResolveOverride.providerOverride;
         log.info(`[hooks] provider overridden to ${provider}`);
