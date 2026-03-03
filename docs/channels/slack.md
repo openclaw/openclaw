@@ -293,6 +293,13 @@ and still route command execution against the target conversation session (`Comm
 }
 ```
 
+Notes:
+
+- This snippet is a baseline for core built-in native commands.
+- If `commands.nativeSkills` (or `channels.slack.commands.nativeSkills`) is enabled, also register generated skill slash commands.
+- Native-capable dock/plugin commands can add additional slash commands; keep your Slack app manifest aligned with your active native command set.
+- Naming/limits for generated skill commands are documented in [Slash Commands](/tools/slash-commands#command-list).
+
   </Accordion>
 </AccordionGroup>
 
