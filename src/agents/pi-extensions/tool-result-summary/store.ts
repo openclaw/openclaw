@@ -5,7 +5,6 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { Connection, Table } from "@lancedb/lancedb";
 import type { TextContent, ImageContent } from "@mariozechner/pi-ai";
 import type { EmbeddingProvider } from "../../../memory/embeddings.js";
 import { truncateContent } from "./tools.js";
@@ -14,11 +13,35 @@ import type { ToolResultEntry, ToolResultSearchResult, StorageConfig } from "./t
 const TABLE_NAME = "tool_results";
 
 /**
+ * LanceDB types (dynamically loaded, types defined locally).
+ * These match the declarations in lancedb.d.ts.
+ */
+type LanceDBQueryBuilder = {
+  select(columns: string[]): LanceDBQueryBuilder;
+  where(condition: string): LanceDBQueryBuilder;
+  toArray(): Promise<unknown[]>;
+};
+
+type LanceDBConnection = {
+  tableNames(): Promise<string[]>;
+  openTable(name: string): Promise<LanceDBTable>;
+  createTable(name: string, data: unknown[]): Promise<LanceDBTable>;
+};
+
+type LanceDBTable = {
+  add(rows: unknown[]): Promise<void>;
+  vectorSearch(vector: number[]): { limit(n: number): { toArray(): Promise<unknown[]> } };
+  query(): LanceDBQueryBuilder;
+  delete(condition: string): Promise<void>;
+  countRows(): Promise<number>;
+};
+
+/**
  * Vector store for tool result summaries.
  */
 export class ToolResultSummaryStore {
-  private db: Connection | null = null;
-  private table: Table | null = null;
+  private db: LanceDBConnection | null = null;
+  private table: LanceDBTable | null = null;
   private initPromise: Promise<void> | null = null;
   private entryCount: number = 0;
 
@@ -72,9 +95,11 @@ export class ToolResultSummaryStore {
     this.entryCount = await this.table.countRows();
   }
 
-  private async loadLanceDB(): Promise<{ connect: typeof import("@lancedb/lancedb").connect }> {
+  private async loadLanceDB(): Promise<{ connect: (path: string) => Promise<LanceDBConnection> }> {
     try {
-      return await import("@lancedb/lancedb");
+      // Dynamic import - cast to expected type since lancedb is optional
+      const module = await import("@lancedb/lancedb");
+      return module as { connect: (path: string) => Promise<LanceDBConnection> };
     } catch (err) {
       throw new Error(
         `Failed to load LanceDB. Ensure @lancedb/lancedb is installed. Error: ${String(err)}`,
