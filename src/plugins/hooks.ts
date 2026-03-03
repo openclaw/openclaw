@@ -49,6 +49,8 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookAfterMessageWriteEvent,
+  PluginHookAfterMessageWriteContext,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -80,6 +82,8 @@ export type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookAfterMessageWriteEvent,
+  PluginHookAfterMessageWriteContext,
   PluginHookSessionContext,
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
@@ -589,6 +593,17 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return undefined;
   }
 
+  /**
+   * Run after_message_write hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runAfterMessageWrite(
+    event: PluginHookAfterMessageWriteEvent,
+    ctx: PluginHookAfterMessageWriteContext,
+  ): Promise<void> {
+    return runVoidHook("after_message_write", event, ctx);
+  }
+
   // =========================================================================
   // Session Hooks
   // =========================================================================
@@ -734,6 +749,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,
+    runAfterMessageWrite,
     // Session hooks
     runSessionStart,
     runSessionEnd,

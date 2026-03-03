@@ -1,12 +1,13 @@
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
@@ -48,7 +49,6 @@ import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -377,6 +377,7 @@ function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
   sessionId: string;
+  sessionKey?: string;
   storePath: string | undefined;
   sessionFile?: string;
   agentId?: string;
@@ -421,6 +422,8 @@ function appendAssistantTranscriptMessage(params: {
     label: params.label,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
   });
 }
 
@@ -463,6 +466,7 @@ function persistAbortedPartials(params: {
     const appended = appendAssistantTranscriptMessage({
       message: snapshot.text,
       sessionId,
+      sessionKey: params.sessionKey,
       storePath,
       sessionFile: entry?.sessionFile,
       createIfMissing: true,
@@ -958,6 +962,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               const appended = appendAssistantTranscriptMessage({
                 message: combinedReply,
                 sessionId,
+                sessionKey,
                 storePath: latestStorePath,
                 sessionFile: latestEntry?.sessionFile,
                 agentId,
@@ -1066,6 +1071,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: p.message,
       label: p.label,
       sessionId,
+      sessionKey: rawSessionKey,
       storePath,
       sessionFile: entry?.sessionFile,
       agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),

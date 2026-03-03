@@ -1,6 +1,6 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Command } from "commander";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -324,6 +324,7 @@ export type PluginHookName =
   | "after_tool_call"
   | "tool_result_persist"
   | "before_message_write"
+  | "after_message_write"
   | "session_start"
   | "session_end"
   | "subagent_spawning"
@@ -562,6 +563,23 @@ export type PluginHookBeforeMessageWriteResult = {
   message?: AgentMessage; // Optional: modified message to write instead
 };
 
+// after_message_write hook
+export type PluginHookAfterMessageWriteEvent = {
+  /** The message that was successfully appended to the transcript. */
+  message: AgentMessage;
+  /** Transcript file path when available. */
+  sessionFile?: string;
+  toolCallId?: string;
+  toolName?: string;
+  /** True when this append came from a synthetic tool-result flush. */
+  isSynthetic?: boolean;
+};
+
+export type PluginHookAfterMessageWriteContext = {
+  sessionKey?: string;
+  agentId?: string;
+};
+
 // Session context
 export type PluginHookSessionContext = {
   agentId?: string;
@@ -740,6 +758,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeMessageWriteEvent,
     ctx: { agentId?: string; sessionKey?: string },
   ) => PluginHookBeforeMessageWriteResult | void;
+  after_message_write: (
+    event: PluginHookAfterMessageWriteEvent,
+    ctx: PluginHookAfterMessageWriteContext,
+  ) => Promise<void> | void;
   session_start: (
     event: PluginHookSessionStartEvent,
     ctx: PluginHookSessionContext,

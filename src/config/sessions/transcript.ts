@@ -1,11 +1,14 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import type { SessionEntry } from "./types.js";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveDefaultSessionStorePath } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore } from "./store.js";
-import type { SessionEntry } from "./types.js";
 
 function stripQuery(value: string): string {
   const noHash = value.split("#")[0] ?? value;
@@ -129,7 +132,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
 
   const sessionManager = SessionManager.open(sessionFile);
-  sessionManager.appendMessage({
+  const message: Parameters<typeof sessionManager.appendMessage>[0] = {
     role: "assistant",
     content: [{ type: "text", text: mirrorText }],
     api: "openai-responses",
@@ -151,7 +154,25 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     },
     stopReason: "stop",
     timestamp: Date.now(),
-  });
+  };
+  sessionManager.appendMessage(message);
+
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("after_message_write")) {
+    fireAndForgetHook(
+      hookRunner.runAfterMessageWrite(
+        {
+          message: message as AgentMessage,
+          sessionFile,
+        },
+        {
+          sessionKey,
+          agentId: params.agentId,
+        },
+      ),
+      "appendAssistantMessageToSessionTranscript: after_message_write hook failed",
+    );
+  }
 
   emitSessionTranscriptUpdate(sessionFile);
   return { ok: true, sessionFile };

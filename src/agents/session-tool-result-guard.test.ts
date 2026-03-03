@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
@@ -419,6 +419,62 @@ describe("installSessionToolResultGuard", () => {
 
     const messages = getPersistedMessages(sm);
     expect(messages.map((m) => m.role)).toEqual(["assistant"]);
+  });
+
+  it("emits after_message_write for regular, toolResult, and synthetic flush writes", () => {
+    const sm = SessionManager.inMemory();
+    const afterMessageWriteHook = vi.fn();
+    const guard = installSessionToolResultGuard(sm, {
+      afterMessageWriteHook,
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "regular" }],
+      }),
+    );
+    appendToolResultText(sm, "tool result payload");
+    sm.appendMessage(toolCallMessage);
+    guard.flushPendingToolResults();
+
+    const calls = afterMessageWriteHook.mock.calls.map((args) => args[0]) as Array<{
+      message?: { role?: string };
+      isSynthetic?: boolean;
+    }>;
+
+    const regularCount = calls.filter(
+      (entry) => entry.message?.role === "assistant" && entry.isSynthetic !== true,
+    ).length;
+    const toolResultCount = calls.filter(
+      (entry) => entry.message?.role === "toolResult" && entry.isSynthetic !== true,
+    ).length;
+    const syntheticCount = calls.filter((entry) => entry.isSynthetic === true).length;
+
+    expect(regularCount).toBeGreaterThanOrEqual(2);
+    expect(toolResultCount).toBeGreaterThanOrEqual(1);
+    expect(syntheticCount).toBe(1);
+  });
+
+  it("does not block append when after_message_write callback throws", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      afterMessageWriteHook: () => {
+        throw new Error("boom");
+      },
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "still persisted",
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = getPersistedMessages(sm);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.role).toBe("user");
   });
 
   it("applies message persistence transform to user messages", () => {
