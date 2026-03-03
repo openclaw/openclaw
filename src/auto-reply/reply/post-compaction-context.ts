@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 
 const MAX_CONTEXT_CHARS = 3000;
+const DEFAULT_PRESERVE_SECTIONS = ["Session Startup", "Red Lines"];
 
 function formatDateStamp(nowMs: number, timezone: string): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -53,9 +54,14 @@ export async function readPostCompactionContext(
       }
     })();
 
-    // Extract "## Session Startup" and "## Red Lines" sections
-    // Each section ends at the next "## " heading or end of file
-    const sections = extractSections(content, ["Session Startup", "Red Lines"]);
+    // Extract configured sections from AGENTS.md for post-compaction context.
+    // Defaults to ["Session Startup", "Red Lines"] when not configured.
+    const configuredSections = cfg?.agents?.defaults?.compaction?.preserveSections;
+    const sectionNames =
+      Array.isArray(configuredSections) && configuredSections.length > 0
+        ? configuredSections
+        : DEFAULT_PRESERVE_SECTIONS;
+    const sections = extractSections(content, sectionNames);
 
     if (sections.length === 0) {
       return null;

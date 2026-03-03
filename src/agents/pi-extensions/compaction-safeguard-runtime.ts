@@ -14,6 +14,7 @@ export type CompactionSafeguardRuntimeValue = {
    */
   model?: Model<Api>;
   recentTurnsPreserve?: number;
+  preserveSections?: string[];
 };
 
 const registry = createSessionManagerRuntimeRegistry<CompactionSafeguardRuntimeValue>();

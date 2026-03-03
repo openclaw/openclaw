@@ -4,6 +4,8 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.3.3
 
+- Compaction: add `agents.defaults.compaction.preserveSections` config to specify which AGENTS.md sections are preserved in post-compaction context. Defaults to `["Session Startup", "Red Lines"]` for backward compatibility. Agents with custom section names (e.g. "Safety", "Critical Rules") no longer lose those rules after compaction.
+
 ### Changes
 
 - Docs/Web search: remove outdated Brave free-tier wording and replace prescriptive AI ToS guidance with neutral compliance language in Brave setup docs. (#26860) Thanks @HenryLoenwind.

@@ -215,6 +215,74 @@ Never modify memory/YYYY-MM-DD.md destructively.
     expect(result).toContain("America/New_York");
   });
 
+  it("uses configured preserveSections instead of defaults", async () => {
+    const content = `# My Agent
+
+## Safety
+
+Never delete production data.
+
+## Things You Must NEVER Get Wrong
+
+Always double-check before sending emails.
+
+## Session Startup
+
+Default section that should be ignored when custom sections are configured.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            preserveSections: ["Safety", "Things You Must NEVER Get Wrong"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const result = await readPostCompactionContext(tmpDir, cfg);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Never delete production data");
+    expect(result).toContain("Always double-check before sending emails");
+    expect(result).not.toContain("Default section that should be ignored");
+  });
+
+  it("falls back to defaults when preserveSections is empty", async () => {
+    const content = `## Session Startup
+
+Read startup files.
+
+## Safety
+
+Custom section.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            preserveSections: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const result = await readPostCompactionContext(tmpDir, cfg);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Read startup files");
+    expect(result).not.toContain("Custom section");
+  });
+
+  it("falls back to defaults when preserveSections is not configured", async () => {
+    const content = `## Session Startup
+
+Default preserved.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Default preserved");
+  });
+
   it("appends current time line even when no YYYY-MM-DD placeholder is present", async () => {
     const content = `## Session Startup
 

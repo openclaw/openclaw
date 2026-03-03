@@ -386,12 +386,14 @@ function appendSummarySection(summary: string, section: string): string {
   return `${summary}${section}`;
 }
 
+const DEFAULT_PRESERVE_SECTIONS = ["Session Startup", "Red Lines"];
+
 /**
  * Read and format critical workspace context for compaction summary.
- * Extracts "Session Startup" and "Red Lines" from AGENTS.md.
+ * Extracts configured sections (or defaults: "Session Startup" and "Red Lines") from AGENTS.md.
  * Limited to 2000 chars to avoid bloating the summary.
  */
-async function readWorkspaceContextForSummary(): Promise<string> {
+async function readWorkspaceContextForSummary(preserveSections?: string[]): Promise<string> {
   const MAX_SUMMARY_CONTEXT_CHARS = 2000;
   const workspaceDir = process.cwd();
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
@@ -413,7 +415,11 @@ async function readWorkspaceContextForSummary(): Promise<string> {
         fs.closeSync(opened.fd);
       }
     })();
-    const sections = extractSections(content, ["Session Startup", "Red Lines"]);
+    const sectionNames =
+      Array.isArray(preserveSections) && preserveSections.length > 0
+        ? preserveSections
+        : DEFAULT_PRESERVE_SECTIONS;
+    const sections = extractSections(content, sectionNames);
 
     if (sections.length === 0) {
       return "";
@@ -619,8 +625,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       summary = appendSummarySection(summary, toolFailureSection);
       summary = appendSummarySection(summary, fileOpsSummary);
 
-      // Append workspace critical context (Session Startup + Red Lines from AGENTS.md)
-      const workspaceContext = await readWorkspaceContextForSummary();
+      // Append workspace critical context (configured sections from AGENTS.md)
+      const workspaceContext = await readWorkspaceContextForSummary(runtime?.preserveSections);
       if (workspaceContext) {
         summary = appendSummarySection(summary, workspaceContext);
       }
