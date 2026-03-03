@@ -47,11 +47,14 @@ function resolveReplyToMessageId(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
 }): string | undefined {
-  const replyTarget = params.replyToId ?? params.threadId;
-  if (replyTarget == null) {
+  const replyToId = params.replyToId?.trim();
+  if (replyToId) {
+    return replyToId;
+  }
+  if (params.threadId == null) {
     return undefined;
   }
-  const trimmed = String(replyTarget).trim();
+  const trimmed = String(params.threadId).trim();
   return trimmed || undefined;
 }
 

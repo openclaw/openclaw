@@ -155,6 +155,26 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       }),
     );
   });
+
+  it("falls back to threadId when replyToId is empty on sendText", async () => {
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "hello",
+      replyToId: " ",
+      threadId: "om_thread_2",
+      accountId: "main",
+    } as any);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "hello",
+        replyToMessageId: "om_thread_2",
+        accountId: "main",
+      }),
+    );
+  });
 });
 
 describe("feishuOutbound.sendMedia renderMode", () => {
@@ -212,6 +232,14 @@ describe("feishuOutbound.sendMedia renderMode", () => {
       expect.objectContaining({
         to: "chat_1",
         mediaUrl: "https://example.com/image.png",
+        replyToMessageId: "om_thread_1",
+        accountId: "main",
+      }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "caption",
         replyToMessageId: "om_thread_1",
         accountId: "main",
       }),
