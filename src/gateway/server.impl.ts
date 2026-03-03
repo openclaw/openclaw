@@ -627,7 +627,7 @@ export async function startGatewayServer(
   const skillsChangeUnsub = minimalTestGateway
     ? () => {}
     : registerSkillsChangeListener((event) => {
-        if (event.reason === "remote-node") {
+        if (event.reason === "remote-node" || event.reason === "sandbox-bins") {
           return;
         }
         if (skillsRefreshTimer) {
