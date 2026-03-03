@@ -32,7 +32,7 @@ jobs:
   # Push to main keeps broad coverage.
   changed-scope:
     needs: [docs-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true'
+    if: github.event_name == 'pull_request' && needs.docs-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       run_node: ${{ steps.scope.outputs.run_node }}
@@ -114,7 +114,7 @@ jobs:
         run: pnpm release:check
 
   checks:
-    needs: [docs-scope, changed-scope, check]
+    needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     strategy:
@@ -330,7 +330,7 @@ jobs:
         run: pre-commit run --all-files pnpm-audit-prod
 
   checks-windows:
-    needs: [docs-scope, changed-scope, check]
+    needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_windows == 'true')
     runs-on: blacksmith-32vcpu-windows-2025
     timeout-minutes: 45
@@ -686,7 +686,7 @@ jobs:
           PY
 
   android:
-    needs: [docs-scope, changed-scope, check]
+    needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_android == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     strategy:
