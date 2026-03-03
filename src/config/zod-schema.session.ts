@@ -140,6 +140,13 @@ export const SessionSchema = z
         }
       })
       .optional(),
+    archival: z
+      .object({
+        enabled: z.boolean().optional(),
+        keepLastTurns: z.number().int().min(5).max(100).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
