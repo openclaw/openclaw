@@ -1,0 +1,51 @@
+[
+  {
+    "id": "risk-tier1-auto-67",
+    "category": "risk-control",
+    "name": "Tier 1 auto-approve $67",
+    "description": "Buy 0.001 BTC — estimated $67 under maxAutoTradeUsd ($100), auto-approved without confirmation",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "BTC/USDT",
+        "last": 67000,
+        "bid": 66990,
+        "ask": 67010
+      },
+      "currentTime": "2026-03-03T10:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.001,
+        "price": 67000,
+        "exchangeId": "binance-testnet"
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "requiresConfirmation": false,
+      "estimatedValueUsdRange": [60, 75]
+    },
+    "tags": ["risk-tier", "auto"]
+  }
+]

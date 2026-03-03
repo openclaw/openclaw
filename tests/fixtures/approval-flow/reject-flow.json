@@ -1,0 +1,51 @@
+[
+  {
+    "id": "approval-over-threshold",
+    "category": "approval-flow",
+    "name": "Order over confirm threshold rejected",
+    "description": "Buy 1 ETH at $3,500 — estimated $3,500 exceeds confirmThresholdUsd ($500), rejected without option to confirm",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "ETH/USDT",
+        "last": 3500,
+        "bid": 3499,
+        "ask": 3501
+      },
+      "currentTime": "2026-03-03T10:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "ETH/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 1,
+        "price": 3500,
+        "exchangeId": "binance-testnet"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "reasonContains": "exceeds",
+      "estimatedValueUsdRange": [3400, 3600]
+    },
+    "tags": ["approval", "reject"]
+  }
+]

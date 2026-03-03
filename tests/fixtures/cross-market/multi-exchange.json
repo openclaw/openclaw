@@ -1,0 +1,114 @@
+[
+  {
+    "id": "cross-dual-exchange",
+    "category": "cross-market",
+    "name": "Dual exchange specific selection",
+    "description": "Two exchanges configured (binance-testnet + okx-testnet), explicitly specifying okx-testnet for the order",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "okx-testnet",
+      "exchangeConfig": {
+        "exchange": "okx",
+        "apiKey": "test-api-key-okx",
+        "secret": "test-secret-okx",
+        "testnet": true,
+        "passphrase": "test-passphrase"
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "ETH/USDT",
+        "last": 3500,
+        "bid": 3499,
+        "ask": 3501
+      },
+      "currentTime": "2026-03-03T10:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "ETH/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.02,
+        "price": 3500,
+        "exchangeId": "okx-testnet"
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "requiresConfirmation": false,
+      "estimatedValueUsdRange": [65, 75],
+      "customAssertions": [
+        {
+          "path": "order.exchangeId",
+          "operator": "eq",
+          "value": "okx-testnet"
+        }
+      ]
+    },
+    "tags": ["cross-market", "multi-exchange"]
+  },
+  {
+    "id": "cross-default-fallback",
+    "category": "cross-market",
+    "name": "Default exchange fallback",
+    "description": "No exchangeId specified — should fall back to the default configured exchange",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "BTC/USDT",
+        "last": 67000,
+        "bid": 66990,
+        "ask": 67010
+      },
+      "currentTime": "2026-03-03T10:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.001,
+        "price": 67000
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "requiresConfirmation": false,
+      "estimatedValueUsdRange": [60, 75],
+      "customAssertions": [
+        {
+          "path": "order.exchangeId",
+          "operator": "eq",
+          "value": "binance-testnet"
+        }
+      ]
+    },
+    "tags": ["cross-market", "fallback"]
+  }
+]

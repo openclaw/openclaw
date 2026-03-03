@@ -1,0 +1,52 @@
+[
+  {
+    "id": "risk-leverage-exceeded",
+    "category": "risk-control",
+    "name": "Leverage limit exceeded",
+    "description": "Attempt 5x leverage with maxLeverage=3 — should be blocked by risk control",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "ETH/USDT",
+        "last": 3500,
+        "bid": 3499,
+        "ask": 3501
+      },
+      "currentTime": "2026-03-03T10:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "ETH/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.01,
+        "price": 3500,
+        "exchangeId": "binance-testnet",
+        "leverage": 5,
+        "market": "futures"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "reasonContains": "leverage"
+    },
+    "tags": ["leverage", "exceeded"]
+  }
+]

@@ -1,0 +1,100 @@
+[
+  {
+    "id": "us-thanksgiving-closed",
+    "category": "us-equity",
+    "name": "Thanksgiving closed",
+    "description": "Attempt to buy AAPL on 2026-11-26 (Thanksgiving Thursday) — market fully closed",
+    "market": "us-equity",
+    "setup": {
+      "exchangeId": "alpaca-paper",
+      "exchangeConfig": {
+        "exchange": "alpaca",
+        "apiKey": "PKTST-FAKE-KEY",
+        "secret": "fake-secret-key",
+        "paper": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "AAPL",
+        "last": 175,
+        "bid": 174.95,
+        "ask": 175.05
+      },
+      "currentTime": "2026-11-26T15:30:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "AAPL",
+        "side": "buy",
+        "type": "limit",
+        "amount": 1,
+        "price": 175,
+        "exchangeId": "alpaca-paper"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "marketOpen": false,
+      "reasonContains": "holiday"
+    },
+    "tags": ["holiday", "thanksgiving"]
+  },
+  {
+    "id": "us-christmas-closed",
+    "category": "us-equity",
+    "name": "Christmas closed",
+    "description": "Attempt to buy AAPL on 2026-12-25 (Christmas) — market fully closed",
+    "market": "us-equity",
+    "setup": {
+      "exchangeId": "alpaca-paper",
+      "exchangeConfig": {
+        "exchange": "alpaca",
+        "apiKey": "PKTST-FAKE-KEY",
+        "secret": "fake-secret-key",
+        "paper": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "AAPL",
+        "last": 175,
+        "bid": 174.95,
+        "ask": 175.05
+      },
+      "currentTime": "2026-12-25T15:30:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "AAPL",
+        "side": "buy",
+        "type": "limit",
+        "amount": 1,
+        "price": 175,
+        "exchangeId": "alpaca-paper"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "marketOpen": false,
+      "reasonContains": "holiday"
+    },
+    "tags": ["holiday", "christmas"]
+  }
+]

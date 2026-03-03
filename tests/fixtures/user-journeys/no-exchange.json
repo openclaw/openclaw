@@ -1,0 +1,40 @@
+[
+  {
+    "id": "journey-no-exchange",
+    "category": "user-journeys",
+    "name": "No exchange configured error",
+    "description": "Attempt to place order without any exchange configured — should return error indicating no exchange is set up",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "",
+      "exchangeConfig": {
+        "exchange": ""
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "currentTime": "2026-03-03T10:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.001,
+        "price": 67000
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "errorContains": "no exchange configured"
+    },
+    "tags": ["journey", "no-exchange", "error"]
+  }
+]

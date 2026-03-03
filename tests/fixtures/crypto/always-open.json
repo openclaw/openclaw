@@ -1,0 +1,53 @@
+[
+  {
+    "id": "crypto-weekend-3am",
+    "category": "crypto",
+    "name": "Crypto market open 24/7",
+    "description": "Buy BTC/USDT at 03:00 UTC on Saturday 2026-03-07 — crypto markets are always open",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "BTC/USDT",
+        "last": 67000,
+        "bid": 66990,
+        "ask": 67010,
+        "volume24h": 25000
+      },
+      "currentTime": "2026-03-07T03:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.001,
+        "price": 67000,
+        "exchangeId": "binance-testnet"
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "marketOpen": true,
+      "requiresConfirmation": false,
+      "estimatedValueUsdRange": [60, 75]
+    },
+    "tags": ["always-open", "weekend"]
+  }
+]

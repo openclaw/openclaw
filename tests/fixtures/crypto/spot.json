@@ -1,0 +1,152 @@
+[
+  {
+    "id": "crypto-btc-auto",
+    "category": "crypto",
+    "name": "Buy 0.001 BTC auto-approved",
+    "description": "Buy 0.001 BTC at $67,000 — estimated $67 under maxAutoTradeUsd ($100), auto-approved",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "BTC/USDT",
+        "last": 67000,
+        "bid": 66990,
+        "ask": 67010,
+        "volume24h": 25000
+      },
+      "currentTime": "2026-03-03T02:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.001,
+        "price": 67000,
+        "exchangeId": "binance-testnet"
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "requiresConfirmation": false,
+      "estimatedValueUsdRange": [60, 75]
+    },
+    "tags": ["spot", "auto", "normal-trading"]
+  },
+  {
+    "id": "crypto-eth-reject",
+    "category": "crypto",
+    "name": "Buy 1 ETH rejected",
+    "description": "Buy 1 ETH at $3,500 — estimated $3,500 exceeds confirmThresholdUsd ($500), should be rejected",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "ETH/USDT",
+        "last": 3500,
+        "bid": 3499,
+        "ask": 3501,
+        "volume24h": 500000
+      },
+      "currentTime": "2026-03-03T02:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "ETH/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 1,
+        "price": 3500,
+        "exchangeId": "binance-testnet"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "reasonContains": "exceeds",
+      "estimatedValueUsdRange": [3400, 3600]
+    },
+    "tags": ["spot", "reject"]
+  },
+  {
+    "id": "crypto-sol-confirm",
+    "category": "crypto",
+    "name": "Buy 2 SOL needs confirmation",
+    "description": "Buy 2 SOL at $150 — estimated $300 between maxAutoTradeUsd ($100) and confirmThresholdUsd ($500), requires confirmation",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "SOL/USDT",
+        "last": 150,
+        "bid": 149.8,
+        "ask": 150.2,
+        "volume24h": 2000000
+      },
+      "currentTime": "2026-03-03T02:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "SOL/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 2,
+        "price": 150,
+        "exchangeId": "binance-testnet"
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "requiresConfirmation": true,
+      "estimatedValueUsdRange": [290, 310]
+    },
+    "tags": ["spot", "confirm"]
+  }
+]

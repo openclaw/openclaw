@@ -1,0 +1,106 @@
+[
+  {
+    "id": "cn-makeup-saturday",
+    "category": "cn-a-share",
+    "name": "Makeup day Saturday open",
+    "description": "Buy on 2026-02-14 Saturday 10:00 CST — makeup trading day before Spring Festival, market should be open",
+    "market": "cn-a-share",
+    "setup": {
+      "exchangeId": "openctp-sim",
+      "exchangeConfig": {
+        "exchange": "openctp",
+        "apiKey": "test-user",
+        "secret": "test-pass",
+        "testnet": true,
+        "ctpBrokerId": "9999",
+        "ctpFrontAddr": "tcp://180.168.146.187:10130"
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "000001.SZ",
+        "last": 12,
+        "bid": 11.99,
+        "ask": 12.01
+      },
+      "currentTime": "2026-02-14T02:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "000001.SZ",
+        "side": "buy",
+        "type": "limit",
+        "amount": 100,
+        "price": 12,
+        "exchangeId": "openctp-sim"
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "marketOpen": true,
+      "estimatedValueUsdRange": [155, 175]
+    },
+    "tags": ["makeup-day", "weekend"],
+    "notes": "2026-02-14 is a designated makeup trading day (补班) for the Spring Festival holiday"
+  },
+  {
+    "id": "cn-makeup-sunday",
+    "category": "cn-a-share",
+    "name": "Makeup day Sunday open",
+    "description": "Buy on 2026-02-15 Sunday 10:00 CST — makeup trading day before Spring Festival, market should be open",
+    "market": "cn-a-share",
+    "setup": {
+      "exchangeId": "openctp-sim",
+      "exchangeConfig": {
+        "exchange": "openctp",
+        "apiKey": "test-user",
+        "secret": "test-pass",
+        "testnet": true,
+        "ctpBrokerId": "9999",
+        "ctpFrontAddr": "tcp://180.168.146.187:10130"
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "000001.SZ",
+        "last": 12,
+        "bid": 11.99,
+        "ask": 12.01
+      },
+      "currentTime": "2026-02-15T02:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "000001.SZ",
+        "side": "buy",
+        "type": "limit",
+        "amount": 100,
+        "price": 12,
+        "exchangeId": "openctp-sim"
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "marketOpen": true,
+      "estimatedValueUsdRange": [155, 175]
+    },
+    "tags": ["makeup-day", "weekend"],
+    "notes": "2026-02-15 is a designated makeup trading day (补班) for the Spring Festival holiday"
+  }
+]

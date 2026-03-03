@@ -1,0 +1,58 @@
+[
+  {
+    "id": "journey-emergency-stop",
+    "category": "user-journeys",
+    "name": "Emergency stop all trading",
+    "description": "Emergency stop: cancel all open orders and disable trading across all exchanges — crisis mode activation",
+    "market": "multi",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "BTC/USDT",
+        "last": 67000,
+        "bid": 66990,
+        "ask": 67010
+      },
+      "currentTime": "2026-03-03T15:00:00Z"
+    },
+    "input": {
+      "tool": "fin_emergency_stop",
+      "params": {
+        "cancelAllOrders": true,
+        "disableTrading": true,
+        "reason": "Market crash detected — emergency protocol activated"
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "customAssertions": [
+        {
+          "path": "result.ordersCancelled",
+          "operator": "gte",
+          "value": 0
+        },
+        {
+          "path": "result.tradingDisabled",
+          "operator": "eq",
+          "value": true
+        }
+      ]
+    },
+    "tags": ["journey", "emergency", "stop"]
+  }
+]

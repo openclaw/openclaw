@@ -1,0 +1,54 @@
+[
+  {
+    "id": "cn-t1-same-day-sell",
+    "category": "cn-a-share",
+    "name": "T+1 same-day sell blocked",
+    "description": "Buy 100 shares then attempt to sell same day — blocked by A-share T+1 settlement rule",
+    "market": "cn-a-share",
+    "setup": {
+      "exchangeId": "openctp-sim",
+      "exchangeConfig": {
+        "exchange": "openctp",
+        "apiKey": "test-user",
+        "secret": "test-pass",
+        "testnet": true,
+        "ctpBrokerId": "9999",
+        "ctpFrontAddr": "tcp://180.168.146.187:10130"
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "000001.SZ",
+        "last": 12,
+        "bid": 11.99,
+        "ask": 12.01
+      },
+      "currentTime": "2026-03-03T04:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "000001.SZ",
+        "side": "sell",
+        "type": "limit",
+        "amount": 100,
+        "price": 12,
+        "exchangeId": "openctp-sim",
+        "boughtToday": true
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "reasonContains": "T+1"
+    },
+    "tags": ["t-plus-one", "settlement"],
+    "notes": "A-share T+1: shares bought today cannot be sold until next trading day"
+  }
+]

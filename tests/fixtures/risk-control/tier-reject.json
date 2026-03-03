@@ -1,0 +1,51 @@
+[
+  {
+    "id": "risk-tier3-reject-50000",
+    "category": "risk-control",
+    "name": "Tier 3 reject $50,000",
+    "description": "Buy 0.75 BTC at $67,000 — estimated $50,250 far exceeds confirmThresholdUsd ($500), rejected outright",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "BTC/USDT",
+        "last": 67000,
+        "bid": 66990,
+        "ask": 67010
+      },
+      "currentTime": "2026-03-03T10:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.75,
+        "price": 67000,
+        "exchangeId": "binance-testnet"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "reasonContains": "exceeds",
+      "estimatedValueUsdRange": [49000, 51000]
+    },
+    "tags": ["risk-tier", "reject"]
+  }
+]

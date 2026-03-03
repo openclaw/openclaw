@@ -1,0 +1,53 @@
+[
+  {
+    "id": "risk-position-pct-exceeded",
+    "category": "risk-control",
+    "name": "Position percentage limit exceeded",
+    "description": "Single position would exceed maxPositionPct (25%) of portfolio — order should be blocked",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3,
+        "portfolioValueUsd": 10000,
+        "currentPositionValueUsd": 2400
+      },
+      "mockTicker": {
+        "symbol": "ETH/USDT",
+        "last": 3500,
+        "bid": 3499,
+        "ask": 3501
+      },
+      "currentTime": "2026-03-03T10:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "ETH/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.1,
+        "price": 3500,
+        "exchangeId": "binance-testnet"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "reasonContains": "position"
+    },
+    "tags": ["position-limit", "exceeded"],
+    "notes": "Current ETH position $2,400 + new order $350 = $2,750 = 27.5% of $10,000 portfolio, exceeds 25% limit"
+  }
+]

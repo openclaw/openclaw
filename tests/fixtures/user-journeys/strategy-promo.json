@@ -1,0 +1,55 @@
+[
+  {
+    "id": "journey-strategy-l1-l2",
+    "category": "user-journeys",
+    "name": "Strategy promotion L1 to L2",
+    "description": "Promote a strategy from L1 (backtest) to L2 (paper trading) — requires passing backtest fitness threshold",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "BTC/USDT",
+        "last": 67000,
+        "bid": 66990,
+        "ask": 67010
+      },
+      "currentTime": "2026-03-03T10:00:00Z"
+    },
+    "input": {
+      "tool": "fin_strategy_promote",
+      "params": {
+        "strategyId": "test-momentum-btc-001",
+        "fromLevel": "L1",
+        "toLevel": "L2",
+        "backtestFitness": 0.72,
+        "minFitnessThreshold": 0.6
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "customAssertions": [
+        {
+          "path": "strategy.level",
+          "operator": "eq",
+          "value": "L2"
+        }
+      ]
+    },
+    "tags": ["journey", "strategy", "promotion"]
+  }
+]

@@ -1,0 +1,100 @@
+[
+  {
+    "id": "risk-blocked-pair",
+    "category": "risk-control",
+    "name": "Blocked pair BTC/USDT",
+    "description": "BTC/USDT is in blockedPairs list — order should be blocked regardless of value",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3,
+        "blockedPairs": ["BTC/USDT", "DOGE/USDT"]
+      },
+      "mockTicker": {
+        "symbol": "BTC/USDT",
+        "last": 67000,
+        "bid": 66990,
+        "ask": 67010
+      },
+      "currentTime": "2026-03-03T10:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.001,
+        "price": 67000,
+        "exchangeId": "binance-testnet"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "reasonContains": "blocked"
+    },
+    "tags": ["pair-list", "blocked"]
+  },
+  {
+    "id": "risk-allowed-pair",
+    "category": "risk-control",
+    "name": "Allowed pairs whitelist blocks BTC",
+    "description": "Only ETH/USDT and SOL/USDT in allowedPairs — BTC/USDT not in whitelist, should be blocked",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3,
+        "allowedPairs": ["ETH/USDT", "SOL/USDT"]
+      },
+      "mockTicker": {
+        "symbol": "BTC/USDT",
+        "last": 67000,
+        "bid": 66990,
+        "ask": 67010
+      },
+      "currentTime": "2026-03-03T10:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.001,
+        "price": 67000,
+        "exchangeId": "binance-testnet"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "reasonContains": "not in allowed"
+    },
+    "tags": ["pair-list", "allowed-only"]
+  }
+]

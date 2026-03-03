@@ -1,0 +1,103 @@
+[
+  {
+    "id": "hk-lot-default-100-valid",
+    "category": "hk-equity",
+    "name": "Default lot size 100 valid",
+    "description": "Buy 100 shares of 9988.HK (Alibaba) — default lot size is 100, order is valid",
+    "market": "hk-equity",
+    "setup": {
+      "exchangeId": "futu-paper",
+      "exchangeConfig": {
+        "exchange": "futu",
+        "apiKey": "futu-test-key",
+        "secret": "futu-test-secret",
+        "paper": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "9988.HK",
+        "last": 80,
+        "bid": 79.9,
+        "ask": 80.1,
+        "volume24h": 20000000
+      },
+      "currentTime": "2026-03-03T02:30:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "9988.HK",
+        "side": "buy",
+        "type": "limit",
+        "amount": 100,
+        "price": 80,
+        "exchangeId": "futu-paper"
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "lotSizeValid": true,
+      "requiresConfirmation": true,
+      "estimatedValueUsdRange": [950, 1100]
+    },
+    "tags": ["lot-size", "valid"]
+  },
+  {
+    "id": "hk-lot-override-500-invalid",
+    "category": "hk-equity",
+    "name": "Lot size override 500 invalid",
+    "description": "Buy 300 shares of 9988.HK with lotSizeOverride=500 — 300 is not a multiple of 500, invalid lot size",
+    "market": "hk-equity",
+    "setup": {
+      "exchangeId": "futu-paper",
+      "exchangeConfig": {
+        "exchange": "futu",
+        "apiKey": "futu-test-key",
+        "secret": "futu-test-secret",
+        "paper": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "9988.HK",
+        "last": 80,
+        "bid": 79.9,
+        "ask": 80.1
+      },
+      "currentTime": "2026-03-03T02:30:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "9988.HK",
+        "side": "buy",
+        "type": "limit",
+        "amount": 300,
+        "price": 80,
+        "exchangeId": "futu-paper",
+        "lotSizeOverride": 500
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "lotSizeValid": false,
+      "reasonContains": "lot size"
+    },
+    "tags": ["lot-size", "override", "invalid"]
+  }
+]

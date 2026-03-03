@@ -1,0 +1,51 @@
+[
+  {
+    "id": "cross-loss-cascade",
+    "category": "cross-market",
+    "name": "Cross-market loss cascade",
+    "description": "Multiple consecutive losses across markets trigger daily loss limit — cumulative loss $980 from crypto + equity, next order blocked",
+    "market": "multi",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3,
+        "currentDailyLossUsd": 980
+      },
+      "mockTicker": {
+        "symbol": "SOL/USDT",
+        "last": 150,
+        "bid": 149.8,
+        "ask": 150.2
+      },
+      "currentTime": "2026-03-03T20:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "SOL/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.5,
+        "price": 150,
+        "exchangeId": "binance-testnet"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "reasonContains": "daily loss"
+    },
+    "tags": ["cross-market", "cascade", "daily-loss"]
+  }
+]

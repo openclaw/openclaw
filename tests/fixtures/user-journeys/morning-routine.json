@@ -1,0 +1,47 @@
+[
+  {
+    "id": "journey-morning-check",
+    "category": "user-journeys",
+    "name": "Morning portfolio check",
+    "description": "Morning routine: check portfolio status before market opens — should return portfolio summary without placing any orders",
+    "market": "multi",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "BTC/USDT",
+        "last": 67000,
+        "bid": 66990,
+        "ask": 67010
+      },
+      "currentTime": "2026-03-03T06:00:00Z"
+    },
+    "input": {
+      "tool": "fin_check_portfolio",
+      "params": {
+        "exchangeId": "binance-testnet",
+        "includeOpenOrders": true,
+        "includePnl": true
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false
+    },
+    "tags": ["journey", "morning", "portfolio"],
+    "notes": "Portfolio check is a read-only operation, should always succeed if exchange is configured"
+  }
+]

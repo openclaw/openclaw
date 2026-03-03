@@ -1,0 +1,102 @@
+[
+  {
+    "id": "us-buy-aapl-1",
+    "category": "us-equity",
+    "name": "Buy 1 share AAPL needs confirmation",
+    "description": "Buy 1 share of AAPL at $175 — estimated $175 exceeds maxAutoTradeUsd ($100), requires confirmation",
+    "market": "us-equity",
+    "setup": {
+      "exchangeId": "alpaca-paper",
+      "exchangeConfig": {
+        "exchange": "alpaca",
+        "apiKey": "PKTST-FAKE-KEY",
+        "secret": "fake-secret-key",
+        "paper": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "AAPL",
+        "last": 175,
+        "bid": 174.95,
+        "ask": 175.05,
+        "volume24h": 55000000
+      },
+      "currentTime": "2026-03-03T15:30:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "AAPL",
+        "side": "buy",
+        "type": "limit",
+        "amount": 1,
+        "price": 175,
+        "exchangeId": "alpaca-paper"
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "requiresConfirmation": true,
+      "estimatedValueUsdRange": [170, 180]
+    },
+    "tags": ["normal-trading", "confirm"]
+  },
+  {
+    "id": "us-buy-nvda-5",
+    "category": "us-equity",
+    "name": "Buy 5 shares NVDA rejected",
+    "description": "Buy 5 shares of NVDA at $800 — estimated $4,000 exceeds confirmThresholdUsd ($500), should be rejected",
+    "market": "us-equity",
+    "setup": {
+      "exchangeId": "alpaca-paper",
+      "exchangeConfig": {
+        "exchange": "alpaca",
+        "apiKey": "PKTST-FAKE-KEY",
+        "secret": "fake-secret-key",
+        "paper": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "NVDA",
+        "last": 800,
+        "bid": 799.5,
+        "ask": 800.5,
+        "volume24h": 40000000
+      },
+      "currentTime": "2026-03-03T15:30:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "NVDA",
+        "side": "buy",
+        "type": "limit",
+        "amount": 5,
+        "price": 800,
+        "exchangeId": "alpaca-paper"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "reasonContains": "exceeds",
+      "estimatedValueUsdRange": [3900, 4100]
+    },
+    "tags": ["normal-trading", "reject"]
+  }
+]

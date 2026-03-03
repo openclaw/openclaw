@@ -1,0 +1,105 @@
+[
+  {
+    "id": "crypto-futures-3x-ok",
+    "category": "crypto",
+    "name": "Futures 3x leverage valid",
+    "description": "Buy BTC/USDT futures with 3x leverage — within maxLeverage limit (3), should be allowed",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "BTC/USDT",
+        "last": 67000,
+        "bid": 66990,
+        "ask": 67010,
+        "volume24h": 25000
+      },
+      "currentTime": "2026-03-03T02:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.001,
+        "price": 67000,
+        "exchangeId": "binance-testnet",
+        "leverage": 3,
+        "market": "futures"
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "requiresConfirmation": false,
+      "estimatedValueUsdRange": [60, 75]
+    },
+    "tags": ["futures", "leverage", "valid"]
+  },
+  {
+    "id": "crypto-futures-10x-reject",
+    "category": "crypto",
+    "name": "Futures 10x leverage rejected",
+    "description": "Buy BTC/USDT futures with 10x leverage — exceeds maxLeverage (3), should be blocked",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "BTC/USDT",
+        "last": 67000,
+        "bid": 66990,
+        "ask": 67010,
+        "volume24h": 25000
+      },
+      "currentTime": "2026-03-03T02:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "limit",
+        "amount": 0.001,
+        "price": 67000,
+        "exchangeId": "binance-testnet",
+        "leverage": 10,
+        "market": "futures"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "reasonContains": "leverage"
+    },
+    "tags": ["futures", "leverage", "reject"]
+  }
+]

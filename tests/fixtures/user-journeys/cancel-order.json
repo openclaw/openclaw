@@ -1,0 +1,53 @@
+[
+  {
+    "id": "journey-cancel-open-order",
+    "category": "user-journeys",
+    "name": "Cancel an open order",
+    "description": "Cancel a pending limit order by order ID — should succeed and return cancellation confirmation",
+    "market": "crypto",
+    "setup": {
+      "exchangeId": "binance-testnet",
+      "exchangeConfig": {
+        "exchange": "binance",
+        "apiKey": "test-api-key",
+        "secret": "test-secret",
+        "testnet": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "BTC/USDT",
+        "last": 67000,
+        "bid": 66990,
+        "ask": 67010
+      },
+      "currentTime": "2026-03-03T12:00:00Z"
+    },
+    "input": {
+      "tool": "fin_cancel_order",
+      "params": {
+        "orderId": "test-order-12345",
+        "symbol": "BTC/USDT",
+        "exchangeId": "binance-testnet"
+      }
+    },
+    "expected": {
+      "success": true,
+      "blocked": false,
+      "customAssertions": [
+        {
+          "path": "result.status",
+          "operator": "eq",
+          "value": "cancelled"
+        }
+      ]
+    },
+    "tags": ["journey", "cancel", "order"]
+  }
+]

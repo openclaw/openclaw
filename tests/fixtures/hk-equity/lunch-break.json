@@ -1,0 +1,102 @@
+[
+  {
+    "id": "hk-lunch-closed",
+    "category": "hk-equity",
+    "name": "Lunch break closed",
+    "description": "Attempt to buy 0700.HK at 12:30 HKT (04:30 UTC) — market closed during lunch break (12:00-13:00 HKT)",
+    "market": "hk-equity",
+    "setup": {
+      "exchangeId": "futu-paper",
+      "exchangeConfig": {
+        "exchange": "futu",
+        "apiKey": "futu-test-key",
+        "secret": "futu-test-secret",
+        "paper": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "0700.HK",
+        "last": 380,
+        "bid": 379.6,
+        "ask": 380.4
+      },
+      "currentTime": "2026-03-03T04:30:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "0700.HK",
+        "side": "buy",
+        "type": "limit",
+        "amount": 100,
+        "price": 380,
+        "exchangeId": "futu-paper"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "marketOpen": false,
+      "reasonContains": "lunch break"
+    },
+    "tags": ["lunch-break", "closed"]
+  },
+  {
+    "id": "hk-afternoon-open",
+    "category": "hk-equity",
+    "name": "Afternoon session open",
+    "description": "Buy 0700.HK at 14:00 HKT (06:00 UTC) — afternoon session open (13:00-16:00 HKT)",
+    "market": "hk-equity",
+    "setup": {
+      "exchangeId": "futu-paper",
+      "exchangeConfig": {
+        "exchange": "futu",
+        "apiKey": "futu-test-key",
+        "secret": "futu-test-secret",
+        "paper": true
+      },
+      "riskConfig": {
+        "enabled": true,
+        "maxAutoTradeUsd": 100,
+        "confirmThresholdUsd": 500,
+        "maxDailyLossUsd": 1000,
+        "maxPositionPct": 25,
+        "maxLeverage": 3
+      },
+      "mockTicker": {
+        "symbol": "0700.HK",
+        "last": 380,
+        "bid": 379.6,
+        "ask": 380.4
+      },
+      "currentTime": "2026-03-03T06:00:00Z"
+    },
+    "input": {
+      "tool": "fin_place_order",
+      "params": {
+        "symbol": "0700.HK",
+        "side": "buy",
+        "type": "limit",
+        "amount": 100,
+        "price": 380,
+        "exchangeId": "futu-paper"
+      }
+    },
+    "expected": {
+      "success": false,
+      "blocked": true,
+      "marketOpen": true,
+      "reasonContains": "exceeds",
+      "estimatedValueUsdRange": [4700, 5100]
+    },
+    "tags": ["lunch-break", "open"],
+    "notes": "Market is open but order still blocked by risk control (value exceeds threshold)"
+  }
+]
