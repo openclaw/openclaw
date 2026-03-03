@@ -91,7 +91,7 @@ export function stripReasoningTagsFromText(
   // Handle bare "thought\n" duplication (Gemini 3.0 Flash, no XML tags)
   if (mode === "strict" && /\bthought\b/i.test(result)) {
     const lowerResult = result.toLowerCase();
-    const thoughtMatch = lowerResult.match(/\\bthought\\b\\s*\\n/i);
+    const thoughtMatch = lowerResult.match(/\bthought\b\s*\n/i);
     if (thoughtMatch) {
       const thoughtIdx = thoughtMatch.index!;
       const prefix = result.slice(0, thoughtIdx).trimEnd();
