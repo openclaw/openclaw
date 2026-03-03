@@ -384,6 +384,7 @@ describe("createTelegramDraftStream", () => {
       api: api as unknown as Bot["api"],
       chatId: 123,
       previewTransport: "message",
+      previewTransport: "message",
       onSupersededPreview,
     });
 
@@ -413,6 +414,7 @@ describe("createTelegramDraftStream", () => {
       api: api as unknown as Bot["api"],
       chatId: 123,
       previewTransport: "message",
+      previewTransport: "message",
       renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
     });
 
@@ -433,6 +435,7 @@ describe("createTelegramDraftStream", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      previewTransport: "message",
       maxChars: 100,
       renderText: () => ({ text: `<b>${"<".repeat(120)}</b>`, parseMode: "HTML" }),
       warn,
@@ -460,6 +463,7 @@ describe("draft stream initial message debounce", () => {
     return createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      previewTransport: "message",
       minInitialChars,
     });
   }
@@ -554,6 +558,7 @@ describe("draft stream initial message debounce", () => {
       const stream = createTelegramDraftStream({
         api: api as unknown as Bot["api"],
         chatId: 123,
+      previewTransport: "message",
         // no minInitialChars (backward-compatible behavior)
       });
 
