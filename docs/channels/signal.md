@@ -197,6 +197,48 @@ Groups:
 - `channels.signal.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
 - Runtime note: if `channels.signal` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
+## Recommended configuration for personal use
+
+If you are running OpenClaw as a personal assistant and Signal is your primary channel, this configuration optimizes the DM experience.
+
+```json5
+{
+  channels: {
+    signal: {
+      enabled: true,
+      account: "+15551234567",
+      cliPath: "signal-cli",
+      dmPolicy: "allowlist",
+      allowFrom: ["+15557654321"],
+      sendReadReceipts: true,
+      chunkMode: "newline",
+      blockStreaming: true,
+      blockStreamingCoalesce: {
+        minChars: 800,
+        idleMs: 1000,
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      blockStreamingDefault: "on",
+      blockStreamingBreak: "text_end",
+      humanDelay: { mode: "natural" },
+    },
+  },
+}
+```
+
+What each setting does:
+
+- `sendReadReceipts: true` — shows blue checkmarks when the bot reads your message.
+- `chunkMode: "newline"` — splits outbound messages at paragraph boundaries instead of arbitrary character counts.
+- `blockStreaming: true` — progressive delivery: sends message blocks as they're ready instead of waiting for the full response.
+- `blockStreamingCoalesce` — merges small chunks to prevent message spam. `minChars: 800` is a good balance between responsiveness and notification noise.
+- `humanDelay: { mode: "natural" }` — adds realistic pauses between message blocks so delivery feels conversational.
+
+If you prefer receiving complete responses as a single message, increase `blockStreamingCoalesce.minChars` to a very high value (e.g. `50000`). The bot will still stream internally but coalesce everything into one delivery.
+
 ## How it works (behavior)
 
 - `signal-cli` runs as a daemon; the gateway reads events via SSE.
