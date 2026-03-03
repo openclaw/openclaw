@@ -26,6 +26,8 @@ interface LineAccountBaseConfig {
   responsePrefix?: string;
   mediaMaxMb?: number;
   webhookPath?: string;
+  /** How fenced code blocks are rendered: "flex" (separate Flex bubbles, default) or "inline" (plain text in body). */
+  codeBlockDisplay?: "flex" | "inline";
   groups?: Record<string, LineGroupConfig>;
 }
 

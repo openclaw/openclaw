@@ -8,9 +8,10 @@ import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { normalizePluginHttpPath } from "../plugins/http-path.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveLineAccount } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
-import { processLineMessage } from "./markdown-to-line.js";
+import { processLineMessage as processLineMessageRaw } from "./markdown-to-line.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import {
   replyMessageLine,
@@ -222,7 +223,12 @@ export async function monitorLineProvider(
                 textLimit,
                 deps: {
                   buildTemplateMessageFromPayload,
-                  processLineMessage,
+                  processLineMessage: (text) => {
+                    const resolved = resolveLineAccount({ cfg: config, accountId: ctx.accountId });
+                    return processLineMessageRaw(text, {
+                      codeBlockDisplay: resolved.config.codeBlockDisplay,
+                    });
+                  },
                   chunkMarkdownText,
                   sendLineReplyChunks,
                   replyMessageLine,

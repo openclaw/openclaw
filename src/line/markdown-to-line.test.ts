@@ -296,6 +296,42 @@ print("done")
     expect(result.text).toBe(text);
     expect(result.flexMessages).toHaveLength(0);
   });
+
+  it("keeps code blocks inline as plain text when codeBlockDisplay is 'inline'", () => {
+    const text = `Run this:
+
+\`\`\`bash
+npm install
+\`\`\`
+
+Then restart.`;
+
+    const result = processLineMessage(text, { codeBlockDisplay: "inline" });
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain("npm install");
+    expect(result.text).toContain("Run this:");
+    expect(result.text).toContain("Then restart.");
+    expect(result.text).not.toContain("```");
+  });
+
+  it("extracts code blocks to Flex when codeBlockDisplay is 'flex'", () => {
+    const text = `Code:\n\n\`\`\`js\nconsole.log("hi");\n\`\`\``;
+
+    const result = processLineMessage(text, { codeBlockDisplay: "flex" });
+
+    expect(result.flexMessages).toHaveLength(1);
+    expect(result.text).not.toContain("console.log");
+  });
+
+  it("defaults to flex when codeBlockDisplay is undefined", () => {
+    const text = `Code:\n\n\`\`\`js\nconsole.log("hi");\n\`\`\``;
+
+    const resultDefault = processLineMessage(text);
+    const resultFlex = processLineMessage(text, { codeBlockDisplay: "flex" });
+
+    expect(resultDefault.flexMessages).toHaveLength(resultFlex.flexMessages.length);
+  });
 });
 
 describe("hasMarkdownToConvert", () => {
