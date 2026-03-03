@@ -1,11 +1,12 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isPidAlive } from "../shared/pid-alive.js";
+import { getSystemBootId, isPidAlive } from "../shared/pid-alive.js";
 import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
 
 type LockFilePayload = {
   pid?: number;
+  bootId?: string;
   createdAt?: string;
 };
 
@@ -273,6 +274,9 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
     if (typeof parsed.pid === "number") {
       payload.pid = parsed.pid;
     }
+    if (typeof parsed.bootId === "string") {
+      payload.bootId = parsed.bootId;
+    }
     if (typeof parsed.createdAt === "string") {
       payload.createdAt = parsed.createdAt;
     }
@@ -294,11 +298,20 @@ function inspectLockPayload(
   const ageMs = Number.isFinite(createdAtMs) ? Math.max(0, nowMs - createdAtMs) : null;
 
   const staleReasons: string[] = [];
-  if (pid === null) {
+
+  // Boot ID mismatch means the system rebooted since the lock was created.
+  // The PID is guaranteed to belong to a different process, even if
+  // isPidAlive returns true (PID reuse after reboot).
+  const currentBootId = getSystemBootId();
+  const lockBootId = typeof payload?.bootId === "string" ? payload.bootId : null;
+  if (currentBootId && lockBootId && currentBootId !== lockBootId) {
+    staleReasons.push("different-boot");
+  } else if (pid === null) {
     staleReasons.push("missing-pid");
   } else if (!pidAlive) {
     staleReasons.push("dead-pid");
   }
+
   if (ageMs === null) {
     staleReasons.push("invalid-createdAt");
   } else if (ageMs > staleMs) {
@@ -447,7 +460,12 @@ export async function acquireSessionWriteLock(params: {
     try {
       handle = await fs.open(lockPath, "wx");
       const createdAt = new Date().toISOString();
-      await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt }, null, 2), "utf8");
+      const bootId = getSystemBootId();
+      const lockData: LockFilePayload = { pid: process.pid, createdAt };
+      if (bootId) {
+        lockData.bootId = bootId;
+      }
+      await handle.writeFile(JSON.stringify(lockData, null, 2), "utf8");
       const createdHeld: HeldLock = {
         count: 1,
         handle,

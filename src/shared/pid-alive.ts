@@ -31,3 +31,35 @@ export function isPidAlive(pid: number): boolean {
   }
   return true;
 }
+
+let cachedBootId: string | null | undefined;
+
+/**
+ * Read the system boot ID on Linux (`/proc/sys/kernel/random/boot_id`).
+ * Returns `null` on non-Linux platforms or if the file can't be read.
+ * The value is cached for the lifetime of the process since it never changes
+ * within a single boot.
+ */
+export function getSystemBootId(): string | null {
+  if (cachedBootId !== undefined) {
+    return cachedBootId;
+  }
+  if (process.platform !== "linux") {
+    cachedBootId = null;
+    return null;
+  }
+  try {
+    cachedBootId = fsSync.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    return cachedBootId;
+  } catch {
+    cachedBootId = null;
+    return null;
+  }
+}
+
+/**
+ * Reset the cached boot ID. Only useful in tests.
+ */
+export function __resetBootIdCache(): void {
+  cachedBootId = undefined;
+}

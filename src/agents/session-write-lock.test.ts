@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { getSystemBootId } from "../shared/pid-alive.js";
 import {
   __testing,
   acquireSessionWriteLock,
@@ -315,5 +316,96 @@ describe("acquireSessionWriteLock", () => {
 
     expect(process.listeners("SIGINT")).toContain(keepAlive);
     process.off("SIGINT", keepAlive);
+  });
+
+  it("writes bootId to lock file on Linux", async () => {
+    const bootId = getSystemBootId();
+    if (!bootId) {
+      return; // skip on non-Linux
+    }
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const raw = await fs.readFile(lockPath, "utf8");
+      const payload = JSON.parse(raw) as { pid: number; bootId?: string };
+
+      expect(payload.pid).toBe(process.pid);
+      expect(payload.bootId).toBe(bootId);
+      await lock.release();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reclaims lock with different bootId even if PID is alive", async () => {
+    const bootId = getSystemBootId();
+    if (!bootId) {
+      return; // skip on non-Linux
+    }
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+
+      // Create a lock file with current PID (alive!) but a different bootId
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          bootId: "00000000-0000-0000-0000-000000000000",
+          createdAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+
+      // Should reclaim because bootId doesn't match, even though PID is alive
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 });
+      const raw = await fs.readFile(lockPath, "utf8");
+      const payload = JSON.parse(raw) as { pid: number; bootId?: string };
+
+      expect(payload.pid).toBe(process.pid);
+      expect(payload.bootId).toBe(bootId);
+      await lock.release();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleanStaleLockFiles detects different-boot as stale reason", async () => {
+    const bootId = getSystemBootId();
+    if (!bootId) {
+      return; // skip on non-Linux
+    }
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    try {
+      const rebootedLock = path.join(sessionsDir, "rebooted.jsonl.lock");
+      await fs.writeFile(
+        rebootedLock,
+        JSON.stringify({
+          pid: process.pid,
+          bootId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          createdAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 60_000,
+        removeStale: true,
+      });
+
+      expect(result.locks).toHaveLength(1);
+      expect(result.cleaned).toHaveLength(1);
+      expect(result.cleaned[0].staleReasons).toContain("different-boot");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
