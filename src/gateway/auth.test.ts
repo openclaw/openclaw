@@ -42,6 +42,20 @@ function createTailscaleForwardedReq(): never {
   } as never;
 }
 
+function createTailscaleForwardedReqWithPortInHost(): never {
+  return {
+    socket: { remoteAddress: "127.0.0.1" },
+    headers: {
+      host: "gateway.local",
+      "x-forwarded-for": "100.64.0.1",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "ai-hub.bone-egret.ts.net:443",
+      "tailscale-user-login": "peter",
+      "tailscale-user-name": "Peter",
+    },
+  } as never;
+}
+
 function createNonTailscaleForwardedReq(): never {
   return {
     socket: { remoteAddress: "127.0.0.1" },
@@ -286,6 +300,20 @@ describe("gateway auth", () => {
 
   it("treats proxied tailscale serve requests as direct when trusted proxies are configured", () => {
     expect(isLocalDirectRequest(createTailscaleForwardedReq(), ["127.0.0.1"])).toBe(true);
+  });
+
+  it("treats proxied tailscale serve requests with host:port as direct when trusted proxies are configured", () => {
+    expect(isLocalDirectRequest(createTailscaleForwardedReqWithPortInHost(), ["127.0.0.1"])).toBe(
+      true,
+    );
+  });
+
+  it("does not apply the tailscale local-direct shortcut when explicitly disabled", () => {
+    expect(
+      isLocalDirectRequest(createTailscaleForwardedReq(), ["127.0.0.1"], false, {
+        allowTailscaleServeShortcut: false,
+      }),
+    ).toBe(false);
   });
 
   it("does not treat proxied tailscale serve requests as direct without trusted proxies", () => {
