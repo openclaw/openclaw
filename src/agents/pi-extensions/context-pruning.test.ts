@@ -615,4 +615,41 @@ describe("context-pruning", () => {
     const newContent = (next[3] as { content: string }).content;
     expect(newContent).toContain(bigBody);
   });
+
+  it("handles file blocks with mime attribute before name", () => {
+    const body = "x".repeat(5000);
+    const text = `<file mime="application/pdf" name="report.pdf">${body}</file>`;
+    const settings = makeAggressiveSettings({
+      fileBlocks: { enabled: true, maxChars: 100, headChars: 30, tailChars: 30 },
+    });
+    const result = softTrimFileBlocksInText(text, settings);
+    expect(result.trimmedChars).toBeGreaterThan(0);
+    expect(result.text).toContain("[File block trimmed:");
+    expect(result.text).toContain(`<file name="report.pdf" mime="application/pdf">`);
+  });
+
+  it("handles file blocks with extra attributes", () => {
+    const body = "y".repeat(5000);
+    const text = `<file name="test.txt" mime="text/plain" size="5000" encoding="utf-8">${body}</file>`;
+    const settings = makeAggressiveSettings({
+      fileBlocks: { enabled: true, maxChars: 100, headChars: 30, tailChars: 30 },
+    });
+    const result = softTrimFileBlocksInText(text, settings);
+    expect(result.trimmedChars).toBeGreaterThan(0);
+    expect(result.text).toContain("[File block trimmed:");
+    expect(result.text).toContain(`<file name="test.txt" mime="text/plain">`);
+  });
+
+  it("handles file blocks with only name attribute (no mime)", () => {
+    const body = "z".repeat(5000);
+    const text = `<file name="simple.txt">${body}</file>`;
+    const settings = makeAggressiveSettings({
+      fileBlocks: { enabled: true, maxChars: 100, headChars: 30, tailChars: 30 },
+    });
+    const result = softTrimFileBlocksInText(text, settings);
+    expect(result.trimmedChars).toBeGreaterThan(0);
+    expect(result.text).toContain("[File block trimmed:");
+    expect(result.text).toContain(`<file name="simple.txt">`);
+    expect(result.text).not.toContain('mime=');
+  });
 });
