@@ -633,6 +633,7 @@ export const registerTelegramHandlers = ({
         isForum: params.isForum,
         messageThreadId: params.messageThreadId,
         groupAllowFrom,
+        groupAuthIncludesPairingStore: telegramCfg.groupAuthIncludesPairingStore,
         resolveTelegramGroupConfig,
       }));
     // Use direct config dmPolicy override if available for DMs
