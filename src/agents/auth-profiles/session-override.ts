@@ -112,7 +112,14 @@ export async function resolveSessionAuthProfileOverride(params: {
     (typeof sessionEntry.authProfileOverrideCompactionCount === "number"
       ? "auto"
       : current
-        ? "user"
+        ? // Legacy sessions may carry an override id without source metadata.
+          // When multiple profiles are configured for the provider, treating the
+          // legacy value as "auto" keeps profile rotation/failover available.
+          // For single-profile providers, retain the conservative legacy "user"
+          // behavior to avoid surprising explicit pin expectations.
+          order.length > 1
+          ? "auto"
+          : "user"
         : undefined);
   if (source === "user" && current && !isNewSession) {
     return current;
