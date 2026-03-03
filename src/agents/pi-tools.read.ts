@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import {
   SafeOpenError,
@@ -703,7 +703,7 @@ function wrapHostEditToolWithPostWriteRecovery(base: AnyAgentTool, root: string)
       toolCallId: string,
       params: unknown,
       signal: AbortSignal | undefined,
-      onUpdate?: (update: unknown) => void,
+      onUpdate?: AgentToolUpdateCallback<unknown>,
     ) => {
       try {
         return await base.execute(toolCallId, params, signal, onUpdate);
