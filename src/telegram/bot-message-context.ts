@@ -234,6 +234,10 @@ export const buildTelegramMessageContext = async ({
         accountId: account.accountId,
         peer: { kind: "direct", id: peerId },
         dmScope: "per-account-channel-peer",
+        // Thread identity-links through to keep parity with the routed path in
+        // resolveAgentRoute, which also passes cfg.session?.identityLinks so that
+        // resolveLinkedPeerId can collapse multiple peer IDs into a canonical key.
+        identityLinks: cfg.session?.identityLinks,
       }).toLowerCase()
     : route.sessionKey;
   // DMs: use thread suffix for session isolation (works regardless of dmScope)
