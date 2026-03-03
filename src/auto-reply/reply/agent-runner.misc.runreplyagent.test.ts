@@ -1920,8 +1920,9 @@ describe("runReplyAgent continuation signal handling", () => {
 
     // Verify the spawn params contain the task and attachments
     const spawnParams = spawnSubagentDirectMock.mock.calls[0][0];
+    const spawnCtx = spawnSubagentDirectMock.mock.calls[0][1];
     expect(spawnParams.task).toContain(delegateTask);
-    expect(spawnParams.sessionKey).toBe(sessionKey);
+    expect(spawnCtx.agentSessionKey).toBe(sessionKey);
     expect(spawnParams.attachments).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

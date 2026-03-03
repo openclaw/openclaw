@@ -813,7 +813,6 @@ export async function runReplyAgent(params: {
               await spawnSubagentDirect(
                 {
                   task: `[continuation] Delegated task (turn ${nextChainCount}/${maxChainLength}): ${delegateTask}`,
-                  sessionKey,
                   attachments,
                 },
                 {
