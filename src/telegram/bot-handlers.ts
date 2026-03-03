@@ -211,11 +211,13 @@ export const registerTelegramHandlers = ({
         cfg,
         commandOptions: { botUsername: entry.botUsername },
       });
+      if (entry.debounceLane === "forward") {
+        // Forwarded bursts often split text + media into adjacent updates.
+        // Debounce media-only forward entries too so they can coalesce.
+        return hasDebounceableText || entry.allMedia.length > 0;
+      }
       if (!hasDebounceableText) {
         return false;
-      }
-      if (entry.debounceLane === "forward") {
-        return true;
       }
       return entry.allMedia.length === 0;
     },
