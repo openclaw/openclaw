@@ -1,6 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
-import { connectGateway } from "./app-gateway.ts";
+
+vi.stubGlobal("localStorage", {
+  getItem: vi.fn(() => null),
+  setItem: vi.fn(),
+  removeItem: vi.fn(),
+  clear: vi.fn(),
+  key: vi.fn(() => null),
+  length: 0,
+});
+
+vi.mock("./app-settings.ts", async () => {
+  const actual = await vi.importActual<typeof import("./app-settings.ts")>("./app-settings.ts");
+  return {
+    ...actual,
+    setTab: vi.fn(
+      (host: Parameters<typeof actual.setTab>[0], next: Parameters<typeof actual.setTab>[1]) => {
+        host.tab = next;
+      },
+    ),
+    setTabFromRoute: vi.fn(actual.setTabFromRoute),
+    syncUrlWithTab: vi.fn(),
+  };
+});
+
+const { connectGateway } = await import("./app-gateway.ts");
+const appSettings = await import("./app-settings.ts");
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
@@ -112,6 +137,7 @@ function createHost() {
 describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
+    vi.clearAllMocks();
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {
@@ -249,5 +275,34 @@ describe("connectGateway", () => {
 
     expect(host.tab).toBe("overview");
     expect(host.lastError).toContain("gateway token missing");
+    expect(appSettings.setTabFromRoute).toHaveBeenCalledWith(host, "overview");
+    expect(appSettings.syncUrlWithTab).toHaveBeenCalledWith(host, "overview", false);
+    expect(appSettings.setTab).not.toHaveBeenCalled();
+  });
+
+  it("stays on chat when password auth is configured", () => {
+    const host = createHost();
+    host.tab = "chat";
+    host.settings.token = "";
+    host.password = "sekret";
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message:
+          "unauthorized: gateway token missing (open the dashboard URL and paste the token in Control UI settings)",
+        details: { code: "INVALID_REQUEST" },
+      },
+    });
+
+    expect(host.tab).toBe("chat");
+    expect(appSettings.setTabFromRoute).not.toHaveBeenCalled();
+    expect(appSettings.syncUrlWithTab).not.toHaveBeenCalled();
   });
 });
