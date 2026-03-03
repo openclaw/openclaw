@@ -26,6 +26,16 @@ class CanvasScreenNavigationPolicyTest {
   }
 
   @Test
+  fun opensCrossOriginMixedHttpSchemeNavigationInExternalBrowser() {
+    assertTrue(
+      shouldOpenCanvasNavigationInExternalBrowser(
+        currentUrl = "https://canvas.example/page",
+        targetUrl = "http://canvas.example/page",
+      ),
+    )
+  }
+
+  @Test
   fun opensHttpNavigationFromFileCanvasInExternalBrowser() {
     assertTrue(
       shouldOpenCanvasNavigationInExternalBrowser(
@@ -41,6 +51,26 @@ class CanvasScreenNavigationPolicyTest {
       shouldOpenCanvasNavigationInExternalBrowser(
         currentUrl = "https://canvas.example",
         targetUrl = "javascript:void(0)",
+      ),
+    )
+  }
+
+  @Test
+  fun keepsEquivalentDefaultHttpsPortNavigationInsideCanvas() {
+    assertFalse(
+      shouldOpenCanvasNavigationInExternalBrowser(
+        currentUrl = "https://canvas.example/page",
+        targetUrl = "https://canvas.example:443/help",
+      ),
+    )
+  }
+
+  @Test
+  fun keepsNavigationInsideCanvasWhenCurrentUrlIsMissing() {
+    assertFalse(
+      shouldOpenCanvasNavigationInExternalBrowser(
+        currentUrl = null,
+        targetUrl = "https://example.com",
       ),
     )
   }

@@ -101,15 +101,20 @@ fun CanvasScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               view: WebView,
               request: WebResourceRequest,
             ): Boolean {
-              if (!request.isForMainFrame || !request.hasGesture()) return false
+              if (!request.isForMainFrame) return false
+              val userInitiatedOrRedirect = request.hasGesture() || request.isRedirect
+              if (!userInitiatedOrRedirect) return false
               val targetUrl = request.url?.toString().orEmpty()
               if (!shouldOpenCanvasNavigationInExternalBrowser(view.url, targetUrl)) return false
               return try {
                 val intent = Intent(Intent.ACTION_VIEW, request.url).addCategory(Intent.CATEGORY_BROWSABLE)
                 view.context.startActivity(intent)
                 true
-              } catch (_: Throwable) {
-                false
+              } catch (error: Throwable) {
+                if (isDebuggable) {
+                  Log.w("OpenClawWebView", "external navigation launch failed for $targetUrl", error)
+                }
+                true
               }
             }
 
