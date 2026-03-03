@@ -140,6 +140,12 @@ export type AgentDefaultsConfig = {
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
+  /**
+   * Inject MEMORY.md / memory.md into Project Context bootstrap files.
+   * Set false to rely on memory_search/memory_get recall without always preloading memory files.
+   * Default: true.
+   */
+  bootstrapInjectMemory?: boolean;
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
