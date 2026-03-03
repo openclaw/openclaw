@@ -149,10 +149,11 @@ async function runNonStreamingChatSend(params: {
   message?: string;
   client?: unknown;
   expectBroadcast?: boolean;
+  sessionKey?: string;
 }) {
   await chatHandlers["chat.send"]({
     params: {
-      sessionKey: "main",
+      sessionKey: params.sessionKey ?? "main",
       message: params.message ?? "hello",
       idempotencyKey: params.idempotencyKey,
     },
@@ -345,7 +346,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(payload)).toBe("hello");
   });
 
-  it("chat.send inherits originating routing metadata from session delivery context", async () => {
+  it("chat.send inherits routing metadata for per-channel sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-origin-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -367,6 +368,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-origin-routing",
+      sessionKey: "agent:main:telegram:direct:6812765697",
       expectBroadcast: false,
     });
 
@@ -380,7 +382,39 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("chat.send inherits Feishu routing metadata from session delivery context", async () => {
+  it("chat.send does NOT inherit external channel for shared main sessions (dmScope=main)", async () => {
+    createTranscriptFixture("openclaw-chat-send-shared-main-no-inherit-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "discord",
+        to: "discord:user123",
+        accountId: "default",
+      },
+      lastChannel: "discord",
+      lastTo: "discord:user123",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-shared-main-no-inherit",
+      sessionKey: "main",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+      }),
+    );
+    expect(mockState.lastDispatchCtx?.OriginatingTo).toBeUndefined();
+  });
+
+  it("chat.send inherits Feishu routing metadata for per-channel session", async () => {
     createTranscriptFixture("openclaw-chat-send-feishu-origin-routing-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -400,6 +434,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-feishu-origin-routing",
+      sessionKey: "agent:main:feishu:direct:ou_feishu_direct_123",
       expectBroadcast: false,
     });
 

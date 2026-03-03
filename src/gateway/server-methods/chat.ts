@@ -5,6 +5,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { resolveSessionKeyChannelHint } from "../../auto-reply/reply/session-delivery.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -840,13 +841,22 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
-      const routeChannelCandidate = normalizeMessageChannel(
-        entry?.deliveryContext?.channel ?? entry?.lastChannel,
-      );
-      const routeToCandidate = entry?.deliveryContext?.to ?? entry?.lastTo;
-      const routeAccountIdCandidate =
-        entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
-      const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
+      // Only inherit delivery context for per-channel sessions (e.g. agent:main:telegram:...).
+      // Shared main sessions (agent:main:main, dmScope=main) must not inherit the external
+      // channel from a previous interaction — doing so causes duplicate delivery (#33619).
+      const isPerChannelSession = resolveSessionKeyChannelHint(sessionKey) != null;
+      const routeChannelCandidate = isPerChannelSession
+        ? normalizeMessageChannel(entry?.deliveryContext?.channel ?? entry?.lastChannel)
+        : undefined;
+      const routeToCandidate = isPerChannelSession
+        ? (entry?.deliveryContext?.to ?? entry?.lastTo)
+        : undefined;
+      const routeAccountIdCandidate = isPerChannelSession
+        ? (entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined)
+        : undefined;
+      const routeThreadIdCandidate = isPerChannelSession
+        ? (entry?.deliveryContext?.threadId ?? entry?.lastThreadId)
+        : undefined;
       const hasDeliverableRoute =
         routeChannelCandidate &&
         routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&

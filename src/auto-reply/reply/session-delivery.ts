@@ -18,7 +18,7 @@ export type LegacyMainDeliveryRetirement = {
   entry: SessionEntry;
 };
 
-function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
+export function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed?.rest) {
     return undefined;
