@@ -77,6 +77,7 @@ describe("runDiscordGatewayLifecycle", () => {
     const runtimeError = vi.fn();
     const runtimeExit = vi.fn();
     const releaseEarlyGatewayErrorGuard = vi.fn();
+    const statusSink = vi.fn();
     const runtime: RuntimeEnv = {
       log: runtimeLog,
       error: runtimeError,
@@ -89,6 +90,7 @@ describe("runDiscordGatewayLifecycle", () => {
       runtimeLog,
       runtimeError,
       releaseEarlyGatewayErrorGuard,
+      statusSink,
       lifecycleParams: {
         accountId: params?.accountId ?? "default",
         client: {
@@ -102,6 +104,7 @@ describe("runDiscordGatewayLifecycle", () => {
         threadBindings: { stop: threadStop },
         pendingGatewayErrors: params?.pendingGatewayErrors,
         releaseEarlyGatewayErrorGuard,
+        statusSink,
       },
     };
   };
@@ -201,6 +204,26 @@ describe("runDiscordGatewayLifecycle", () => {
       waitCalls: 1,
       releaseEarlyGatewayErrorGuard,
     });
+  });
+
+  it("pushes connected status when gateway is already connected at lifecycle start", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const { emitter, gateway } = createGatewayHarness();
+    gateway.isConnected = true;
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    const { lifecycleParams, statusSink } = createLifecycleHarness({ gateway });
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+    const connectedCall = statusSink.mock.calls.find(
+      ([patch]: [Record<string, unknown>]) => patch.connected === true,
+    );
+    expect(connectedCall).toBeDefined();
+    expect(connectedCall![0]).toMatchObject({
+      connected: true,
+      lastDisconnect: null,
+    });
+    expect(connectedCall![0].lastConnectedAt).toBeTypeOf("number");
   });
 
   it("handles queued disallowed intents errors without waiting for gateway events", async () => {
