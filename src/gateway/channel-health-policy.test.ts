@@ -98,7 +98,26 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
   });
 
-  it("flags stale sockets when no events arrive beyond threshold", () => {
+  it("flags stale sockets when lastEventAt is set and exceeds threshold", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: 10_000,
+      },
+      {
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+
+  it("treats channels without lastEventAt as healthy (no false-positive stale-socket)", () => {
     const evaluation = evaluateChannelHealth(
       {
         running: true,
@@ -114,7 +133,44 @@ describe("evaluateChannelHealth", () => {
         staleEventThresholdMs: 30_000,
       },
     );
-    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("treats channels that never set lastEventAt as healthy", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+      },
+      {
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("reports healthy when lastEventAt is recent", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: 85_000,
+      },
+      {
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 });
 
