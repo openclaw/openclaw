@@ -1,34 +1,17 @@
 import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
+import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import type { OpenClawConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { isPlainObject } from "../utils.js";
-import { buildGatewayReloadPlan, type GatewayReloadPlan } from "./config-reload-plan.js";
+import { type ChannelKind, type GatewayReloadPlan } from "./config-reload-plan.js";
 
-export { buildGatewayReloadPlan };
-export type { GatewayReloadPlan } from "./config-reload-plan.js";
+export type { ChannelKind, GatewayReloadPlan };
 
 export type GatewayReloadSettings = {
   mode: GatewayReloadMode;
   debounceMs: number;
-};
-
-export type ChannelKind = ChannelId;
-
-export type GatewayReloadPlan = {
-  changedPaths: string[];
-  restartGateway: boolean;
-  restartReasons: string[];
-  hotReasons: string[];
-  reloadHooks: boolean;
-  restartGmailWatcher: boolean;
-  restartImapWatcher: boolean;
-  restartBrowserControl: boolean;
-  restartCron: boolean;
-  restartHeartbeat: boolean;
-  restartChannels: Set<ChannelKind>;
-  noopPaths: string[];
 };
 
 type ReloadRule = {
@@ -198,6 +181,7 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
     restartBrowserControl: false,
     restartCron: false,
     restartHeartbeat: false,
+    restartHealthMonitor: false,
     restartChannels: new Set(),
     noopPaths: [],
   };

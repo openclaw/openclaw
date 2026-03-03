@@ -10,6 +10,7 @@ export type GatewayReloadPlan = {
   hotReasons: string[];
   reloadHooks: boolean;
   restartGmailWatcher: boolean;
+  restartImapWatcher: boolean;
   restartBrowserControl: boolean;
   restartCron: boolean;
   restartHeartbeat: boolean;
@@ -142,6 +143,7 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
     hotReasons: [],
     reloadHooks: false,
     restartGmailWatcher: false,
+    restartImapWatcher: false,
     restartBrowserControl: false,
     restartCron: false,
     restartHeartbeat: false,
