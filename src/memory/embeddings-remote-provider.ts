@@ -13,6 +13,37 @@ export type RemoteEmbeddingClient = {
   model: string;
 };
 
+/**
+ * Appends "/embeddings" to the pathname of a base URL while preserving any
+ * existing query parameters and fragments.
+ *
+ * This is necessary for Azure OpenAI deployments whose base URLs include
+ * required query parameters such as `?api-version=2024-02-01`.  A naïve
+ * string concatenation (`${baseUrl}/embeddings`) would produce a malformed
+ * URL when the base already carries a query string.
+ *
+ * @example
+ *   // Plain base URL (standard OpenAI-compatible endpoint)
+ *   appendEmbeddingsPath("https://api.openai.com/v1")
+ *   // => "https://api.openai.com/v1/embeddings"
+ *
+ *   // Azure OpenAI deployment URL with api-version query param
+ *   appendEmbeddingsPath(
+ *     "https://my.cognitiveservices.azure.com/openai/deployments/text-embedding-3-large?api-version=2024-02-01"
+ *   )
+ *   // => "https://my.cognitiveservices.azure.com/openai/deployments/text-embedding-3-large/embeddings?api-version=2024-02-01"
+ */
+export function appendEmbeddingsPath(baseUrl: string): string {
+  try {
+    const parsed = new URL(baseUrl);
+    parsed.pathname = parsed.pathname.replace(/\/$/, "") + "/embeddings";
+    return parsed.toString();
+  } catch {
+    // Fallback for non-parseable URLs (e.g. relative paths in tests)
+    return `${baseUrl.replace(/\/$/, "")}/embeddings`;
+  }
+}
+
 export function createRemoteEmbeddingProvider(params: {
   id: string;
   client: RemoteEmbeddingClient;
@@ -20,7 +51,7 @@ export function createRemoteEmbeddingProvider(params: {
   maxInputTokens?: number;
 }): EmbeddingProvider {
   const { client } = params;
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
+  const url = appendEmbeddingsPath(client.baseUrl);
 
   const embed = async (input: string[]): Promise<number[][]> => {
     if (input.length === 0) {
