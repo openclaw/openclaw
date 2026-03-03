@@ -83,6 +83,38 @@ describe("discord auto presence", () => {
     expect(updatePresence.mock.calls[1]?.[0]?.status).toBe("online");
   });
 
+  it("re-applies presence on refresh even when signature is unchanged", () => {
+    let now = Date.now();
+    const store = createStore();
+    const updatePresence = vi.fn();
+
+    const controller = createDiscordAutoPresenceController({
+      accountId: "default",
+      discordConfig: {
+        autoPresence: {
+          enabled: true,
+          intervalMs: 60_000,
+          minUpdateIntervalMs: 60_000,
+        },
+      },
+      gateway: {
+        isConnected: true,
+        updatePresence,
+      },
+      loadAuthStore: () => store,
+      now: () => now,
+    });
+
+    controller.runNow();
+    now += 1_000;
+    controller.runNow();
+    controller.refresh();
+
+    expect(updatePresence).toHaveBeenCalledTimes(2);
+    expect(updatePresence.mock.calls[0]?.[0]?.status).toBe("online");
+    expect(updatePresence.mock.calls[1]?.[0]?.status).toBe("online");
+  });
+
   it("does nothing when auto presence is disabled", () => {
     const updatePresence = vi.fn();
     const controller = createDiscordAutoPresenceController({

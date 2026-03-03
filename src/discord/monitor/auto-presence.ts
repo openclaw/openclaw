@@ -293,7 +293,7 @@ export function createDiscordAutoPresenceController(params: {
   let lastAppliedSignature: string | null = null;
   let lastAppliedAt = 0;
 
-  const runEvaluation = () => {
+  const runEvaluation = (options?: { force?: boolean }) => {
     let decision: DiscordAutoPresenceDecision | null = null;
     try {
       decision = resolveDiscordAutoPresenceDecision({
@@ -315,12 +315,13 @@ export function createDiscordAutoPresenceController(params: {
       return;
     }
 
+    const forceApply = options?.force === true;
     const ts = now();
     const signature = stablePresenceSignature(decision.presence);
-    if (signature === lastAppliedSignature) {
+    if (!forceApply && signature === lastAppliedSignature) {
       return;
     }
-    if (lastAppliedAt > 0 && ts - lastAppliedAt < autoCfg.minUpdateIntervalMs) {
+    if (!forceApply && lastAppliedAt > 0 && ts - lastAppliedAt < autoCfg.minUpdateIntervalMs) {
       return;
     }
 
@@ -331,14 +332,14 @@ export function createDiscordAutoPresenceController(params: {
 
   return {
     enabled: true,
-    runNow: runEvaluation,
-    refresh: runEvaluation,
+    runNow: () => runEvaluation(),
+    refresh: () => runEvaluation({ force: true }),
     start: () => {
       if (timer) {
         return;
       }
-      runEvaluation();
-      timer = setIntervalFn(runEvaluation, autoCfg.intervalMs);
+      runEvaluation({ force: true });
+      timer = setIntervalFn(() => runEvaluation(), autoCfg.intervalMs);
     },
     stop: () => {
       if (!timer) {

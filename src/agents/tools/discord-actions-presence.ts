@@ -218,9 +218,15 @@ async function resolveAvatarDataUri(params: {
   if (rawBuffer) {
     const dataUrlMatch = /^data:([^;]+);base64,(.*)$/i.exec(rawBuffer.trim());
     const contentType = validateAvatarMime(hintedContentType ?? dataUrlMatch?.[1]);
-    const payload = dataUrlMatch ? dataUrlMatch[2] : rawBuffer.trim();
+    const payload = (dataUrlMatch ? dataUrlMatch[2] : rawBuffer.trim()).replace(/\s+/g, "");
     if (!payload) {
       throw new Error("Avatar buffer is empty.");
+    }
+    const decodedBytes = Buffer.byteLength(payload, "base64");
+    if (decodedBytes > DISCORD_MAX_AVATAR_BYTES) {
+      throw new Error(
+        `Avatar buffer exceeds the Discord limit of ${Math.floor(DISCORD_MAX_AVATAR_BYTES / (1024 * 1024))} MB.`,
+      );
     }
     return `data:${contentType};base64,${payload}`;
   }

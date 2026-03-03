@@ -242,6 +242,16 @@ describe("handleDiscordPresenceAction", () => {
     );
   });
 
+  it("rejects avatar buffers that exceed Discord size limits", async () => {
+    const tooLargeBase64 = Buffer.alloc(10 * 1024 * 1024 + 1, 0).toString("base64");
+    await expect(
+      updateSelfProfile({
+        buffer: tooLargeBase64,
+        contentType: "image/png",
+      }),
+    ).rejects.toThrow(/exceeds the Discord limit of 10 MB/i);
+  });
+
   it("updates nickname without needing an active gateway connection", async () => {
     clearGateways();
     await updateSelfProfile({ guildId: "guild-1", nickname: "Only Nick" });
