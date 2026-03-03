@@ -62,7 +62,7 @@ jobs:
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
-    needs: [docs-scope, changed-scope, check]
+    needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
@@ -285,7 +285,8 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "true"
+          use-sticky-disk: "false"
+          install-deps: "false"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -329,7 +330,7 @@ jobs:
         run: pre-commit run --all-files pnpm-audit-prod
 
   checks-windows:
-    needs: [docs-scope, changed-scope, build-artifacts, check]
+    needs: [docs-scope, changed-scope, check]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_windows == 'true')
     runs-on: blacksmith-32vcpu-windows-2025
     timeout-minutes: 45
