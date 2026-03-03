@@ -1965,6 +1965,63 @@ describe("BlueBubbles webhook monitor", () => {
       expect(cached?.body).toBe("original outbound body");
     });
 
+    it("ignores empty updated-message payloads when associatedMessageGuid is missing", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "new-message",
+          data: {
+            text: "original outbound body missing-guid",
+            handle: { address: "+15551234567" },
+            isGroup: false,
+            isFromMe: true,
+            guid: "edited-msg-missing-associated-guid-1",
+            chatGuid: "iMessage;-;+15551234567",
+            date: Date.now(),
+          },
+        }),
+        createMockResponse(),
+      );
+
+      await handleBlueBubblesWebhookRequest(
+        createMockRequest("POST", "/bluebubbles-webhook", {
+          type: "updated-message",
+          data: {
+            text: "",
+            handle: { address: "+15551234567" },
+            isGroup: false,
+            isFromMe: true,
+            guid: "edited-msg-missing-associated-guid-1",
+            chatGuid: "iMessage;-;+15551234567",
+            associatedMessageType: 2000,
+            date: Date.now(),
+          },
+        }),
+        createMockResponse(),
+      );
+
+      await flushAsync();
+
+      const cached = resolveReplyContextFromCache({
+        accountId: "default",
+        replyToId: "edited-msg-missing-associated-guid-1",
+        chatGuid: "iMessage;-;+15551234567",
+      });
+      expect(cached?.body).toBe("original outbound body missing-guid");
+    });
+
     it("ignores guid-only empty updated-message payloads", async () => {
       const account = createMockAccount({ dmPolicy: "open" });
       const config: OpenClawConfig = {};

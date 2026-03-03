@@ -202,10 +202,12 @@ function shouldIgnoreUpdatedNonConversationalEvent(
     return false;
   }
 
+  const hasAssociatedGuid = Boolean(message.associatedMessageGuid?.trim());
   const hasAssociatedSignal =
     typeof message.associatedMessageType === "number" &&
     Number.isFinite(message.associatedMessageType) &&
-    message.associatedMessageType !== 0;
+    message.associatedMessageType !== 0 &&
+    hasAssociatedGuid;
 
   // updated-message without text or reaction metadata is delivery/playback state noise.
   if (!hasAssociatedSignal) {
