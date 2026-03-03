@@ -772,6 +772,45 @@ describe("BlueBubbles webhook monitor", () => {
 
       expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
+
+    it("drops direct payload with legacy group=true metadata and no chat context", async () => {
+      const account = createMockAccount({
+        dmPolicy: "open",
+        groupPolicy: "open",
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "aiden",
+          handle: { address: "+15551234567" },
+          isFromMe: false,
+          guid: "msg-legacy-group-true",
+          date: Date.now(),
+          conversationLabel: "Group id:Unknown",
+          group: true,
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
   });
 
   describe("mention gating (group messages)", () => {

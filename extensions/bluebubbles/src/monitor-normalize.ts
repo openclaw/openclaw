@@ -363,6 +363,7 @@ function extractChatContext(message: Record<string, unknown>): {
   const explicitGroupChatHint = readFirstBooleanWithSource([
     { record: message, key: "isGroupChat" },
     { record: message, key: "is_group_chat" },
+    { record: message, key: "group" },
     { record: chat, key: "isGroupChat" },
     { record: chat, key: "is_group_chat" },
     { record: chatFromList, key: "isGroupChat" },
@@ -863,7 +864,8 @@ export function normalizeWebhookMessage(
     hasDefinedProperty(message, "isGroupChat") ||
     hasDefinedProperty(message, "is_group_chat") ||
     hasDefinedProperty(message, "isGroup") ||
-    hasDefinedProperty(message, "is_group");
+    hasDefinedProperty(message, "is_group") ||
+    hasDefinedProperty(message, "group");
   const hasMessageIdFull =
     hasDefinedProperty(message, "messageIdFull") || hasDefinedProperty(message, "message_id_full");
   const timestamp =

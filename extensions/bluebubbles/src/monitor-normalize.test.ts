@@ -134,6 +134,28 @@ describe("normalizeWebhookMessage", () => {
     expect(result?.chatId).toBeUndefined();
   });
 
+  it("treats legacy group flag as explicit group metadata", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-legacy-group-flag",
+        text: "hello",
+        handle: { address: "+15551234567" },
+        conversation_label: "Group id:Unknown",
+        group: true,
+        isFromMe: false,
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.isGroup).toBe(false);
+    expect(result?.explicitGroupChatHint).toBe(true);
+    expect(result?.hasExplicitGroupChatFlag).toBe(true);
+    expect(result?.chatGuid).toBeUndefined();
+    expect(result?.chatIdentifier).toBeUndefined();
+    expect(result?.chatId).toBeUndefined();
+  });
+
   it("does not treat DM conversation labels as group chat GUIDs", () => {
     const result = normalizeWebhookMessage({
       type: "new-message",
