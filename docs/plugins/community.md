@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Berry Shield** — Security-focused OpenClaw plugin with layered guardrails, `berry_check` preflight validation, runtime command/file blocking, and sensitive-data redaction.
+  npm: `@f4bioo/berry-shield`
+  repo: `https://github.com/F4bioo/berry-shield`
+  install: `openclaw plugins install @f4bioo/berry-shield`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
