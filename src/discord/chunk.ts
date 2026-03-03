@@ -116,7 +116,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
 
   const alreadyOk = body.length <= maxChars && countLines(body) <= maxLines;
   if (alreadyOk) {
-    return [body];
+    return formatReasoningBlockquotes(body, [body]);
   }
 
   const lines = body.split("\n");
