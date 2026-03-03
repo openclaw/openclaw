@@ -7,6 +7,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+type ParsedBoolean = {
+  value: boolean;
+  source: "boolean" | "number" | "string";
+};
+
 function hasDefinedProperty(record: Record<string, unknown> | null, key: string): boolean {
   if (!record || !Object.prototype.hasOwnProperty.call(record, key)) {
     return false;
@@ -37,30 +42,49 @@ function readNumber(record: Record<string, unknown> | null, key: string): number
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function readBoolean(record: Record<string, unknown> | null, key: string): boolean | undefined {
+function readBooleanWithSource(
+  record: Record<string, unknown> | null,
+  key: string,
+): ParsedBoolean | undefined {
   if (!record) {
     return undefined;
   }
   const value = record[key];
   if (typeof value === "boolean") {
-    return value;
+    return { value, source: "boolean" };
   }
   if (typeof value === "number" && Number.isFinite(value)) {
     if (value === 1) {
-      return true;
+      return { value: true, source: "number" };
     }
     if (value === 0) {
-      return false;
+      return { value: false, source: "number" };
     }
     return undefined;
   }
   if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
     if (["1", "true", "yes", "y"].includes(normalized)) {
-      return true;
+      return { value: true, source: "string" };
     }
     if (["0", "false", "no", "n"].includes(normalized)) {
-      return false;
+      return { value: false, source: "string" };
+    }
+  }
+  return undefined;
+}
+
+function readBoolean(record: Record<string, unknown> | null, key: string): boolean | undefined {
+  return readBooleanWithSource(record, key)?.value;
+}
+
+function readFirstBooleanWithSource(
+  candidates: Array<{ record: Record<string, unknown> | null; key: string }>,
+): ParsedBoolean | undefined {
+  for (const candidate of candidates) {
+    const parsed = readBooleanWithSource(candidate.record, candidate.key);
+    if (parsed) {
+      return parsed;
     }
   }
   return undefined;
@@ -331,22 +355,33 @@ function extractChatContext(message: Record<string, unknown>): {
         : [];
   const participantsCount = participants.length;
   const groupFromChatGuid = resolveGroupFlagFromChatGuid(chatGuid);
-  const explicitGroupChatHint =
-    readBoolean(message, "isGroupChat") ??
-    readBoolean(message, "is_group_chat") ??
-    readBoolean(chat, "isGroupChat") ??
-    readBoolean(chat, "is_group_chat") ??
-    readBoolean(chatFromList, "isGroupChat") ??
-    readBoolean(chatFromList, "is_group_chat");
-  const explicitIsGroup =
+  const hasConcreteChatIdentity =
+    Boolean(chatGuid?.trim()) ||
+    Boolean(chatIdentifier?.trim()) ||
+    (typeof chatId === "number" && Number.isFinite(chatId));
+  const explicitGroupChatHint = readFirstBooleanWithSource([
+    { record: message, key: "isGroupChat" },
+    { record: message, key: "is_group_chat" },
+    { record: chat, key: "isGroupChat" },
+    { record: chat, key: "is_group_chat" },
+    { record: chatFromList, key: "isGroupChat" },
+    { record: chatFromList, key: "is_group_chat" },
+  ]);
+  const explicitIsGroupCandidate =
     explicitGroupChatHint ??
-    readBoolean(message, "isGroup") ??
-    readBoolean(message, "is_group") ??
-    readBoolean(chat, "isGroup") ??
-    readBoolean(chat, "is_group") ??
-    readBoolean(chatFromList, "isGroup") ??
-    readBoolean(chatFromList, "is_group") ??
-    readBoolean(message, "group");
+    readFirstBooleanWithSource([
+      { record: message, key: "isGroup" },
+      { record: message, key: "is_group" },
+      { record: chat, key: "isGroup" },
+      { record: chat, key: "is_group" },
+      { record: chatFromList, key: "isGroup" },
+      { record: chatFromList, key: "is_group" },
+      { record: message, key: "group" },
+    ]);
+  const explicitIsGroup =
+    explicitIsGroupCandidate?.source === "string" && !hasConcreteChatIdentity
+      ? undefined
+      : explicitIsGroupCandidate?.value;
   const isGroup =
     typeof groupFromChatGuid === "boolean"
       ? groupFromChatGuid

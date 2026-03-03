@@ -61,7 +61,7 @@ describe("normalizeWebhookMessage", () => {
         guid: "msg-1",
         text: "hello group",
         handle: { address: "+15551234567" },
-        is_group_chat: true,
+        is_group_chat: "true",
         conversation_label: "Group id:any;+;7a77739c144e46798b4747b98ebe63a4",
         isFromMe: false,
       },
@@ -72,6 +72,26 @@ describe("normalizeWebhookMessage", () => {
     expect(result?.chatGuid).toBe("any;+;7a77739c144e46798b4747b98ebe63a4");
     expect(result?.chatIdentifier).toBe("7a77739c144e46798b4747b98ebe63a4");
     expect(result?.explicitIsGroupHint).toBe(true);
+  });
+
+  it("does not force group routing from string group hints without chat identity", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-1",
+        text: "hello",
+        handle: { address: "+15551234567" },
+        is_group_chat: "true",
+        isFromMe: false,
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.isGroup).toBe(false);
+    expect(result?.explicitIsGroupHint).toBeUndefined();
+    expect(result?.chatGuid).toBeUndefined();
+    expect(result?.chatIdentifier).toBeUndefined();
+    expect(result?.chatId).toBeUndefined();
   });
 
   it("does not treat DM conversation labels as group chat GUIDs", () => {
