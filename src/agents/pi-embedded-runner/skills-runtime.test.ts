@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SkillSnapshot } from "../skills.js";
 
+type LoadWorkspaceSkillEntriesFn = (typeof import("../skills.js"))["loadWorkspaceSkillEntries"];
+
 const hoisted = vi.hoisted(() => ({
   loadWorkspaceSkillEntries: vi.fn(
     (_workspaceDir: string, _options?: { config?: OpenClawConfig }) => [],
