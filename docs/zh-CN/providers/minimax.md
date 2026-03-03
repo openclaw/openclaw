@@ -183,6 +183,44 @@ openclaw onboard --auth-choice minimax-portal
 - 参见 [/concepts/model-providers](/concepts/model-providers) 了解提供商规则。
 - 使用 `openclaw models list` 和 `openclaw models set minimax/MiniMax-M2.1` 切换模型。
 
+## MiniMax 编程计划 MCP 工具（web_search & understand_image）
+
+MiniMax 提供了专门的 **编程计划 MCP 服务器**，对外暴露两个工具：
+
+- `web_search` —— 基于查询的网络搜索，返回结果和相关搜索建议。
+- `understand_image` —— 图像理解与分析。
+
+官方文档：参见 [Web Search & Image Understanding MCP](https://platform.minimax.io/docs/coding-plan/mcp-guide)。
+
+### 安装 MCP 服务器
+
+使用 `uvx` 安装 MCP 服务器二进制：
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uvx minimax-coding-plan-mcp -y
+```
+
+你需要配置：
+
+- `MINIMAX_API_KEY` —— 编程计划 API 密钥。
+- `MINIMAX_API_HOST` —— 通常为 `https://api.minimax.io`（国际）或 `https://api.minimaxi.com`（中国大陆）。
+- 可选：`MINIMAX_MCP_BASE_PATH` —— 本地输出目录（需要已存在且可写）。
+- 可选：`MINIMAX_API_RESOURCE_MODE` —— `url` 或 `local`（默认 `url`）。
+
+### 在 IDE 与 OpenClaw 工作流中的使用方式
+
+MiniMax 文档中介绍了如何将该 MCP 服务器接入：
+
+- Claude Code（通过 `claude mcp add -s user MiniMax ...`）。
+- Cursor（在 `mcp.json` 中增加 `MiniMax` 条目）。
+- OpenCode 以及其他 IDE。
+
+如果你已经在 IDE 中使用 MiniMax 编程计划 MCP 的 `web_search` / `understand_image`：
+
+- 对于基础联网能力，你**不需要**额外配置 Brave Search API 密钥。
+- 你可以在 OpenClaw 中保持 `web_search` 工具关闭，或者将其配置为其他提供商，同时依赖 MiniMax 自带的 MCP 工具来完成网页搜索和图片理解。
+
 ## 故障排除
 
 ### "Unknown model: minimax/MiniMax-M2.1"

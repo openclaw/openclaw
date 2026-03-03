@@ -142,7 +142,8 @@ async function promptWebToolsConfig(
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "It requires a Brave Search API key (you can store it in the config or set BRAVE_API_KEY in the Gateway environment).",
+      "By default it uses Brave Search, but you can also choose other providers (Perplexity, Grok, Gemini, Kimi) or rely on providers that bundle their own browsing.",
+      "If you stick with Brave Search, it requires a Brave Search API key (you can store it in the config or set BRAVE_API_KEY in the Gateway environment).",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -150,7 +151,7 @@ async function promptWebToolsConfig(
 
   const enableSearch = guardCancel(
     await confirm({
-      message: "Enable web_search (Brave Search)?",
+      message: "Enable web_search (Brave Search or another provider)?",
       initialValue: existingSearch?.enabled ?? hasSearchKey,
     }),
     runtime,

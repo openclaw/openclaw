@@ -41,6 +41,12 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 
 See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
 
+Some model providers (for example, **MiniMax Coding Plan MCP** or certain OpenAI configurations) bundle their own web tools such as `web_search` and `understand_image`. In those setups:
+
+- You can rely on the provider’s first-party web tools instead of configuring Brave.
+- It is often reasonable to keep OpenClaw’s `web_search` tool disabled or configured with a different provider to avoid duplicate prompts about Brave API keys.
+- See [/providers/minimax](/providers/minimax) for MiniMax-specific MCP setup.
+
 ### Auto-detection
 
 If no `provider` is explicitly set, OpenClaw auto-detects which provider to use based on available API keys, checking in this order:

@@ -457,6 +457,9 @@ export async function finalizeOnboardingWizard(
   const webSearchKey = (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
   const webSearchEnv = (process.env.BRAVE_API_KEY ?? "").trim();
   const hasWebSearchKey = Boolean(webSearchKey || webSearchEnv);
+  const hasMinimaxKey = Boolean(
+    (process.env.MINIMAX_API_KEY ?? "").trim() || (process.env.MINIMAX_CODE_PLAN_KEY ?? "").trim(),
+  );
   await prompter.note(
     hasWebSearchKey
       ? [
@@ -470,11 +473,13 @@ export async function finalizeOnboardingWizard(
       : [
           "If you want your agent to be able to search the web, you’ll need an API key.",
           "",
-          "OpenClaw uses Brave Search for the `web_search` tool. Without a Brave Search API key, web search won’t work.",
+          hasMinimaxKey
+            ? "OpenClaw’s built-in `web_search` tool defaults to Brave Search, but a MiniMax Coding Plan key is already configured. In many setups MiniMax provides its own web search tools, so Brave is optional unless you explicitly want Brave Search."
+            : "OpenClaw uses Brave Search for the `web_search` tool. Without a Brave Search API key, web search won’t work.",
           "",
           "Set it up interactively:",
           `- Run: ${formatCliCommand("openclaw configure --section web")}`,
-          "- Enable web_search and paste your Brave Search API key",
+          "- Enable web_search and paste your Brave Search API key (or switch to another supported web_search provider).",
           "",
           "Alternative: set BRAVE_API_KEY in the Gateway environment (no config changes).",
           "Docs: https://docs.openclaw.ai/tools/web",
