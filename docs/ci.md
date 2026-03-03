@@ -36,6 +36,8 @@ Jobs are ordered so cheap checks fail before expensive ones run:
 2. `build-artifacts` (blocked on above)
 3. `checks`, `checks-windows`, `macos`, `android` (blocked on build)
 
+Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`.
+
 ## Runners
 
 | Runner                           | Jobs                                       |
