@@ -337,7 +337,7 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
 <Card title="Telegram /call Addon" icon="phone-volume" href="https://github.com/roshanis/openclaw-telegram-call-addon">
   **@roshanis** • `telegram` `voice` `plugin`
 
-  Community addon that adds a `/call` command in Telegram and forwards to a Pipecat-compatible voice backend.
+Community plugin that adds a Telegram `/call` command and forwards calls to a Pipecat-compatible voice backend.
 </Card>
 
 </CardGroup>
