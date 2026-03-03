@@ -224,7 +224,7 @@ function generatePkce(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-function resolvePlatform(): "WINDOWS" | "MACOS" | "LINUX" | "PLATFORM_UNSPECIFIED" {
+function resolvePlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
   if (process.platform === "win32") {
     return "WINDOWS";
   }
