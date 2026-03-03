@@ -225,6 +225,19 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
   return texts.length > 0 ? texts.join("\n") : undefined;
 }
 
+/**
+ * Returns true for assistant messages written by the delivery-mirror subsystem.
+ * These entries record outbound sends for transcript completeness but should not
+ * be surfaced in the webchat UI (the real model response is already present).
+ */
+function isDeliveryMirrorMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const msg = message as Record<string, unknown>;
+  return msg.role === "assistant" && msg.model === "delivery-mirror";
+}
+
 function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
@@ -237,6 +250,14 @@ function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
     // Drop assistant messages whose entire visible text is the silent reply token.
     const text = extractAssistantTextForSilentCheck(res.message);
     if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+      changed = true;
+      continue;
+    }
+    // Drop delivery-mirror transcript entries — these are internal bookkeeping
+    // for outbound messages sent via channel plugins and should not appear in
+    // the webchat UI (the real assistant message is already in the transcript).
+    // See: openclaw/openclaw#33263
+    if (isDeliveryMirrorMessage(res.message)) {
       changed = true;
       continue;
     }
