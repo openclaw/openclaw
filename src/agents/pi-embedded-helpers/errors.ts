@@ -542,6 +542,13 @@ export function formatAssistantErrorText(
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
+  if (isContentFilterErrorMessage(raw)) {
+    return (
+      "Request was rejected by the model provider's content filters. " +
+      "Try rephrasing your message, starting a fresh session with /new, or switching to a different model."
+    );
+  }
+
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
     return formatRawAssistantErrorForUi(raw);
   }
@@ -719,6 +726,27 @@ export function isRateLimitErrorMessage(raw: string): boolean {
 
 export function isTimeoutErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
+}
+
+/**
+ * Detect provider-side content inspection / safety filter errors that reject
+ * otherwise normal-looking input text. This currently targets known shapes
+ * from Alibaba Bailian/Qwen-style endpoints.
+ */
+export function isContentFilterErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  // Bailian/Qwen error type
+  if (lower.includes("datainspectionfailed")) {
+    return true;
+  }
+  // Bailian/Qwen error message text
+  if (lower.includes("input text data may contain inappropriate content")) {
+    return true;
+  }
+  return false;
 }
 
 /**

@@ -9,6 +9,7 @@ import {
   isContextOverflowError,
   isLikelyContextOverflowError,
   isTransientHttpError,
+  isContentFilterErrorMessage,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -479,6 +480,7 @@ export async function runAgentTurnWithFallback(params: {
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
+      const isContentFilterError = isContentFilterErrorMessage(message);
 
       if (
         isCompactionFailure &&
@@ -574,7 +576,9 @@ export async function runAgentTurnWithFallback(params: {
         ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
         : isRoleOrderingError
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+          : isContentFilterError
+            ? "⚠️ Request was rejected by the model provider's content filters. Try rephrasing your message, starting a fresh session with /new, or switching to a different model."
+            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",
