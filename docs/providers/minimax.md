@@ -12,7 +12,7 @@ MiniMax is an AI company that builds the **M2/M2.5** model family. The current
 coding-focused release is **MiniMax M2.5** (December 23, 2025), built for
 real-world complex tasks.
 
-Source: [MiniMax M2.5 release note](https://www.minimax.io/news/minimax-m21)
+Source: [MiniMax M2.5 release note](https://www.minimax.io/news/minimax-m25)
 
 ## Model overview (M2.5)
 
@@ -27,13 +27,12 @@ MiniMax highlights these improvements in M2.5:
   Droid/Factory AI, Cline, Kilo Code, Roo Code, BlackBox).
 - Higher-quality **dialogue and technical writing** outputs.
 
-## MiniMax M2.5 vs MiniMax M2.5 Lightning
+## MiniMax M2.5 vs MiniMax M2.5 Highspeed
 
-- **Speed:** Lightning is the “fast” variant in MiniMax’s pricing docs.
-- **Cost:** Pricing shows the same input cost, but Lightning has higher output cost.
-- **Coding plan routing:** The Lightning back-end isn’t directly available on the MiniMax
-  coding plan. MiniMax auto-routes most requests to Lightning, but falls back to the
-  regular M2.5 back-end during traffic spikes.
+- **Speed:** `MiniMax-M2.5-highspeed` is the official fast tier in MiniMax docs.
+- **Cost:** MiniMax pricing lists the same input cost and a higher output cost for highspeed.
+- **Compatibility:** OpenClaw still accepts legacy `MiniMax-M2.5-Lightning` configs, but prefer
+  `MiniMax-M2.5-highspeed` for new setup.
 
 ## Choose a setup
 
@@ -81,9 +80,18 @@ Configure via CLI:
           {
             id: "MiniMax-M2.5",
             name: "MiniMax M2.5",
-            reasoning: false,
+            reasoning: true,
             input: ["text"],
-            cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
+            cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
+            contextWindow: 200000,
+            maxTokens: 8192,
+          },
+          {
+            id: "MiniMax-M2.5-highspeed",
+            name: "MiniMax M2.5 Highspeed",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
             contextWindow: 200000,
             maxTokens: 8192,
           },
@@ -178,6 +186,7 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 ## Notes
 
 - Model refs are `minimax/<model>`.
+- Recommended model IDs: `MiniMax-M2.5` and `MiniMax-M2.5-highspeed`.
 - Coding Plan usage API: `https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains` (requires a coding plan key).
 - Update pricing values in `models.json` if you need exact cost tracking.
 - Referral link for MiniMax Coding Plan (10% off): [https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link](https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link)
@@ -200,7 +209,8 @@ and no MiniMax auth profile/env key found). A fix for this detection is in
 Make sure the model id is **case‑sensitive**:
 
 - `minimax/MiniMax-M2.5`
-- `minimax/MiniMax-M2.5-Lightning`
+- `minimax/MiniMax-M2.5-highspeed`
+- `minimax/MiniMax-M2.5-Lightning` (legacy)
 
 Then recheck with:
 
