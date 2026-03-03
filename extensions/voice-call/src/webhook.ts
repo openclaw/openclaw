@@ -304,7 +304,7 @@ export class VoiceCallWebhookServer {
         body: `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="alice">All agents are currently busy. Please hold.</Say>
-  <Play loop="0">http://com.twilio.sounds.music.s3.amazonaws.com/MARKOVICHAMP-B8.mp3</Play>
+  <Play loop="0">https://s3.amazonaws.com/com.twilio.music.classical/BusyStrings.mp3</Play>
 </Response>`,
       };
     }
