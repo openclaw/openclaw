@@ -108,6 +108,7 @@ describe("detectGatewayManagementExecCommand", () => {
       source: "openclaw-cli",
       hard: false,
       complex: false,
+      json: true,
     });
   });
 
@@ -249,6 +250,21 @@ describe("detectGatewayManagementExecCommand", () => {
   it("detects systemctl restart commands for gateway units", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "systemctl --user restart openclaw-gateway.service",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "systemctl",
+      hard: false,
+      complex: false,
+    });
+  });
+
+  it("detects systemctl --no-block restart commands for gateway units", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --user restart --no-block openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
     });
@@ -426,6 +442,40 @@ describe("exec gateway management interception", () => {
     );
     expect(listRunningSessions()).toHaveLength(0);
     expect(listFinishedSessions()).toHaveLength(0);
+  });
+
+  it("intercepts gateway restart --json and preserves json output shape", async () => {
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      sessionKey: "agent:main:telegram:123:thread:9",
+    });
+
+    const result = await tool.execute("call1-json", {
+      command: "openclaw gateway restart --json",
+    });
+
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+    });
+    const payload = JSON.parse(text) as {
+      ok: boolean;
+      action: string;
+      result: string;
+      service?: { loaded?: boolean };
+    };
+    expect(payload).toMatchObject({
+      ok: true,
+      action: "restart",
+      result: "restarted",
+      service: { loaded: true },
+    });
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "exec:gateway-restart" }),
+    );
   });
 
   it("blocks gateway restart --hard via exec", async () => {

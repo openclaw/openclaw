@@ -9,6 +9,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
@@ -48,6 +49,7 @@ const SYSTEMCTL_BOOLEAN_OPTIONS = new Set([
   "--all",
   "--global",
   "--legend",
+  "--no-block",
   "--no-ask-password",
   "--no-legend",
   "--no-pager",
@@ -91,6 +93,7 @@ export type GatewayManagementExecCommand = {
   source: GatewayManagementExecSource;
   hard: boolean;
   complex: boolean;
+  json?: boolean;
 };
 
 function normalizeLower(token: string | undefined): string {
@@ -397,6 +400,7 @@ function readCliArgv(argv: string[]): string[] | null {
 function parseGatewayActionFromCliArgv(cliArgv: string[]): {
   action: GatewayManagementAction;
   hard: boolean;
+  json: boolean;
 } | null {
   if (cliArgv.length < 2) {
     return null;
@@ -468,7 +472,8 @@ function parseGatewayActionFromCliArgv(cliArgv: string[]): {
   }
 
   const hard = actionRaw === "restart" && trailing.has("--hard");
-  return { action: actionRaw, hard };
+  const json = trailing.has("--json");
+  return { action: actionRaw, hard, json };
 }
 
 function consumeSystemctlOption(argv: string[], idx: number): number | null {
@@ -655,6 +660,7 @@ export function detectGatewayManagementExecCommand(params: {
           source: "openclaw-cli",
           hard: parsed.hard,
           complex,
+          ...(parsed.json ? { json: true } : {}),
         };
       }
     }
@@ -728,6 +734,22 @@ function buildCompletedResult(text: string, cwd: string): AgentToolResult<ExecTo
   };
 }
 
+function buildRestartJsonResult(cwd: string): AgentToolResult<ExecToolDetails> {
+  const service = resolveGatewayService();
+  const payload = {
+    ok: true,
+    action: "restart",
+    result: "restarted",
+    service: {
+      label: service.label,
+      loaded: true,
+      loadedText: service.loadedText,
+      notLoadedText: service.notLoadedText,
+    },
+  };
+  return buildCompletedResult(JSON.stringify(payload, null, 2), cwd);
+}
+
 export async function maybeInterceptGatewayManagementExec(params: {
   host: ExecHost;
   command: string;
@@ -787,5 +809,8 @@ export async function maybeInterceptGatewayManagementExec(params: {
   logInfo(
     `exec: intercepted gateway restart command (${commandMatch.source}, session=${sessionKey ?? "unknown"}, delayMs=${scheduled.delayMs})`,
   );
+  if (commandMatch.json) {
+    return buildRestartJsonResult(params.cwd);
+  }
   return buildCompletedResult(text, params.cwd);
 }
