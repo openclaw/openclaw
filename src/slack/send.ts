@@ -18,7 +18,7 @@ import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
-import { markdownToSlackMrkdwnChunks } from "./format.js";
+import { markdownToSlackMrkdwnChunks, normalizeSlackOutboundText } from "./format.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -280,7 +280,8 @@ export async function sendMessageSlack(
     if (opts.mediaUrl) {
       throw new Error("Slack send does not support blocks with mediaUrl");
     }
-    const fallbackText = trimmedMessage || buildSlackBlocksFallbackText(blocks);
+    const fallbackRaw = trimmedMessage || buildSlackBlocksFallbackText(blocks);
+    const fallbackText = fallbackRaw ? normalizeSlackOutboundText(fallbackRaw) : fallbackRaw;
     const response = await postSlackMessageBestEffort({
       client,
       channelId,
@@ -310,7 +311,7 @@ export async function sendMessageSlack(
     markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode }),
   );
   if (!chunks.length && trimmedMessage) {
-    chunks.push(trimmedMessage);
+    chunks.push(normalizeSlackOutboundText(trimmedMessage));
   }
   const mediaMaxBytes =
     typeof account.config.mediaMaxMb === "number"

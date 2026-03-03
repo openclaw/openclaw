@@ -5,6 +5,7 @@ import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
+import { normalizeSlackOutboundText } from "./format.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
@@ -182,10 +183,11 @@ export async function editSlackMessage(
   const client = await getClient(opts);
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   const trimmedContent = content.trim();
+  const converted = trimmedContent ? normalizeSlackOutboundText(trimmedContent) : trimmedContent;
   await client.chat.update({
     channel: channelId,
     ts: messageId,
-    text: trimmedContent || (blocks ? buildSlackBlocksFallbackText(blocks) : " "),
+    text: converted || (blocks ? buildSlackBlocksFallbackText(blocks) : " "),
     ...(blocks ? { blocks } : {}),
   });
 }
