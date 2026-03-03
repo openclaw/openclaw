@@ -83,7 +83,21 @@ function mergeMattermostAccountConfig(
     defaultAccount?: unknown;
   };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+
+  // Shallow merging is fine for most keys, but `commands` should be merged
+  // so that account-specific overrides (callbackPath/callbackUrl) do not
+  // accidentally reset global settings like `native: true`.
+  const mergedCommands = {
+    ...(base.commands ?? {}),
+    ...(account.commands ?? {}),
+  };
+
+  const merged = { ...base, ...account };
+  if (Object.keys(mergedCommands).length > 0) {
+    merged.commands = mergedCommands;
+  }
+
+  return merged;
 }
 
 function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
