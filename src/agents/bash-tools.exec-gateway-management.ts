@@ -375,8 +375,13 @@ function parseGatewayActionFromCliArgv(cliArgv: string[]): {
     return null;
   }
 
-  const trailing = cliArgv.slice(gatewayIdx + 2).map((token) => token.trim().toLowerCase());
-  const hard = actionRaw === "restart" && trailing.includes("--hard");
+  const trailing = new Set(
+    cliArgv.slice(gatewayIdx + 2).map((token) => token.trim().toLowerCase()),
+  );
+  if (trailing.has("--help") || trailing.has("-h")) {
+    return null;
+  }
+  const hard = actionRaw === "restart" && trailing.has("--hard");
   return { action: actionRaw, hard };
 }
 

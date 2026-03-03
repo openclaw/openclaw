@@ -156,6 +156,16 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
+  it("does not detect gateway restart help commands", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "openclaw gateway restart --help",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
   it("detects systemctl restart commands for gateway units", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "systemctl --user restart openclaw-gateway.service",
