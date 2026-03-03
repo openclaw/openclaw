@@ -50,6 +50,10 @@ async function createLargeTestJpeg(): Promise<{ buffer: Buffer; file: string }> 
   return { buffer: largeJpegBuffer, file: largeJpegFile };
 }
 
+function cloneStatWithDev<T extends { dev: number | bigint }>(stat: T, dev: number | bigint): T {
+  return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { dev }) as T;
+}
+
 beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
@@ -355,6 +359,30 @@ describe("local media root guard", () => {
       localRoots: [resolvePreferredOpenClawTmpDir()],
     });
     expect(result.kind).toBe("image");
+  });
+
+  it("accepts win32 dev=0 stat mismatch for local file loads", async () => {
+    const actualLstat = await fs.lstat(tinyPngFile);
+    const actualStat = await fs.stat(tinyPngFile);
+    const zeroDev = typeof actualLstat.dev === "bigint" ? 0n : 0;
+
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const lstatSpy = vi
+      .spyOn(fs, "lstat")
+      .mockResolvedValue(cloneStatWithDev(actualLstat, zeroDev));
+    const statSpy = vi.spyOn(fs, "stat").mockResolvedValue(cloneStatWithDev(actualStat, zeroDev));
+
+    try {
+      const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
+        localRoots: [resolvePreferredOpenClawTmpDir()],
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    } finally {
+      statSpy.mockRestore();
+      lstatSpy.mockRestore();
+      platformSpy.mockRestore();
+    }
   });
 
   it("requires readFile override for localRoots bypass", async () => {

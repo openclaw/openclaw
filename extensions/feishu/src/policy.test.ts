@@ -1,7 +1,62 @@
 import { describe, expect, it } from "vitest";
-import { isFeishuGroupAllowed, resolveFeishuAllowlistMatch } from "./policy.js";
+import {
+  isFeishuGroupAllowed,
+  resolveFeishuAllowlistMatch,
+  resolveFeishuGroupConfig,
+} from "./policy.js";
+import type { FeishuConfig } from "./types.js";
 
 describe("feishu policy", () => {
+  describe("resolveFeishuGroupConfig", () => {
+    it("falls back to wildcard group config when direct match is missing", () => {
+      const cfg = {
+        groups: {
+          "*": { requireMention: false },
+          "oc-explicit": { requireMention: true },
+        },
+      } as unknown as FeishuConfig;
+
+      const resolved = resolveFeishuGroupConfig({
+        cfg,
+        groupId: "oc-missing",
+      });
+
+      expect(resolved).toEqual({ requireMention: false });
+    });
+
+    it("prefers exact group config over wildcard", () => {
+      const cfg = {
+        groups: {
+          "*": { requireMention: false },
+          "oc-explicit": { requireMention: true },
+        },
+      } as unknown as FeishuConfig;
+
+      const resolved = resolveFeishuGroupConfig({
+        cfg,
+        groupId: "oc-explicit",
+      });
+
+      expect(resolved).toEqual({ requireMention: true });
+    });
+
+    it("keeps case-insensitive matching for explicit group ids", () => {
+      const cfg = {
+        groups: {
+          "*": { requireMention: false },
+          OC_UPPER: { requireMention: true },
+        },
+      } as unknown as FeishuConfig;
+
+      const resolved = resolveFeishuGroupConfig({
+        cfg,
+        groupId: "oc_upper",
+      });
+
+      expect(resolved).toEqual({ requireMention: true });
+    });
+  });
+
   describe("resolveFeishuAllowlistMatch", () => {
     it("allows wildcard", () => {
       expect(

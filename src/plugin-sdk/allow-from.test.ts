@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedParsedChatSender } from "./allow-from.js";
+import { isAllowedParsedChatSender, isNormalizedSenderAllowed } from "./allow-from.js";
 
 function parseAllowTarget(
   entry: string,
@@ -69,5 +69,36 @@ describe("isAllowedParsedChatSender", () => {
     });
 
     expect(allowed).toBe(true);
+  });
+});
+
+describe("isNormalizedSenderAllowed", () => {
+  it("allows wildcard", () => {
+    expect(
+      isNormalizedSenderAllowed({
+        senderId: "attacker",
+        allowFrom: ["*"],
+      }),
+    ).toBe(true);
+  });
+
+  it("normalizes case and strips prefixes", () => {
+    expect(
+      isNormalizedSenderAllowed({
+        senderId: "12345",
+        allowFrom: ["ZALO:12345", "zl:777"],
+        stripPrefixRe: /^(zalo|zl):/i,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects when sender is missing", () => {
+    expect(
+      isNormalizedSenderAllowed({
+        senderId: "999",
+        allowFrom: ["zl:12345"],
+        stripPrefixRe: /^(zalo|zl):/i,
+      }),
+    ).toBe(false);
   });
 });

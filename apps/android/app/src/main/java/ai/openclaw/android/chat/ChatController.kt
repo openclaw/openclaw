@@ -261,11 +261,7 @@ class ChatController(
     val key = _sessionKey.value
     try {
       if (supportsChatSubscribe) {
-        try {
-          session.sendNodeEvent("chat.subscribe", """{"sessionKey":"$key"}""")
-        } catch (_: Throwable) {
-          // best-effort
-        }
+        session.sendNodeEvent("chat.subscribe", """{"sessionKey":"$key"}""")
       }
 
       val historyJson = session.request("chat.history", """{"sessionKey":"$key"}""")
@@ -315,16 +311,19 @@ class ChatController(
     if (!sessionKey.isNullOrEmpty() && sessionKey != _sessionKey.value) return
 
     val runId = payload["runId"].asStringOrNull()
-    if (runId != null) {
-      val isPending =
-        synchronized(pendingRuns) {
-          pendingRuns.contains(runId)
-        }
-      if (!isPending) return
-    }
+    val isPending =
+      if (runId != null) synchronized(pendingRuns) { pendingRuns.contains(runId) } else true
 
     val state = payload["state"].asStringOrNull()
     when (state) {
+      "delta" -> {
+        // Only show streaming text for runs we initiated
+        if (!isPending) return
+        val text = parseAssistantDeltaText(payload)
+        if (!text.isNullOrEmpty()) {
+          _streamingAssistantText.value = text
+        }
+      }
       "final", "aborted", "error" -> {
         if (state == "error") {
           _errorText.value = payload["errorMessage"].asStringOrNull() ?: "Chat failed"
@@ -351,9 +350,8 @@ class ChatController(
 
   private fun handleAgentEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
-    val runId = payload["runId"].asStringOrNull()
-    val sessionId = _sessionId.value
-    if (sessionId != null && runId != sessionId) return
+    val sessionKey = payload["sessionKey"].asStringOrNull()?.trim()
+    if (!sessionKey.isNullOrEmpty() && sessionKey != _sessionKey.value) return
 
     val stream = payload["stream"].asStringOrNull()
     val data = payload["data"].asObjectOrNull()
@@ -396,6 +394,21 @@ class ChatController(
         _streamingAssistantText.value = null
       }
     }
+  }
+
+  private fun parseAssistantDeltaText(payload: JsonObject): String? {
+    val message = payload["message"].asObjectOrNull() ?: return null
+    if (message["role"].asStringOrNull() != "assistant") return null
+    val content = message["content"].asArrayOrNull() ?: return null
+    for (item in content) {
+      val obj = item.asObjectOrNull() ?: continue
+      if (obj["type"].asStringOrNull() != "text") continue
+      val text = obj["text"].asStringOrNull()
+      if (!text.isNullOrEmpty()) {
+        return text
+      }
+    }
+    return null
   }
 
   private fun publishPendingToolCalls() {

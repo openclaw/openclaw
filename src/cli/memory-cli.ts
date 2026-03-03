@@ -15,6 +15,8 @@ import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatErrorMessage, withManager } from "./cli-utils.js";
+import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
+import { getMemoryCommandSecretTargetIds } from "./command-secret-targets.js";
 import { formatHelpExamples } from "./help-format.js";
 import { withProgress, withProgressTotals } from "./progress.js";
 
@@ -43,6 +45,41 @@ type MemorySourceScan = {
   totalFiles: number | null;
   issues: string[];
 };
+
+type LoadedMemoryCommandConfig = {
+  config: ReturnType<typeof loadConfig>;
+  diagnostics: string[];
+};
+
+async function loadMemoryCommandConfig(commandName: string): Promise<LoadedMemoryCommandConfig> {
+  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+    config: loadConfig(),
+    commandName,
+    targetIds: getMemoryCommandSecretTargetIds(),
+  });
+  return {
+    config: resolvedConfig,
+    diagnostics,
+  };
+}
+
+function emitMemorySecretResolveDiagnostics(
+  diagnostics: string[],
+  params?: { json?: boolean },
+): void {
+  if (diagnostics.length === 0) {
+    return;
+  }
+  const toStderr = params?.json === true;
+  for (const entry of diagnostics) {
+    const message = theme.warn(`[secrets] ${entry}`);
+    if (toStderr) {
+      defaultRuntime.error(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  }
+}
 
 function formatSourceLabel(source: string, workspaceDir: string, agentId: string): string {
   if (source === "memory") {
@@ -297,7 +334,8 @@ async function scanMemorySources(params: {
 
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
   setVerbose(Boolean(opts.verbose));
-  const cfg = loadConfig();
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory status");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentIds = resolveAgentIds(cfg, opts.agent);
   const allResults: Array<{
     agentId: string;
@@ -570,7 +608,8 @@ export function registerMemoryCli(program: Command) {
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
       setVerbose(Boolean(opts.verbose));
-      const cfg = loadConfig();
+      const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory index");
+      emitMemorySecretResolveDiagnostics(diagnostics);
       const agentIds = resolveAgentIds(cfg, opts.agent);
       for (const agentId of agentIds) {
         await withMemoryManagerForAgent({
@@ -702,20 +741,31 @@ export function registerMemoryCli(program: Command) {
   memory
     .command("search")
     .description("Search memory files")
-    .argument("<query>", "Search query")
+    .argument("[query]", "Search query")
+    .option("--query <text>", "Search query (alternative to positional argument)")
     .option("--agent <id>", "Agent id (default: default agent)")
     .option("--max-results <n>", "Max results", (value: string) => Number(value))
     .option("--min-score <n>", "Minimum score", (value: string) => Number(value))
     .option("--json", "Print JSON")
     .action(
       async (
-        query: string,
+        queryArg: string | undefined,
         opts: MemoryCommandOptions & {
+          query?: string;
           maxResults?: number;
           minScore?: number;
         },
       ) => {
-        const cfg = loadConfig();
+        const query = opts.query ?? queryArg;
+        if (!query) {
+          defaultRuntime.error(
+            "Missing search query. Provide a positional query or use --query <text>.",
+          );
+          process.exitCode = 1;
+          return;
+        }
+        const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory search");
+        emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
         const agentId = resolveAgent(cfg, opts.agent);
         await withMemoryManagerForAgent({
           cfg,

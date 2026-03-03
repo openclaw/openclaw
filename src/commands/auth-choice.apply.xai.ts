@@ -1,10 +1,9 @@
-import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
-  formatApiKeyPreview,
-  normalizeApiKeyInput,
-  validateApiKeyInput,
-} from "./auth-choice.api-key.js";
-import { createAuthChoiceAgentModelNoter } from "./auth-choice.apply-helpers.js";
+  createAuthChoiceAgentModelNoter,
+  ensureApiKeyFromOptionEnvOrPrompt,
+  normalizeSecretInputModeInput,
+} from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
@@ -25,35 +24,22 @@ export async function applyAuthChoiceXAI(
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
   const noteAgentModel = createAuthChoiceAgentModelNoter(params);
-
-  let hasCredential = false;
-  const optsKey = params.opts?.xaiApiKey?.trim();
-  if (optsKey) {
-    setXaiApiKey(normalizeApiKeyInput(optsKey), params.agentDir);
-    hasCredential = true;
-  }
-
-  if (!hasCredential) {
-    const envKey = resolveEnvApiKey("xai");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing XAI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        setXaiApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
-      }
-    }
-  }
-
-  if (!hasCredential) {
-    const key = await params.prompter.text({
-      message: "Enter xAI API key",
-      validate: validateApiKeyInput,
-    });
-    setXaiApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
-  }
+  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
+  await ensureApiKeyFromOptionEnvOrPrompt({
+    token: params.opts?.xaiApiKey,
+    tokenProvider: "xai",
+    secretInputMode: requestedSecretInputMode,
+    config: nextConfig,
+    expectedProviders: ["xai"],
+    provider: "xai",
+    envLabel: "XAI_API_KEY",
+    promptMessage: "Enter xAI API key",
+    normalize: normalizeApiKeyInput,
+    validate: validateApiKeyInput,
+    prompter: params.prompter,
+    setCredential: async (apiKey, mode) =>
+      setXaiApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
+  });
 
   nextConfig = applyAuthProfileConfig(nextConfig, {
     profileId: "xai:default",
