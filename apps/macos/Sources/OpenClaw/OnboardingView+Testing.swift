@@ -38,6 +38,8 @@ extension OnboardingView {
         view.workspacePath = "/tmp/openclaw"
         view.workspaceStatus = "Saved workspace"
         view.state.connectionMode = .local
+        view.state.remoteToken = "gateway-token"
+        view.state.remotePassword = "gateway-password"
         _ = view.welcomePage()
         _ = view.connectionPage()
         _ = view.wizardPage()

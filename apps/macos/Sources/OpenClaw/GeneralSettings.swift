@@ -149,6 +149,7 @@ struct GeneralSettings: View {
             } else {
                 self.remoteDirectRow
             }
+            self.remoteAuthRows
 
             GatewayDiscoveryInlineList(
                 discovery: self.gatewayDiscovery,
@@ -308,6 +309,27 @@ struct GeneralSettings: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, self.remoteLabelWidth + 10)
+        }
+    }
+
+    private var remoteAuthRows: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 10) {
+                Text("Token")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.remoteLabelWidth, alignment: .leading)
+                SecureField("gateway token", text: self.$state.remoteToken)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+            }
+            HStack(alignment: .center, spacing: 10) {
+                Text("Password")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.remoteLabelWidth, alignment: .leading)
+                SecureField("gateway password", text: self.$state.remotePassword)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+            }
         }
     }
 
@@ -710,6 +732,8 @@ extension GeneralSettings {
         state.remoteTransport = .ssh
         state.remoteTarget = "user@host:2222"
         state.remoteUrl = "wss://gateway.example.ts.net"
+        state.remoteToken = "gateway-token"
+        state.remotePassword = "gateway-password"
         state.remoteIdentity = "/tmp/id_ed25519"
         state.remoteProjectRoot = "/tmp/openclaw"
         state.remoteCliPath = "/tmp/openclaw"

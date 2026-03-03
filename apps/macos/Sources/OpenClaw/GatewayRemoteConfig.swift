@@ -58,6 +58,28 @@ enum GatewayRemoteConfig {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    static func resolveTokenString(root: [String: Any]) -> String? {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any],
+              let tokenRaw = remote["token"] as? String
+        else {
+            return nil
+        }
+        let trimmed = tokenRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func resolvePasswordString(root: [String: Any]) -> String? {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any],
+              let passwordRaw = remote["password"] as? String
+        else {
+            return nil
+        }
+        let trimmed = passwordRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     static func resolveGatewayUrl(root: [String: Any]) -> URL? {
         guard let raw = self.resolveUrlString(root: root) else { return nil }
         return self.normalizeGatewayUrl(raw)

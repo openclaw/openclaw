@@ -257,6 +257,22 @@ extension OnboardingView {
                                 .frame(width: fieldWidth)
                         }
                     }
+                    GridRow {
+                        Text("Token")
+                            .font(.callout.weight(.semibold))
+                            .frame(width: labelWidth, alignment: .leading)
+                        SecureField("gateway token", text: self.$state.remoteToken)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: fieldWidth)
+                    }
+                    GridRow {
+                        Text("Password")
+                            .font(.callout.weight(.semibold))
+                            .frame(width: labelWidth, alignment: .leading)
+                        SecureField("gateway password", text: self.$state.remotePassword)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: fieldWidth)
+                    }
                 }
 
                 Text(self.state.remoteTransport == .direct
