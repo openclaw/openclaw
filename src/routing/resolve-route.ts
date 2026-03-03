@@ -448,6 +448,35 @@ function formatRouteCachePeer(peer: RoutePeer | null): string {
   return `${peer.kind}:${peer.id}`;
 }
 
+function formatRoleIdsCacheKey(roleIds: string[]): string {
+  const count = roleIds.length;
+  if (count === 0) {
+    return "-";
+  }
+  if (count === 1) {
+    return roleIds[0] ?? "-";
+  }
+  if (count === 2) {
+    const first = roleIds[0] ?? "";
+    const second = roleIds[1] ?? "";
+    return first <= second ? `${first},${second}` : `${second},${first}`;
+  }
+  return roleIds.toSorted().join(",");
+}
+
+function buildResolvedRouteCacheKey(params: {
+  channel: string;
+  accountId: string;
+  peer: RoutePeer | null;
+  parentPeer: RoutePeer | null;
+  guildId: string;
+  teamId: string;
+  memberRoleIds: string[];
+  dmScope: string;
+}): string {
+  return `${params.channel}\t${params.accountId}\t${formatRouteCachePeer(params.peer)}\t${formatRouteCachePeer(params.parentPeer)}\t${params.guildId || "-"}\t${params.teamId || "-"}\t${formatRoleIdsCacheKey(params.memberRoleIds)}\t${params.dmScope}`;
+}
+
 function hasGuildConstraint(match: NormalizedBindingMatch): boolean {
   return Boolean(match.guildId);
 }
@@ -524,16 +553,16 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const routeCache =
     !shouldLogDebug && !identityLinks ? resolveRouteCacheForConfig(input.cfg) : null;
   const routeCacheKey = routeCache
-    ? [
+    ? buildResolvedRouteCacheKey({
         channel,
         accountId,
-        formatRouteCachePeer(peer),
-        formatRouteCachePeer(parentPeer),
-        guildId || "-",
-        teamId || "-",
-        memberRoleIds.length > 0 ? memberRoleIds.toSorted().join(",") : "-",
+        peer,
+        parentPeer,
+        guildId,
+        teamId,
+        memberRoleIds,
         dmScope,
-      ].join("\t")
+      })
     : "";
   if (routeCache && routeCacheKey) {
     const cachedRoute = routeCache.get(routeCacheKey);
