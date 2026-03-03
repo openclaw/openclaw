@@ -87,21 +87,25 @@ export type FeishuMessageInfo = {
 
 const CARD_MAX_NODES = 500;
 const CARD_MAX_OUTPUT_CHARS = 8000;
+// Cap the number of child-arrays enqueued to prevent wide column_set or note
+// structures from causing unbounded queue growth / memory exhaustion.
+const CARD_MAX_QUEUED_ARRAYS = 64;
 
 /**
  * Iterative BFS extraction of visible text from a Feishu interactive card.
- * Bounded by CARD_MAX_NODES and CARD_MAX_OUTPUT_CHARS to guard against
- * deeply-nested or oversized attacker-influenced card payloads (DoS).
+ * Bounded by CARD_MAX_NODES, CARD_MAX_OUTPUT_CHARS, and CARD_MAX_QUEUED_ARRAYS
+ * to guard against deeply-nested or wide attacker-influenced card payloads (DoS).
+ * Uses an index-based queue to avoid O(n²) cost from Array.shift().
  */
 function extractCardTextElements(root: unknown[]): string[] {
   const out: string[] = [];
-  const queue: Array<unknown[]> = [root];
+  const queue: unknown[][] = [root];
+  let qi = 0; // index-based dequeue — avoids O(n²) from shift()
   let seenNodes = 0;
   let outChars = 0;
 
-  while (queue.length > 0 && seenNodes < CARD_MAX_NODES && outChars < CARD_MAX_OUTPUT_CHARS) {
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    const nodes = queue.shift()!;
+  while (qi < queue.length && seenNodes < CARD_MAX_NODES && outChars < CARD_MAX_OUTPUT_CHARS) {
+    const nodes = queue[qi++];
     for (const element of nodes) {
       if (++seenNodes > CARD_MAX_NODES) break;
       if (!element || typeof element !== "object") continue;
@@ -113,6 +117,10 @@ function extractCardTextElements(root: unknown[]): string[] {
         const clipped = s.slice(0, CARD_MAX_OUTPUT_CHARS - outChars);
         out.push(clipped);
         outChars += clipped.length;
+      };
+
+      const enqueue = (arr: unknown[]) => {
+        if (queue.length < CARD_MAX_QUEUED_ARRAYS) queue.push(arr);
       };
 
       if (tag === "div" && el.text && typeof el.text === "object") {
@@ -127,7 +135,7 @@ function extractCardTextElements(root: unknown[]): string[] {
         const c = (el.title as Record<string, unknown>).content;
         if (typeof c === "string") pushText(c);
       } else if (tag === "note" && Array.isArray(el.elements)) {
-        queue.push(el.elements as unknown[]);
+        enqueue(el.elements as unknown[]);
       } else if (tag === "column_set" && Array.isArray(el.columns)) {
         for (const col of el.columns as unknown[]) {
           if (
@@ -135,7 +143,8 @@ function extractCardTextElements(root: unknown[]): string[] {
             typeof col === "object" &&
             Array.isArray((col as Record<string, unknown>).elements)
           ) {
-            queue.push((col as Record<string, unknown>).elements as unknown[]);
+            enqueue((col as Record<string, unknown>).elements as unknown[]);
+            if (queue.length >= CARD_MAX_QUEUED_ARRAYS) break; // fanout cap
           }
         }
       }
