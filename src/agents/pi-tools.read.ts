@@ -28,6 +28,7 @@ import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
   CLAUDE_PARAM_GROUPS,
+  assertRequiredParams,
   normalizeToolParams,
   patchToolSchemaForClaudeCompatibility,
   wrapToolParamNormalization,
