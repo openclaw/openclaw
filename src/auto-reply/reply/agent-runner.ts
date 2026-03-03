@@ -163,10 +163,11 @@ export async function runReplyAgent(params: {
   const replyOriginatingChannel = deliveryTarget.channel ?? sessionCtx.OriginatingChannel;
   const replyOriginatingTo = deliveryTarget.to ?? sourceTargetTo;
   const replyAccountId = deliveryTarget.accountId ?? sessionCtx.AccountId;
+  // In relay runs, deliveryTarget.threadId is a thread/topic ID (e.g. Telegram topic),
+  // not a message ID. Leave currentMessageId unset so reply threading doesn't target
+  // an invalid replyToId; thread routing is handled separately via threadId fields.
   const currentMessageId = useRelayRunRouting
-    ? deliveryTarget.threadId != null
-      ? String(deliveryTarget.threadId)
-      : undefined
+    ? undefined
     : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
   const replyToChannel = resolveOriginMessageProvider({
     originatingChannel: replyOriginatingChannel,

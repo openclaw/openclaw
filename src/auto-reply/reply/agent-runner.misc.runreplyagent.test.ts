@@ -1232,7 +1232,7 @@ describe("runReplyAgent read-only relay immediate routing", () => {
     });
   });
 
-  it("threads final replies with relay metadata instead of source message ids", async () => {
+  it("does not use relay threadId as replyToId (thread IDs are not message IDs)", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "thread me" }],
       meta: {},
@@ -1243,16 +1243,16 @@ describe("runReplyAgent read-only relay immediate routing", () => {
         channel: "whatsapp",
         to: "+15550002222",
         accountId: "relay-account",
-        threadId: "relay-message-id",
+        threadId: "relay-thread-id",
       },
     });
     const payload = Array.isArray(result) ? result[0] : result;
 
     expect(payload).toMatchObject({
       text: "thread me",
-      replyToId: "relay-message-id",
     });
-    expect(payload?.replyToId).not.toBe("source-message-id");
+    // Thread IDs are not message IDs; replyToId must not carry a thread ID.
+    expect(payload?.replyToId).toBeUndefined();
   });
 });
 

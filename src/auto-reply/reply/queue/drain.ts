@@ -39,16 +39,25 @@ type OriginRoutingMetadata = Pick<
 >;
 
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
+  // Pick a single authoritative item for relay fields so we never mix
+  // relayMode from one queued item with relayOutput from another.
+  const relayItem = items.find((item) => item.relayMode);
   return {
-    relayMode: items.find((item) => item.relayMode)?.relayMode,
-    relayOutput: items.find((item) => item.relayOutput)?.relayOutput,
-    originatingChannel: items.find((item) => item.originatingChannel)?.originatingChannel,
-    originatingTo: items.find((item) => item.originatingTo)?.originatingTo,
-    originatingAccountId: items.find((item) => item.originatingAccountId)?.originatingAccountId,
+    relayMode: relayItem?.relayMode,
+    relayOutput: relayItem?.relayOutput,
+    originatingChannel:
+      relayItem?.originatingChannel ??
+      items.find((item) => item.originatingChannel)?.originatingChannel,
+    originatingTo:
+      relayItem?.originatingTo ?? items.find((item) => item.originatingTo)?.originatingTo,
+    originatingAccountId:
+      relayItem?.originatingAccountId ??
+      items.find((item) => item.originatingAccountId)?.originatingAccountId,
     // Support both number (Telegram topic) and string (Slack thread_ts) thread IDs.
-    originatingThreadId: items.find(
-      (item) => item.originatingThreadId != null && item.originatingThreadId !== "",
-    )?.originatingThreadId,
+    originatingThreadId:
+      relayItem?.originatingThreadId ??
+      items.find((item) => item.originatingThreadId != null && item.originatingThreadId !== "")
+        ?.originatingThreadId,
   };
 }
 
