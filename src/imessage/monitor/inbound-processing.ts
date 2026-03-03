@@ -99,7 +99,10 @@ export function resolveIMessageInboundDecision(params: {
   storeAllowFrom: string[];
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
-  echoCache?: { has: (scope: string, lookup: { text?: string; messageId?: string }) => boolean };
+  echoCache?: {
+    has: (scope: string, lookup: { text?: string; messageId?: string }) => boolean;
+    remember?: (scope: string, lookup: { text?: string; messageId?: string }) => void;
+  };
   logVerbose?: (msg: string) => void;
 }): IMessageInboundDecision {
   const senderRaw = params.message.sender ?? "";
@@ -108,7 +111,20 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "missing sender" };
   }
   const senderNormalized = normalizeIMessageHandle(sender);
+  const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
   if (params.message.is_from_me) {
+    if (params.echoCache?.remember && (params.messageText || inboundMessageId)) {
+      for (const scope of buildIMessageSelfEchoScopes({
+        accountId: params.accountId,
+        sender,
+        chatId: params.message.chat_id ?? undefined,
+      })) {
+        params.echoCache.remember(scope, {
+          text: params.messageText || undefined,
+          messageId: inboundMessageId,
+        });
+      }
+    }
     return { kind: "drop", reason: "from me" };
   }
 
@@ -216,7 +232,6 @@ export function resolveIMessageInboundDecision(params: {
 
   // Echo detection: check if the received message matches a recently sent message (within 5 seconds).
   // Scope by conversation so same text in different chats is not conflated.
-  const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
   if (params.echoCache && (messageText || inboundMessageId)) {
     const echoScope = buildIMessageEchoScope({
       accountId: params.accountId,
@@ -339,6 +354,32 @@ export function resolveIMessageInboundDecision(params: {
     effectiveDmAllowFrom,
     effectiveGroupAllowFrom,
   };
+}
+
+function buildIMessageSelfEchoScopes(params: {
+  accountId: string;
+  sender: string;
+  chatId?: number;
+}): string[] {
+  const scopes = [
+    buildIMessageEchoScope({
+      accountId: params.accountId,
+      isGroup: false,
+      chatId: params.chatId,
+      sender: params.sender,
+    }),
+  ];
+  if (params.chatId !== undefined) {
+    scopes.push(
+      buildIMessageEchoScope({
+        accountId: params.accountId,
+        isGroup: true,
+        chatId: params.chatId,
+        sender: params.sender,
+      }),
+    );
+  }
+  return scopes;
 }
 
 export function buildIMessageInboundContext(params: {

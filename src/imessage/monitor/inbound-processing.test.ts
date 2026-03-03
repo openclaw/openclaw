@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createSentMessageCache } from "./echo-cache.js";
 import {
   describeIMessageEchoDropLog,
   resolveIMessageInboundDecision,
@@ -45,6 +46,63 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         messageId: "42",
       }),
     );
+  });
+
+  it("records from_me payloads so reflected self-chat copies are dropped as echo", () => {
+    const echoCache = createSentMessageCache();
+
+    const fromMeDecision = resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: 9641,
+        sender: "+15555550123",
+        text: "Do you want to report this issue?",
+        is_from_me: true,
+        is_group: false,
+        chat_id: 1001,
+      },
+      opts: undefined,
+      messageText: "Do you want to report this issue?",
+      bodyText: "Do you want to report this issue?",
+      allowFrom: [],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache,
+      logVerbose: undefined,
+    });
+    expect(fromMeDecision).toEqual({ kind: "drop", reason: "from me" });
+
+    const reflectedDecision = resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: 9642,
+        sender: "+15555550123",
+        text: "Do you want to report this issue?",
+        is_from_me: false,
+        is_group: false,
+        chat_id: 1001,
+      },
+      opts: undefined,
+      messageText: "Do you want to report this issue?",
+      bodyText: "Do you want to report this issue?",
+      allowFrom: [],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache,
+      logVerbose: undefined,
+    });
+
+    expect(reflectedDecision).toEqual({ kind: "drop", reason: "echo" });
   });
 });
 
