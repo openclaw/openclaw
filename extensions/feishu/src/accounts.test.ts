@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveDefaultFeishuAccountId, resolveFeishuAccount } from "./accounts.js";
+import {
+  resolveDefaultFeishuAccountId,
+  resolveDefaultFeishuAccountSelection,
+  resolveFeishuAccount,
+} from "./accounts.js";
 
 describe("resolveDefaultFeishuAccountId", () => {
   it("prefers channels.feishu.defaultAccount when configured", () => {
@@ -63,6 +67,35 @@ describe("resolveDefaultFeishuAccountId", () => {
 
     expect(resolveDefaultFeishuAccountId(cfg as never)).toBe("default");
   });
+
+  it("reports selection source for configured defaults and mapped defaults", () => {
+    const explicitDefaultCfg = {
+      channels: {
+        feishu: {
+          defaultAccount: "router-d",
+          accounts: {},
+        },
+      },
+    };
+    expect(resolveDefaultFeishuAccountSelection(explicitDefaultCfg as never)).toEqual({
+      accountId: "router-d",
+      source: "explicit-default",
+    });
+
+    const mappedDefaultCfg = {
+      channels: {
+        feishu: {
+          accounts: {
+            default: { appId: "cli_default", appSecret: "secret_default" },
+          },
+        },
+      },
+    };
+    expect(resolveDefaultFeishuAccountSelection(mappedDefaultCfg as never)).toEqual({
+      accountId: "default",
+      source: "mapped-default",
+    });
+  });
 });
 
 describe("resolveFeishuAccount", () => {
@@ -82,6 +115,7 @@ describe("resolveFeishuAccount", () => {
 
     const account = resolveFeishuAccount({ cfg: cfg as never, accountId: undefined });
     expect(account.accountId).toBe("router-d");
+    expect(account.selectionSource).toBe("explicit-default");
     expect(account.configured).toBe(true);
     expect(account.appId).toBe("top_level_app");
   });
@@ -101,6 +135,7 @@ describe("resolveFeishuAccount", () => {
 
     const account = resolveFeishuAccount({ cfg: cfg as never, accountId: undefined });
     expect(account.accountId).toBe("router-d");
+    expect(account.selectionSource).toBe("explicit-default");
     expect(account.configured).toBe(true);
     expect(account.appId).toBe("cli_router");
   });
@@ -120,6 +155,7 @@ describe("resolveFeishuAccount", () => {
 
     const account = resolveFeishuAccount({ cfg: cfg as never, accountId: "default" });
     expect(account.accountId).toBe("default");
+    expect(account.selectionSource).toBe("explicit");
     expect(account.appId).toBe("cli_default");
   });
 });
