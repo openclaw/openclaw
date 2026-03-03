@@ -598,7 +598,11 @@ export async function initSessionState(params: {
       const entry = store[sessionKey];
       if (entry?.label) {
         for (const [key, other] of Object.entries(store)) {
-          if (key !== sessionKey && other?.label === entry.label) {
+          // Skip the current session and its legacy case-aliases
+          if (key.toLowerCase() === sessionKey.toLowerCase()) {
+            continue;
+          }
+          if (other?.label === entry.label) {
             // Label conflict detected — clear the auto-assigned label
             delete entry.label;
             // Also clear sessionEntry.label to prevent later persistence code paths
