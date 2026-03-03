@@ -10,7 +10,7 @@ import {
 
 describe("qiniu-shared", () => {
   describe("constants", () => {
-    it("BASE_URL points to Qiniu MaaS endpoint", () => {
+    it("BASE_URL points to Qiniu endpoint", () => {
       expect(QINIU_BASE_URL).toBe("https://api.qnaigc.com");
     });
 
