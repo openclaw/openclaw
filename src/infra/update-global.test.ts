@@ -61,14 +61,12 @@ describe("checkDirectoryOwnership", () => {
     await fs.mkdir(subDir, { recursive: true });
 
     const realReaddir = fs.readdir.bind(fs);
-    vi.spyOn(fs, "readdir").mockImplementation(
-      (async (p: unknown, opts?: unknown) => {
-        if (String(p) === subDir) {
-          throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-        }
-        return realReaddir(p as string, opts as never);
-      }) as never,
-    );
+    vi.spyOn(fs, "readdir").mockImplementation((async (p: unknown, opts?: unknown) => {
+      if (String(p) === subDir) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      return realReaddir(p as string, opts as never);
+    }) as never);
 
     const result = await checkDirectoryOwnership(dir);
 
