@@ -1,18 +1,20 @@
-import type { App } from "@slack/bolt";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { App } from "@slack/bolt";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { RuntimeEnv } from "../../../runtime.js";
+import { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
-import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
-import { resolveAgentRoute } from "../../../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
-import { createSlackMonitorContext } from "../context.js";
 import { prepareSlackMessage } from "./prepare.js";
+import {
+  createInboundSlackTestContext as createInboundSlackCtx,
+  createSlackTestAccount as createSlackAccount,
+} from "./prepare.test-helpers.js";
 
 describe("slack prepareSlackMessage inbound contract", () => {
   let fixtureRoot = "";
@@ -37,53 +39,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       fixtureRoot = "";
     }
   });
-
-  function createInboundSlackCtx(params: {
-    cfg: OpenClawConfig;
-    appClient?: App["client"];
-    defaultRequireMention?: boolean;
-    replyToMode?: "off" | "all";
-    channelsConfig?: Record<string, { systemPrompt: string }>;
-  }) {
-    return createSlackMonitorContext({
-      cfg: params.cfg,
-      accountId: "default",
-      botToken: "token",
-      app: { client: params.appClient ?? {} } as App,
-      runtime: {} as RuntimeEnv,
-      botUserId: "B1",
-      teamId: "T1",
-      apiAppId: "A1",
-      historyLimit: 0,
-      sessionScope: "per-sender",
-      mainKey: "main",
-      dmEnabled: true,
-      dmPolicy: "open",
-      allowFrom: [],
-      allowNameMatching: false,
-      groupDmEnabled: true,
-      groupDmChannels: [],
-      defaultRequireMention: params.defaultRequireMention ?? true,
-      channelsConfig: params.channelsConfig,
-      groupPolicy: "open",
-      useAccessGroups: false,
-      reactionMode: "off",
-      reactionAllowlist: [],
-      replyToMode: params.replyToMode ?? "off",
-      threadHistoryScope: "thread",
-      threadInheritParent: false,
-      slashCommand: {
-        enabled: false,
-        name: "openclaw",
-        sessionPrefix: "slack:slash",
-        ephemeral: true,
-      },
-      textLimit: 4000,
-      ackReactionScope: "group-mentions",
-      mediaMaxBytes: 1024,
-      removeAckAfterReply: false,
-    });
-  }
 
   function createDefaultSlackCtx() {
     const slackCtx = createInboundSlackCtx({
@@ -131,20 +86,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       message,
       opts: { source: "message" },
     });
-  }
-
-  function createSlackAccount(config: ResolvedSlackAccount["config"] = {}): ResolvedSlackAccount {
-    return {
-      accountId: "default",
-      enabled: true,
-      botTokenSource: "config",
-      appTokenSource: "config",
-      userTokenSource: "none",
-      config,
-      replyToMode: config.replyToMode,
-      replyToModeByChatType: config.replyToModeByChatType,
-      dm: config.dm,
-    };
   }
 
   function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
@@ -510,13 +451,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.IsFirstThreadTurn).toBe(true);
+    expect(prepared!.ctxPayload.ThreadStarterBody).toBe("starter");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("follow-up question");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps loading thread history when thread session already exists in store", async () => {
+  it("skips loading thread history when thread session already exists in store (bloat fix)", async () => {
     const { storePath } = makeTmpStorePath();
     const cfg = {
       session: { store: storePath },
@@ -533,24 +475,15 @@ describe("slack prepareSlackMessage inbound contract", () => {
       baseSessionKey: route.sessionKey,
       threadId: "200.000",
     });
+    // Simulate existing session - thread history should NOT be fetched (bloat fix)
     fs.writeFileSync(
       storePath,
       JSON.stringify({ [threadKeys.sessionKey]: { updatedAt: Date.now() } }, null, 2),
     );
 
-    const replies = vi
-      .fn()
-      .mockResolvedValueOnce({
-        messages: [{ text: "starter", user: "U2", ts: "200.000" }],
-      })
-      .mockResolvedValueOnce({
-        messages: [
-          { text: "starter", user: "U2", ts: "200.000" },
-          { text: "assistant follow-up", bot_id: "B1", ts: "200.500" },
-          { text: "user follow-up", user: "U1", ts: "200.800" },
-          { text: "current message", user: "U1", ts: "201.000" },
-        ],
-      });
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [{ text: "starter", user: "U2", ts: "200.000" }],
+    });
     const slackCtx = createThreadSlackCtx({ cfg, replies });
     slackCtx.resolveUserName = async () => ({ name: "Alice" });
     slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
@@ -563,10 +496,13 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.IsFirstThreadTurn).toBeUndefined();
-    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant follow-up");
-    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("user follow-up");
-    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
-    expect(replies).toHaveBeenCalledTimes(2);
+    // Thread history should NOT be fetched for existing sessions (bloat fix)
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toBeUndefined();
+    // Thread starter should also be skipped for existing sessions
+    expect(prepared!.ctxPayload.ThreadStarterBody).toBeUndefined();
+    expect(prepared!.ctxPayload.ThreadLabel).toContain("Slack thread");
+    // Replies API should only be called once (for thread starter lookup, not history)
+    expect(replies).toHaveBeenCalledTimes(1);
   });
 
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {

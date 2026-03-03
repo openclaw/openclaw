@@ -45,7 +45,6 @@ vi.mock("./client.js", () => ({
 }));
 
 const { createSynologyChatPlugin } = await import("./channel.js");
-
 describe("Synology channel wiring integration", () => {
   beforeEach(() => {
     registerPluginHttpRouteMock.mockClear();
@@ -54,6 +53,7 @@ describe("Synology channel wiring integration", () => {
 
   it("registers real webhook handler with resolved account config and enforces allowlist", async () => {
     const plugin = createSynologyChatPlugin();
+    const abortController = new AbortController();
     const ctx = {
       cfg: {
         channels: {
@@ -74,9 +74,10 @@ describe("Synology channel wiring integration", () => {
       },
       accountId: "alerts",
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      abortSignal: abortController.signal,
     };
 
-    const started = await plugin.gateway.startAccount(ctx);
+    const started = plugin.gateway.startAccount(ctx);
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
 
     const firstCall = registerPluginHttpRouteMock.mock.calls[0];
@@ -102,9 +103,7 @@ describe("Synology channel wiring integration", () => {
     expect(res._status).toBe(403);
     expect(res._body).toContain("not authorized");
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
-
-    if (started && typeof started === "object" && "stop" in started) {
-      (started as { stop: () => void }).stop();
-    }
+    abortController.abort();
+    await started;
   });
 });

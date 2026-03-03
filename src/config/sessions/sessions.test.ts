@@ -2,9 +2,8 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { SessionConfig } from "../types.base.js";
-import type { SessionEntry } from "./types.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as jsonFiles from "../../infra/json-files.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -12,6 +11,7 @@ import {
   resolveAndPersistSessionFile,
   updateSessionStore,
 } from "../sessions.js";
+import type { SessionConfig } from "../types.base.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -20,6 +20,7 @@ import {
 } from "./paths.js";
 import { resolveSessionResetPolicy } from "./reset.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
+import type { SessionEntry } from "./types.js";
 
 function useTempSessionsFixture(prefix: string) {
   let tempDir = "";
@@ -198,6 +199,24 @@ describe("session store lock (Promise chain mutex)", () => {
 
     const store = loadSessionStore(storePath);
     expect((store[key] as Record<string, unknown>).counter).toBe(N);
+  });
+
+  it("skips session store disk writes when payload is unchanged", async () => {
+    const key = "agent:main:no-op-save";
+    const { storePath } = await makeTmpStore({
+      [key]: { sessionId: "s-noop", updatedAt: Date.now() },
+    });
+
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    await updateSessionStore(
+      storePath,
+      async () => {
+        // Intentionally no-op mutation.
+      },
+      { skipMaintenance: true },
+    );
+    expect(writeSpy).not.toHaveBeenCalled();
+    writeSpy.mockRestore();
   });
 
   it("multiple consecutive errors do not permanently poison the queue", async () => {

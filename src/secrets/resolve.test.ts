@@ -178,6 +178,43 @@ describe("secret ref resolver", () => {
     expect(value).toBe("value:openai/api-key");
   });
 
+  it("uses timeoutMs as the default no-output timeout for exec providers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await createCaseDir("exec-delay");
+    const scriptPath = path.join(root, "resolver-delay.mjs");
+    await writeSecureFile(
+      scriptPath,
+      [
+        "#!/usr/bin/env node",
+        "setTimeout(() => {",
+        "  process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { delayed: 'ok' } }));",
+        "}, 120);",
+      ].join("\n"),
+      0o700,
+    );
+
+    const value = await resolveSecretRefString(
+      { source: "exec", provider: "execmain", id: "delayed" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              execmain: {
+                source: "exec",
+                command: scriptPath,
+                passEnv: ["PATH"],
+                timeoutMs: 500,
+              },
+            },
+          },
+        },
+      },
+    );
+    expect(value).toBe("ok");
+  });
+
   it("supports non-JSON single-value exec output when jsonOnly is false", async () => {
     if (process.platform === "win32") {
       return;

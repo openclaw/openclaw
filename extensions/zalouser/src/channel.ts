@@ -3,6 +3,7 @@ import type {
   ChannelDirectoryEntry,
   ChannelDock,
   ChannelGroupContext,
+  ChannelMessageActionAdapter,
   ChannelPlugin,
   OpenClawConfig,
   GroupToolPolicyConfig,
@@ -32,9 +33,11 @@ import {
   type ResolvedZalouserAccount,
 } from "./accounts.js";
 import { ZalouserConfigSchema } from "./config-schema.js";
+import { buildZalouserGroupCandidates, findZalouserGroupEntry } from "./group-policy.js";
+import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import { zalouserOnboardingAdapter } from "./onboarding.js";
 import { probeZalouser } from "./probe.js";
-import { sendMessageZalouser } from "./send.js";
+import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 import {
   listZaloFriendsMatching,
@@ -121,19 +124,105 @@ function resolveZalouserGroupToolPolicy(
     accountId: params.accountId ?? undefined,
   });
   const groups = account.config.groups ?? {};
-  const groupId = params.groupId?.trim();
-  const groupChannel = params.groupChannel?.trim();
-  const candidates = [groupId, groupChannel, "*"].filter((value): value is string =>
-    Boolean(value),
+  const entry = findZalouserGroupEntry(
+    groups,
+    buildZalouserGroupCandidates({
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      includeWildcard: true,
+    }),
   );
-  for (const key of candidates) {
-    const entry = groups[key];
-    if (entry?.tools) {
-      return entry.tools;
-    }
-  }
-  return undefined;
+  return entry?.tools;
 }
+
+function resolveZalouserRequireMention(params: ChannelGroupContext): boolean {
+  const account = resolveZalouserAccountSync({
+    cfg: params.cfg,
+    accountId: params.accountId ?? undefined,
+  });
+  const groups = account.config.groups ?? {};
+  const entry = findZalouserGroupEntry(
+    groups,
+    buildZalouserGroupCandidates({
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      includeWildcard: true,
+    }),
+  );
+  if (typeof entry?.requireMention === "boolean") {
+    return entry.requireMention;
+  }
+  return true;
+}
+
+const zalouserMessageActions: ChannelMessageActionAdapter = {
+  listActions: ({ cfg }) => {
+    const accounts = listZalouserAccountIds(cfg)
+      .map((accountId) => resolveZalouserAccountSync({ cfg, accountId }))
+      .filter((account) => account.enabled);
+    if (accounts.length === 0) {
+      return [];
+    }
+    return ["react"];
+  },
+  supportsAction: ({ action }) => action === "react",
+  handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
+    if (action !== "react") {
+      throw new Error(`Zalouser action ${action} not supported`);
+    }
+    const account = resolveZalouserAccountSync({ cfg, accountId });
+    const threadId =
+      (typeof params.threadId === "string" ? params.threadId.trim() : "") ||
+      (typeof params.to === "string" ? params.to.trim() : "") ||
+      (typeof params.chatId === "string" ? params.chatId.trim() : "") ||
+      (toolContext?.currentChannelId?.trim() ?? "");
+    if (!threadId) {
+      throw new Error("Zalouser react requires threadId (or to/chatId).");
+    }
+    const emoji = typeof params.emoji === "string" ? params.emoji.trim() : "";
+    if (!emoji) {
+      throw new Error("Zalouser react requires emoji.");
+    }
+    const ids = resolveZalouserReactionMessageIds({
+      messageId: typeof params.messageId === "string" ? params.messageId : undefined,
+      cliMsgId: typeof params.cliMsgId === "string" ? params.cliMsgId : undefined,
+      currentMessageId: toolContext?.currentMessageId,
+    });
+    if (!ids) {
+      throw new Error(
+        "Zalouser react requires messageId + cliMsgId (or a current message context id).",
+      );
+    }
+    const result = await sendReactionZalouser({
+      profile: account.profile,
+      threadId,
+      isGroup: params.isGroup === true,
+      msgId: ids.msgId,
+      cliMsgId: ids.cliMsgId,
+      emoji,
+      remove: params.remove === true,
+    });
+    if (!result.ok) {
+      throw new Error(result.error || "Failed to react on Zalo message");
+    }
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text:
+            params.remove === true
+              ? `Removed reaction ${emoji} from ${ids.msgId}`
+              : `Reacted ${emoji} on ${ids.msgId}`,
+        },
+      ],
+      details: {
+        messageId: ids.msgId,
+        cliMsgId: ids.cliMsgId,
+        threadId,
+      },
+    };
+  },
+};
 
 export const zalouserDock: ChannelDock = {
   id: "zalouser",
@@ -152,7 +241,7 @@ export const zalouserDock: ChannelDock = {
       formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(zalouser|zlu):/i }),
   },
   groups: {
-    resolveRequireMention: () => true,
+    resolveRequireMention: resolveZalouserRequireMention,
     resolveToolPolicy: resolveZalouserGroupToolPolicy,
   },
   threading: {
@@ -235,12 +324,13 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     },
   },
   groups: {
-    resolveRequireMention: () => true,
+    resolveRequireMention: resolveZalouserRequireMention,
     resolveToolPolicy: resolveZalouserGroupToolPolicy,
   },
   threading: {
     resolveReplyToMode: () => "off",
   },
+  actions: zalouserMessageActions,
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountName: ({ cfg, accountId, name }) =>

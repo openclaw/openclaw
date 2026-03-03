@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { AgentInternalEvent } from "../../agents/internal-events.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
+import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
-import { agentCommand } from "../../commands/agent.js";
+import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
   mergeSessionEntry,
@@ -13,11 +12,6 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import {
-  createInternalHookEvent,
-  triggerInternalHook,
-  type AgentPreRunHookContext,
-} from "../../hooks/internal-hooks.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
@@ -59,6 +53,7 @@ import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { sessionsHandlers } from "./sessions.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 
@@ -605,36 +600,14 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
-    // Fire agent:pre-run hook to allow hooks to override model/thinking
-    const resolvedAgentIdForHook =
-      agentId ?? resolveAgentIdFromSessionKey(resolvedSessionKey) ?? "main";
-    let thinkingFromHook = request.thinking;
-    let modelFromHook = request.model;
-
-    const hookContext: AgentPreRunHookContext = {
-      agentId: resolvedAgentIdForHook,
-      sessionKey: resolvedSessionKey,
-      model: modelFromHook,
-      thinking: thinkingFromHook,
-    };
-
-    const hookEvent = createInternalHookEvent("agent", "pre-run", resolvedSessionKey, hookContext);
-    await triggerInternalHook(hookEvent);
-
-    // Read back hook-mutated values
-    const mutatedContext = hookEvent.context as AgentPreRunHookContext;
-    thinkingFromHook = mutatedContext.thinking;
-    modelFromHook = mutatedContext.model;
-
-    void agentCommand(
+    void agentCommandFromIngress(
       {
         message,
         images,
         to: resolvedTo,
         sessionId: resolvedSessionId,
         sessionKey: resolvedSessionKey,
-        thinking: thinkingFromHook,
-        model: modelFromHook,
+        thinking: request.thinking,
         deliver,
         deliveryTargetMode,
         channel: resolvedChannel,

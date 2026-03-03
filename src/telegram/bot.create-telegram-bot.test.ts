@@ -1,8 +1,8 @@
-import type { Chat, Message } from "@grammyjs/types";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Chat, Message } from "@grammyjs/types";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -52,10 +52,10 @@ const TELEGRAM_TEST_TIMINGS = {
 } as const;
 
 describe("createTelegramBot", () => {
-  beforeEach(() => {
+  beforeAll(() => {
     process.env.TZ = "UTC";
   });
-  afterEach(() => {
+  afterAll(() => {
     process.env.TZ = ORIGINAL_TZ;
   });
 

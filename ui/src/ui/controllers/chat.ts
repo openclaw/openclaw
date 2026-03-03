@@ -3,6 +3,29 @@ import type { ChatAttachment } from "../ui-types.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { generateUUID } from "../uuid.ts";
 
+const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+
+function isSilentReplyStream(text: string): boolean {
+  return SILENT_REPLY_PATTERN.test(text);
+}
+/** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
+function isAssistantSilentReply(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+  if (role !== "assistant") {
+    return false;
+  }
+  // entry.text takes precedence — matches gateway extractAssistantTextForSilentCheck
+  if (typeof entry.text === "string") {
+    return isSilentReplyStream(entry.text);
+  }
+  const text = extractText(message);
+  return typeof text === "string" && isSilentReplyStream(text);
+}
+
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -41,7 +64,8 @@ export async function loadChatHistory(state: ChatState) {
         limit: 200,
       },
     );
-    state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
+    const messages = Array.isArray(res.messages) ? res.messages : [];
+    state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
     state.lastError = String(err);
@@ -230,7 +254,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
-      if (finalMessage) {
+      if (finalMessage && !isAssistantSilentReply(finalMessage)) {
         state.chatMessages = [...state.chatMessages, finalMessage];
         return null;
       }
@@ -241,7 +265,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
 
   if (payload.state === "delta") {
     const next = extractText(payload.message);
-    if (typeof next === "string") {
+    if (typeof next === "string" && !isSilentReplyStream(next)) {
       const current = state.chatStream ?? "";
       if (!current || next.length >= current.length) {
         state.chatStream = next;
@@ -249,9 +273,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
-    if (finalMessage) {
+    if (finalMessage && !isAssistantSilentReply(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
-    } else if (state.chatStream?.trim()) {
+    } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
       state.chatMessages = [
         ...state.chatMessages,
         {
@@ -266,11 +290,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
-    if (normalizedMessage) {
+    if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
     } else {
       const streamedText = state.chatStream ?? "";
-      if (streamedText.trim()) {
+      if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
         state.chatMessages = [
           ...state.chatMessages,
           {

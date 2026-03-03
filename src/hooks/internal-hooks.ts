@@ -85,6 +85,10 @@ export type MessageSentHookContext = {
   conversationId?: string;
   /** Message ID returned by the provider */
   messageId?: string;
+  /** Whether this message was sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier, if applicable */
+  groupId?: string;
 };
 
 export type MessageSentHookEvent = InternalHookEvent & {
@@ -93,50 +97,90 @@ export type MessageSentHookEvent = InternalHookEvent & {
   context: MessageSentHookContext;
 };
 
-// ============================================================================
-// Session Pre-Spawn Hook Events
-// ============================================================================
-
-export type SessionPreSpawnHookContext = {
-  /** Agent ID for the subagent being spawned */
-  agentId?: string;
-  /** Model override (can be mutated by hooks) */
-  model?: string;
-  /** Fallback model (can be mutated by hooks) */
-  fallbackModel?: string;
-  /** Thinking level (can be mutated by hooks) */
-  thinking?: string;
-  /** Task description for the subagent */
-  task?: string;
-  /** Session key of the requester/parent agent */
-  requesterSessionKey?: string;
+export type MessageTranscribedHookContext = {
+  /** Sender identifier (e.g., phone number, user ID) */
+  from?: string;
+  /** Recipient identifier */
+  to?: string;
+  /** Original raw message body (e.g., "🎤 [Audio]") */
+  body?: string;
+  /** Enriched body shown to the agent, including transcript */
+  bodyForAgent?: string;
+  /** The transcribed text from audio */
+  transcript: string;
+  /** Unix timestamp when the message was received */
+  timestamp?: number;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Message ID from the provider */
+  messageId?: string;
+  /** Sender user ID */
+  senderId?: string;
+  /** Sender display name */
+  senderName?: string;
+  /** Sender username */
+  senderUsername?: string;
+  /** Provider name */
+  provider?: string;
+  /** Surface name */
+  surface?: string;
+  /** Path to the media file that was transcribed */
+  mediaPath?: string;
+  /** MIME type of the media */
+  mediaType?: string;
 };
 
-export type SessionPreSpawnHookEvent = InternalHookEvent & {
-  type: "session";
-  action: "pre-spawn";
-  context: SessionPreSpawnHookContext;
+export type MessageTranscribedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "transcribed";
+  context: MessageTranscribedHookContext;
 };
 
-// ============================================================================
-// Agent Pre-Run Hook Events
-// ============================================================================
-
-export type AgentPreRunHookContext = {
-  /** Agent ID for the agent run */
-  agentId?: string;
-  /** Session key for the agent run */
-  sessionKey?: string;
-  /** Model (can be mutated by hooks) */
-  model?: string;
-  /** Thinking level (can be mutated by hooks) */
-  thinking?: string;
+export type MessagePreprocessedHookContext = {
+  /** Sender identifier (e.g., phone number, user ID) */
+  from?: string;
+  /** Recipient identifier */
+  to?: string;
+  /** Original raw message body */
+  body?: string;
+  /** Fully enriched body shown to the agent (transcripts, image descriptions, link summaries) */
+  bodyForAgent?: string;
+  /** Transcribed audio text, if the message contained audio */
+  transcript?: string;
+  /** Unix timestamp when the message was received */
+  timestamp?: number;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Message ID from the provider */
+  messageId?: string;
+  /** Sender user ID */
+  senderId?: string;
+  /** Sender display name */
+  senderName?: string;
+  /** Sender username */
+  senderUsername?: string;
+  /** Provider name */
+  provider?: string;
+  /** Surface name */
+  surface?: string;
+  /** Path to the media file, if present */
+  mediaPath?: string;
+  /** MIME type of the media, if present */
+  mediaType?: string;
+  /** Whether this message was sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier, if applicable */
+  groupId?: string;
 };
 
-export type AgentPreRunHookEvent = InternalHookEvent & {
-  type: "agent";
-  action: "pre-run";
-  context: AgentPreRunHookContext;
+export type MessagePreprocessedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "preprocessed";
+  context: MessagePreprocessedHookContext;
 };
 
 export interface InternalHookEvent {
@@ -329,28 +373,28 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
   );
 }
 
-export function isSessionPreSpawnEvent(
+export function isMessageTranscribedEvent(
   event: InternalHookEvent,
-): event is SessionPreSpawnHookEvent {
-  if (event.type !== "session" || event.action !== "pre-spawn") {
+): event is MessageTranscribedHookEvent {
+  if (event.type !== "message" || event.action !== "transcribed") {
     return false;
   }
-  const context = event.context as Partial<SessionPreSpawnHookContext> | null;
+  const context = event.context as Partial<MessageTranscribedHookContext> | null;
   if (!context || typeof context !== "object") {
     return false;
   }
-  // All fields are optional, so we just verify it's an object
-  return true;
+  return typeof context.transcript === "string" && typeof context.channelId === "string";
 }
 
-export function isAgentPreRunEvent(event: InternalHookEvent): event is AgentPreRunHookEvent {
-  if (event.type !== "agent" || event.action !== "pre-run") {
+export function isMessagePreprocessedEvent(
+  event: InternalHookEvent,
+): event is MessagePreprocessedHookEvent {
+  if (event.type !== "message" || event.action !== "preprocessed") {
     return false;
   }
-  const context = event.context as Partial<AgentPreRunHookContext> | null;
+  const context = event.context as Partial<MessagePreprocessedHookContext> | null;
   if (!context || typeof context !== "object") {
     return false;
   }
-  // All fields are optional, so we just verify it's an object
-  return true;
+  return typeof context.channelId === "string";
 }

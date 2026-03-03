@@ -1,16 +1,15 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import type { TelegramInlineButtons } from "../button-types.js";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { danger, logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { mediaKindFromMime } from "../../media/constants.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
-import { isGifMedia } from "../../media/mime.js";
+import { isGifMedia, kindFromMime } from "../../media/mime.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
+import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
   markdownToTelegramChunks,
@@ -234,7 +233,7 @@ async function deliverMediaReply(params: {
       mediaUrl,
       buildOutboundMediaLoadOptions({ mediaLocalRoots: params.mediaLocalRoots }),
     );
-    const kind = mediaKindFromMime(media.contentType ?? undefined);
+    const kind = kindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
       contentType: media.contentType,
       fileName: media.fileName,

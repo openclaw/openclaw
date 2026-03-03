@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { pathExists } from "../utils.js";
+import { resolveStableNodePath } from "./stable-node-path.js";
 import { runGatewayUpdate } from "./update-runner.js";
 
 type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
@@ -49,7 +50,7 @@ describe("runGatewayUpdate", () => {
     // Shared fixtureRoot cleaned up in afterAll.
   });
 
-  function createStableTagRunner(params: {
+  async function createStableTagRunner(params: {
     stableTag: string;
     uiIndexPath: string;
     onDoctor?: () => Promise<void>;
@@ -57,7 +58,8 @@ describe("runGatewayUpdate", () => {
   }) {
     const calls: string[] = [];
     let uiBuildCount = 0;
-    const doctorKey = `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorKey = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
 
     const runCommand = async (argv: string[]) => {
       const key = argv.join(" ");
@@ -287,15 +289,15 @@ describe("runGatewayUpdate", () => {
     await setupUiIndex();
     const stableTag = "v1.0.1-1";
     const betaTag = "v1.0.0-beta.2";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
     const { runner, calls } = createRunner({
       ...buildStableTagResponses(stableTag, { additionalTags: [betaTag] }),
       "pnpm install": { stdout: "" },
       "pnpm build": { stdout: "" },
       "pnpm ui:build": { stdout: "" },
-      [`${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`]:
-        {
-          stdout: "",
-        },
+      [`${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`]: {
+        stdout: "",
+      },
     });
 
     const result = await runWithRunner(runner, { channel: "beta" });
@@ -544,7 +546,7 @@ describe("runGatewayUpdate", () => {
     const uiIndexPath = await setupUiIndex();
 
     const stableTag = "v1.0.1-1";
-    const { runCommand, calls, doctorKey, getUiBuildCount } = createStableTagRunner({
+    const { runCommand, calls, doctorKey, getUiBuildCount } = await createStableTagRunner({
       stableTag,
       uiIndexPath,
       onUiBuild: async (count) => {
@@ -567,7 +569,7 @@ describe("runGatewayUpdate", () => {
     const uiIndexPath = await setupUiIndex();
 
     const stableTag = "v1.0.1-1";
-    const { runCommand } = createStableTagRunner({
+    const { runCommand } = await createStableTagRunner({
       stableTag,
       uiIndexPath,
       onUiBuild: async (count) => {

@@ -59,9 +59,10 @@ function shouldAcceptInbound(config: EventContext["config"], from: string | unde
   }
 }
 
-function createInboundCall(params: {
+function createWebhookCall(params: {
   ctx: EventContext;
   providerCallId: string;
+  direction: "inbound" | "outbound";
   from: string;
   to: string;
 }): CallRecord {
@@ -71,7 +72,7 @@ function createInboundCall(params: {
     callId,
     providerCallId: params.providerCallId,
     provider: params.ctx.provider?.name || "twilio",
-    direction: "inbound",
+    direction: params.direction,
     state: "ringing",
     from: params.from,
     to: params.to,
@@ -79,7 +80,10 @@ function createInboundCall(params: {
     transcript: [],
     processedEventIds: [],
     metadata: {
-      initialMessage: params.ctx.config.inboundGreeting || "Hello! How can I help you today?",
+      initialMessage:
+        params.direction === "inbound"
+          ? params.ctx.config.inboundGreeting || "Hello! How can I help you today?"
+          : undefined,
     },
   };
 
@@ -87,7 +91,9 @@ function createInboundCall(params: {
   params.ctx.providerCallIdMap.set(params.providerCallId, callId);
   persistCallRecord(params.ctx.storePath, callRecord);
 
-  console.log(`[voice-call] Created inbound call record: ${callId} from ${params.from}`);
+  console.log(
+    `[voice-call] Created ${params.direction} call record: ${callId} from ${params.from}`,
+  );
   return callRecord;
 }
 
@@ -104,8 +110,18 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     callIdOrProviderCallId: event.callId,
   });
 
-  if (!call && event.direction === "inbound" && event.providerCallId) {
-    if (!shouldAcceptInbound(ctx.config, event.from)) {
+  // Auto-register untracked calls arriving via webhook. This covers both
+  // true inbound calls and externally-initiated outbound-api calls (e.g. calls
+  // placed directly via the Twilio REST API pointing at our webhook URL).
+  const isUnregisteredWebhookCall =
+    !call &&
+    event.providerCallId &&
+    (event.direction === "inbound" || event.direction === "outbound");
+
+  if (isUnregisteredWebhookCall) {
+    // Apply inbound policy for true inbound calls; external outbound-api calls
+    // are implicitly trusted because the caller controls the webhook URL.
+    if (event.direction === "inbound" && !shouldAcceptInbound(ctx.config, event.from)) {
       const pid = event.providerCallId;
       if (!ctx.provider) {
         console.warn(
@@ -132,9 +148,10 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       return;
     }
 
-    call = createInboundCall({
+    call = createWebhookCall({
       ctx,
       providerCallId: event.providerCallId,
+      direction: event.direction === "outbound" ? "outbound" : "inbound",
       from: event.from || "unknown",
       to: event.to || ctx.config.fromNumber || "unknown",
     });

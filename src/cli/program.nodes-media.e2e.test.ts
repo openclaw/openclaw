@@ -325,7 +325,7 @@ describe("cli program (nodes media)", () => {
         command: "camera.snap" as const,
         payload: {
           format: "jpg",
-          url: "https://example.com/photo.jpg",
+          url: `https://${IOS_NODE.remoteIp}/photo.jpg`,
           width: 640,
           height: 480,
         },
@@ -337,7 +337,7 @@ describe("cli program (nodes media)", () => {
         command: "camera.clip" as const,
         payload: {
           format: "mp4",
-          url: "https://example.com/clip.mp4",
+          url: `https://${IOS_NODE.remoteIp}/clip.mp4`,
           durationMs: 5000,
           hasAudio: true,
         },

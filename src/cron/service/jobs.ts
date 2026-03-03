@@ -28,13 +28,28 @@ import {
 } from "./normalize.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
+const STAGGER_OFFSET_CACHE_MAX = 4096;
+const staggerOffsetCache = new Map<string, number>();
 
 function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
   if (staggerMs <= 1) {
     return 0;
   }
+  const cacheKey = `${staggerMs}:${jobId}`;
+  const cached = staggerOffsetCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
   const digest = crypto.createHash("sha256").update(jobId).digest();
-  return digest.readUInt32BE(0) % staggerMs;
+  const offset = digest.readUInt32BE(0) % staggerMs;
+  if (staggerOffsetCache.size >= STAGGER_OFFSET_CACHE_MAX) {
+    const first = staggerOffsetCache.keys().next();
+    if (!first.done) {
+      staggerOffsetCache.delete(first.value);
+    }
+  }
+  staggerOffsetCache.set(cacheKey, offset);
+  return offset;
 }
 
 function computeStaggeredCronNextRunAtMs(job: CronJob, nowMs: number) {

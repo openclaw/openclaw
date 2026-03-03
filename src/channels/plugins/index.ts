@@ -1,6 +1,6 @@
-import type { ChannelId, ChannelPlugin } from "./types.js";
-import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistryKey, requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeAnyChannelId } from "../registry.js";
+import type { ChannelId, ChannelPlugin } from "./types.js";
 
 // Channel plugins registry (runtime).
 //
@@ -8,12 +8,6 @@ import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeAnyChannelId } from ".
 // Shared code paths (reply flow, command auth, sandbox explain) should depend on `src/channels/dock.ts`
 // instead, and only call `getChannelPlugin()` at execution boundaries.
 //
-// Channel plugins are registered by the plugin loader (extensions/ or configured paths).
-function listPluginChannels(): ChannelPlugin[] {
-  const registry = requireActivePluginRegistry();
-  return registry.channels.map((entry) => entry.plugin);
-}
-
 function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
   const seen = new Set<string>();
   const resolved: ChannelPlugin[] = [];
@@ -28,9 +22,31 @@ function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
   return resolved;
 }
 
-export function listChannelPlugins(): ChannelPlugin[] {
-  const combined = dedupeChannels(listPluginChannels());
-  return combined.toSorted((a, b) => {
+type CachedChannelPlugins = {
+  registry: ReturnType<typeof requireActivePluginRegistry> | null;
+  registryKey: string | null;
+  sorted: ChannelPlugin[];
+  byId: Map<string, ChannelPlugin>;
+};
+
+const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
+  registry: null,
+  registryKey: null,
+  sorted: [],
+  byId: new Map(),
+};
+
+let cachedChannelPlugins = EMPTY_CHANNEL_PLUGIN_CACHE;
+
+function resolveCachedChannelPlugins(): CachedChannelPlugins {
+  const registry = requireActivePluginRegistry();
+  const registryKey = getActivePluginRegistryKey();
+  const cached = cachedChannelPlugins;
+  if (cached.registry === registry && cached.registryKey === registryKey) {
+    return cached;
+  }
+
+  const sorted = dedupeChannels(registry.channels.map((entry) => entry.plugin)).toSorted((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
     const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
@@ -40,6 +56,23 @@ export function listChannelPlugins(): ChannelPlugin[] {
     }
     return a.id.localeCompare(b.id);
   });
+  const byId = new Map<string, ChannelPlugin>();
+  for (const plugin of sorted) {
+    byId.set(plugin.id, plugin);
+  }
+
+  const next: CachedChannelPlugins = {
+    registry,
+    registryKey,
+    sorted,
+    byId,
+  };
+  cachedChannelPlugins = next;
+  return next;
+}
+
+export function listChannelPlugins(): ChannelPlugin[] {
+  return resolveCachedChannelPlugins().sorted.slice();
 }
 
 export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
@@ -47,7 +80,7 @@ export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
   if (!resolvedId) {
     return undefined;
   }
-  return listChannelPlugins().find((plugin) => plugin.id === resolvedId);
+  return resolveCachedChannelPlugins().byId.get(resolvedId);
 }
 
 export function normalizeChannelId(raw?: string | null): ChannelId | null {

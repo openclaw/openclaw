@@ -44,6 +44,10 @@
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
     },
+    "./plugin-sdk/keyed-async-queue": {
+      "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
+      "default": "./dist/plugin-sdk/keyed-async-queue.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
@@ -59,7 +63,7 @@
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
     "build:strict-smoke": "pnpm canvas:a2ui:bundle && tsdown && pnpm build:plugin-sdk:dts",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
-    "check": "pnpm format:check && pnpm tsgo && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:plugins:no-register-http-handler && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope && pnpm check:host-env-policy:swift",
+    "check": "pnpm format:check && pnpm tsgo && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope && pnpm check:host-env-policy:swift",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-links",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
@@ -96,6 +100,7 @@
     "ios:open": "bash -lc './scripts/ios-configure-signing.sh && cd apps/ios && xcodegen generate && open OpenClaw.xcodeproj'",
     "ios:run": "bash -lc './scripts/ios-configure-signing.sh && cd apps/ios && xcodegen generate && xcodebuild -project OpenClaw.xcodeproj -scheme OpenClaw -destination \"${IOS_DEST:-platform=iOS Simulator,name=iPhone 17}\" -configuration Debug build && xcrun simctl boot \"${IOS_SIM:-iPhone 17}\" || true && xcrun simctl launch booted ai.openclaw.ios'",
     "lint": "oxlint --type-aware",
+    "lint:agent:ingress-owner": "node scripts/check-ingress-agent-owner-context.mjs",
     "lint:all": "pnpm lint && pnpm lint:swift",
     "lint:auth:no-pairing-store-group": "node scripts/check-no-pairing-store-group-auth.mjs",
     "lint:auth:pairing-account-scope": "node scripts/check-pairing-account-scope.mjs",

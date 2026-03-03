@@ -18,7 +18,14 @@ import {
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  buildCanonicalSentMessageHookContext,
+  toInternalMessageSentContext,
+  toPluginMessageContext,
+  toPluginMessageSentEvent,
+} from "../../hooks/message-hook-mappers.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -220,6 +227,10 @@ type DeliverOutboundPayloadsCoreParams = {
     agentId?: string;
     text?: string;
     mediaUrls?: string[];
+    /** Whether this message is being sent in a group/channel context */
+    isGroup?: boolean;
+    /** Group or channel identifier for correlation with received events */
+    groupId?: string;
   };
   silent?: boolean;
 };
@@ -458,31 +469,31 @@ async function deliverOutboundPayloadsCore(
       text: normalizedText,
     };
   };
-  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads)
-    .map((payload) => {
-      // Strip HTML tags for plain-text surfaces (WhatsApp, Signal, etc.)
-      // Models occasionally produce <br>, <b>, etc. that render as literal text.
-      // See https://github.com/openclaw/openclaw/issues/31884
-      if (!isPlainTextSurface(channel) || !payload.text) {
-        return payload;
-      }
+  const normalizedPayloads: ReplyPayload[] = [];
+  for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
+    let sanitizedPayload = payload;
+    // Strip HTML tags for plain-text surfaces (WhatsApp, Signal, etc.)
+    // Models occasionally produce <br>, <b>, etc. that render as literal text.
+    // See https://github.com/openclaw/openclaw/issues/31884
+    if (isPlainTextSurface(channel) && payload.text) {
       // Telegram sendPayload uses textMode:"html". Preserve raw HTML in this path.
-      if (channel === "telegram" && payload.channelData) {
-        return payload;
+      if (!(channel === "telegram" && payload.channelData)) {
+        sanitizedPayload = { ...payload, text: sanitizeForPlainText(payload.text) };
       }
-      return { ...payload, text: sanitizeForPlainText(payload.text) };
-    })
-    .flatMap((payload) => {
-      const normalized = normalizePayloadForChannelDelivery(payload, channel);
-      return normalized ? [normalized] : [];
-    });
+    }
+    const normalized = normalizePayloadForChannelDelivery(sanitizedPayload, channel);
+    if (normalized) {
+      normalizedPayloads.push(normalized);
+    }
+  }
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
-  if (
-    hookRunner?.hasHooks("message_sent") &&
-    params.session?.agentId &&
-    !sessionKeyForInternalHooks
-  ) {
+  const mirrorIsGroup = params.mirror?.isGroup;
+  const mirrorGroupId = params.mirror?.groupId;
+  const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
+  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  const canEmitInternalHook = Boolean(sessionKeyForInternalHooks);
+  if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
       "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
       {
@@ -504,47 +515,59 @@ async function deliverOutboundPayloadsCore(
       error?: string;
       messageId?: string;
     }) => {
-      if (hookRunner?.hasHooks("message_sent")) {
-        void hookRunner
-          .runMessageSent(
-            {
-              to,
-              content: params.content,
-              success: params.success,
-              ...(params.error ? { error: params.error } : {}),
-            },
-            {
-              channelId: channel,
-              accountId: accountId ?? undefined,
-              conversationId: to,
-            },
-          )
-          .catch(() => {});
-      }
-      if (!sessionKeyForInternalHooks) {
+      if (!hasMessageSentHooks && !canEmitInternalHook) {
         return;
       }
-      void triggerInternalHook(
-        createInternalHookEvent("message", "sent", sessionKeyForInternalHooks, {
-          to,
-          content: params.content,
-          success: params.success,
-          ...(params.error ? { error: params.error } : {}),
-          channelId: channel,
-          accountId: accountId ?? undefined,
-          conversationId: to,
-          messageId: params.messageId,
-        }),
-      ).catch(() => {});
+      const canonical = buildCanonicalSentMessageHookContext({
+        to,
+        content: params.content,
+        success: params.success,
+        error: params.error,
+        channelId: channel,
+        accountId: accountId ?? undefined,
+        conversationId: to,
+        messageId: params.messageId,
+        isGroup: mirrorIsGroup,
+        groupId: mirrorGroupId,
+      });
+      if (hasMessageSentHooks) {
+        fireAndForgetHook(
+          hookRunner!.runMessageSent(
+            toPluginMessageSentEvent(canonical),
+            toPluginMessageContext(canonical),
+          ),
+          "deliverOutboundPayloads: message_sent plugin hook failed",
+          (message) => {
+            log.warn(message);
+          },
+        );
+      }
+      if (!canEmitInternalHook) {
+        return;
+      }
+      fireAndForgetHook(
+        triggerInternalHook(
+          createInternalHookEvent(
+            "message",
+            "sent",
+            sessionKeyForInternalHooks!,
+            toInternalMessageSentContext(canonical),
+          ),
+        ),
+        "deliverOutboundPayloads: message:sent internal hook failed",
+        (message) => {
+          log.warn(message);
+        },
+      );
     };
     try {
       throwIfAborted(abortSignal);
 
       // Run message_sending plugin hook (may modify content or cancel)
       let effectivePayload = payload;
-      if (hookRunner?.hasHooks("message_sending")) {
+      if (hasMessageSendingHooks) {
         try {
-          const sendingResult = await hookRunner.runMessageSending(
+          const sendingResult = await hookRunner!.runMessageSending(
             {
               to,
               content: payloadSummary.text,

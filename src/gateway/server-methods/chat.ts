@@ -1,13 +1,13 @@
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
-import type { MsgContext } from "../../auto-reply/templating.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -48,6 +48,7 @@ import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -186,16 +187,61 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   return { message: changed ? entry : message, changed };
 }
 
+/**
+ * Extract the visible text from an assistant history message for silent-token checks.
+ * Returns `undefined` for non-assistant messages or messages with no extractable text.
+ * When `entry.text` is present it takes precedence over `entry.content` to avoid
+ * dropping messages that carry real text alongside a stale `content: "NO_REPLY"`.
+ */
+function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const entry = message as Record<string, unknown>;
+  if (entry.role !== "assistant") {
+    return undefined;
+  }
+  if (typeof entry.text === "string") {
+    return entry.text;
+  }
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  if (!Array.isArray(entry.content) || entry.content.length === 0) {
+    return undefined;
+  }
+
+  const texts: string[] = [];
+  for (const block of entry.content) {
+    if (!block || typeof block !== "object") {
+      return undefined;
+    }
+    const typed = block as { type?: unknown; text?: unknown };
+    if (typed.type !== "text" || typeof typed.text !== "string") {
+      return undefined;
+    }
+    texts.push(typed.text);
+  }
+  return texts.length > 0 ? texts.join("\n") : undefined;
+}
+
 function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
   }
   let changed = false;
-  const next = messages.map((message) => {
+  const next: unknown[] = [];
+  for (const message of messages) {
     const res = sanitizeChatHistoryMessage(message);
     changed ||= res.changed;
-    return res.message;
-  });
+    // Drop assistant messages whose entire visible text is the silent reply token.
+    const text = extractAssistantTextForSilentCheck(res.message);
+    if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+      changed = true;
+      continue;
+    }
+    next.push(res.message);
+  }
   return changed ? next : messages;
 }
 

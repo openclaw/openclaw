@@ -89,6 +89,21 @@ describe("resolveEntriesWithActiveFallback", () => {
     });
   }
 
+  function expectResolvedProviders(params: {
+    cfg: OpenClawConfig;
+    capability: ResolveWithFallbackInput["capability"];
+    config: ResolveWithFallbackInput["config"];
+    providers: string[];
+  }) {
+    const entries = resolveWithActiveFallback({
+      cfg: params.cfg,
+      capability: params.capability,
+      config: params.config,
+    });
+    expect(entries).toHaveLength(params.providers.length);
+    expect(entries.map((entry) => entry.provider)).toEqual(params.providers);
+  }
+
   it("uses active model when enabled and no models are configured", () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -98,13 +113,12 @@ describe("resolveEntriesWithActiveFallback", () => {
       },
     };
 
-    const entries = resolveWithActiveFallback({
+    expectResolvedProviders({
       cfg,
       capability: "audio",
       config: cfg.tools?.media?.audio,
+      providers: ["groq"],
     });
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.provider).toBe("groq");
   });
 
   it("ignores active model when configured entries exist", () => {
@@ -116,13 +130,12 @@ describe("resolveEntriesWithActiveFallback", () => {
       },
     };
 
-    const entries = resolveWithActiveFallback({
+    expectResolvedProviders({
       cfg,
       capability: "audio",
       config: cfg.tools?.media?.audio,
+      providers: ["openai"],
     });
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.provider).toBe("openai");
   });
 
   it("skips active model when provider lacks capability", () => {

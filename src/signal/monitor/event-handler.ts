@@ -35,15 +35,19 @@ import { resolveChannelGroupRequireMention } from "../../config/group-policy.js"
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { mediaKindFromMime } from "../../media/constants.js";
+import { kindFromMime } from "../../media/mime.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { DM_GROUP_ACCESS_REASON } from "../../security/dm-policy-shared.js";
+import {
+  DM_GROUP_ACCESS_REASON,
+  resolvePinnedMainDmOwnerFromAllowlist,
+} from "../../security/dm-policy-shared.js";
 import { normalizeE164 } from "../../utils.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
   formatSignalSenderId,
   isSignalSenderAllowed,
+  normalizeSignalAllowRecipient,
   resolveSignalPeerId,
   resolveSignalRecipient,
   resolveSignalSender,
@@ -184,6 +188,25 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             channel: "signal",
             to: entry.senderRecipient,
             accountId: route.accountId,
+            mainDmOwnerPin: (() => {
+              const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
+                dmScope: deps.cfg.session?.dmScope,
+                allowFrom: deps.allowFrom,
+                normalizeEntry: normalizeSignalAllowRecipient,
+              });
+              if (!pinnedOwner) {
+                return undefined;
+              }
+              return {
+                ownerRecipient: pinnedOwner,
+                senderRecipient: entry.senderRecipient,
+                onSkip: ({ ownerRecipient, senderRecipient }) => {
+                  logVerbose(
+                    `signal: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                  );
+                },
+              };
+            })(),
           }
         : undefined,
       onRecordError: (err) => {
@@ -613,7 +636,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           return "<media:attachment>";
         }
         const firstContentType = dataMessage.attachments?.[0]?.contentType;
-        const pendingKind = mediaKindFromMime(firstContentType ?? undefined);
+        const pendingKind = kindFromMime(firstContentType ?? undefined);
         return pendingKind ? `<media:${pendingKind}>` : "<media:attachment>";
       })();
       const pendingBodyText = messageText || pendingPlaceholder || quoteText;
@@ -656,7 +679,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
-    const kind = mediaKindFromMime(mediaType ?? undefined);
+    const kind = kindFromMime(mediaType ?? undefined);
     if (kind) {
       placeholder = `<media:${kind}>`;
     } else if (dataMessage.attachments?.length) {

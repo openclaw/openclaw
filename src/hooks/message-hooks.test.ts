@@ -1,18 +1,112 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import {
   clearInternalHooks,
+  createInternalHookEvent,
   registerInternalHook,
+  triggerInternalHook,
   type InternalHookEvent,
 } from "./internal-hooks.js";
-import {
-  triggerMessageReceived,
-  triggerMessageSent,
-  type MessageReceivedContext,
-  type MessageSentContext,
-} from "./message-hooks.js";
 
-describe("message-hooks", () => {
+type ActionCase = {
+  label: string;
+  key: string;
+  action: "received" | "transcribed" | "preprocessed" | "sent";
+  context: Record<string, unknown>;
+  assertContext: (context: Record<string, unknown>) => void;
+};
+
+const actionCases: ActionCase[] = [
+  {
+    label: "message:received",
+    key: "message:received",
+    action: "received",
+    context: {
+      from: "signal:+15551234567",
+      to: "bot:+15559876543",
+      content: "Test message",
+      channelId: "signal",
+      conversationId: "conv-abc",
+      messageId: "msg-xyz",
+      senderId: "sender-1",
+      senderName: "Test User",
+      senderUsername: "testuser",
+      senderE164: "+15551234567",
+      provider: "signal",
+      surface: "signal",
+      threadId: "thread-1",
+      originatingChannel: "signal",
+      originatingTo: "bot:+15559876543",
+      timestamp: 1707600000,
+    },
+    assertContext: (context) => {
+      expect(context.content).toBe("Test message");
+      expect(context.channelId).toBe("signal");
+      expect(context.senderE164).toBe("+15551234567");
+      expect(context.threadId).toBe("thread-1");
+    },
+  },
+  {
+    label: "message:transcribed",
+    key: "message:transcribed",
+    action: "transcribed",
+    context: {
+      body: "🎤 [Audio]",
+      bodyForAgent: "[Audio] Transcript: Hello from voice",
+      transcript: "Hello from voice",
+      channelId: "telegram",
+      mediaType: "audio/ogg",
+    },
+    assertContext: (context) => {
+      expect(context.body).toBe("🎤 [Audio]");
+      expect(context.bodyForAgent).toContain("Transcript:");
+      expect(context.transcript).toBe("Hello from voice");
+      expect(context.mediaType).toBe("audio/ogg");
+    },
+  },
+  {
+    label: "message:preprocessed",
+    key: "message:preprocessed",
+    action: "preprocessed",
+    context: {
+      body: "🎤 [Audio]",
+      bodyForAgent: "[Audio] Transcript: Check https://example.com\n[Link summary: Example site]",
+      transcript: "Check https://example.com",
+      channelId: "telegram",
+      mediaType: "audio/ogg",
+      isGroup: false,
+    },
+    assertContext: (context) => {
+      expect(context.transcript).toBe("Check https://example.com");
+      expect(String(context.bodyForAgent)).toContain("Link summary");
+      expect(String(context.bodyForAgent)).toContain("Transcript:");
+    },
+  },
+  {
+    label: "message:sent",
+    key: "message:sent",
+    action: "sent",
+    context: {
+      from: "bot:456",
+      to: "user:123",
+      content: "Reply text",
+      channelId: "discord",
+      conversationId: "channel:C123",
+      provider: "discord",
+      surface: "discord",
+      threadId: "thread-abc",
+      originatingChannel: "discord",
+      originatingTo: "channel:C123",
+    },
+    assertContext: (context) => {
+      expect(context.content).toBe("Reply text");
+      expect(context.channelId).toBe("discord");
+      expect(context.conversationId).toBe("channel:C123");
+      expect(context.threadId).toBe("thread-abc");
+    },
+  },
+];
+
+describe("message hooks", () => {
   beforeEach(() => {
     clearInternalHooks();
   });
@@ -21,116 +115,162 @@ describe("message-hooks", () => {
     clearInternalHooks();
   });
 
-  describe("triggerMessageReceived", () => {
-    it("triggers message:received hook with correct context", async () => {
-      const handler = vi.fn();
-      registerInternalHook("message:received", handler);
+  describe("action handlers", () => {
+    for (const testCase of actionCases) {
+      it(`triggers handler for ${testCase.label}`, async () => {
+        const handler = vi.fn();
+        registerInternalHook(testCase.key, handler);
 
-      const ctx = {
-        Body: "Hello world",
-        RawBody: "Hello world",
-        SenderId: "+1234567890",
-        SenderName: "Test User",
-        Provider: "signal",
-        MessageSid: "msg-123",
-        ChatType: "dm" as const,
-        From: "+1234567890",
-        SessionKey: "agent:main:signal",
-        Timestamp: 1700000000,
-        CommandAuthorized: true,
-      };
+        await triggerInternalHook(
+          createInternalHookEvent("message", testCase.action, "session-1", testCase.context),
+        );
 
-      await triggerMessageReceived("agent:main:signal", ctx as unknown as FinalizedMsgContext);
+        expect(handler).toHaveBeenCalledOnce();
+        const event = handler.mock.calls[0][0] as InternalHookEvent;
+        expect(event.type).toBe("message");
+        expect(event.action).toBe(testCase.action);
+        testCase.assertContext(event.context);
+      });
+    }
 
-      expect(handler).toHaveBeenCalledTimes(1);
-      const event = handler.mock.calls[0][0] as InternalHookEvent;
-      expect(event.type).toBe("message");
-      expect(event.action).toBe("received");
-      expect(event.sessionKey).toBe("agent:main:signal");
+    it("does not trigger action-specific handlers for other actions", async () => {
+      const sentHandler = vi.fn();
+      registerInternalHook("message:sent", sentHandler);
 
-      const eventContext = event.context as MessageReceivedContext;
-      expect(eventContext.message).toBe("Hello world");
-      expect(eventContext.rawBody).toBe("Hello world");
-      expect(eventContext.senderId).toBe("+1234567890");
-      expect(eventContext.senderName).toBe("Test User");
-      expect(eventContext.channel).toBe("signal");
-      expect(eventContext.messageId).toBe("msg-123");
-      expect(eventContext.isGroup).toBe(false);
-      expect(eventContext.commandAuthorized).toBe(true);
-    });
-
-    it("sets isGroup=true and groupId for group messages", async () => {
-      const handler = vi.fn();
-      registerInternalHook("message:received", handler);
-
-      const ctx = {
-        Body: "Group message",
-        ChatType: "group" as const,
-        From: "group-abc-123",
-        SessionKey: "agent:main:signal:group",
-      };
-
-      await triggerMessageReceived(
-        "agent:main:signal:group",
-        ctx as unknown as FinalizedMsgContext,
+      await triggerInternalHook(
+        createInternalHookEvent("message", "received", "session-1", { content: "hello" }),
       );
 
-      const event = handler.mock.calls[0][0] as InternalHookEvent;
-      const eventContext = event.context as MessageReceivedContext;
-      expect(eventContext.isGroup).toBe(true);
-      expect(eventContext.groupId).toBe("group-abc-123");
-    });
-
-    it("does not fire if no handlers registered", async () => {
-      // Should not throw when no handlers are registered
-      const ctx = { Body: "test", SessionKey: "test" };
-      await expect(
-        triggerMessageReceived("test", ctx as unknown as FinalizedMsgContext),
-      ).resolves.toBeUndefined();
+      expect(sentHandler).not.toHaveBeenCalled();
     });
   });
 
-  describe("triggerMessageSent", () => {
-    it("triggers message:sent hook with correct context", async () => {
-      const handler = vi.fn();
-      registerInternalHook("message:sent", handler);
+  describe("general handler", () => {
+    it("receives full message lifecycle in order", async () => {
+      const events: InternalHookEvent[] = [];
+      registerInternalHook("message", (event) => {
+        events.push(event);
+      });
 
-      const payload = { text: "Hello back!" };
-      const context = {
-        target: "signal:+1234567890",
-        channel: "signal",
-        kind: "final",
-      };
+      const lifecycleFixtures: Array<{
+        action: "received" | "transcribed" | "preprocessed" | "sent";
+        context: Record<string, unknown>;
+      }> = [
+        { action: "received", context: { content: "hi" } },
+        { action: "transcribed", context: { transcript: "hello" } },
+        { action: "preprocessed", context: { body: "hello", bodyForAgent: "hello" } },
+        { action: "sent", context: { content: "reply" } },
+      ];
 
-      await triggerMessageSent("agent:main:main", payload, context);
+      for (const fixture of lifecycleFixtures) {
+        await triggerInternalHook(
+          createInternalHookEvent("message", fixture.action, "s1", fixture.context),
+        );
+      }
 
-      expect(handler).toHaveBeenCalledTimes(1);
-      const event = handler.mock.calls[0][0] as InternalHookEvent;
-      expect(event.type).toBe("message");
-      expect(event.action).toBe("sent");
-      expect(event.sessionKey).toBe("agent:main:main");
-
-      const eventContext = event.context as MessageSentContext;
-      expect(eventContext.text).toBe("Hello back!");
-      expect(eventContext.target).toBe("signal:+1234567890");
-      expect(eventContext.channel).toBe("signal");
-      expect(eventContext.kind).toBe("final");
+      expect(events.map((event) => event.action)).toEqual([
+        "received",
+        "transcribed",
+        "preprocessed",
+        "sent",
+      ]);
     });
 
-    it("handles payload with media", async () => {
+    it("triggers both general and specific handlers", async () => {
+      const generalHandler = vi.fn();
+      const specificHandler = vi.fn();
+      registerInternalHook("message", generalHandler);
+      registerInternalHook("message:received", specificHandler);
+
+      await triggerInternalHook(
+        createInternalHookEvent("message", "received", "s1", { content: "test" }),
+      );
+
+      expect(generalHandler).toHaveBeenCalledOnce();
+      expect(specificHandler).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("error isolation", () => {
+    it("does not propagate handler errors", async () => {
+      const badHandler = vi.fn(() => {
+        throw new Error("Hook exploded");
+      });
+      registerInternalHook("message:received", badHandler);
+
+      await expect(
+        triggerInternalHook(
+          createInternalHookEvent("message", "received", "s1", { content: "test" }),
+        ),
+      ).resolves.not.toThrow();
+      expect(badHandler).toHaveBeenCalledOnce();
+    });
+
+    it("continues with later handlers when one fails", async () => {
+      const failHandler = vi.fn(() => {
+        throw new Error("First handler fails");
+      });
+      const successHandler = vi.fn();
+      registerInternalHook("message:received", failHandler);
+      registerInternalHook("message:received", successHandler);
+
+      await triggerInternalHook(
+        createInternalHookEvent("message", "received", "s1", { content: "test" }),
+      );
+
+      expect(failHandler).toHaveBeenCalledOnce();
+      expect(successHandler).toHaveBeenCalledOnce();
+    });
+
+    it("isolates async handler errors", async () => {
+      const asyncFailHandler = vi.fn(async () => {
+        throw new Error("Async hook failed");
+      });
+      registerInternalHook("message:sent", asyncFailHandler);
+
+      await expect(
+        triggerInternalHook(createInternalHookEvent("message", "sent", "s1", { content: "reply" })),
+      ).resolves.not.toThrow();
+      expect(asyncFailHandler).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("event structure", () => {
+    it("includes timestamps on message events", async () => {
       const handler = vi.fn();
-      registerInternalHook("message:sent", handler);
+      registerInternalHook("message", handler);
 
-      const payload = {
-        text: "Check this out",
-        mediaUrl: "/tmp/image.png",
-      };
-
-      await triggerMessageSent("test-session", payload, { channel: "telegram" });
+      const before = new Date();
+      await triggerInternalHook(
+        createInternalHookEvent("message", "received", "s1", { content: "hi" }),
+      );
+      const after = new Date();
 
       const event = handler.mock.calls[0][0] as InternalHookEvent;
-      const context = event.context as MessageSentContext;
-      expect(context.mediaUrl).toBe("/tmp/image.png");
+      expect(event.timestamp).toBeInstanceOf(Date);
+      expect(event.timestamp.getTime()).toBeGreaterThanOrEqual(before.getTime());
+      expect(event.timestamp.getTime()).toBeLessThanOrEqual(after.getTime());
+    });
+
+    it("preserves mutable messages and sessionKey", async () => {
+      const events: InternalHookEvent[] = [];
+      registerInternalHook("message", (event) => {
+        event.messages.push("Echo");
+        events.push(event);
+      });
+
+      const sessionKey = "agent:main:telegram:abc";
+      const received = createInternalHookEvent("message", "received", sessionKey, {
+        content: "hi",
+      });
+      await triggerInternalHook(received);
+      await triggerInternalHook(
+        createInternalHookEvent("message", "sent", sessionKey, { content: "reply" }),
+      );
+
+      expect(received.messages).toContain("Echo");
+      expect(events[0]?.sessionKey).toBe(sessionKey);
+      expect(events[1]?.sessionKey).toBe(sessionKey);
     });
   });
 });

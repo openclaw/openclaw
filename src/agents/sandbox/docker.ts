@@ -165,10 +165,11 @@ import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from 
 import { formatCliCommand } from "../../cli/command-format.js";
 import { defaultRuntime } from "../../runtime.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
-import { DEFAULT_SANDBOX_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
 import { readRegistry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
+import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
 
 const log = createSubsystemLogger("docker");
 
@@ -452,16 +453,13 @@ async function createSandboxContainer(params: {
     bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
   });
   args.push("--workdir", cfg.workdir);
-  const mainMountSuffix =
-    params.workspaceAccess === "ro" && workspaceDir === params.agentWorkspaceDir ? ":ro" : "";
-  args.push("-v", `${workspaceDir}:${cfg.workdir}${mainMountSuffix}`);
-  if (params.workspaceAccess !== "none" && workspaceDir !== params.agentWorkspaceDir) {
-    const agentMountSuffix = params.workspaceAccess === "ro" ? ":ro" : "";
-    args.push(
-      "-v",
-      `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
-    );
-  }
+  appendWorkspaceMountArgs({
+    args,
+    workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
+    workdir: cfg.workdir,
+    workspaceAccess: params.workspaceAccess,
+  });
   appendCustomBinds(args, cfg);
   args.push(cfg.image, "sleep", "infinity");
 
@@ -469,7 +467,7 @@ async function createSandboxContainer(params: {
   await execDocker(["start", name]);
 
   if (cfg.setupCommand?.trim()) {
-    await execDocker(["exec", "-i", name, "sh", "-lc", cfg.setupCommand]);
+    await execDocker(["exec", "-i", name, "/bin/sh", "-lc", cfg.setupCommand]);
   }
 }
 

@@ -167,6 +167,24 @@ async function runSubmitButton(params: {
   return submitInteraction;
 }
 
+async function runModelSelect(params: {
+  context: ModelPickerContext;
+  data?: PickerSelectData;
+  userId?: string;
+  values?: string[];
+}) {
+  const select = createDiscordModelPickerFallbackSelect(params.context);
+  const selectInteraction = createInteraction({
+    userId: params.userId ?? "owner",
+    values: params.values ?? ["gpt-4o"],
+  });
+  await select.run(
+    selectInteraction as unknown as PickerSelectInteraction,
+    params.data ?? createModelsViewSelectData(),
+  );
+  return selectInteraction;
+}
+
 function expectDispatchedModelSelection(params: {
   dispatchSpy: { mock: { calls: Array<[unknown]> } };
   model: string;
@@ -270,15 +288,7 @@ describe("Discord model picker interactions", () => {
       .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
       .mockResolvedValue({} as never);
 
-    const select = createDiscordModelPickerFallbackSelect(context);
-    const selectInteraction = createInteraction({
-      userId: "owner",
-      values: ["gpt-4o"],
-    });
-
-    const selectData = createModelsViewSelectData();
-
-    await select.run(selectInteraction as unknown as PickerSelectInteraction, selectData);
+    const selectInteraction = await runModelSelect({ context });
 
     expect(selectInteraction.update).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).not.toHaveBeenCalled();
@@ -315,15 +325,7 @@ describe("Discord model picker interactions", () => {
       .spyOn(timeoutModule, "withTimeout")
       .mockRejectedValue(new Error("timeout"));
 
-    const select = createDiscordModelPickerFallbackSelect(context);
-    const selectInteraction = createInteraction({
-      userId: "owner",
-      values: ["gpt-4o"],
-    });
-
-    const selectData = createModelsViewSelectData();
-
-    await select.run(selectInteraction as unknown as PickerSelectInteraction, selectData);
+    await runModelSelect({ context });
 
     const button = createDiscordModelPickerFallbackButton(context);
     const submitInteraction = createInteraction({ userId: "owner" });

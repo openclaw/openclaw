@@ -1,5 +1,4 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { ChannelMessageActionContext } from "../../types.js";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -8,6 +7,8 @@ import {
 import { readDiscordParentIdParam } from "../../../../agents/tools/discord-actions-shared.js";
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
 import { resolveDiscordChannelId } from "../../../../discord/targets.js";
+import type { ChannelMessageActionContext } from "../../types.js";
+import { resolveReactionMessageId } from "../reaction-message-id.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 
 const providerId = "discord";
@@ -107,7 +108,13 @@ export async function handleDiscordMessageAction(
   }
 
   if (action === "react") {
-    const messageId = readStringParam(params, "messageId", { required: true });
+    const messageIdRaw = resolveReactionMessageId({ args: params, toolContext: ctx.toolContext });
+    const messageId = messageIdRaw != null ? String(messageIdRaw).trim() : "";
+    if (!messageId) {
+      throw new Error(
+        "messageId required. Provide messageId explicitly or react to the current inbound message.",
+      );
+    }
     const emoji = readStringParam(params, "emoji", { allowEmpty: true });
     const remove = typeof params.remove === "boolean" ? params.remove : undefined;
     return await handleDiscordAction(

@@ -43,6 +43,20 @@ function writeRuntimeOpenRouterProfile(agentDir: string): void {
   );
 }
 
+async function writeLegacyAuthJson(
+  agentDir: string,
+  authEntries: Record<string, unknown>,
+): Promise<void> {
+  await fs.writeFile(path.join(agentDir, "auth.json"), JSON.stringify(authEntries, null, 2));
+}
+
+async function readLegacyAuthJson(agentDir: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as Record<
+    string,
+    unknown
+  >;
+}
+
 describe("discoverAuthStorage", () => {
   it("loads runtime credentials from auth-profiles without writing auth.json", async () => {
     await withAgentDir(async (agentDir) => {
@@ -91,28 +105,19 @@ describe("discoverAuthStorage", () => {
   it("scrubs static api_key entries from legacy auth.json and keeps oauth entries", async () => {
     await withAgentDir(async (agentDir) => {
       writeRuntimeOpenRouterProfile(agentDir);
-      await fs.writeFile(
-        path.join(agentDir, "auth.json"),
-        JSON.stringify(
-          {
-            openrouter: { type: "api_key", key: "legacy-static-key" },
-            "openai-codex": {
-              type: "oauth",
-              access: "oauth-access",
-              refresh: "oauth-refresh",
-              expires: Date.now() + 60_000,
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await writeLegacyAuthJson(agentDir, {
+        openrouter: { type: "api_key", key: "legacy-static-key" },
+        "openai-codex": {
+          type: "oauth",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+      });
 
       discoverAuthStorage(agentDir);
 
-      const parsed = JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as {
-        [key: string]: unknown;
-      };
+      const parsed = await readLegacyAuthJson(agentDir);
       expect(parsed.openrouter).toBeUndefined();
       expect(parsed["openai-codex"]).toMatchObject({
         type: "oauth",
@@ -127,22 +132,13 @@ describe("discoverAuthStorage", () => {
       process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
       try {
         writeRuntimeOpenRouterProfile(agentDir);
-        await fs.writeFile(
-          path.join(agentDir, "auth.json"),
-          JSON.stringify(
-            {
-              openrouter: { type: "api_key", key: "legacy-static-key" },
-            },
-            null,
-            2,
-          ),
-        );
+        await writeLegacyAuthJson(agentDir, {
+          openrouter: { type: "api_key", key: "legacy-static-key" },
+        });
 
         discoverAuthStorage(agentDir);
 
-        const parsed = JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as {
-          [key: string]: unknown;
-        };
+        const parsed = await readLegacyAuthJson(agentDir);
         expect(parsed.openrouter).toMatchObject({ type: "api_key", key: "legacy-static-key" });
       } finally {
         if (previous === undefined) {

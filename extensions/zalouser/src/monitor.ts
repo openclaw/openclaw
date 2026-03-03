@@ -5,10 +5,12 @@ import type {
   RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import {
+  createTypingCallbacks,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   resolveOutboundMediaUrls,
   mergeAllowlist,
+  resolveMentionGatingWithBypass,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveSenderCommandAuthorization,
@@ -16,10 +18,26 @@ import {
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk";
-import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+import {
+  buildZalouserGroupCandidates,
+  findZalouserGroupEntry,
+  isZalouserGroupEntryAllowed,
+} from "./group-policy.js";
+import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
 import { getZalouserRuntime } from "./runtime.js";
-import { sendMessageZalouser } from "./send.js";
-import { listZaloFriends, listZaloGroups, startZaloListener } from "./zalo-js.js";
+import {
+  sendDeliveredZalouser,
+  sendMessageZalouser,
+  sendSeenZalouser,
+  sendTypingZalouser,
+} from "./send.js";
+import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+import {
+  listZaloFriends,
+  listZaloGroups,
+  resolveZaloGroupContext,
+  startZaloListener,
+} from "./zalo-js.js";
 
 export type ZalouserMonitorOptions = {
   account: ResolvedZalouserAccount;
@@ -75,45 +93,64 @@ function isSenderAllowed(senderId: string | undefined, allowFrom: string[]): boo
   });
 }
 
-function normalizeGroupSlug(raw?: string | null): string {
-  const trimmed = raw?.trim().toLowerCase() ?? "";
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed
-    .replace(/^#/, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 function isGroupAllowed(params: {
   groupId: string;
   groupName?: string | null;
-  groups: Record<string, { allow?: boolean; enabled?: boolean }>;
+  groups: Record<string, { allow?: boolean; enabled?: boolean; requireMention?: boolean }>;
 }): boolean {
   const groups = params.groups ?? {};
   const keys = Object.keys(groups);
   if (keys.length === 0) {
     return false;
   }
-  const candidates = [
-    params.groupId,
-    `group:${params.groupId}`,
-    params.groupName ?? "",
-    normalizeGroupSlug(params.groupName ?? ""),
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    const entry = groups[candidate];
-    if (!entry) {
-      continue;
-    }
-    return entry.allow !== false && entry.enabled !== false;
+  const entry = findZalouserGroupEntry(
+    groups,
+    buildZalouserGroupCandidates({
+      groupId: params.groupId,
+      groupName: params.groupName,
+      includeGroupIdAlias: true,
+      includeWildcard: true,
+    }),
+  );
+  return isZalouserGroupEntryAllowed(entry);
+}
+
+function resolveGroupRequireMention(params: {
+  groupId: string;
+  groupName?: string | null;
+  groups: Record<string, { allow?: boolean; enabled?: boolean; requireMention?: boolean }>;
+}): boolean {
+  const entry = findZalouserGroupEntry(
+    params.groups ?? {},
+    buildZalouserGroupCandidates({
+      groupId: params.groupId,
+      groupName: params.groupName,
+      includeGroupIdAlias: true,
+      includeWildcard: true,
+    }),
+  );
+  if (typeof entry?.requireMention === "boolean") {
+    return entry.requireMention;
   }
-  const wildcard = groups["*"];
-  if (wildcard) {
-    return wildcard.allow !== false && wildcard.enabled !== false;
-  }
-  return false;
+  return true;
+}
+
+async function sendZalouserDeliveryAcks(params: {
+  profile: string;
+  isGroup: boolean;
+  message: NonNullable<ZaloInboundMessage["eventMessage"]>;
+}): Promise<void> {
+  await sendDeliveredZalouser({
+    profile: params.profile,
+    isGroup: params.isGroup,
+    message: params.message,
+    isSeen: true,
+  });
+  await sendSeenZalouser({
+    profile: params.profile,
+    isGroup: params.isGroup,
+    message: params.message,
+  });
 }
 
 async function processMessage(
@@ -143,7 +180,32 @@ async function processMessage(
     return;
   }
   const senderName = message.senderName ?? "";
-  const groupName = message.groupName ?? "";
+  const configuredGroupName = message.groupName?.trim() || "";
+  const groupContext =
+    isGroup && !configuredGroupName
+      ? await resolveZaloGroupContext(account.profile, chatId).catch((err) => {
+          logVerbose(
+            core,
+            runtime,
+            `zalouser: group context lookup failed for ${chatId}: ${String(err)}`,
+          );
+          return null;
+        })
+      : null;
+  const groupName = configuredGroupName || groupContext?.name?.trim() || "";
+  const groupMembers = groupContext?.members?.slice(0, 20).join(", ") || undefined;
+
+  if (message.eventMessage) {
+    try {
+      await sendZalouserDeliveryAcks({
+        profile: account.profile,
+        isGroup,
+        message: message.eventMessage,
+      });
+    } catch (err) {
+      logVerbose(core, runtime, `zalouser: delivery/seen ack failed for ${chatId}: ${String(err)}`);
+    }
+  }
 
   const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
   const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
@@ -238,11 +300,8 @@ async function processMessage(
     }
   }
 
-  if (
-    isGroup &&
-    core.channel.commands.isControlCommandMessage(rawBody, config) &&
-    commandAuthorized !== true
-  ) {
+  const hasControlCommand = core.channel.commands.isControlCommandMessage(rawBody, config);
+  if (isGroup && hasControlCommand && commandAuthorized !== true) {
     logVerbose(
       core,
       runtime,
@@ -265,6 +324,45 @@ async function processMessage(
       id: peer.id,
     },
   });
+
+  const requireMention = isGroup
+    ? resolveGroupRequireMention({
+        groupId: chatId,
+        groupName,
+        groups,
+      })
+    : false;
+  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config, route.agentId);
+  const explicitMention = {
+    hasAnyMention: message.hasAnyMention === true,
+    isExplicitlyMentioned: message.wasExplicitlyMentioned === true,
+    canResolveExplicit: message.canResolveExplicitMention === true,
+  };
+  const wasMentioned = isGroup
+    ? core.channel.mentions.matchesMentionWithExplicit({
+        text: rawBody,
+        mentionRegexes,
+        explicit: explicitMention,
+      })
+    : true;
+  const mentionGate = resolveMentionGatingWithBypass({
+    isGroup,
+    requireMention,
+    canDetectMention: mentionRegexes.length > 0 || explicitMention.canResolveExplicit,
+    wasMentioned,
+    implicitMention: message.implicitMention === true,
+    hasAnyMention: explicitMention.hasAnyMention,
+    allowTextCommands: core.channel.commands.shouldHandleTextCommands({
+      cfg: config,
+      surface: "zalouser",
+    }),
+    hasControlCommand,
+    commandAuthorized: commandAuthorized === true,
+  });
+  if (isGroup && mentionGate.shouldSkip) {
+    logVerbose(core, runtime, `zalouser: skip group ${chatId} (mention required, not mentioned)`);
+    return;
+  }
 
   const fromLabel = isGroup ? groupName || `group:${chatId}` : senderName || `user:${senderId}`;
   const storePath = core.channel.session.resolveStorePath(config.session?.store, {
@@ -295,12 +393,24 @@ async function processMessage(
     AccountId: route.accountId,
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: fromLabel,
+    GroupSubject: isGroup ? groupName || undefined : undefined,
+    GroupChannel: isGroup ? groupName || undefined : undefined,
+    GroupMembers: isGroup ? groupMembers : undefined,
     SenderName: senderName || undefined,
     SenderId: senderId,
+    WasMentioned: isGroup ? mentionGate.effectiveWasMentioned : undefined,
     CommandAuthorized: commandAuthorized,
     Provider: "zalouser",
     Surface: "zalouser",
-    MessageSid: message.msgId ?? message.cliMsgId ?? `${message.timestampMs}`,
+    MessageSid: resolveZalouserMessageSid({
+      msgId: message.msgId,
+      cliMsgId: message.cliMsgId,
+      fallback: `${message.timestampMs}`,
+    }),
+    MessageSidFull: formatZalouserMessageSidFull({
+      msgId: message.msgId,
+      cliMsgId: message.cliMsgId,
+    }),
     OriginatingChannel: "zalouser",
     OriginatingTo: `zalouser:${chatId}`,
   });
@@ -320,12 +430,24 @@ async function processMessage(
     channel: "zalouser",
     accountId: account.accountId,
   });
+  const typingCallbacks = createTypingCallbacks({
+    start: async () => {
+      await sendTypingZalouser(chatId, {
+        profile: account.profile,
+        isGroup,
+      });
+    },
+    onStartError: (err) => {
+      logVerbose(core, runtime, `zalouser typing failed for ${chatId}: ${String(err)}`);
+    },
+  });
 
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: config,
     dispatcherOptions: {
       ...prefixOptions,
+      typingCallbacks,
       deliver: async (payload) => {
         await deliverZalouserReply({
           payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },

@@ -36,6 +36,17 @@ function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function makeTelegramBoundCfg(accountId = "account-b"): OpenClawConfig {
+  return makeCfg({
+    bindings: [
+      {
+        agentId: AGENT_ID,
+        match: { channel: "telegram", accountId },
+      },
+    ],
+  });
+}
+
 const AGENT_ID = "agent-b";
 const DEFAULT_TARGET = {
   channel: "telegram" as const,
@@ -110,16 +121,7 @@ describe("resolveDeliveryTarget", () => {
 
   it("falls back to bound accountId when session has no lastAccountId", async () => {
     setMainSessionEntry(undefined);
-
-    const cfg = makeCfg({
-      bindings: [
-        {
-          agentId: "agent-b",
-          match: { channel: "telegram", accountId: "account-b" },
-        },
-      ],
-    });
-
+    const cfg = makeTelegramBoundCfg();
     const result = await resolveForAgent({ cfg });
 
     expect(result.accountId).toBe("account-b");
@@ -134,15 +136,7 @@ describe("resolveDeliveryTarget", () => {
       lastAccountId: "session-account",
     });
 
-    const cfg = makeCfg({
-      bindings: [
-        {
-          agentId: "agent-b",
-          match: { channel: "telegram", accountId: "account-b" },
-        },
-      ],
-    });
-
+    const cfg = makeTelegramBoundCfg();
     const result = await resolveForAgent({ cfg });
 
     // Session-derived accountId should take precedence over binding
