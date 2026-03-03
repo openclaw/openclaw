@@ -32,7 +32,6 @@ export type ResolvedBrowserConfig = {
   headless: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
-  disableLaunch: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
@@ -47,6 +46,7 @@ export type ResolvedBrowserProfile = {
   cdpIsLoopback: boolean;
   color: string;
   driver: "openclaw" | "extension";
+  /** If true: prevent all browser launches (via local Chrome or Playwright) and only allow attaching. Default: false */
   attachOnly: boolean;
   lockTab: boolean;
 };
@@ -254,8 +254,7 @@ export function resolveBrowserConfig(
 
   const headless = cfg?.headless === true;
   const noSandbox = cfg?.noSandbox === true;
-  const disableLaunch = cfg?.disableLaunch === true;
-  const attachOnly = cfg?.attachOnly === true || disableLaunch;
+  const attachOnly = cfg?.attachOnly === true;
   const executablePath = cfg?.executablePath?.trim() || undefined;
 
   const defaultProfileFromConfig = cfg?.defaultProfile?.trim() || undefined;
@@ -296,7 +295,6 @@ export function resolveBrowserConfig(
     headless,
     noSandbox,
     attachOnly,
-    disableLaunch,
     defaultProfile,
     profiles,
     ssrfPolicy,
