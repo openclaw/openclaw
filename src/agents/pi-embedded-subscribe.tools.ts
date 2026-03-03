@@ -30,6 +30,32 @@ function normalizeToolErrorText(text: string): string | undefined {
     : firstLine;
 }
 
+function normalizeToolErrorForTool(
+  toolName: string | undefined,
+  error: string | undefined,
+): string | undefined {
+  if (!error) {
+    return undefined;
+  }
+  const normalizedToolName = toolName?.trim().toLowerCase() ?? "";
+  const isFileMutatingTool =
+    normalizedToolName === "edit" ||
+    normalizedToolName === "write" ||
+    normalizedToolName === "apply_patch";
+  if (!isFileMutatingTool) {
+    return error;
+  }
+  const normalizedError = error.toLowerCase();
+  const permissionDenied =
+    normalizedError.includes("eacces") ||
+    normalizedError.includes("eperm") ||
+    normalizedError.includes("permission denied");
+  if (!permissionDenied) {
+    return error;
+  }
+  return "blocked by filesystem protection policy (permission denied)";
+}
+
 function isErrorLikeStatus(status: string): boolean {
   const normalized = status.trim().toLowerCase();
   if (!normalized) {
@@ -257,18 +283,18 @@ export function isToolResultError(result: unknown): boolean {
   return normalized === "error" || normalized === "timeout";
 }
 
-export function extractToolErrorMessage(result: unknown): string | undefined {
+export function extractToolErrorMessage(result: unknown, toolName?: string): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
   }
   const record = result as Record<string, unknown>;
   const fromDetails = extractErrorField(record.details);
   if (fromDetails) {
-    return fromDetails;
+    return normalizeToolErrorForTool(toolName, fromDetails);
   }
   const fromRoot = extractErrorField(record);
   if (fromRoot) {
-    return fromRoot;
+    return normalizeToolErrorForTool(toolName, fromRoot);
   }
   const text = extractToolResultText(result);
   if (!text) {
@@ -278,12 +304,12 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
     const parsed = JSON.parse(text) as unknown;
     const fromJson = extractErrorField(parsed);
     if (fromJson) {
-      return fromJson;
+      return normalizeToolErrorForTool(toolName, fromJson);
     }
   } catch {
     // Fall through to first-line text fallback.
   }
-  return normalizeToolErrorText(text);
+  return normalizeToolErrorForTool(toolName, normalizeToolErrorText(text));
 }
 
 function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {

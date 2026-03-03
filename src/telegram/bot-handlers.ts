@@ -1293,6 +1293,7 @@ export const registerTelegramHandlers = ({
           await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
             forceWasMentioned: true,
             messageIdOverride: callback.id,
+            approvalCommandOrigin: "button",
           });
           return;
         }
@@ -1305,10 +1306,38 @@ export const registerTelegramHandlers = ({
         from: callback.from,
         text: data,
       });
-      await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
-        forceWasMentioned: true,
-        messageIdOverride: callback.id,
-      });
+      const isApprovalCallback = /^\/approve\s+\S+\s+(allow-once|allow-always|deny)\s*$/i.test(
+        data,
+      );
+      const result = await processMessage(
+        buildSyntheticContext(ctx, syntheticMessage),
+        [],
+        storeAllowFrom,
+        {
+          forceWasMentioned: true,
+          messageIdOverride: callback.id,
+          approvalCommandOrigin: "button",
+        },
+      );
+      if (isApprovalCallback && result.approvalCommandResolved) {
+        const callbackText =
+          typeof callbackMessage.text === "string"
+            ? callbackMessage.text
+            : typeof callbackMessage.caption === "string"
+              ? callbackMessage.caption
+              : "";
+        if (callbackText) {
+          try {
+            await editCallbackMessage(callbackText, { reply_markup: { inline_keyboard: [] } });
+          } catch (editErr) {
+            const errStr = String(editErr);
+            if (!errStr.includes("message is not modified")) {
+              logVerbose(`telegram approval callback button cleanup failed: ${errStr}`);
+            }
+          }
+        }
+      }
+      return;
     } catch (err) {
       runtime.error?.(danger(`callback handler failed: ${String(err)}`));
     }

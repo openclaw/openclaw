@@ -56,6 +56,25 @@ describe("pi tool definition adapter", () => {
     });
   });
 
+  it("normalizes file permission denied errors for edit tool results", async () => {
+    const tool = {
+      name: "edit",
+      label: "Edit",
+      description: "throws permission denied",
+      parameters: Type.Object({}),
+      execute: async () => {
+        throw new Error("EACCES: permission denied, open '/tmp/LOCKED.md'");
+      },
+    } satisfies AgentTool;
+
+    const result = await executeTool(tool, "call2b");
+    expect(result.details).toMatchObject({
+      status: "error",
+      tool: "edit",
+      error: "blocked by filesystem protection policy (permission denied)",
+    });
+  });
+
   it("coerces details-only tool results to include content", async () => {
     const tool = {
       name: "memory_query",

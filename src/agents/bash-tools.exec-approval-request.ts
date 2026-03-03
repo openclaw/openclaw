@@ -23,6 +23,7 @@ export type RequestExecApprovalDecisionParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  timeoutMs?: number;
 };
 
 type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
@@ -33,6 +34,12 @@ type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
 function buildExecApprovalRequestToolParams(
   params: RequestExecApprovalDecisionParams,
 ): ExecApprovalRequestToolParams {
+  const timeoutMs =
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs) &&
+    params.timeoutMs > 0
+      ? Math.floor(params.timeoutMs)
+      : DEFAULT_APPROVAL_TIMEOUT_MS;
   return {
     id: params.id,
     command: params.command,
@@ -51,7 +58,7 @@ function buildExecApprovalRequestToolParams(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
-    timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+    timeoutMs,
     twoPhase: true,
   };
 }
@@ -166,6 +173,7 @@ type HostExecApprovalParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  timeoutMs?: number;
 };
 
 type ExecApprovalRequesterContext = {
@@ -221,6 +229,7 @@ function buildHostApprovalDecisionParams(
     }),
     resolvedPath: params.resolvedPath,
     ...buildExecApprovalTurnSourceContext(params),
+    timeoutMs: params.timeoutMs,
   };
 }
 

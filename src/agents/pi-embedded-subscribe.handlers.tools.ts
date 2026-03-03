@@ -326,7 +326,7 @@ export async function handleToolExecutionEnd(
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
   if (isToolError) {
-    const errorMessage = extractToolErrorMessage(sanitizedResult);
+    const errorMessage = extractToolErrorMessage(sanitizedResult, toolName);
     ctx.state.lastToolError = {
       toolName,
       meta,
@@ -439,7 +439,7 @@ export async function handleToolExecutionEnd(
       runId,
       toolCallId,
       result: sanitizedResult,
-      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+      error: isToolError ? extractToolErrorMessage(sanitizedResult, toolName) : undefined,
       durationMs,
     };
     void hookRunnerAfter

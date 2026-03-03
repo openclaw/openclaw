@@ -2975,18 +2975,22 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
 public struct ExecApprovalResolveParams: Codable, Sendable {
     public let id: String
     public let decision: String
+    public let audit: [String: AnyCodable]?
 
     public init(
         id: String,
-        decision: String)
+        decision: String,
+        audit: [String: AnyCodable]?)
     {
         self.id = id
         self.decision = decision
+        self.audit = audit
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
         case decision
+        case audit
     }
 }
 

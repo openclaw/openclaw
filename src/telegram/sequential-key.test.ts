@@ -43,6 +43,42 @@ describe("getTelegramSequentialKey", () => {
     [{ update: { message: mockMessage({ chat: mockChat({ id: 555 }) }) } }, "telegram:555"],
     [
       {
+        update: {
+          callback_query: {
+            data: "mdl_sel_openai/gpt-4o",
+            message: mockMessage({ chat: mockChat({ id: 555, type: "private" }) }),
+          },
+        },
+      },
+      "telegram:555",
+    ],
+    [
+      {
+        update: {
+          callback_query: {
+            data: "mdl_sel_openai/gpt-4o",
+            message: mockMessage({
+              chat: mockChat({ id: 555, type: "supergroup", is_forum: true }),
+              message_thread_id: 7,
+            }),
+          },
+        },
+      },
+      "telegram:555:topic:7",
+    ],
+    [
+      {
+        update: {
+          callback_query: {
+            data: "/approve abc allow-once",
+            message: mockMessage({ chat: mockChat({ id: 555, type: "private" }) }),
+          },
+        },
+      },
+      "telegram:555:control",
+    ],
+    [
+      {
         channelPost: mockMessage({ chat: mockChat({ id: -100777111222, type: "channel" }) }),
       },
       "telegram:-100777111222",

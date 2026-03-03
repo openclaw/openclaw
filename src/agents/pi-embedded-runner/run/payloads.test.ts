@@ -61,6 +61,23 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("rewrites edit permission-denied details to a filesystem protection message", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "edit",
+        error:
+          "EACCES: permission denied, open '/home/sumix/.openclaw/workspace/policy-protected/LOCKED.md'",
+      },
+      verboseLevel: "on",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Edit",
+      detail: "blocked by filesystem protection policy (permission denied)",
+      absentDetail: "EACCES: permission denied",
+    });
+  });
+
   it("suppresses sessions_send errors to avoid leaking transient relay failures", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "sessions_send", error: "delivery timeout" },

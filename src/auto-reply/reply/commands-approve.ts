@@ -1,5 +1,6 @@
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
+import type { ExecApprovalResolveAudit } from "../../infra/exec-approvals.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -8,6 +9,8 @@ import {
 import type { CommandHandler } from "./commands-types.js";
 
 const COMMAND = "/approve";
+const DASH_VARIANTS_REGEX = /[‐‑‒–—―−﹣－]/g;
+const INVISIBLE_CHARS_REGEX = /[\u200B-\u200D\uFEFF]/g;
 
 const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {
   allow: "allow-once",
@@ -26,6 +29,21 @@ type ParsedApproveCommand =
   | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
   | { ok: false; error: string };
 
+type ExecApprovalResolveResponse = {
+  decision?: unknown;
+};
+
+function normalizeDecisionToken(token: string): string {
+  return token
+    .normalize("NFKC")
+    .replace(INVISIBLE_CHARS_REGEX, "")
+    .replace(/\u00ad/g, "")
+    .replace(DASH_VARIANTS_REGEX, "-")
+    .trim()
+    .toLowerCase()
+    .replace(/^[^a-z0-9]+|[^a-z0-9-]+$/g, "");
+}
+
 function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const trimmed = raw.trim();
   if (!trimmed.toLowerCase().startsWith(COMMAND)) {
@@ -40,8 +58,8 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
     return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
   }
 
-  const first = tokens[0].toLowerCase();
-  const second = tokens[1].toLowerCase();
+  const first = normalizeDecisionToken(tokens[0] ?? "");
+  const second = normalizeDecisionToken(tokens[1] ?? "");
 
   if (DECISION_ALIASES[first]) {
     return {
@@ -64,6 +82,31 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   const channel = params.command.channel;
   const sender = params.command.senderId ?? "unknown";
   return `${channel}:${sender}`;
+}
+
+function buildApprovalAudit(params: Parameters<CommandHandler>[0]): ExecApprovalResolveAudit {
+  return {
+    origin: params.command.approvalCommandOrigin === "button" ? "button" : "typed",
+    channel: params.command.channel || undefined,
+    surface: params.command.surface || undefined,
+    senderId: params.command.senderId || undefined,
+    commandSource: params.command.commandSource ?? "text",
+  };
+}
+
+function buildResolveFailureMessage(err: unknown): string {
+  const message = String(err);
+  if (/unknown approval id/i.test(message) || /approval expired or not found/i.test(message)) {
+    return "❌ Approval is no longer pending (already resolved, expired, or service restarted).";
+  }
+  return `❌ Failed to submit approval: ${message}`;
+}
+
+function normalizeDecision(value: unknown): "allow-once" | "allow-always" | "deny" | undefined {
+  if (value === "allow-once" || value === "allow-always" || value === "deny") {
+    return value;
+  }
+  return undefined;
 }
 
 export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -101,10 +144,12 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   }
 
   const resolvedBy = buildResolvedByLabel(params);
+  const audit = buildApprovalAudit(params);
+  let resolveResult: ExecApprovalResolveResponse | null = null;
   try {
-    await callGateway({
+    resolveResult = await callGateway<ExecApprovalResolveResponse>({
       method: "exec.approval.resolve",
-      params: { id: parsed.id, decision: parsed.decision },
+      params: { id: parsed.id, decision: parsed.decision, audit },
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: `Chat approval (${resolvedBy})`,
       mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -113,13 +158,14 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return {
       shouldContinue: false,
       reply: {
-        text: `❌ Failed to submit approval: ${String(err)}`,
+        text: buildResolveFailureMessage(err),
       },
     };
   }
+  const finalDecision = normalizeDecision(resolveResult?.decision) ?? parsed.decision;
 
   return {
     shouldContinue: false,
-    reply: { text: `✅ Exec approval ${parsed.decision} submitted for ${parsed.id}.` },
+    reply: { text: `✅ Exec approval ${finalDecision} submitted for ${parsed.id}.` },
   };
 };

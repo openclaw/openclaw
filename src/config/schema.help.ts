@@ -576,6 +576,28 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional account selector for multi-account channel setups when approvals must route through a specific account context. Use this only when the target channel has multiple configured identities.",
   "approvals.exec.targets[].threadId":
     "Optional thread/topic target for channels that support threaded delivery of forwarded approvals. Use this to keep approval traffic contained in operational threads instead of main channels.",
+  "approvals.tools":
+    "Gates selected agent tool calls behind the same approval channel used for exec approvals. Use this to require operator confirmation before high-impact coding actions (for example apply_patch).",
+  "approvals.tools.enabled":
+    "Enables tool-call approval gating (default: false). Keep disabled unless your workflow requires explicit human approval before selected tool executions.",
+  "approvals.tools.mode":
+    'Tool matching mode: "selected" applies only to approvals.tools.tools, while "mutating" applies to any mutating tool action detected by policy. Use "selected" as the default unless you intentionally want broad mutating-action approvals.',
+  "approvals.tools.tools":
+    'Tool names requiring approval when mode="selected" (default: ["apply_patch"]). Use normalized tool ids such as apply_patch, write, edit, message, or nodes.',
+  "approvals.tools.agentFilter":
+    'Optional allowlist of agent IDs subject to tool approvals, for example `["main", "ops-agent"]`. Use this to scope approvals to critical agents; omit to apply tool approvals to all agents.',
+  "approvals.tools.sessionFilter":
+    'Optional session-key filters matched as substring or regex-style patterns, for example `["telegram:", "^agent:main:"]`. Use narrow filters to avoid gating unrelated sessions.',
+  "approvals.tools.security":
+    'Security label shown in approval prompts ("deny", "allowlist", or "full"; default: "full"). This is a policy hint for operators and audit trails.',
+  "approvals.tools.ask":
+    'Ask label shown in approval prompts ("off", "on-miss", or "always"; default: "always"). Keep "always" for strict operator-in-the-loop workflows.',
+  "approvals.tools.timeoutMs":
+    "Timeout in milliseconds for each tool approval request (default: 120000). Expired requests deny by default when failClosed is true.",
+  "approvals.tools.failClosed":
+    "If true (default), tool approval transport failures deny the tool call. Set false only if temporary approval-channel outages should not block operations.",
+  "approvals.tools.allowAlwaysTtlMs":
+    "TTL in milliseconds for allow-always grants cached by session and tool-action fingerprint (default: 21600000 / 6h). Lower this in high-control environments.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":

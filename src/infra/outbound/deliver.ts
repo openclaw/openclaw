@@ -33,7 +33,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
-import type { sendMessageTelegram } from "../../telegram/send.js";
+import { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
@@ -114,6 +114,21 @@ type ChannelHandler = {
     },
   ) => Promise<OutboundDeliveryResult>;
 };
+
+function parseThreadIdForTelegram(threadId?: string | number | null): number | undefined {
+  if (typeof threadId === "number" && Number.isFinite(threadId)) {
+    return Math.trunc(threadId);
+  }
+  if (typeof threadId !== "string") {
+    return undefined;
+  }
+  const trimmed = threadId.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
 
 type ChannelHandlerParams = {
   cfg: OpenClawConfig;
@@ -550,45 +565,44 @@ async function deliverOutboundPayloadsCore(
   const signalMaxBytes = isSignalChannel
     ? resolveChannelMediaMaxBytes({
         cfg,
-        resolveChannelLimitMb: ({ cfg, accountId }) =>
-          cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ??
-          cfg.channels?.signal?.mediaMaxMb,
+        resolveChannelLimitMb: ({ cfg: channelCfg, accountId: channelAccountId }) =>
+          channelCfg.channels?.signal?.accounts?.[channelAccountId]?.mediaMaxMb ??
+          channelCfg.channels?.signal?.mediaMaxMb,
         accountId,
       })
     : undefined;
+  const splitTextChunks = (sourceText: string): string[] => {
+    if (!handler.chunker || textLimit === undefined) {
+      return [sourceText];
+    }
+    if (chunkMode === "newline") {
+      const mode = handler.chunkerMode ?? "text";
+      const blockChunks =
+        mode === "markdown"
+          ? chunkMarkdownTextWithMode(sourceText, textLimit, "newline")
+          : chunkByParagraph(sourceText, textLimit);
+      if (!blockChunks.length && sourceText) {
+        blockChunks.push(sourceText);
+      }
+      const nextChunks: string[] = [];
+      for (const blockChunk of blockChunks) {
+        const chunks = handler.chunker(blockChunk, textLimit);
+        if (!chunks.length && blockChunk) {
+          chunks.push(blockChunk);
+        }
+        nextChunks.push(...chunks);
+      }
+      return nextChunks;
+    }
+    return handler.chunker(sourceText, textLimit);
+  };
 
   const sendTextChunks = async (
     text: string,
     overrides?: { replyToId?: string | null; threadId?: string | number | null },
   ) => {
     throwIfAborted(abortSignal);
-    if (!handler.chunker || textLimit === undefined) {
-      results.push(await handler.sendText(text, overrides));
-      return;
-    }
-    if (chunkMode === "newline") {
-      const mode = handler.chunkerMode ?? "text";
-      const blockChunks =
-        mode === "markdown"
-          ? chunkMarkdownTextWithMode(text, textLimit, "newline")
-          : chunkByParagraph(text, textLimit);
-
-      if (!blockChunks.length && text) {
-        blockChunks.push(text);
-      }
-      for (const blockChunk of blockChunks) {
-        const chunks = handler.chunker(blockChunk, textLimit);
-        if (!chunks.length && blockChunk) {
-          chunks.push(blockChunk);
-        }
-        for (const chunk of chunks) {
-          throwIfAborted(abortSignal);
-          results.push(await handler.sendText(chunk, overrides));
-        }
-      }
-      return;
-    }
-    const chunks = handler.chunker(text, textLimit);
+    const chunks = splitTextChunks(text);
     for (const chunk of chunks) {
       throwIfAborted(abortSignal);
       results.push(await handler.sendText(chunk, overrides));
@@ -705,6 +719,49 @@ async function deliverOutboundPayloadsCore(
           messageId: delivery.messageId,
         });
         continue;
+      }
+      // Legacy compatibility path while adapters migrate to sendPayload.
+      if (channel === "telegram" && !handler.sendPayload && effectivePayload.channelData) {
+        const telegramData = effectivePayload.channelData.telegram as
+          | {
+              buttons?: Array<Array<{ text?: string; callback_data?: string }>>;
+              quoteText?: string;
+            }
+          | undefined;
+        const buttons = telegramData?.buttons;
+        const hasButtons = Array.isArray(buttons) && buttons.length > 0;
+        if (hasButtons) {
+          const sendTelegram = params.deps?.sendTelegram ?? sendMessageTelegram;
+          const chunks = splitTextChunks(payloadSummary.text);
+          if (chunks.length === 0) {
+            chunks.push(payloadSummary.text);
+          }
+          let lastMessageId: string | undefined;
+          for (let i = 0; i < chunks.length; i += 1) {
+            const chunk = chunks[i] ?? "";
+            const isFirstChunk = i === 0;
+            const result = await sendTelegram(to, chunk, {
+              verbose: false,
+              accountId: accountId ?? undefined,
+              messageThreadId: parseThreadIdForTelegram(params.threadId),
+              quoteText:
+                isFirstChunk && typeof telegramData?.quoteText === "string"
+                  ? telegramData.quoteText
+                  : undefined,
+              buttons: isFirstChunk
+                ? (buttons as Array<Array<{ text: string; callback_data: string }>>)
+                : undefined,
+            });
+            results.push({ channel: "telegram", ...result });
+            lastMessageId = result.messageId;
+          }
+          emitMessageSent({
+            success: true,
+            content: payloadSummary.text,
+            messageId: lastMessageId,
+          });
+          continue;
+        }
       }
       if (payloadSummary.mediaUrls.length === 0) {
         const beforeCount = results.length;

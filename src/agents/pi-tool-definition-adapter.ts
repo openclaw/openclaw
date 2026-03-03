@@ -60,6 +60,26 @@ function describeToolExecutionError(err: unknown): {
   return { message: String(err) };
 }
 
+function normalizePermissionDeniedToolError(toolName: string, message: string): string {
+  const normalizedToolName = normalizeToolName(toolName);
+  const isFileMutatingTool =
+    normalizedToolName === "edit" ||
+    normalizedToolName === "write" ||
+    normalizedToolName === "apply_patch";
+  if (!isFileMutatingTool) {
+    return message;
+  }
+  const normalizedMessage = message.toLowerCase();
+  const isPermissionDenied =
+    normalizedMessage.includes("eacces") ||
+    normalizedMessage.includes("eperm") ||
+    normalizedMessage.includes("permission denied");
+  if (!isPermissionDenied) {
+    return message;
+  }
+  return "blocked by filesystem protection policy (permission denied)";
+}
+
 function stringifyToolPayload(payload: unknown): string {
   if (typeof payload === "string") {
     return payload;
@@ -177,6 +197,10 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             throw err;
           }
           const described = describeToolExecutionError(err);
+          const userFacingError = normalizePermissionDeniedToolError(
+            normalizedName,
+            described.message,
+          );
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
@@ -185,7 +209,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           return jsonResult({
             status: "error",
             tool: normalizedName,
-            error: described.message,
+            error: userFacingError,
           });
         }
       },

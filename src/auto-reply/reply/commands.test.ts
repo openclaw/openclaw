@@ -284,9 +284,69 @@ describe("/approve command", () => {
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "exec.approval.resolve",
-        params: { id: "abc", decision: "allow-once" },
+        params: expect.objectContaining({
+          id: "abc",
+          decision: "allow-once",
+          audit: expect.objectContaining({ origin: "typed" }),
+        }),
       }),
     );
+  });
+
+  it("reports the persisted decision when approval was already resolved", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow-once", cfg, { SenderId: "123" });
+
+    callGatewayMock.mockResolvedValue({
+      ok: true,
+      alreadyResolved: true,
+      decision: "deny",
+    });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Exec approval deny submitted");
+  });
+
+  it("accepts mobile dash variants in decision token", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow‑once", cfg, { SenderId: "123" });
+
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Exec approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: expect.objectContaining({
+          id: "abc",
+          decision: "allow-once",
+          audit: expect.objectContaining({ origin: "typed" }),
+        }),
+      }),
+    );
+  });
+
+  it("maps stale or unknown approval ids to a friendly no-longer-pending message", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow-once", cfg, { SenderId: "123" });
+
+    callGatewayMock.mockRejectedValueOnce(new Error("unknown approval id"));
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval is no longer pending");
   });
 
   it("rejects gateway clients without approvals scope", async () => {
@@ -326,10 +386,48 @@ describe("/approve command", () => {
       expect(callGatewayMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
           method: "exec.approval.resolve",
-          params: { id: "abc", decision: "allow-once" },
+          params: expect.objectContaining({
+            id: "abc",
+            decision: "allow-once",
+            audit: expect.objectContaining({ origin: "typed" }),
+          }),
         }),
       );
     }
+  });
+
+  it("tags callback-origin approvals as button in resolve audit metadata", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+      ApprovalCommandOrigin: "button",
+      CommandSource: "text",
+    });
+
+    callGatewayMock.mockResolvedValue({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: expect.objectContaining({
+          id: "abc",
+          decision: "allow-once",
+          audit: expect.objectContaining({
+            origin: "button",
+            channel: "telegram",
+            surface: "telegram",
+            senderId: "123",
+          }),
+        }),
+      }),
+    );
   });
 });
 

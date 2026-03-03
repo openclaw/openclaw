@@ -306,6 +306,27 @@ Reply in chat:
 /approve <id> deny
 ```
 
+## Tool approvals on protected files
+
+You can use `approvals.tools` to require operator approval for mutating tool calls such as
+`edit`, `write`, or `apply_patch`.
+
+Important behavior:
+
+- Approval and filesystem policy are separate checks.
+- An operator can approve a tool call, but the call still fails if OS/file permissions block the path.
+- For `edit` / `write` / `apply_patch`, permission-denied failures (`EACCES`, `EPERM`, `permission denied`)
+  are normalized to:
+  `blocked by filesystem protection policy (permission denied)`
+- This normalization is only for user-facing error text; it does not bypass protections.
+- Other tools and non-permission errors are left unchanged.
+
+Typical scenarios:
+
+- Editing a locked file (`chmod 444` or root-owned file).
+- Writing into a read-only or restricted directory.
+- Applying a patch that touches protected files.
+
 ### macOS IPC flow
 
 ```

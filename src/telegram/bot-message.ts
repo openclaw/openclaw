@@ -6,7 +6,10 @@ import {
   type BuildTelegramMessageContextParams,
   type TelegramMediaRef,
 } from "./bot-message-context.js";
-import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
+import {
+  dispatchTelegramMessage,
+  type DispatchTelegramMessageResult,
+} from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 
@@ -51,9 +54,13 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     primaryCtx: TelegramContext,
     allMedia: TelegramMediaRef[],
     storeAllowFrom: string[],
-    options?: { messageIdOverride?: string; forceWasMentioned?: boolean },
+    options?: {
+      messageIdOverride?: string;
+      forceWasMentioned?: boolean;
+      approvalCommandOrigin?: "typed" | "button";
+    },
     replyMedia?: TelegramMediaRef[],
-  ) => {
+  ): Promise<DispatchTelegramMessageResult> => {
     const context = await buildTelegramMessageContext({
       primaryCtx,
       allMedia,
@@ -76,9 +83,9 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       sendChatActionHandler,
     });
     if (!context) {
-      return;
+      return { approvalCommandResolved: false };
     }
-    await dispatchTelegramMessage({
+    return await dispatchTelegramMessage({
       context,
       bot,
       cfg,
