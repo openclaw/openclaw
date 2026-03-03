@@ -691,15 +691,10 @@ export const dispatchTelegramMessage = async ({
 
   const hasFinalResponse = queuedFinal || sentFallback;
 
-  if (statusReactionController && !hasFinalResponse) {
-    void statusReactionController.setError().catch((err) => {
-      logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
-    });
-  }
-
   if (!hasFinalResponse) {
-    // Silent turn (NO_REPLY): also remove the ack reaction so the user
-    // does not see a dangling 👀 on messages the agent chose to ignore (#32294).
+    // Silent turn (NO_REPLY): clear the status reaction or remove the ack
+    // reaction so the user doesn't see a dangling emoji on ignored messages (#32294).
+    // Do NOT call setError() here — NO_REPLY is a deliberate silent turn, not an error.
     if (statusReactionController) {
       void statusReactionController.clear().catch((err) => {
         logVerbose(`telegram: status reaction silent-clear failed: ${String(err)}`);
