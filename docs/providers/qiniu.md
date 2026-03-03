@@ -79,87 +79,87 @@ Model refs follow the pattern `qiniu/<model-id>`.
 
 ### MiniMax
 
-| Ref | Context | Reasoning | Vision |
-|-----|---------|-----------|--------|
-| `qiniu/minimax/minimax-m2.5` *(default)* | 200k | ✓ | — |
-| `qiniu/minimax/minimax-m2.1` | 200k | ✓ | — |
-| `qiniu/minimax/minimax-m2` | 200k | ✓ | — |
-| `qiniu/MiniMax-M1` | 1M | ✓ | — |
+| Ref                                      | Context | Reasoning | Vision |
+| ---------------------------------------- | ------- | --------- | ------ |
+| `qiniu/minimax/minimax-m2.5` _(default)_ | 200k    | ✓         | —      |
+| `qiniu/minimax/minimax-m2.1`             | 200k    | ✓         | —      |
+| `qiniu/minimax/minimax-m2`               | 200k    | ✓         | —      |
+| `qiniu/MiniMax-M1`                       | 1M      | ✓         | —      |
 
 ### DeepSeek
 
-| Ref | Context | Reasoning | Vision |
-|-----|---------|-----------|--------|
-| `qiniu/deepseek/deepseek-v3.2-exp` | 64k | — | — |
-| `qiniu/deepseek/deepseek-v3.2-exp-thinking` | 64k | ✓ | — |
-| `qiniu/deepseek/deepseek-v3.2-251201` | 64k | — | — |
-| `qiniu/deepseek/deepseek-v3.1-terminus` | 64k | — | — |
-| `qiniu/deepseek/deepseek-v3.1-terminus-thinking` | 64k | ✓ | — |
-| `qiniu/deepseek-v3.1` | 64k | — | — |
-| `qiniu/deepseek-v3-0324` | 64k | — | — |
-| `qiniu/deepseek-v3` | 64k | — | — |
-| `qiniu/deepseek-r1-0528` | 64k | ✓ | — |
-| `qiniu/deepseek-r1` | 64k | ✓ | — |
+| Ref                                              | Context | Reasoning | Vision |
+| ------------------------------------------------ | ------- | --------- | ------ |
+| `qiniu/deepseek/deepseek-v3.2-exp`               | 64k     | —         | —      |
+| `qiniu/deepseek/deepseek-v3.2-exp-thinking`      | 64k     | ✓         | —      |
+| `qiniu/deepseek/deepseek-v3.2-251201`            | 64k     | —         | —      |
+| `qiniu/deepseek/deepseek-v3.1-terminus`          | 64k     | —         | —      |
+| `qiniu/deepseek/deepseek-v3.1-terminus-thinking` | 64k     | ✓         | —      |
+| `qiniu/deepseek-v3.1`                            | 64k     | —         | —      |
+| `qiniu/deepseek-v3-0324`                         | 64k     | —         | —      |
+| `qiniu/deepseek-v3`                              | 64k     | —         | —      |
+| `qiniu/deepseek-r1-0528`                         | 64k     | ✓         | —      |
+| `qiniu/deepseek-r1`                              | 64k     | ✓         | —      |
 
 ### Qwen
 
-| Ref | Context | Reasoning | Vision |
-|-----|---------|-----------|--------|
-| `qiniu/qwen3-235b-a22b-thinking-2507` | 128k | ✓ | — |
-| `qiniu/qwen3-235b-a22b-instruct-2507` | 128k | — | — |
-| `qiniu/qwen3-235b-a22b` | 128k | ✓ | — |
-| `qiniu/qwen3-coder-480b-a35b-instruct` | 256k | — | — |
-| `qiniu/qwen3-max` | 128k | ✓ | — |
-| `qiniu/qwen3-max-preview` | 128k | ✓ | — |
-| `qiniu/qwen3-32b` | 128k | ✓ | — |
-| `qiniu/qwen3-30b-a3b` | 128k | ✓ | — |
-| `qiniu/qwen3-30b-a3b-thinking-2507` | 128k | ✓ | — |
-| `qiniu/qwen3-30b-a3b-instruct-2507` | 128k | — | — |
-| `qiniu/qwen3-next-80b-a3b-thinking` | 128k | ✓ | — |
-| `qiniu/qwen3-next-80b-a3b-instruct` | 128k | — | — |
-| `qiniu/qwen-max-2025-01-25` | 32k | — | — |
-| `qiniu/qwen-turbo` | 128k | — | — |
-| `qiniu/qwen3-vl-30b-a3b-thinking` | 128k | ✓ | ✓ |
-| `qiniu/qwen-vl-max-2025-01-25` | 32k | — | ✓ |
-| `qiniu/qwen2.5-vl-72b-instruct` | 128k | — | ✓ |
-| `qiniu/qwen2.5-vl-7b-instruct` | 128k | — | ✓ |
+| Ref                                    | Context | Reasoning | Vision |
+| -------------------------------------- | ------- | --------- | ------ |
+| `qiniu/qwen3-235b-a22b-thinking-2507`  | 128k    | ✓         | —      |
+| `qiniu/qwen3-235b-a22b-instruct-2507`  | 128k    | —         | —      |
+| `qiniu/qwen3-235b-a22b`                | 128k    | ✓         | —      |
+| `qiniu/qwen3-coder-480b-a35b-instruct` | 256k    | —         | —      |
+| `qiniu/qwen3-max`                      | 128k    | ✓         | —      |
+| `qiniu/qwen3-max-preview`              | 128k    | ✓         | —      |
+| `qiniu/qwen3-32b`                      | 128k    | ✓         | —      |
+| `qiniu/qwen3-30b-a3b`                  | 128k    | ✓         | —      |
+| `qiniu/qwen3-30b-a3b-thinking-2507`    | 128k    | ✓         | —      |
+| `qiniu/qwen3-30b-a3b-instruct-2507`    | 128k    | —         | —      |
+| `qiniu/qwen3-next-80b-a3b-thinking`    | 128k    | ✓         | —      |
+| `qiniu/qwen3-next-80b-a3b-instruct`    | 128k    | —         | —      |
+| `qiniu/qwen-max-2025-01-25`            | 32k     | —         | —      |
+| `qiniu/qwen-turbo`                     | 128k    | —         | —      |
+| `qiniu/qwen3-vl-30b-a3b-thinking`      | 128k    | ✓         | ✓      |
+| `qiniu/qwen-vl-max-2025-01-25`         | 32k     | —         | ✓      |
+| `qiniu/qwen2.5-vl-72b-instruct`        | 128k    | —         | ✓      |
+| `qiniu/qwen2.5-vl-7b-instruct`         | 128k    | —         | ✓      |
 
 ### GLM (Zhipu)
 
-| Ref | Context | Reasoning | Vision |
-|-----|---------|-----------|--------|
-| `qiniu/z-ai/glm-5` | 128k | ✓ | — |
-| `qiniu/z-ai/glm-4.7` | 128k | — | — |
-| `qiniu/z-ai/glm-4.6` | 128k | — | — |
-| `qiniu/glm-4.5` | 128k | — | — |
-| `qiniu/glm-4.5-air` | 128k | — | — |
+| Ref                  | Context | Reasoning | Vision |
+| -------------------- | ------- | --------- | ------ |
+| `qiniu/z-ai/glm-5`   | 128k    | ✓         | —      |
+| `qiniu/z-ai/glm-4.7` | 128k    | —         | —      |
+| `qiniu/z-ai/glm-4.6` | 128k    | —         | —      |
+| `qiniu/glm-4.5`      | 128k    | —         | —      |
+| `qiniu/glm-4.5-air`  | 128k    | —         | —      |
 
 ### Kimi (Moonshot)
 
-| Ref | Context | Reasoning | Vision |
-|-----|---------|-----------|--------|
-| `qiniu/moonshotai/kimi-k2.5` | 256k | ✓ | — |
-| `qiniu/moonshotai/kimi-k2-thinking` | 256k | ✓ | — |
-| `qiniu/moonshotai/kimi-k2-0905` | 256k | — | — |
-| `qiniu/kimi-k2` | 256k | — | — |
+| Ref                                 | Context | Reasoning | Vision |
+| ----------------------------------- | ------- | --------- | ------ |
+| `qiniu/moonshotai/kimi-k2.5`        | 256k    | ✓         | —      |
+| `qiniu/moonshotai/kimi-k2-thinking` | 256k    | ✓         | —      |
+| `qiniu/moonshotai/kimi-k2-0905`     | 256k    | —         | —      |
+| `qiniu/kimi-k2`                     | 256k    | —         | —      |
 
 ### Doubao (ByteDance)
 
-| Ref | Context | Reasoning | Vision |
-|-----|---------|-----------|--------|
-| `qiniu/doubao-seed-1.6-thinking` | 128k | ✓ | — |
-| `qiniu/doubao-seed-1.6` | 128k | — | — |
-| `qiniu/doubao-seed-1.6-flash` | 128k | — | — |
-| `qiniu/doubao-1.5-thinking-pro` | 128k | ✓ | — |
-| `qiniu/doubao-1.5-vision-pro` | 128k | — | ✓ |
-| `qiniu/doubao-1.5-pro-32k` | 32k | — | — |
+| Ref                              | Context | Reasoning | Vision |
+| -------------------------------- | ------- | --------- | ------ |
+| `qiniu/doubao-seed-1.6-thinking` | 128k    | ✓         | —      |
+| `qiniu/doubao-seed-1.6`          | 128k    | —         | —      |
+| `qiniu/doubao-seed-1.6-flash`    | 128k    | —         | —      |
+| `qiniu/doubao-1.5-thinking-pro`  | 128k    | ✓         | —      |
+| `qiniu/doubao-1.5-vision-pro`    | 128k    | —         | ✓      |
+| `qiniu/doubao-1.5-pro-32k`       | 32k     | —         | —      |
 
 ### Others
 
-| Ref | Provider | Context | Reasoning | Vision |
-|-----|----------|---------|-----------|--------|
-| `qiniu/meituan/longcat-flash-lite` | Meituan | 128k | — | — |
-| `qiniu/xiaomi/mimo-v2-flash` | Xiaomi | 128k | — | — |
+| Ref                                | Provider | Context | Reasoning | Vision |
+| ---------------------------------- | -------- | ------- | --------- | ------ |
+| `qiniu/meituan/longcat-flash-lite` | Meituan  | 128k    | —         | —      |
+| `qiniu/xiaomi/mimo-v2-flash`       | Xiaomi   | 128k    | —         | —      |
 
 ## Switch the Default Model
 
