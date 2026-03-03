@@ -27,7 +27,6 @@ import {
   resolveSubagentToolPolicy,
 } from "./pi-tools.policy.js";
 import {
-  assertRequiredParams,
   createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,
   createOpenClawReadTool,
@@ -40,6 +39,7 @@ import {
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
+import {assertRequiredParams }  from "./pi-tools.params.ts";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
