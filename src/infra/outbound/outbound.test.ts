@@ -188,6 +188,24 @@ describe("delivery-queue", () => {
       expect(entry.lastAttemptAt).toBeGreaterThan(0);
       expect(entry.lastError).toBe("connection refused");
     });
+
+    it("moves entry to failed/ immediately for permanent errors", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "telegram",
+          to: "123",
+          payloads: [{ text: "x".repeat(5000) }],
+        },
+        tmpDir,
+      );
+
+      await failDelivery(id, "400: Bad Request: message is too long", tmpDir);
+
+      const queueDir = path.join(tmpDir, "delivery-queue");
+      const failedDir = path.join(queueDir, "failed");
+      expect(fs.existsSync(path.join(queueDir, `${id}.json`))).toBe(false);
+      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+    });
   });
 
   describe("moveToFailed", () => {
@@ -219,6 +237,13 @@ describe("delivery-queue", () => {
       "Forbidden: bot was kicked from the group chat",
       "chat_id is empty",
       "Outbound not configured for channel: msteams",
+      "400: Bad Request: message is too long",
+      "Request to sendMessage API failed. (413: Request Entity Too Large)",
+      "bad request: can't parse entities",
+      "403 Forbidden",
+      "404 Not Found",
+      "message is too long",
+      "request entity too large",
     ])("returns true for permanent error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(true);
     });
@@ -229,6 +254,7 @@ describe("delivery-queue", () => {
       "socket hang up",
       "rate limited",
       "500 Internal Server Error",
+      "429 Too Many Requests",
     ])("returns false for transient error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(false);
     });
