@@ -834,11 +834,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
-      const trimmedMessage = parsedMessage.trim();
+      // Bind message for this request so the entire async pipeline uses the same value.
+      // Avoids session context confusion where the agent could reply to a different (e.g. previous) message. See #32296.
+      const boundMessage = String(parsedMessage);
+      const trimmedMessage = boundMessage.trim();
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
-      const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
+      const commandBody = injectThinking ? `/think ${p.thinking} ${boundMessage}` : boundMessage;
       const clientInfo = client?.connect?.client;
       const routeChannelCandidate = normalizeMessageChannel(
         entry?.deliveryContext?.channel ?? entry?.lastChannel,
@@ -861,13 +864,13 @@ export const chatHandlers: GatewayRequestHandlers = {
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
-      const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
+      const stampedMessage = injectTimestamp(boundMessage, timestampOptsFromConfig(cfg));
 
       const ctx: MsgContext = {
-        Body: parsedMessage,
+        Body: boundMessage,
         BodyForAgent: stampedMessage,
         BodyForCommands: commandBody,
-        RawBody: parsedMessage,
+        RawBody: boundMessage,
         CommandBody: commandBody,
         SessionKey: sessionKey,
         Provider: INTERNAL_MESSAGE_CHANNEL,
