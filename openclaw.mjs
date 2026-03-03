@@ -7,9 +7,10 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Fast path for --version: exit before loading heavy modules (~100x faster)
+// Fast path for --version/-V: exit before loading heavy modules (~100x faster)
+// Note: Use -V (uppercase) for version, -v is reserved for --verbose in subcommands
 const argv = new Set(process.argv.slice(2));
-if (argv.has("--version") || argv.has("-v")) {
+if (argv.has("--version") || argv.has("-V")) {
   try {
     const pkg = JSON.parse(await fs.readFile(path.join(__dirname, "package.json"), "utf-8"));
     console.log(pkg.version);
@@ -18,7 +19,6 @@ if (argv.has("--version") || argv.has("-v")) {
   }
   process.exit(0);
 }
-// For --help, fall through to Commander (needs full initialization)
 
 // https://nodejs.org/api/module.html#module-compile-cache
 if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
