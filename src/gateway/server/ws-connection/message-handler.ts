@@ -84,6 +84,7 @@ import {
   resolveControlUiAuthPolicy,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
+import { resolvePostConnectHealthRefreshOptions } from "./post-connect-health.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -1125,7 +1126,9 @@ export function attachGatewayWsMessageHandler(params: {
         });
 
         send({ type: "res", id: frame.id, ok: true, payload: helloOk });
-        void refreshGatewayHealthSnapshot({ probe: true }).catch((err) =>
+        void refreshGatewayHealthSnapshot(
+          resolvePostConnectHealthRefreshOptions(connectParams.client),
+        ).catch((err) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );
         return;
