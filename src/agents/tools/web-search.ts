@@ -336,6 +336,25 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
   };
 }
 
+function isHeaderSafeByteString(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    if (value.charCodeAt(i) > 0xff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function invalidSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
+  const providerLabel = provider === "brave" ? "Brave" : provider;
+  return {
+    error: "invalid_api_key_encoding",
+    provider,
+    message: `${providerLabel} web_search API key contains unsupported characters. Re-enter the key with plain text (smart quotes/em dashes are not valid in API keys).`,
+    docs: "https://docs.openclaw.ai/tools/web",
+  };
+}
+
 function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDERS)[number] {
   const raw =
     search && "provider" in search && typeof search.provider === "string"
@@ -1382,6 +1401,11 @@ export function createWebSearchTool(options?: {
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
+      }
+      // Undici headers require ByteString values; reject smart punctuation/Unicode early
+      // so users get actionable setup guidance instead of a low-level runtime error.
+      if (!isHeaderSafeByteString(apiKey)) {
+        return jsonResult(invalidSearchKeyPayload(provider));
       }
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });

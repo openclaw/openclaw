@@ -210,6 +210,29 @@ describe("web_search country and language parameters", () => {
   });
 });
 
+describe("web_search api key validation", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+
+  it("returns setup guidance when Brave key contains non-ByteString chars", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "brv-test—bad");
+    const mockFetch = installMockFetch({ web: { results: [] } });
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+
+    const result = await tool?.execute?.("call-1", { query: "test" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      error: "invalid_api_key_encoding",
+      provider: "brave",
+    });
+  });
+});
+
 describe("web_search provider proxy dispatch", () => {
   const priorFetch = global.fetch;
 
