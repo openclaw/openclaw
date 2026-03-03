@@ -45,7 +45,7 @@ const REQUIRED_SUMMARY_SECTIONS = [
 const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, preserve literal values exactly as seen (IDs, URLs, file paths, ports, hashes, dates, times).";
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
-  "For ## Exact identifiers, include only context needed for continuity, following current compaction identifier policy.";
+  "For ## Exact identifiers, do not include literal identifiers. Write: N/A (identifier policy off).";
 
 type ToolFailure = {
   toolCallId: string;
