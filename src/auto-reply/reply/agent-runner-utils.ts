@@ -157,6 +157,7 @@ export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
       agentId: run.agentId,
       sessionKey: run.sessionKey,
     }),
+    sessionKey: run.sessionKey,
   };
 }
 

@@ -840,6 +840,7 @@ async function agentCommandInternal(
         model,
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
+        sessionKey,
         run: (providerOverride, modelOverride, runOptions) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
