@@ -143,7 +143,12 @@ async function execSystemctl(
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
-  return (result.stderr || result.stdout || "").trim();
+  const stderr = result.stderr.trim();
+  const stdout = result.stdout.trim();
+  if (stderr && stdout) {
+    return `${stderr}\n${stdout}`;
+  }
+  return stderr || stdout;
 }
 
 function isSystemctlMissing(detail: string): boolean {
