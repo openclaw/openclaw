@@ -39,11 +39,17 @@ export type GatewayBroadcastToConnIdsFn = (
 ) => void;
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
+  const role = client.connect.role ?? "operator";
+  // Node-role websocket clients must not receive global chat/agent broadcasts.
+  // Node message delivery should flow through explicit session subscriptions.
+  if (role === "node" && (event === "chat" || event === "agent")) {
+    return false;
+  }
+
   const required = EVENT_SCOPE_GUARDS[event];
   if (!required) {
     return true;
   }
-  const role = client.connect.role ?? "operator";
   if (role !== "operator") {
     return false;
   }
