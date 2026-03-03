@@ -5,6 +5,7 @@ import {
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
 } from "./pi-embedded-helpers.js";
+import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 
 let testTimestamp = 1;
 const nextTimestamp = () => testTimestamp++;
@@ -93,7 +94,7 @@ describe("sanitizeSessionMessagesImages", () => {
   });
 
   it("does not synthesize tool call input when missing", async () => {
-    const input = [
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read" }],
@@ -111,7 +112,7 @@ describe("sanitizeSessionMessagesImages", () => {
         stopReason: "toolUse",
         timestamp: nextTimestamp(),
       },
-    ] as unknown as AgentMessage[];
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
     const assistant = out[0] as { content?: Array<Record<string, unknown>> };
@@ -122,7 +123,7 @@ describe("sanitizeSessionMessagesImages", () => {
   });
 
   it("removes empty assistant text blocks but preserves tool calls", async () => {
-    const input = [
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [
@@ -143,7 +144,7 @@ describe("sanitizeSessionMessagesImages", () => {
         stopReason: "toolUse",
         timestamp: nextTimestamp(),
       },
-    ] as AgentMessage[];
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -153,7 +154,7 @@ describe("sanitizeSessionMessagesImages", () => {
   });
 
   it("sanitizes tool ids in strict mode (alphanumeric only)", async () => {
-    const input = [
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [
@@ -171,7 +172,7 @@ describe("sanitizeSessionMessagesImages", () => {
         toolUseId: "call_abc|item:123",
         content: [{ type: "text", text: "ok" }],
       },
-    ] as unknown as AgentMessage[];
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test", {
       sanitizeToolCallIds: true,
@@ -188,7 +189,7 @@ describe("sanitizeSessionMessagesImages", () => {
   });
 
   it("sanitizes tool IDs in images-only mode when explicitly enabled", async () => {
-    const input = [
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_123|fc_456", name: "read", arguments: {} }],
@@ -214,7 +215,7 @@ describe("sanitizeSessionMessagesImages", () => {
         isError: false,
         timestamp: nextTimestamp(),
       },
-    ] as AgentMessage[];
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test", {
       sanitizeMode: "images-only",
@@ -236,7 +237,7 @@ describe("sanitizeSessionMessagesImages", () => {
     }
   });
   it("filters whitespace-only assistant text blocks", async () => {
-    const input = [
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [
@@ -257,7 +258,7 @@ describe("sanitizeSessionMessagesImages", () => {
         stopReason: "stop",
         timestamp: nextTimestamp(),
       },
-    ] as AgentMessage[];
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -266,7 +267,7 @@ describe("sanitizeSessionMessagesImages", () => {
     });
   });
   it("drops assistant messages that only contain empty text", async () => {
-    const input = [
+    const input = castAgentMessages([
       { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
       {
         role: "assistant",
@@ -285,7 +286,7 @@ describe("sanitizeSessionMessagesImages", () => {
         stopReason: "stop",
         timestamp: nextTimestamp(),
       } satisfies AssistantMessage,
-    ];
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -293,7 +294,7 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out[0]?.role).toBe("user");
   });
   it("keeps empty assistant error messages", async () => {
-    const input = [
+    const input = castAgentMessages([
       { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
       {
         role: "assistant",
@@ -329,7 +330,7 @@ describe("sanitizeSessionMessagesImages", () => {
         },
         timestamp: nextTimestamp(),
       } satisfies AssistantMessage,
-    ] as unknown as AgentMessage[];
+    ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -360,7 +361,7 @@ describe("sanitizeSessionMessagesImages", () => {
 
   describe("thought_signature stripping", () => {
     it("strips msg_-prefixed thought_signature from assistant message content blocks", async () => {
-      const input = [
+      const input = castAgentMessages([
         {
           role: "assistant",
           content: [
@@ -372,7 +373,7 @@ describe("sanitizeSessionMessagesImages", () => {
             },
           ],
         },
-      ] as unknown as AgentMessage[];
+      ]);
 
       const out = await sanitizeSessionMessagesImages(input, "test");
 
@@ -387,19 +388,19 @@ describe("sanitizeSessionMessagesImages", () => {
 
 describe("sanitizeGoogleTurnOrdering", () => {
   it("prepends a synthetic user turn when history starts with assistant", () => {
-    const input = [
+    const input = castAgentMessages([
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
       },
-    ] as unknown as AgentMessage[];
+    ]);
 
     const out = sanitizeGoogleTurnOrdering(input);
     expect(out[0]?.role).toBe("user");
     expect(out[1]?.role).toBe("assistant");
   });
   it("is a no-op when history starts with user", () => {
-    const input = [{ role: "user", content: "hi" }] as unknown as AgentMessage[];
+    const input = castAgentMessages([{ role: "user", content: "hi" }]);
     const out = sanitizeGoogleTurnOrdering(input);
     expect(out).toBe(input);
   });
