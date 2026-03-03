@@ -406,18 +406,29 @@ export async function openWritableFileWithinRoot(params: {
     }
   }
 
-  const fileMode = params.mode ?? 0o600;
+  const fileMode = params.mode;
+
+  const openWritableHandle = async (
+    ioPathForOpen: string,
+    flags: number,
+    mode?: number,
+  ): Promise<FileHandle> => {
+    if (mode === undefined) {
+      return await fs.open(ioPathForOpen, flags);
+    }
+    return await fs.open(ioPathForOpen, flags, mode);
+  };
 
   let handle: FileHandle;
   let createdForWrite = false;
   try {
     try {
-      handle = await fs.open(ioPath, OPEN_WRITE_EXISTING_FLAGS, fileMode);
+      handle = await openWritableHandle(ioPath, OPEN_WRITE_EXISTING_FLAGS, fileMode);
     } catch (err) {
       if (!isNotFoundPathError(err)) {
         throw err;
       }
-      handle = await fs.open(ioPath, OPEN_WRITE_CREATE_FLAGS, fileMode);
+      handle = await openWritableHandle(ioPath, OPEN_WRITE_CREATE_FLAGS, fileMode);
       createdForWrite = true;
     }
   } catch (err) {

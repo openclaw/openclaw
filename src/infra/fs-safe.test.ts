@@ -9,6 +9,7 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   copyFileWithinRoot,
   createRootScopedReadFile,
+  openWritableFileWithinRoot,
   SafeOpenError,
   openFileWithinRoot,
   readFileWithinRoot,
@@ -244,6 +245,24 @@ describe("fs-safe", () => {
       data: "hello",
     });
     await expect(fs.readFile(path.join(root, "nested", "out.txt"), "utf8")).resolves.toBe("hello");
+  });
+
+  it("does not force 0o600 when write mode is not provided", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const relativePath = path.join("nested", "default-mode.txt");
+    const openSpy = vi.spyOn(fs, "open");
+    const opened = await openWritableFileWithinRoot({
+      rootDir: root,
+      relativePath,
+    });
+    await opened.handle.close();
+
+    const targetOpenCalls = openSpy.mock.calls.filter(([filePath]) =>
+      String(filePath).endsWith(relativePath),
+    );
+    expect(targetOpenCalls.length).toBeGreaterThan(0);
+    expect(targetOpenCalls.every((call) => call.length === 2)).toBe(true);
+    openSpy.mockRestore();
   });
 
   it("does not truncate existing target when atomic rename fails", async () => {

@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Infra/fs-safe default write mode: stop forcing `0600` in `openWritableFileWithinRoot` when no explicit `mode` is provided, so new files follow platform defaults (`0666 & umask`) and inherited ACL policies. (#32404) Thanks @jeanmonet.
 - Sessions/idle reset correctness: preserve existing `updatedAt` during inbound metadata-only writes so idle-reset boundaries are not unintentionally refreshed before actual user turns. (#32379) Thanks @romeodiaz.
 - Slack/socket auth failure handling: fail fast on non-recoverable auth errors (`account_inactive`, `invalid_auth`, etc.) during startup and reconnect instead of retry-looping indefinitely, including `unable_to_socket_mode_start` error payload propagation. (#32377) Thanks @scoootscooob.
 - CLI/installer Node preflight: enforce Node.js `v22.12+` consistently in both `openclaw.mjs` runtime bootstrap and installer active-shell checks, with actionable nvm recovery guidance for mismatched shell PATH/defaults. (#32356) Thanks @jasonhargrove.
