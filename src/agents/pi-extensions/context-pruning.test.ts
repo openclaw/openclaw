@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { ToolResultMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,10 +10,11 @@ import {
 } from "./context-pruning.js";
 import { getContextPruningRuntime, setContextPruningRuntime } from "./context-pruning/runtime.js";
 
-function toolText(msg: AgentMessage): string {
-  if (msg.role !== "toolResult") {
-    throw new Error("expected toolResult");
-  }
+function isToolResultMessage(msg: AgentMessage): msg is ToolResultMessage {
+  return msg.role === "toolResult";
+}
+
+function toolText(msg: ToolResultMessage): string {
   const first = msg.content.find((b) => b.type === "text");
   if (!first || first.type !== "text") {
     return "";
@@ -20,8 +22,10 @@ function toolText(msg: AgentMessage): string {
   return first.text;
 }
 
-function findToolResult(messages: AgentMessage[], toolCallId: string): AgentMessage {
-  const msg = messages.find((m) => m.role === "toolResult" && m.toolCallId === toolCallId);
+function findToolResult(messages: AgentMessage[], toolCallId: string): ToolResultMessage {
+  const msg = messages.find((m): m is ToolResultMessage => {
+    return isToolResultMessage(m) && m.toolCallId === toolCallId;
+  });
   if (!msg) {
     throw new Error(`missing toolResult: ${toolCallId}`);
   }
@@ -32,7 +36,7 @@ function makeToolResult(params: {
   toolCallId: string;
   toolName: string;
   text: string;
-}): AgentMessage {
+}): ToolResultMessage {
   return {
     role: "toolResult",
     toolCallId: params.toolCallId,
@@ -47,7 +51,7 @@ function makeImageToolResult(params: {
   toolCallId: string;
   toolName: string;
   text: string;
-}): AgentMessage {
+}): ToolResultMessage {
   const base = makeToolResult(params);
   return {
     ...base,
@@ -367,9 +371,6 @@ describe("context-pruning", () => {
     const next = pruneWithAggressiveDefaults(messages);
 
     const tool = findToolResult(next, "t1");
-    if (!tool || tool.role !== "toolResult") {
-      throw new Error("unexpected pruned message list shape");
-    }
     expect(tool.content.some((b) => b.type === "image")).toBe(true);
     expect(toolText(tool)).toContain("x".repeat(20_000));
   });
@@ -387,7 +388,7 @@ describe("context-pruning", () => {
         ],
         isError: false,
         timestamp: Date.now(),
-      } as unknown as AgentMessage,
+      } as ToolResultMessage,
     ];
 
     const next = pruneWithAggressiveDefaults(messages, {
