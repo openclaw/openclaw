@@ -26,6 +26,7 @@ import {
   maybeRepairAnthropicOAuthProfileId,
   noteAuthProfileHealth,
 } from "./doctor-auth.js";
+import { noteBootstrapFileSize } from "./doctor-bootstrap-size.js";
 import { doctorShellCompletion } from "./doctor-completion.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { maybeRepairGatewayDaemon } from "./doctor-gateway-daemon-flow.js";
@@ -263,7 +264,8 @@ export async function doctorCommand(
     }
   }
 
-  noteWorkspaceStatus(cfg);
+  const { workspaceDir: wsDir } = noteWorkspaceStatus(cfg);
+  await noteBootstrapFileSize(cfg, wsDir);
 
   // Check and fix shell completion
   await doctorShellCompletion(runtime, prompter, {
