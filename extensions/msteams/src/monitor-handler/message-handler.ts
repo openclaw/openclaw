@@ -154,6 +154,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       groupAllowFrom,
       storeAllowFrom: storedAllowFrom,
       dmPolicy,
+      groupAuthIncludesPairingStore: msteamsCfg?.groupAuthIncludesPairingStore,
     });
 
     const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);

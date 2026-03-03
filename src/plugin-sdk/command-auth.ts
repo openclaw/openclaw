@@ -8,6 +8,7 @@ export type ResolveSenderCommandAuthorizationParams = {
   dmPolicy: string;
   configuredAllowFrom: string[];
   configuredGroupAllowFrom?: string[];
+  groupAuthIncludesPairingStore?: boolean;
   senderId: string;
   isSenderAllowed: (senderId: string, allowFrom: string[]) => boolean;
   readAllowFromStore: () => Promise<string[]>;
@@ -83,6 +84,7 @@ export async function resolveSenderCommandAuthorization(
     allowFrom: params.configuredAllowFrom,
     groupAllowFrom: params.configuredGroupAllowFrom ?? [],
     storeAllowFrom,
+    groupAuthIncludesPairingStore: params.groupAuthIncludesPairingStore,
     isSenderAllowed: (allowFrom) => params.isSenderAllowed(params.senderId, allowFrom),
   });
   const effectiveAllowFrom = access.effectiveAllowFrom;

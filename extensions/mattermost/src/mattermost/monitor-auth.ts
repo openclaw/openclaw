@@ -29,6 +29,7 @@ export function resolveMattermostEffectiveAllowFromLists(params: {
   groupAllowFrom?: Array<string | number> | null;
   storeAllowFrom?: Array<string | number> | null;
   dmPolicy?: string | null;
+  groupAuthIncludesPairingStore?: boolean | null;
 }): {
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
@@ -38,6 +39,7 @@ export function resolveMattermostEffectiveAllowFromLists(params: {
     groupAllowFrom: normalizeMattermostAllowList(params.groupAllowFrom ?? []),
     storeAllowFrom: normalizeMattermostAllowList(params.storeAllowFrom ?? []),
     dmPolicy: params.dmPolicy,
+    groupAuthIncludesPairingStore: params.groupAuthIncludesPairingStore,
   });
 }
 

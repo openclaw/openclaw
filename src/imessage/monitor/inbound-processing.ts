@@ -97,6 +97,7 @@ export function resolveIMessageInboundDecision(params: {
   groupPolicy: string;
   dmPolicy: string;
   storeAllowFrom: string[];
+  groupAuthIncludesPairingStore?: boolean;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   echoCache?: { has: (scope: string, lookup: { text?: string; messageId?: string }) => boolean };
@@ -150,6 +151,7 @@ export function resolveIMessageInboundDecision(params: {
     groupAllowFrom: params.groupAllowFrom,
     storeAllowFrom: params.storeAllowFrom,
     groupAllowFromFallbackToAllowFrom: false,
+    groupAuthIncludesPairingStore: params.groupAuthIncludesPairingStore,
     isSenderAllowed: (allowFrom) =>
       isAllowedIMessageSender({
         allowFrom,

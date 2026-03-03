@@ -28,6 +28,8 @@ export type CommonChannelMessagingConfig = {
   groupAllowFrom?: Array<string | number>;
   /** Group/channel message handling policy. */
   groupPolicy?: GroupPolicy;
+  /** Include pairing store in group auth. Defaults to true for backward compatibility. */
+  groupAuthIncludesPairingStore?: boolean;
   /** Max group/channel messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */

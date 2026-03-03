@@ -20,6 +20,7 @@ export async function resolveMatrixAccessState(params: {
   groupPolicy: MatrixGroupPolicy;
   allowFrom: string[];
   groupAllowFrom: Array<string | number>;
+  groupAuthIncludesPairingStore?: boolean;
   senderId: string;
   readStoreForDmPolicy: (provider: string, accountId: string) => Promise<string[]>;
 }) {
@@ -46,6 +47,7 @@ export async function resolveMatrixAccessState(params: {
     groupAllowFrom: normalizedGroupAllowFrom,
     storeAllowFrom,
     groupAllowFromFallbackToAllowFrom: false,
+    groupAuthIncludesPairingStore: params.groupAuthIncludesPairingStore,
     isSenderAllowed: (allowFrom) =>
       resolveMatrixAllowListMatches({
         allowList: normalizeMatrixAllowList(allowFrom),

@@ -110,6 +110,7 @@ export async function checkInboundAccessControl(params: {
     allowFrom: params.group ? configuredAllowFrom : dmAllowFrom,
     groupAllowFrom,
     storeAllowFrom,
+    groupAuthIncludesPairingStore: account.groupAuthIncludesPairingStore,
     isSenderAllowed: (allowEntries) => {
       const hasWildcard = allowEntries.includes("*");
       if (hasWildcard) {

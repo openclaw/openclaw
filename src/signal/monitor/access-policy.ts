@@ -15,6 +15,7 @@ export async function resolveSignalAccessState(params: {
   groupPolicy: SignalGroupPolicy;
   allowFrom: string[];
   groupAllowFrom: string[];
+  groupAuthIncludesPairingStore?: boolean;
   sender: SignalSender;
 }) {
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
@@ -30,6 +31,7 @@ export async function resolveSignalAccessState(params: {
       allowFrom: params.allowFrom,
       groupAllowFrom: params.groupAllowFrom,
       storeAllowFrom,
+      groupAuthIncludesPairingStore: params.groupAuthIncludesPairingStore,
       isSenderAllowed: (allowEntries) => isSignalSenderAllowed(params.sender, allowEntries),
     });
   const dmAccess = resolveAccessDecision(false);

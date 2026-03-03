@@ -80,6 +80,8 @@ export type MSTeamsConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  /** Include pairing store in group auth. Defaults to true for backward compatibility. */
+  groupAuthIncludesPairingStore?: boolean;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */

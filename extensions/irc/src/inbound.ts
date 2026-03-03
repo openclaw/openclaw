@@ -39,6 +39,7 @@ function resolveIrcEffectiveAllowlists(params: {
   configGroupAllowFrom: string[];
   storeAllowList: string[];
   dmPolicy: string;
+  groupAuthIncludesPairingStore?: boolean;
 }): {
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
@@ -50,6 +51,7 @@ function resolveIrcEffectiveAllowlists(params: {
     dmPolicy: params.dmPolicy,
     // IRC intentionally requires explicit groupAllowFrom; do not fallback to allowFrom.
     groupAllowFromFallbackToAllowFrom: false,
+    groupAuthIncludesPairingStore: params.groupAuthIncludesPairingStore,
   });
   return { effectiveAllowFrom, effectiveGroupAllowFrom };
 }
