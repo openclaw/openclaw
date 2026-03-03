@@ -152,17 +152,8 @@ export function createPluginRuntime(): PluginRuntime {
     },
     pairing: {
       buildPairingReply,
-      readAllowFromStore: ({ channel, accountId, env }) =>
-        readChannelAllowFromStore(channel, env, accountId),
-      upsertPairingRequest: ({ channel, id, accountId, meta, env, pairingAdapter }) =>
-        upsertChannelPairingRequest({
-          channel,
-          id,
-          accountId,
-          meta,
-          env,
-          pairingAdapter,
-        }),
+      readAllowFromStore: readChannelAllowFromStore,
+      upsertPairingRequest: upsertChannelPairingRequest,
     },
     media: {
       loadWebMedia,
