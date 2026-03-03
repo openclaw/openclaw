@@ -341,6 +341,12 @@ async function acquireSharedBrowser(params: {
   config: OpenClawConfig;
   idleMs: number;
 }): Promise<BrowserLease> {
+  if (params.config.browser?.disableLaunch) {
+    throw new Error(
+      "Browser launch is disabled by configuration (browser.disableLaunch: true). " +
+        "Diff rendering requires a local browser.",
+    );
+  }
   const executablePath = await resolveBrowserExecutablePath(params.config);
   const desiredKey = executablePath || SHARED_BROWSER_KEY;
   if (sharedBrowserState && sharedBrowserState.key !== desiredKey) {
