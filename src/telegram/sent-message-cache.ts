@@ -4,6 +4,7 @@
  */
 
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_CHATS = 5000;
 
 type CacheEntry = {
   timestamps: Map<number, number>;
@@ -24,11 +25,24 @@ function cleanupExpired(entry: CacheEntry): void {
   }
 }
 
+function evictOldestChat(): void {
+  const oldest = sentMessages.keys().next().value;
+  if (oldest) {
+    sentMessages.delete(oldest);
+  }
+}
+
 /**
  * Record a message ID as sent by the bot.
  */
 export function recordSentMessage(chatId: number | string, messageId: number): void {
   const key = getChatKey(chatId);
+  
+  // Evict oldest chat if at capacity
+  if (sentMessages.size >= MAX_CHATS && !sentMessages.has(key)) {
+    evictOldestChat();
+  }
+  
   let entry = sentMessages.get(key);
   if (!entry) {
     entry = { timestamps: new Map() };
