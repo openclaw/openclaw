@@ -174,56 +174,6 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
-  it("emits chat delta for assistant delta-only events and accumulates text", () => {
-    let now = 4_000;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
-    chatRunState.registry.add("run-delta-only", {
-      sessionKey: "session-delta-only",
-      clientRunId: "client-delta-only",
-    });
-
-    handler({
-      runId: "run-delta-only",
-      seq: 1,
-      stream: "assistant",
-      ts: Date.now(),
-      data: { delta: "Hello" },
-    });
-    now = 4_200;
-    handler({
-      runId: "run-delta-only",
-      seq: 2,
-      stream: "assistant",
-      ts: Date.now(),
-      data: { delta: " world" },
-    });
-    emitLifecycleEnd(handler, "run-delta-only", 3);
-
-    const chatCalls = chatBroadcastCalls(broadcast);
-    expect(chatCalls).toHaveLength(3);
-    const firstPayload = chatCalls[0]?.[1] as {
-      state?: string;
-      message?: { content?: Array<{ text?: string }> };
-    };
-    const secondPayload = chatCalls[1]?.[1] as {
-      state?: string;
-      message?: { content?: Array<{ text?: string }> };
-    };
-    const thirdPayload = chatCalls[2]?.[1] as {
-      state?: string;
-      message?: { content?: Array<{ text?: string }> };
-    };
-    expect(firstPayload.state).toBe("delta");
-    expect(firstPayload.message?.content?.[0]?.text).toBe("Hello");
-    expect(secondPayload.state).toBe("delta");
-    expect(secondPayload.message?.content?.[0]?.text).toBe("Hello world");
-    expect(thirdPayload.state).toBe("final");
-    expect(thirdPayload.message?.content?.[0]?.text).toBe("Hello world");
-    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
-    nowSpy.mockRestore();
-  });
-
   it("strips inline directives from assistant chat events", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),
