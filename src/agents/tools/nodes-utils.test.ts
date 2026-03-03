@@ -118,6 +118,21 @@ describe("resolveCanvasNodeIds", () => {
     await expect(resolveCanvasNodeIds({})).rejects.toThrow("no connected canvas-capable nodes");
   });
 
+  it("includes pair-list fallback nodes that lack caps/connected fields", async () => {
+    gatewayMocks.callGatewayTool
+      .mockRejectedValueOnce(new Error("unknown method: node.list"))
+      .mockResolvedValueOnce({
+        pending: [],
+        paired: [
+          { nodeId: "pair-1", displayName: "Pair 1", platform: "ios", remoteIp: "1.2.3.4" },
+          { nodeId: "pair-2", displayName: "Pair 2", platform: "macos", remoteIp: "5.6.7.8" },
+        ],
+      });
+
+    const ids = await resolveCanvasNodeIds({});
+    expect(ids).toEqual(["pair-1", "pair-2"]);
+  });
+
   it("resolves to a single node when a query is provided", async () => {
     gatewayMocks.callGatewayTool.mockResolvedValue({
       nodes: [
