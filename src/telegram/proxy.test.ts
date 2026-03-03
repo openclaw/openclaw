@@ -120,4 +120,11 @@ describe("shouldBypassProxyForUrl", () => {
     expect(shouldBypassProxyForUrl("https://api.telegram.org")).toBe(false);
     expect(shouldBypassProxyForUrl("https://api.telegram.org:8443")).toBe(true);
   });
+
+  it("matches IPv6 localhost entries with bracketed URL hostnames", () => {
+    process.env.NO_PROXY = "[::1], [::1]:443";
+    expect(shouldBypassProxyForUrl("https://[::1]")).toBe(true);
+    expect(shouldBypassProxyForUrl("https://[::1]:443")).toBe(true);
+    expect(shouldBypassProxyForUrl("https://[::1]:8443")).toBe(true);
+  });
 });

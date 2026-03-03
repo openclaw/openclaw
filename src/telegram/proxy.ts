@@ -98,6 +98,14 @@ function resolveDefaultPort(protocol: string): string | null {
   }
 }
 
+function normalizeHostnameForNoProxy(hostname: string): string {
+  const trimmed = hostname.trim().toLowerCase();
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
 /**
  * Return true when proxying should be bypassed for the given URL based on NO_PROXY.
  * Supports exact host entries, leading-dot/suffix domains, and wildcard (*).
@@ -107,7 +115,7 @@ export function shouldBypassProxyForUrl(url: string, noProxy?: string | string[]
   let port: string | null;
   try {
     const parsed = new URL(url);
-    hostname = parsed.hostname.trim().toLowerCase();
+    hostname = normalizeHostnameForNoProxy(parsed.hostname);
     port = parsed.port || resolveDefaultPort(parsed.protocol);
   } catch {
     return false;
