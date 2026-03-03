@@ -453,7 +453,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(agentTriggerCalls[0].params).toMatchObject({
       sessionKey: "agent:whatsapp-targeted:main",
       deliver: true,
-      message: expect.stringContaining("[System Message]"),
+      message: expect.stringContaining("[Internal task completion event]"),
     });
   });
 });
