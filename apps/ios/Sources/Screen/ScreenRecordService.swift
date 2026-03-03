@@ -55,7 +55,7 @@ final class ScreenRecordService: @unchecked Sendable {
             outPath: outPath)
 
         let state = CaptureState()
-        let recordQueue = DispatchQueue(label: "bot.molt.screenrecord")
+        let recordQueue = DispatchQueue(label: "ai.openclaw.screenrecord")
 
         try await self.startCapture(state: state, config: config, recordQueue: recordQueue)
         try await Task.sleep(nanoseconds: UInt64(config.durationMs) * 1_000_000)
@@ -84,8 +84,8 @@ final class ScreenRecordService: @unchecked Sendable {
             throw ScreenRecordError.invalidScreenIndex(idx)
         }
 
-        let durationMs = Self.clampDurationMs(durationMs)
-        let fps = Self.clampFps(fps)
+        let durationMs = CaptureRateLimits.clampDurationMs(durationMs)
+        let fps = CaptureRateLimits.clampFps(fps, maxFps: 30)
         let fpsInt = Int32(fps.rounded())
         let fpsValue = Double(fpsInt)
         let includeAudio = includeAudio ?? true
@@ -319,16 +319,6 @@ final class ScreenRecordService: @unchecked Sendable {
         }
     }
 
-    private nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
-        let v = ms ?? 10000
-        return min(60000, max(250, v))
-    }
-
-    private nonisolated static func clampFps(_ fps: Double?) -> Double {
-        let v = fps ?? 10
-        if !v.isFinite { return 10 }
-        return min(30, max(1, v))
-    }
 }
 
 @MainActor
@@ -350,11 +340,11 @@ private func stopReplayKitCapture(_ completion: @escaping @Sendable (Error?) -> 
 #if DEBUG
 extension ScreenRecordService {
     nonisolated static func _test_clampDurationMs(_ ms: Int?) -> Int {
-        self.clampDurationMs(ms)
+        CaptureRateLimits.clampDurationMs(ms)
     }
 
     nonisolated static func _test_clampFps(_ fps: Double?) -> Double {
-        self.clampFps(fps)
+        CaptureRateLimits.clampFps(fps, maxFps: 30)
     }
 }
 #endif

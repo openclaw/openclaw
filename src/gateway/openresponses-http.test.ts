@@ -91,9 +91,9 @@ async function ensureResponseConsumed(res: Response) {
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
-  it("rejects when disabled (default + config)", { timeout: 120_000 }, async () => {
+  it("rejects when disabled (default + config)", { timeout: 15_000 }, async () => {
     const port = await getFreePort();
-    const _server = await startServer(port);
+    const server = await startServer(port);
     try {
       const res = await postResponses(port, {
         model: "openclaw",
@@ -102,7 +102,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(res.status).toBe(404);
       await ensureResponseConsumed(res);
     } finally {
-      // shared server
+      await server.close({ reason: "test done" });
     }
 
     const disabledPort = await getFreePort();
@@ -163,6 +163,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect((optsHeader as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
+      expect((optsHeader as { messageChannel?: string } | undefined)?.messageChannel).toBe(
+        "webchat",
+      );
       await ensureResponseConsumed(resHeader);
 
       mockAgentOnce([{ text: "hello" }]);
@@ -173,6 +176,19 @@ describe("OpenResponses HTTP API (e2e)", () => {
         /^agent:beta:/,
       );
       await ensureResponseConsumed(resModel);
+
+      mockAgentOnce([{ text: "hello" }]);
+      const resChannelHeader = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-message-channel": "custom-client-channel" },
+      );
+      expect(resChannelHeader.status).toBe(200);
+      const optsChannelHeader = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      expect((optsChannelHeader as { messageChannel?: string } | undefined)?.messageChannel).toBe(
+        "webchat",
+      );
+      await ensureResponseConsumed(resChannelHeader);
 
       mockAgentOnce([{ text: "hello" }]);
       const resUser = await postResponses(port, {

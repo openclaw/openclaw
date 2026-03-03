@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import path from "node:path";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { execDockerRaw } from "../agents/sandbox/docker.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
@@ -15,6 +16,7 @@ import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
+import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";
 import {
   collectAttackSurfaceSummaryFindings,
@@ -24,6 +26,7 @@ import {
   collectHooksHardeningFindings,
   collectIncludeFilePermFindings,
   collectInstalledSkillsCodeSafetyFindings,
+  collectLikelyMultiUserSetupFindings,
   collectSandboxBrowserHashLabelFindings,
   collectMinimalProfileOverrideFindings,
   collectModelHygieneFindings,
@@ -37,6 +40,7 @@ import {
   collectPluginsCodeSafetyFindings,
   collectStateDeepFilesystemFindings,
   collectSyncedFolderFindings,
+  collectWorkspaceSkillSymlinkEscapeFindings,
   readConfigSnapshotForAudit,
 } from "./audit-extra.js";
 import {
@@ -123,6 +127,57 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
     return [];
   }
   return list.map((v) => String(v).trim()).filter(Boolean);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+function hasNonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isFeishuDocToolEnabled(cfg: OpenClawConfig): boolean {
+  const channels = asRecord(cfg.channels);
+  const feishu = asRecord(channels?.feishu);
+  if (!feishu || feishu.enabled === false) {
+    return false;
+  }
+
+  const baseTools = asRecord(feishu.tools);
+  const baseDocEnabled = baseTools?.doc !== false;
+  const baseAppId = hasNonEmptyString(feishu.appId);
+  const baseAppSecret = hasNonEmptyString(feishu.appSecret);
+  const baseConfigured = baseAppId && baseAppSecret;
+
+  const accounts = asRecord(feishu.accounts);
+  if (!accounts || Object.keys(accounts).length === 0) {
+    return baseDocEnabled && baseConfigured;
+  }
+
+  for (const accountValue of Object.values(accounts)) {
+    const account = asRecord(accountValue) ?? {};
+    if (account.enabled === false) {
+      continue;
+    }
+    const accountTools = asRecord(account.tools);
+    const effectiveTools = accountTools ?? baseTools;
+    const docEnabled = effectiveTools?.doc !== false;
+    if (!docEnabled) {
+      continue;
+    }
+    const accountConfigured =
+      (hasNonEmptyString(account.appId) || baseAppId) &&
+      (hasNonEmptyString(account.appSecret) || baseAppSecret);
+    if (accountConfigured) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function collectFilesystemFindings(params: {
@@ -266,6 +321,11 @@ function collectGatewayConfigFindings(
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
+  const controlUiAllowedOrigins = (cfg.gateway?.controlUi?.allowedOrigins ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const dangerouslyAllowHostHeaderOriginFallback =
+    cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
     ? cfg.gateway.trustedProxies
     : [];
@@ -340,6 +400,49 @@ function collectGatewayConfigFindings(
       remediation: "Set gateway.auth (token recommended) or keep the Control UI local-only.",
     });
   }
+  if (
+    bind !== "loopback" &&
+    controlUiEnabled &&
+    controlUiAllowedOrigins.length === 0 &&
+    !dangerouslyAllowHostHeaderOriginFallback
+  ) {
+    findings.push({
+      checkId: "gateway.control_ui.allowed_origins_required",
+      severity: "critical",
+      title: "Non-loopback Control UI missing explicit allowed origins",
+      detail:
+        "Control UI is enabled on a non-loopback bind but gateway.controlUi.allowedOrigins is empty. " +
+        "Strict origin policy requires explicit allowed origins for non-loopback deployments.",
+      remediation:
+        "Set gateway.controlUi.allowedOrigins to full trusted origins (for example https://control.example.com). " +
+        "If your deployment intentionally relies on Host-header origin fallback, set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true.",
+    });
+  }
+  if (controlUiAllowedOrigins.includes("*")) {
+    const exposed = bind !== "loopback";
+    findings.push({
+      checkId: "gateway.control_ui.allowed_origins_wildcard",
+      severity: exposed ? "critical" : "warn",
+      title: "Control UI allowed origins contains wildcard",
+      detail:
+        'gateway.controlUi.allowedOrigins includes "*" which effectively disables origin allowlisting for Control UI/WebChat requests.',
+      remediation:
+        "Replace wildcard origins with explicit trusted origins (for example https://control.example.com).",
+    });
+  }
+  if (dangerouslyAllowHostHeaderOriginFallback) {
+    const exposed = bind !== "loopback";
+    findings.push({
+      checkId: "gateway.control_ui.host_header_origin_fallback",
+      severity: exposed ? "critical" : "warn",
+      title: "DANGEROUS: Host-header origin fallback enabled",
+      detail:
+        "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true enables Host-header origin fallback " +
+        "for Control UI/WebChat websocket checks and weakens DNS rebinding protections.",
+      remediation:
+        "Disable gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback and configure explicit gateway.controlUi.allowedOrigins.",
+    });
+  }
 
   if (allowRealIpFallback) {
     const hasNonLoopbackTrustedProxy = trustedProxies.some(
@@ -410,6 +513,18 @@ function collectGatewayConfigFindings(
       detail:
         "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
       remediation: "Disable it unless you are in a short-lived break-glass scenario.",
+    });
+  }
+
+  if (isFeishuDocToolEnabled(cfg)) {
+    findings.push({
+      checkId: "channels.feishu.doc_owner_open_id",
+      severity: "warn",
+      title: "Feishu doc create can grant requester permissions",
+      detail:
+        'channels.feishu tools include "doc"; feishu_doc action "create" can grant document access to the trusted requesting Feishu user.',
+      remediation:
+        "Disable channels.feishu.tools.doc when not needed, and restrict tool access for untrusted prompts.",
     });
   }
 
@@ -711,8 +826,77 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       ),
     ).toSorted();
   };
-  const interpreterHits: string[] = [];
+  const normalizeConfiguredTrustedDirs = (entries: unknown): string[] => {
+    if (!Array.isArray(entries)) {
+      return [];
+    }
+    return normalizeTrustedSafeBinDirs(
+      entries.filter((entry): entry is string => typeof entry === "string"),
+    );
+  };
+  const classifyRiskySafeBinTrustedDir = (entry: string): string | null => {
+    const raw = entry.trim();
+    if (!raw) {
+      return null;
+    }
+    if (!path.isAbsolute(raw)) {
+      return "relative path (trust boundary depends on process cwd)";
+    }
+    const normalized = path.resolve(raw).replace(/\\/g, "/").toLowerCase();
+    if (
+      normalized === "/tmp" ||
+      normalized.startsWith("/tmp/") ||
+      normalized === "/var/tmp" ||
+      normalized.startsWith("/var/tmp/") ||
+      normalized === "/private/tmp" ||
+      normalized.startsWith("/private/tmp/")
+    ) {
+      return "temporary directory is mutable and easy to poison";
+    }
+    if (
+      normalized === "/usr/local/bin" ||
+      normalized === "/opt/homebrew/bin" ||
+      normalized === "/opt/local/bin" ||
+      normalized === "/home/linuxbrew/.linuxbrew/bin"
+    ) {
+      return "package-manager bin directory (often user-writable)";
+    }
+    if (
+      normalized.startsWith("/users/") ||
+      normalized.startsWith("/home/") ||
+      normalized.includes("/.local/bin")
+    ) {
+      return "home-scoped bin directory (typically user-writable)";
+    }
+    if (/^[a-z]:\/users\//.test(normalized)) {
+      return "home-scoped bin directory (typically user-writable)";
+    }
+    return null;
+  };
+
   const globalExec = cfg.tools?.exec;
+  const riskyTrustedDirHits: string[] = [];
+  const collectRiskyTrustedDirHits = (scopePath: string, entries: unknown): void => {
+    for (const entry of normalizeConfiguredTrustedDirs(entries)) {
+      const reason = classifyRiskySafeBinTrustedDir(entry);
+      if (!reason) {
+        continue;
+      }
+      riskyTrustedDirHits.push(`- ${scopePath}.safeBinTrustedDirs: ${entry} (${reason})`);
+    }
+  };
+  collectRiskyTrustedDirHits("tools.exec", globalExec?.safeBinTrustedDirs);
+  for (const entry of agents) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
+      continue;
+    }
+    collectRiskyTrustedDirHits(
+      `agents.list.${entry.id}.tools.exec`,
+      entry.tools?.exec?.safeBinTrustedDirs,
+    );
+  }
+
+  const interpreterHits: string[] = [];
   const globalSafeBins = normalizeConfiguredSafeBins(globalExec?.safeBins);
   if (globalSafeBins.length > 0) {
     const merged = resolveMergedSafeBinProfileFixtures({ global: globalExec }) ?? {};
@@ -758,11 +942,27 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     });
   }
 
+  if (riskyTrustedDirHits.length > 0) {
+    findings.push({
+      checkId: "tools.exec.safe_bin_trusted_dirs_risky",
+      severity: "warn",
+      title: "safeBinTrustedDirs includes risky mutable directories",
+      detail:
+        `Detected risky safeBinTrustedDirs entries:\n${riskyTrustedDirHits.slice(0, 10).join("\n")}` +
+        (riskyTrustedDirHits.length > 10
+          ? `\n- +${riskyTrustedDirHits.length - 10} more entries.`
+          : ""),
+      remediation:
+        "Prefer root-owned immutable bins, keep default trust dirs (/bin, /usr/bin), and avoid trusting temporary/home/package-manager paths unless tightly controlled.",
+    });
+  }
+
   return findings;
 }
 
 async function maybeProbeGateway(params: {
   cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
   timeoutMs: number;
   probe: typeof probeGateway;
 }): Promise<SecurityAuditReport["deep"]> {
@@ -775,8 +975,8 @@ async function maybeProbeGateway(params: {
 
   const auth =
     !isRemoteMode || remoteUrlMissing
-      ? resolveGatewayProbeAuth({ cfg: params.cfg, mode: "local" })
-      : resolveGatewayProbeAuth({ cfg: params.cfg, mode: "remote" });
+      ? resolveGatewayProbeAuth({ cfg: params.cfg, env: params.env, mode: "local" })
+      : resolveGatewayProbeAuth({ cfg: params.cfg, env: params.env, mode: "remote" });
   const res = await params.probe({ url, auth, timeoutMs: params.timeoutMs }).catch((err) => ({
     ok: false,
     url,
@@ -829,6 +1029,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectModelHygieneFindings(cfg));
   findings.push(...collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...collectExposureMatrixFindings(cfg));
+  findings.push(...collectLikelyMultiUserSetupFindings(cfg));
 
   const configSnapshot =
     opts.includeFilesystem !== false
@@ -836,6 +1037,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       : null;
 
   if (opts.includeFilesystem !== false) {
+    const codeSafetySummaryCache = new Map<string, Promise<unknown>>();
     findings.push(
       ...(await collectFilesystemFindings({
         stateDir,
@@ -853,6 +1055,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     findings.push(
       ...(await collectStateDeepFilesystemFindings({ cfg, env, stateDir, platform, execIcacls })),
     );
+    findings.push(...(await collectWorkspaceSkillSymlinkEscapeFindings({ cfg })));
     findings.push(
       ...(await collectSandboxBrowserHashLabelFindings({
         execDockerRawFn: opts.execDockerRawFn,
@@ -860,8 +1063,19 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     );
     findings.push(...(await collectPluginsTrustFindings({ cfg, stateDir })));
     if (opts.deep === true) {
-      findings.push(...(await collectPluginsCodeSafetyFindings({ stateDir })));
-      findings.push(...(await collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir })));
+      findings.push(
+        ...(await collectPluginsCodeSafetyFindings({
+          stateDir,
+          summaryCache: codeSafetySummaryCache,
+        })),
+      );
+      findings.push(
+        ...(await collectInstalledSkillsCodeSafetyFindings({
+          cfg,
+          stateDir,
+          summaryCache: codeSafetySummaryCache,
+        })),
+      );
     }
   }
 
@@ -874,6 +1088,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     opts.deep === true
       ? await maybeProbeGateway({
           cfg,
+          env,
           timeoutMs: Math.max(250, opts.deepTimeoutMs ?? 5000),
           probe: opts.probeGatewayFn ?? probeGateway,
         })

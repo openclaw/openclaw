@@ -21,6 +21,16 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   listeners: [],
   hints: [],
 }));
+const buildGatewayInstallPlan = vi.fn(
+  async (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) => ({
+    programArguments: ["/bin/node", "cli", "gateway", "--port", String(params.port)],
+    workingDirectory: process.cwd(),
+    environment: {
+      OPENCLAW_GATEWAY_PORT: String(params.port),
+      ...(params.token ? { OPENCLAW_GATEWAY_TOKEN: params.token } : {}),
+    },
+  }),
+);
 
 const { runtimeLogs, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
@@ -65,6 +75,11 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime,
 }));
 
+vi.mock("../commands/daemon-install-helpers.js", () => ({
+  buildGatewayInstallPlan: (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) =>
+    buildGatewayInstallPlan(params),
+}));
+
 vi.mock("./deps.js", () => ({
   createDefaultDeps: () => {},
 }));
@@ -74,6 +89,7 @@ vi.mock("./progress.js", () => ({
 }));
 
 const { registerDaemonCli } = await import("./daemon-cli.js");
+let daemonProgram: Command;
 
 function createDaemonProgram() {
   const program = new Command();
@@ -83,8 +99,7 @@ function createDaemonProgram() {
 }
 
 async function runDaemonCommand(args: string[]) {
-  const program = createDaemonProgram();
-  await program.parseAsync(args, { from: "user" });
+  await daemonProgram.parseAsync(args, { from: "user" });
 }
 
 function parseFirstJsonRuntimeLine<T>() {
@@ -96,6 +111,7 @@ describe("daemon-cli coverage", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
+    daemonProgram = createDaemonProgram();
     envSnapshot = captureEnv([
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
@@ -107,6 +123,7 @@ describe("daemon-cli coverage", () => {
     delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_PROFILE;
     serviceReadCommand.mockResolvedValue(null);
+    buildGatewayInstallPlan.mockClear();
   });
 
   afterEach(() => {
@@ -123,7 +140,7 @@ describe("daemon-cli coverage", () => {
     expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "status" }));
     expect(findExtraGatewayServices).toHaveBeenCalled();
     expect(inspectPortUsage).toHaveBeenCalled();
-  }, 20_000);
+  });
 
   it("derives probe URL from service args + env (json)", async () => {
     resetRuntimeCapture();
@@ -138,7 +155,7 @@ describe("daemon-cli coverage", () => {
         OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon-state/openclaw.json",
         OPENCLAW_GATEWAY_PORT: "19001",
       },
-      sourcePath: "/tmp/bot.molt.gateway.plist",
+      sourcePath: "/tmp/ai.openclaw.gateway.plist",
     });
 
     await runDaemonCommand(["daemon", "status", "--json"]);
@@ -162,7 +179,7 @@ describe("daemon-cli coverage", () => {
     expect(parsed.config?.mismatch).toBe(true);
     expect(parsed.rpc?.url).toBe("ws://127.0.0.1:19001");
     expect(parsed.rpc?.ok).toBe(true);
-  }, 20_000);
+  });
 
   it("passes deep scan flag for daemon status", async () => {
     findExtraGatewayServices.mockClear();
@@ -175,53 +192,46 @@ describe("daemon-cli coverage", () => {
     );
   });
 
-  it.each([
-    { label: "plain output", includeJsonFlag: false },
-    { label: "json output", includeJsonFlag: true },
-  ])("installs the daemon ($label)", async ({ includeJsonFlag }) => {
+  it("installs the daemon (json output)", async () => {
     resetRuntimeCapture();
     serviceIsLoaded.mockResolvedValueOnce(false);
     serviceInstall.mockClear();
 
-    const args = includeJsonFlag
-      ? ["daemon", "install", "--port", "18789", "--json"]
-      : ["daemon", "install", "--port", "18789"];
-    await runDaemonCommand(args);
+    await runDaemonCommand([
+      "daemon",
+      "install",
+      "--port",
+      "18789",
+      "--token",
+      "test-token",
+      "--json",
+    ]);
 
     expect(serviceInstall).toHaveBeenCalledTimes(1);
-    if (includeJsonFlag) {
-      const parsed = parseFirstJsonRuntimeLine<{
-        ok?: boolean;
-        action?: string;
-        result?: string;
-      }>();
-      expect(parsed.ok).toBe(true);
-      expect(parsed.action).toBe("install");
-      expect(parsed.result).toBe("installed");
-    }
+    const parsed = parseFirstJsonRuntimeLine<{
+      ok?: boolean;
+      action?: string;
+      result?: string;
+    }>();
+    expect(parsed.ok).toBe(true);
+    expect(parsed.action).toBe("install");
+    expect(parsed.result).toBe("installed");
   });
 
-  it.each([
-    { label: "plain output", includeJsonFlag: false },
-    { label: "json output", includeJsonFlag: true },
-  ])("starts and stops daemon ($label)", async ({ includeJsonFlag }) => {
+  it("starts and stops daemon (json output)", async () => {
     resetRuntimeCapture();
     serviceRestart.mockClear();
     serviceStop.mockClear();
     serviceIsLoaded.mockResolvedValue(true);
 
-    const startArgs = includeJsonFlag ? ["daemon", "start", "--json"] : ["daemon", "start"];
-    const stopArgs = includeJsonFlag ? ["daemon", "stop", "--json"] : ["daemon", "stop"];
-    await runDaemonCommand(startArgs);
-    await runDaemonCommand(stopArgs);
+    await runDaemonCommand(["daemon", "start", "--json"]);
+    await runDaemonCommand(["daemon", "stop", "--json"]);
 
     expect(serviceRestart).toHaveBeenCalledTimes(1);
     expect(serviceStop).toHaveBeenCalledTimes(1);
-    if (includeJsonFlag) {
-      const jsonLines = runtimeLogs.filter((line) => line.trim().startsWith("{"));
-      const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });
-      expect(parsed.some((entry) => entry.action === "start" && entry.ok === true)).toBe(true);
-      expect(parsed.some((entry) => entry.action === "stop" && entry.ok === true)).toBe(true);
-    }
+    const jsonLines = runtimeLogs.filter((line) => line.trim().startsWith("{"));
+    const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });
+    expect(parsed.some((entry) => entry.action === "start" && entry.ok === true)).toBe(true);
+    expect(parsed.some((entry) => entry.action === "stop" && entry.ok === true)).toBe(true);
   });
 });

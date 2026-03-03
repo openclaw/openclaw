@@ -177,6 +177,12 @@ headers are trusted.
 `webhookSecurity.trustedProxyIPs` only trusts forwarded headers when the request
 remote IP matches the list.
 
+Webhook replay protection is enabled for Twilio and Plivo. Replayed valid webhook
+requests are acknowledged but skipped for side effects.
+
+Twilio conversation turns include a per-turn token in `<Gather>` callbacks, so
+stale/replayed speech callbacks cannot satisfy a newer pending transcript turn.
+
 Example with a stable public host:
 
 ```json5

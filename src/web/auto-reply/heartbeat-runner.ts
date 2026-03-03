@@ -18,13 +18,13 @@ import {
 import { emitHeartbeatEvent, resolveIndicatorType } from "../../infra/heartbeat-events.js";
 import { resolveHeartbeatVisibility } from "../../infra/heartbeat-visibility.js";
 import { getChildLogger } from "../../logging.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { sendMessageWhatsApp } from "../outbound.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
 import { whatsappHeartbeatLog } from "./loggers.js";
 import { getSessionSnapshot } from "./session-snapshot.js";
-import { elide } from "./util.js";
 
 export async function runWebHeartbeatOnce(opts: {
   cfg?: ReturnType<typeof loadConfig>;
@@ -40,10 +40,11 @@ export async function runWebHeartbeatOnce(opts: {
   const replyResolver = opts.replyResolver ?? getReplyFromConfig;
   const sender = opts.sender ?? sendMessageWhatsApp;
   const runId = newConnectionId();
+  const redactedTo = redactIdentifier(to);
   const heartbeatLogger = getChildLogger({
     module: "web-heartbeat",
     runId,
-    to,
+    to: redactedTo,
   });
 
   const cfg = cfgOverride ?? loadConfig();
@@ -57,20 +58,20 @@ export async function runWebHeartbeatOnce(opts: {
       return false;
     }
     if (dryRun) {
-      whatsappHeartbeatLog.info(`[dry-run] heartbeat ok -> ${to}`);
+      whatsappHeartbeatLog.info(`[dry-run] heartbeat ok -> ${redactedTo}`);
       return false;
     }
     const sendResult = await sender(to, heartbeatOkText, { verbose });
     heartbeatLogger.info(
       {
-        to,
+        to: redactedTo,
         messageId: sendResult.messageId,
         chars: heartbeatOkText.length,
         reason: "heartbeat-ok",
       },
       "heartbeat ok sent",
     );
-    whatsappHeartbeatLog.info(`heartbeat ok sent to ${to} (id ${sendResult.messageId})`);
+    whatsappHeartbeatLog.info(`heartbeat ok sent to ${redactedTo} (id ${sendResult.messageId})`);
     return true;
   };
 
@@ -100,7 +101,7 @@ export async function runWebHeartbeatOnce(opts: {
   if (verbose) {
     heartbeatLogger.info(
       {
-        to,
+        to: redactedTo,
         sessionKey: sessionSnapshot.key,
         sessionId: sessionId ?? sessionSnapshot.entry?.sessionId ?? null,
         sessionFresh: sessionSnapshot.fresh,
@@ -122,7 +123,7 @@ export async function runWebHeartbeatOnce(opts: {
     if (overrideBody) {
       if (dryRun) {
         whatsappHeartbeatLog.info(
-          `[dry-run] web send -> ${to}: ${elide(overrideBody.trim(), 200)} (manual message)`,
+          `[dry-run] web send -> ${redactedTo} (${overrideBody.trim().length} chars, manual message)`,
         );
         return;
       }
@@ -137,19 +138,21 @@ export async function runWebHeartbeatOnce(opts: {
       });
       heartbeatLogger.info(
         {
-          to,
+          to: redactedTo,
           messageId: sendResult.messageId,
           chars: overrideBody.length,
           reason: "manual-message",
         },
         "manual heartbeat message sent",
       );
-      whatsappHeartbeatLog.info(`manual heartbeat sent to ${to} (id ${sendResult.messageId})`);
+      whatsappHeartbeatLog.info(
+        `manual heartbeat sent to ${redactedTo} (id ${sendResult.messageId})`,
+      );
       return;
     }
 
     if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
-      heartbeatLogger.info({ to, reason: "alerts-disabled" }, "heartbeat skipped");
+      heartbeatLogger.info({ to: redactedTo, reason: "alerts-disabled" }, "heartbeat skipped");
       emitHeartbeatEvent({
         status: "skipped",
         to,
@@ -181,7 +184,7 @@ export async function runWebHeartbeatOnce(opts: {
     ) {
       heartbeatLogger.info(
         {
-          to,
+          to: redactedTo,
           reason: "empty-reply",
           sessionId: sessionSnapshot.entry?.sessionId ?? null,
         },
@@ -226,7 +229,7 @@ export async function runWebHeartbeatOnce(opts: {
       }
 
       heartbeatLogger.info(
-        { to, reason: "heartbeat-token", rawLength: replyPayload.text?.length },
+        { to: redactedTo, reason: "heartbeat-token", rawLength: replyPayload.text?.length },
         "heartbeat skipped",
       );
       const okSent = await maybeSendHeartbeatOk();
@@ -241,14 +244,17 @@ export async function runWebHeartbeatOnce(opts: {
     }
 
     if (hasMedia) {
-      heartbeatLogger.warn({ to }, "heartbeat reply contained media; sending text only");
+      heartbeatLogger.warn(
+        { to: redactedTo },
+        "heartbeat reply contained media; sending text only",
+      );
     }
 
     const finalText = stripped.text || replyPayload.text || "";
 
     // Check if alerts are disabled for WhatsApp
     if (!visibility.showAlerts) {
-      heartbeatLogger.info({ to, reason: "alerts-disabled" }, "heartbeat skipped");
+      heartbeatLogger.info({ to: redactedTo, reason: "alerts-disabled" }, "heartbeat skipped");
       emitHeartbeatEvent({
         status: "skipped",
         to,
@@ -262,8 +268,11 @@ export async function runWebHeartbeatOnce(opts: {
     }
 
     if (dryRun) {
-      heartbeatLogger.info({ to, reason: "dry-run", chars: finalText.length }, "heartbeat dry-run");
-      whatsappHeartbeatLog.info(`[dry-run] heartbeat -> ${to}: ${elide(finalText, 200)}`);
+      heartbeatLogger.info(
+        { to: redactedTo, reason: "dry-run", chars: finalText.length },
+        "heartbeat dry-run",
+      );
+      whatsappHeartbeatLog.info(`[dry-run] heartbeat -> ${redactedTo} (${finalText.length} chars)`);
       return;
     }
 
@@ -278,17 +287,16 @@ export async function runWebHeartbeatOnce(opts: {
     });
     heartbeatLogger.info(
       {
-        to,
+        to: redactedTo,
         messageId: sendResult.messageId,
         chars: finalText.length,
-        preview: elide(finalText, 140),
       },
       "heartbeat sent",
     );
-    whatsappHeartbeatLog.info(`heartbeat alert sent to ${to}`);
+    whatsappHeartbeatLog.info(`heartbeat alert sent to ${redactedTo}`);
   } catch (err) {
     const reason = formatError(err);
-    heartbeatLogger.warn({ to, error: reason }, "heartbeat failed");
+    heartbeatLogger.warn({ to: redactedTo, error: reason }, "heartbeat failed");
     whatsappHeartbeatLog.warn(`heartbeat failed (${reason})`);
     emitHeartbeatEvent({
       status: "failed",

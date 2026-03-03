@@ -16,6 +16,8 @@ import {
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
   resolveChannelAccountConfigBasePath,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk";
@@ -56,7 +58,7 @@ function normalizeZaloMessagingTarget(raw: string): string | undefined {
 export const zaloDock: ChannelDock = {
   id: "zalo",
   capabilities: {
-    chatTypes: ["direct"],
+    chatTypes: ["direct", "group"],
     media: true,
     blockStreaming: true,
   },
@@ -82,7 +84,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   meta,
   onboarding: zaloOnboardingAdapter,
   capabilities: {
-    chatTypes: ["direct"],
+    chatTypes: ["direct", "group"],
     media: true,
     reactions: false,
     threads: false,
@@ -142,6 +144,31 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         approveHint: formatPairingApproveHint("zalo"),
         normalizeEntry: (raw) => raw.replace(/^(zalo|zl):/i, ""),
       };
+    },
+    collectWarnings: ({ account, cfg }) => {
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.zalo !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
+      if (groupPolicy !== "open") {
+        return [];
+      }
+      const explicitGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((entry) =>
+        String(entry),
+      );
+      const dmAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
+      const effectiveAllowFrom =
+        explicitGroupAllowFrom.length > 0 ? explicitGroupAllowFrom : dmAllowFrom;
+      if (effectiveAllowFrom.length > 0) {
+        return [
+          `- Zalo groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.zalo.groupPolicy="allowlist" + channels.zalo.groupAllowFrom to restrict senders.`,
+        ];
+      }
+      return [
+        `- Zalo groups: groupPolicy="open" with no groupAllowFrom/allowFrom allowlist; any member can trigger (mention-gated). Set channels.zalo.groupPolicy="allowlist" + channels.zalo.groupAllowFrom.`,
+      ];
     },
   },
   groups: {
@@ -275,6 +302,40 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
     chunker: chunkTextForOutbound,
     chunkerMode: "text",
     textChunkLimit: 2000,
+    sendPayload: async (ctx) => {
+      const text = ctx.payload.text ?? "";
+      const urls = ctx.payload.mediaUrls?.length
+        ? ctx.payload.mediaUrls
+        : ctx.payload.mediaUrl
+          ? [ctx.payload.mediaUrl]
+          : [];
+      if (!text && urls.length === 0) {
+        return { channel: "zalo", messageId: "" };
+      }
+      if (urls.length > 0) {
+        let lastResult = await zaloPlugin.outbound!.sendMedia!({
+          ...ctx,
+          text,
+          mediaUrl: urls[0],
+        });
+        for (let i = 1; i < urls.length; i++) {
+          lastResult = await zaloPlugin.outbound!.sendMedia!({
+            ...ctx,
+            text: "",
+            mediaUrl: urls[i],
+          });
+        }
+        return lastResult;
+      }
+      const outbound = zaloPlugin.outbound!;
+      const limit = outbound.textChunkLimit;
+      const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
+      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
+      for (const chunk of chunks) {
+        lastResult = await outbound.sendText!({ ...ctx, text: chunk });
+      }
+      return lastResult!;
+    },
     sendText: async ({ to, text, accountId, cfg }) => {
       const result = await sendMessageZalo(to, text, {
         accountId: accountId ?? undefined,

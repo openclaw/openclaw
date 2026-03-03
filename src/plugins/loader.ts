@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
 import {
@@ -48,20 +48,25 @@ const defaultLogger = () => createSubsystemLogger("plugins");
 const resolvePluginSdkAliasFile = (params: {
   srcFile: string;
   distFile: string;
+  modulePath?: string;
 }): string | null => {
   try {
-    const modulePath = fileURLToPath(import.meta.url);
+    const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
     const isProduction = process.env.NODE_ENV === "production";
     const isTest = process.env.VITEST || process.env.NODE_ENV === "test";
+    const normalizedModulePath = modulePath.replace(/\\/g, "/");
+    const isDistRuntime = normalizedModulePath.includes("/dist/");
     let cursor = path.dirname(modulePath);
     for (let i = 0; i < 6; i += 1) {
       const srcCandidate = path.join(cursor, "src", "plugin-sdk", params.srcFile);
       const distCandidate = path.join(cursor, "dist", "plugin-sdk", params.distFile);
-      const orderedCandidates = isProduction
-        ? isTest
-          ? [distCandidate, srcCandidate]
-          : [distCandidate]
-        : [srcCandidate, distCandidate];
+      const orderedCandidates = isDistRuntime
+        ? [distCandidate, srcCandidate]
+        : isProduction
+          ? isTest
+            ? [distCandidate, srcCandidate]
+            : [distCandidate]
+          : [srcCandidate, distCandidate];
       for (const candidate of orderedCandidates) {
         if (fs.existsSync(candidate)) {
           return candidate;
@@ -84,6 +89,10 @@ const resolvePluginSdkAlias = (): string | null =>
 
 const resolvePluginSdkAccountIdAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
+};
+
+export const __testing = {
+  resolvePluginSdkAliasFile,
 };
 
 function buildCacheKey(params: {
@@ -167,7 +176,7 @@ function createPluginRecord(params: {
     cliCommands: [],
     services: [],
     commands: [],
-    httpHandlers: 0,
+    httpRoutes: 0,
     hookCount: 0,
     configSchema: params.configSchema,
     configUiHints: undefined,
@@ -356,6 +365,11 @@ function warnAboutUntrackedLoadedPlugins(params: {
   }
 }
 
+function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): void {
+  setActivePluginRegistry(registry, cacheKey);
+  initializeGlobalHookRunner(registry);
+}
+
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   // Test env: default-disable plugins unless explicitly configured.
   // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
@@ -371,7 +385,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = registryCache.get(cacheKey);
     if (cached) {
-      setActivePluginRegistry(cached, cacheKey);
+      activatePluginRegistry(cached, cacheKey);
       return cached;
     }
   }
@@ -493,6 +507,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     record.kind = manifestRecord.kind;
     record.configUiHints = manifestRecord.configUiHints;
     record.configJsonSchema = manifestRecord.configSchema;
+    const pushPluginLoadError = (message: string) => {
+      record.status = "error";
+      record.error = message;
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      registry.diagnostics.push({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: record.error,
+      });
+    };
 
     if (!enableState.enabled) {
       record.status = "disabled";
@@ -503,40 +529,28 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
 
     if (!manifestRecord.configSchema) {
-      record.status = "error";
-      record.error = "missing config schema";
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
-      });
+      pushPluginLoadError("missing config schema");
       continue;
     }
 
-    if (
-      !isPathInsideWithRealpath(candidate.rootDir, candidate.source, {
-        requireRealpath: true,
-      })
-    ) {
-      record.status = "error";
-      record.error = "plugin entry path escapes plugin root";
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
-      });
+    const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
+    const opened = openBoundaryFileSync({
+      absolutePath: candidate.source,
+      rootPath: pluginRoot,
+      boundaryLabel: "plugin root",
+      rejectHardlinks: candidate.origin !== "bundled",
+      skipLexicalRootCheck: true,
+    });
+    if (!opened.ok) {
+      pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
       continue;
     }
+    const safeSource = opened.path;
+    fs.closeSync(opened.fd);
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti()(candidate.source) as OpenClawPluginModule;
+      mod = getJiti()(safeSource) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,
@@ -612,16 +626,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (!validatedConfig.ok) {
       logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
-      record.status = "error";
-      record.error = `invalid config: ${validatedConfig.errors?.join(", ")}`;
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
-      });
+      pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
       continue;
     }
 
@@ -633,16 +638,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     if (typeof register !== "function") {
       logger.error(`[plugins] ${record.id} missing register/activate export`);
-      record.status = "error";
-      record.error = "plugin export missing register/activate";
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: record.error,
-      });
+      pushPluginLoadError("plugin export missing register/activate");
       continue;
     }
 
@@ -694,7 +690,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     registryCache.set(cacheKey, registry);
   }
-  setActivePluginRegistry(registry, cacheKey);
-  initializeGlobalHookRunner(registry);
+  activatePluginRegistry(registry, cacheKey);
   return registry;
+}
+
+function safeRealpathOrResolve(value: string): string {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.resolve(value);
+  }
 }

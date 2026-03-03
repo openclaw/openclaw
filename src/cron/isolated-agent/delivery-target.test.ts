@@ -35,6 +35,17 @@ function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function makeTelegramBoundCfg(accountId = "account-b"): OpenClawConfig {
+  return makeCfg({
+    bindings: [
+      {
+        agentId: AGENT_ID,
+        match: { channel: "telegram", accountId },
+      },
+    ],
+  });
+}
+
 const AGENT_ID = "agent-b";
 const DEFAULT_TARGET = {
   channel: "telegram" as const,
@@ -109,16 +120,7 @@ describe("resolveDeliveryTarget", () => {
 
   it("falls back to bound accountId when session has no lastAccountId", async () => {
     setMainSessionEntry(undefined);
-
-    const cfg = makeCfg({
-      bindings: [
-        {
-          agentId: "agent-b",
-          match: { channel: "telegram", accountId: "account-b" },
-        },
-      ],
-    });
-
+    const cfg = makeTelegramBoundCfg();
     const result = await resolveForAgent({ cfg });
 
     expect(result.accountId).toBe("account-b");
@@ -133,15 +135,7 @@ describe("resolveDeliveryTarget", () => {
       lastAccountId: "session-account",
     });
 
-    const cfg = makeCfg({
-      bindings: [
-        {
-          agentId: "agent-b",
-          match: { channel: "telegram", accountId: "account-b" },
-        },
-      ],
-    });
-
+    const cfg = makeTelegramBoundCfg();
     const result = await resolveForAgent({ cfg });
 
     // Session-derived accountId should take precedence over binding
@@ -298,5 +292,40 @@ describe("resolveDeliveryTarget", () => {
     expect(result.channel).toBe("telegram");
     expect(result.to).toBe("987654");
     expect(result.ok).toBe(true);
+  });
+
+  it("explicit delivery.accountId overrides session-derived accountId", async () => {
+    setMainSessionEntry({
+      sessionId: "sess-5",
+      updatedAt: 1000,
+      lastChannel: "telegram",
+      lastTo: "chat-999",
+      lastAccountId: "default",
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "chat-999",
+      accountId: "bot-b",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe("bot-b");
+  });
+
+  it("explicit delivery.accountId overrides bindings-derived accountId", async () => {
+    setMainSessionEntry(undefined);
+    const cfg = makeCfg({
+      bindings: [{ agentId: AGENT_ID, match: { channel: "telegram", accountId: "bound" } }],
+    });
+
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+      channel: "telegram",
+      to: "chat-777",
+      accountId: "explicit",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe("explicit");
   });
 });

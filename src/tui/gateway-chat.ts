@@ -146,6 +146,10 @@ export class GatewayChatClient {
         });
       },
       onClose: (_code, reason) => {
+        // Reset so waitForReady() blocks again until the next successful reconnect.
+        this.readyPromise = new Promise((resolve) => {
+          this.resolveReady = resolve;
+        });
         this.onDisconnected?.(reason);
       },
       onGap: (info) => {
@@ -241,7 +245,8 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
   ensureExplicitGatewayAuth({
     urlOverride,
-    auth: explicitAuth,
+    urlOverrideSource: "cli",
+    explicitAuth,
     errorHint: "Fix: pass --token or --password when using --url.",
   });
   const url = buildGatewayConnectionDetails({

@@ -50,6 +50,20 @@ describe("extractModelDirective", () => {
       expect(result.rawProfile).toBe("work");
     });
 
+    it("keeps Cloudflare @cf path segments inside model ids", () => {
+      const result = extractModelDirective("/model openai/@cf/openai/gpt-oss-20b");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("openai/@cf/openai/gpt-oss-20b");
+      expect(result.rawProfile).toBeUndefined();
+    });
+
+    it("allows profile overrides after Cloudflare @cf path segments", () => {
+      const result = extractModelDirective("/model openai/@cf/openai/gpt-oss-20b@cf:default");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("openai/@cf/openai/gpt-oss-20b");
+      expect(result.rawProfile).toBe("cf:default");
+    });
+
     it("returns no directive for plain text", () => {
       const result = extractModelDirective("hello world");
       expect(result.hasDirective).toBe(false);

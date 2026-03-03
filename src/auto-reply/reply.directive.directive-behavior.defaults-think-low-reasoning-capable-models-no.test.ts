@@ -66,7 +66,7 @@ async function expectThinkStatusForReasoningModel(params: {
 
   const text = replyText(res);
   expect(text).toContain(`Current thinking level: ${params.expectedLevel}`);
-  expect(text).toContain("Options: off, minimal, low, medium, high.");
+  expect(text).toContain("Options: off, minimal, low, medium, high, adaptive.");
 }
 
 function mockReasoningCapableCatalog() {
@@ -112,7 +112,7 @@ async function runReasoningDefaultCase(params: {
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
-  it("shows /think defaults for reasoning and non-reasoning models", async () => {
+  it("covers /think status and reasoning defaults for reasoning and non-reasoning models", async () => {
     await withTempHome(async (home) => {
       await expectThinkStatusForReasoningModel({
         home,
@@ -125,6 +125,25 @@ describe("directive behavior", () => {
         expectedLevel: "off",
       });
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+
+      vi.mocked(runEmbeddedPiAgent).mockClear();
+
+      for (const scenario of [
+        {
+          expectedThinkLevel: "low" as const,
+          expectedReasoningLevel: "off" as const,
+        },
+        {
+          expectedThinkLevel: "off" as const,
+          expectedReasoningLevel: "on" as const,
+          thinkingDefault: "off" as const,
+        },
+      ]) {
+        await runReasoningDefaultCase({
+          home,
+          ...scenario,
+        });
+      }
     });
   });
   it("renders model list and status variants across catalog/config combinations", async () => {
@@ -164,7 +183,7 @@ describe("directive behavior", () => {
             primary: "anthropic/claude-opus-4-5",
             fallbacks: ["openai/gpt-4.1-mini"],
           },
-          imageModel: { primary: "minimax/MiniMax-M2.1" },
+          imageModel: { primary: "minimax/MiniMax-M2.5" },
           models: undefined,
         },
       });
@@ -187,7 +206,7 @@ describe("directive behavior", () => {
           models: {
             "anthropic/claude-opus-4-5": {},
             "openai/gpt-4.1-mini": {},
-            "minimax/MiniMax-M2.1": { alias: "minimax" },
+            "minimax/MiniMax-M2.5": { alias: "minimax" },
           },
         },
         extra: {
@@ -197,14 +216,14 @@ describe("directive behavior", () => {
               minimax: {
                 baseUrl: "https://api.minimax.io/anthropic",
                 api: "anthropic-messages",
-                models: [{ id: "MiniMax-M2.1", name: "MiniMax M2.1" }],
+                models: [{ id: "MiniMax-M2.5", name: "MiniMax M2.5" }],
               },
             },
           },
         },
       });
       expect(configOnlyProviderText).toContain("Models (minimax");
-      expect(configOnlyProviderText).toContain("minimax/MiniMax-M2.1");
+      expect(configOnlyProviderText).toContain("minimax/MiniMax-M2.5");
 
       const missingAuthText = await runModelDirectiveText(home, "/model list", {
         defaults: {
@@ -280,26 +299,6 @@ describe("directive behavior", () => {
 
       expect(replyTexts(inlineThinkRes)).toContain("done");
       expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
-    });
-  });
-  it("applies reasoning defaults based on thinkingDefault configuration", async () => {
-    await withTempHome(async (home) => {
-      for (const scenario of [
-        {
-          expectedThinkLevel: "low" as const,
-          expectedReasoningLevel: "off" as const,
-        },
-        {
-          expectedThinkLevel: "off" as const,
-          expectedReasoningLevel: "on" as const,
-          thinkingDefault: "off" as const,
-        },
-      ]) {
-        await runReasoningDefaultCase({
-          home,
-          ...scenario,
-        });
-      }
     });
   });
   it("passes elevated defaults when sender is approved", async () => {

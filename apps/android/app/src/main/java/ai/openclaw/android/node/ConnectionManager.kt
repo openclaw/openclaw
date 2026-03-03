@@ -7,13 +7,6 @@ import ai.openclaw.android.gateway.GatewayClientInfo
 import ai.openclaw.android.gateway.GatewayConnectOptions
 import ai.openclaw.android.gateway.GatewayEndpoint
 import ai.openclaw.android.gateway.GatewayTlsParams
-import ai.openclaw.android.protocol.OpenClawCanvasA2UICommand
-import ai.openclaw.android.protocol.OpenClawCanvasCommand
-import ai.openclaw.android.protocol.OpenClawCameraCommand
-import ai.openclaw.android.protocol.OpenClawLocationCommand
-import ai.openclaw.android.protocol.OpenClawScreenCommand
-import ai.openclaw.android.protocol.OpenClawSmsCommand
-import ai.openclaw.android.protocol.OpenClawCapability
 import ai.openclaw.android.LocationMode
 import ai.openclaw.android.VoiceWakeMode
 
@@ -22,6 +15,8 @@ class ConnectionManager(
   private val cameraEnabled: () -> Boolean,
   private val locationMode: () -> LocationMode,
   private val voiceWakeMode: () -> VoiceWakeMode,
+  private val motionActivityAvailable: () -> Boolean,
+  private val motionPedometerAvailable: () -> Boolean,
   private val smsAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
   private val manualTls: () -> Boolean,
@@ -79,47 +74,20 @@ class ConnectionManager(
     }
   }
 
-  fun buildInvokeCommands(): List<String> =
-    buildList {
-      add(OpenClawCanvasCommand.Present.rawValue)
-      add(OpenClawCanvasCommand.Hide.rawValue)
-      add(OpenClawCanvasCommand.Navigate.rawValue)
-      add(OpenClawCanvasCommand.Eval.rawValue)
-      add(OpenClawCanvasCommand.Snapshot.rawValue)
-      add(OpenClawCanvasA2UICommand.Push.rawValue)
-      add(OpenClawCanvasA2UICommand.PushJSONL.rawValue)
-      add(OpenClawCanvasA2UICommand.Reset.rawValue)
-      add(OpenClawScreenCommand.Record.rawValue)
-      if (cameraEnabled()) {
-        add(OpenClawCameraCommand.Snap.rawValue)
-        add(OpenClawCameraCommand.Clip.rawValue)
-      }
-      if (locationMode() != LocationMode.Off) {
-        add(OpenClawLocationCommand.Get.rawValue)
-      }
-      if (smsAvailable()) {
-        add(OpenClawSmsCommand.Send.rawValue)
-      }
-      if (BuildConfig.DEBUG) {
-        add("debug.logs")
-        add("debug.ed25519")
-      }
-      add("app.update")
-    }
+  private fun runtimeFlags(): NodeRuntimeFlags =
+    NodeRuntimeFlags(
+      cameraEnabled = cameraEnabled(),
+      locationEnabled = locationMode() != LocationMode.Off,
+      smsAvailable = smsAvailable(),
+      voiceWakeEnabled = voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission(),
+      motionActivityAvailable = motionActivityAvailable(),
+      motionPedometerAvailable = motionPedometerAvailable(),
+      debugBuild = BuildConfig.DEBUG,
+    )
 
-  fun buildCapabilities(): List<String> =
-    buildList {
-      add(OpenClawCapability.Canvas.rawValue)
-      add(OpenClawCapability.Screen.rawValue)
-      if (cameraEnabled()) add(OpenClawCapability.Camera.rawValue)
-      if (smsAvailable()) add(OpenClawCapability.Sms.rawValue)
-      if (voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission()) {
-        add(OpenClawCapability.VoiceWake.rawValue)
-      }
-      if (locationMode() != LocationMode.Off) {
-        add(OpenClawCapability.Location.rawValue)
-      }
-    }
+  fun buildInvokeCommands(): List<String> = InvokeCommandRegistry.advertisedCommands(runtimeFlags())
+
+  fun buildCapabilities(): List<String> = InvokeCommandRegistry.advertisedCapabilities(runtimeFlags())
 
   fun resolvedVersionName(): String {
     val versionName = BuildConfig.VERSION_NAME.trim().ifEmpty { "dev" }
@@ -176,7 +144,7 @@ class ConnectionManager(
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-control-ui", clientMode = "ui"),
+      client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
   }

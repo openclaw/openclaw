@@ -5,6 +5,7 @@ import type {
   ReplyToMode,
 } from "./types.base.js";
 import type { DmConfig } from "./types.messages.js";
+import type { SecretRef } from "./types.secrets.js";
 
 export type GoogleChatDmConfig = {
   /** If false, ignore all incoming Google Chat DMs. Default: true. */
@@ -43,6 +44,11 @@ export type GoogleChatAccountConfig = {
   enabled?: boolean;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
+  /**
+   * Break-glass override: allow mutable principal matching (raw email entries) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
   /** Default mention requirement for space messages (default: true). */
   requireMention?: boolean;
   /**
@@ -58,8 +64,10 @@ export type GoogleChatAccountConfig = {
   defaultTo?: string;
   /** Per-space configuration keyed by space id or name. */
   groups?: Record<string, GoogleChatGroupConfig>;
-  /** Service account JSON (inline string or object). */
-  serviceAccount?: string | Record<string, unknown>;
+  /** Service account JSON (inline string, object, or secret reference). */
+  serviceAccount?: string | Record<string, unknown> | SecretRef;
+  /** Explicit secret reference for service account JSON. */
+  serviceAccountRef?: SecretRef;
   /** Service account JSON file path. */
   serviceAccountFile?: string;
   /** Webhook audience type (app-url or project-number). */

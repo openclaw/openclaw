@@ -104,6 +104,53 @@ describe("createLineNodeWebhookHandler", () => {
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
+  it("uses a tight body-read limit for unsigned POST requests", async () => {
+    const bot = { handleWebhook: vi.fn(async () => {}) };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const readBody = vi.fn(async (_req: IncomingMessage, maxBytes: number) => {
+      expect(maxBytes).toBe(4096);
+      return JSON.stringify({ events: [{ type: "message" }] });
+    });
+    const handler = createLineNodeWebhookHandler({
+      channelSecret: "secret",
+      bot,
+      runtime,
+      readBody,
+    });
+
+    const { res } = createRes();
+    await handler({ method: "POST", headers: {} } as unknown as IncomingMessage, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(readBody).toHaveBeenCalledTimes(1);
+    expect(bot.handleWebhook).not.toHaveBeenCalled();
+  });
+
+  it("uses strict pre-auth limits for signed POST requests", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const bot = { handleWebhook: vi.fn(async () => {}) };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const readBody = vi.fn(async (_req: IncomingMessage, maxBytes: number, timeoutMs?: number) => {
+      expect(maxBytes).toBe(64 * 1024);
+      expect(timeoutMs).toBe(5_000);
+      return rawBody;
+    });
+    const handler = createLineNodeWebhookHandler({
+      channelSecret: "secret",
+      bot,
+      runtime,
+      readBody,
+      maxBodyBytes: 1024 * 1024,
+    });
+
+    const { res } = createRes();
+    await runSignedPost({ handler, rawBody, secret: "secret", res });
+
+    expect(res.statusCode).toBe(200);
+    expect(readBody).toHaveBeenCalledTimes(1);
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects invalid signature", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
     const { bot, handler } = createPostWebhookTestHarness(rawBody);

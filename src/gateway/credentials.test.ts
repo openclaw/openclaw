@@ -78,12 +78,61 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     expect(resolved).toEqual({});
   });
 
+  it("uses env credentials for env-sourced url overrides", () => {
+    const resolved = resolveGatewayCredentialsFor(
+      {
+        auth: DEFAULT_GATEWAY_AUTH,
+      },
+      {
+        urlOverride: "wss://example.com",
+        urlOverrideSource: "env",
+      },
+    );
+    expectEnvGatewayCredentials(resolved);
+  });
+
   it("uses local-mode environment values before local config", () => {
     const resolved = resolveGatewayCredentialsFor({
       mode: "local",
       auth: DEFAULT_GATEWAY_AUTH,
     });
     expectEnvGatewayCredentials(resolved);
+  });
+
+  it("falls back to remote credentials in local mode when local auth is missing", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: cfg({
+        gateway: {
+          mode: "local",
+          remote: { token: "remote-token", password: "remote-password" },
+          auth: {},
+        },
+      }),
+      env: {} as NodeJS.ProcessEnv,
+      includeLegacyEnv: false,
+    });
+    expect(resolved).toEqual({
+      token: "remote-token",
+      password: "remote-password",
+    });
+  });
+
+  it("keeps local credentials ahead of remote fallback in local mode", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: cfg({
+        gateway: {
+          mode: "local",
+          remote: { token: "remote-token", password: "remote-password" },
+          auth: { token: "local-token", password: "local-password" },
+        },
+      }),
+      env: {} as NodeJS.ProcessEnv,
+      includeLegacyEnv: false,
+    });
+    expect(resolved).toEqual({
+      token: "local-token",
+      password: "local-password",
+    });
   });
 
   it("uses remote-mode remote credentials before env and local config", () => {

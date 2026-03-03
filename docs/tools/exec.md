@@ -36,8 +36,11 @@ Notes:
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
 - On non-Windows hosts, exec uses `SHELL` when set; if `SHELL` is `fish`, it prefers `bash` (or `sh`)
   from `PATH` to avoid fish-incompatible scripts, then falls back to `SHELL` if neither exists.
+- On Windows hosts, exec prefers PowerShell 7 (`pwsh`) discovery (Program Files, ProgramW6432, then PATH),
+  then falls back to Windows PowerShell 5.1.
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to
   prevent binary hijacking or injected code.
+- OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
 - Important: sandboxing is **off by default**. If sandboxing is off and `host=sandbox` is explicitly
   configured/requested, exec now fails closed instead of silently running on the gateway host.
   Enable sandboxing or use `host=gateway` with approvals.
@@ -55,7 +58,7 @@ Notes:
 - `tools.exec.node` (default: unset)
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs (gateway + sandbox only).
 - `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals#safe-bins-stdin-only).
-- `tools.exec.safeBinTrustedDirs`: additional explicit directories trusted for `safeBins` path checks. `PATH` entries are never auto-trusted.
+- `tools.exec.safeBinTrustedDirs`: additional explicit directories trusted for `safeBins` path checks. `PATH` entries are never auto-trusted. Built-in defaults are `/bin` and `/usr/bin`.
 - `tools.exec.safeBinProfiles`: optional custom argv policy per safe bin (`minPositional`, `maxPositional`, `allowedValueFlags`, `deniedFlags`).
 
 Example:
@@ -122,11 +125,14 @@ running after `tools.exec.approvalRunningNoticeMs`, a single `Exec running` noti
 
 ## Allowlist + safe bins
 
-Allowlist enforcement matches **resolved binary paths only** (no basename matches). When
+Manual allowlist enforcement matches **resolved binary paths only** (no basename matches). When
 `security=allowlist`, shell commands are auto-allowed only if every pipeline segment is
 allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections are rejected in
 allowlist mode unless every top-level segment satisfies the allowlist (including safe bins).
 Redirections remain unsupported.
+
+`autoAllowSkills` is a separate convenience path in exec approvals. It is not the same as
+manual path allowlist entries. For strict explicit trust, keep `autoAllowSkills` disabled.
 
 Use the two controls for different jobs:
 

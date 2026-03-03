@@ -39,13 +39,15 @@ export type SessionFilePathOptions = {
   sessionsDir?: string;
 };
 
+const MULTI_STORE_PATH_SENTINEL = "(multiple)";
+
 export function resolveSessionFilePathOptions(params: {
   agentId?: string;
   storePath?: string;
 }): SessionFilePathOptions | undefined {
   const agentId = params.agentId?.trim();
   const storePath = params.storePath?.trim();
-  if (storePath) {
+  if (storePath && storePath !== MULTI_STORE_PATH_SENTINEL) {
     const sessionsDir = path.dirname(path.resolve(storePath));
     return agentId ? { sessionsDir, agentId } : { sessionsDir };
   }
@@ -104,15 +106,58 @@ function resolveSiblingAgentSessionsDir(
   return path.join(rootDir, "agents", normalizeAgentId(agentId), "sessions");
 }
 
-function extractAgentIdFromAbsoluteSessionPath(candidateAbsPath: string): string | undefined {
+function resolveAgentSessionsPathParts(
+  candidateAbsPath: string,
+): { parts: string[]; sessionsIndex: number } | null {
   const normalized = path.normalize(path.resolve(candidateAbsPath));
   const parts = normalized.split(path.sep).filter(Boolean);
   const sessionsIndex = parts.lastIndexOf("sessions");
   if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
+    return null;
+  }
+  return { parts, sessionsIndex };
+}
+
+function extractAgentIdFromAbsoluteSessionPath(candidateAbsPath: string): string | undefined {
+  const parsed = resolveAgentSessionsPathParts(candidateAbsPath);
+  if (!parsed) {
     return undefined;
   }
+  const { parts, sessionsIndex } = parsed;
   const agentId = parts[sessionsIndex - 1];
   return agentId || undefined;
+}
+
+function resolveStructuralSessionFallbackPath(
+  candidateAbsPath: string,
+  expectedAgentId: string,
+): string | undefined {
+  const parsed = resolveAgentSessionsPathParts(candidateAbsPath);
+  if (!parsed) {
+    return undefined;
+  }
+  const { parts, sessionsIndex } = parsed;
+  const agentIdPart = parts[sessionsIndex - 1];
+  if (!agentIdPart) {
+    return undefined;
+  }
+  const normalizedAgentId = normalizeAgentId(agentIdPart);
+  if (normalizedAgentId !== agentIdPart.toLowerCase()) {
+    return undefined;
+  }
+  if (normalizedAgentId !== normalizeAgentId(expectedAgentId)) {
+    return undefined;
+  }
+  const relativeSegments = parts.slice(sessionsIndex + 1);
+  // Session transcripts are stored as direct files in "sessions/".
+  if (relativeSegments.length !== 1) {
+    return undefined;
+  }
+  const fileName = relativeSegments[0];
+  if (!fileName || fileName === "." || fileName === "..") {
+    return undefined;
+  }
+  return path.normalize(path.resolve(candidateAbsPath));
 }
 
 function safeRealpathSync(filePath: string): string | undefined {
@@ -170,11 +215,15 @@ function resolvePathWithinSessionsDir(
       if (resolvedFromPath) {
         return resolvedFromPath;
       }
-      // The path structurally matches .../agents/<agentId>/sessions/...
-      // Accept it even if the root directory differs from the current env
-      // (e.g., OPENCLAW_STATE_DIR changed between session creation and resolution).
-      // The structural pattern provides sufficient containment guarantees.
-      return path.resolve(realTrimmed);
+      // Cross-root compatibility for older absolute paths:
+      // keep only canonical .../agents/<agentId>/sessions/<file> shapes.
+      const structuralFallback = resolveStructuralSessionFallbackPath(
+        realTrimmed,
+        extractedAgentId,
+      );
+      if (structuralFallback) {
+        return structuralFallback;
+      }
     }
   }
   if (!normalized || normalized.startsWith("..") || path.isAbsolute(normalized)) {

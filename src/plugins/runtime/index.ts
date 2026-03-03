@@ -17,6 +17,7 @@ import {
   shouldComputeCommandAuthorized,
 } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
+import { withReplyDispatcher } from "../../auto-reply/dispatch.js";
 import {
   formatAgentEnvelope,
   formatInboundEnvelope,
@@ -94,6 +95,7 @@ import { buildTemplateMessageFromPayload } from "../../line/template-messages.js
 import { getChildLogger } from "../../logging.js";
 import { normalizeLogLevel } from "../../logging/levels.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
+import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
 import { isVoiceCompatibleAudio } from "../../media/audio.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
@@ -243,6 +245,7 @@ export function createPluginRuntime(): PluginRuntime {
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     tts: { textToSpeechTelephony },
+    stt: { transcribeAudioFile },
     tools: createRuntimeTools(),
     channel: createRuntimeChannel(),
     logging: createRuntimeLogging(),
@@ -304,6 +307,7 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
       dispatchReplyFromConfig,
+      withReplyDispatcher,
       finalizeInboundContext,
       formatAgentEnvelope,
       /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
@@ -315,8 +319,17 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     pairing: {
       buildPairingReply,
-      readAllowFromStore: readChannelAllowFromStore,
-      upsertPairingRequest: upsertChannelPairingRequest,
+      readAllowFromStore: ({ channel, accountId, env }) =>
+        readChannelAllowFromStore(channel, env, accountId),
+      upsertPairingRequest: ({ channel, id, accountId, meta, env, pairingAdapter }) =>
+        upsertChannelPairingRequest({
+          channel,
+          id,
+          accountId,
+          meta,
+          env,
+          pairingAdapter,
+        }),
     },
     media: {
       fetchRemoteMedia,

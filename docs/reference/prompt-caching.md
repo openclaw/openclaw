@@ -9,6 +9,10 @@ read_when:
 
 # Prompt caching
 
+Prompt caching means the model provider can reuse unchanged prompt prefixes (usually system/developer instructions and other stable context) across turns instead of re-processing them every time. The first matching request writes cache tokens (`cacheWrite`), and later matching requests can read them back (`cacheRead`).
+
+Why this matters: lower token cost, faster responses, and more predictable performance for long-running sessions. Without caching, repeated prompts pay the full prompt cost on every turn even when most input did not change.
+
 This page covers all cache-related knobs that affect prompt reuse and token cost.
 
 For Anthropic pricing details, see:

@@ -8,6 +8,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import type { ModelApi } from "../config/types.models.js";
 import {
   applyAuthProfileConfig,
   applyLitellmProviderConfig,
@@ -45,7 +46,7 @@ import {
 
 function createLegacyProviderConfig(params: {
   providerId: string;
-  api: "anthropic-messages" | "openai-completions" | "openai-responses";
+  api: ModelApi;
   modelId?: string;
   modelName?: string;
   baseUrl?: string;
@@ -319,6 +320,44 @@ describe("applyAuthProfileConfig", () => {
 
     expect(next.auth?.order?.anthropic).toEqual(["anthropic:work", "anthropic:default"]);
   });
+
+  it("creates provider order when switching from legacy oauth to api_key without explicit order", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "kilocode:legacy": { provider: "kilocode", mode: "oauth" },
+          },
+        },
+      },
+      {
+        profileId: "kilocode:default",
+        provider: "kilocode",
+        mode: "api_key",
+      },
+    );
+
+    expect(next.auth?.order?.kilocode).toEqual(["kilocode:default", "kilocode:legacy"]);
+  });
+
+  it("keeps implicit round-robin when no mixed provider modes are present", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "kilocode:legacy": { provider: "kilocode", mode: "api_key" },
+          },
+        },
+      },
+      {
+        profileId: "kilocode:default",
+        provider: "kilocode",
+        mode: "api_key",
+      },
+    );
+
+    expect(next.auth?.order).toBeUndefined();
+  });
 });
 
 describe("applyMinimaxApiConfig", () => {
@@ -327,11 +366,12 @@ describe("applyMinimaxApiConfig", () => {
     expect(cfg.models?.providers?.minimax).toMatchObject({
       baseUrl: "https://api.minimax.io/anthropic",
       api: "anthropic-messages",
+      authHeader: true,
     });
   });
 
   it("does not set reasoning for non-reasoning models", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1");
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.5");
     expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(false);
   });
 
@@ -341,7 +381,7 @@ describe("applyMinimaxApiConfig", () => {
         agents: {
           defaults: {
             models: {
-              "minimax/MiniMax-M2.1": {
+              "minimax/MiniMax-M2.5": {
                 alias: "MiniMax",
                 params: { custom: "value" },
               },
@@ -349,9 +389,9 @@ describe("applyMinimaxApiConfig", () => {
           },
         },
       },
-      "MiniMax-M2.1",
+      "MiniMax-M2.5",
     );
-    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.1"]).toMatchObject({
+    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.5"]).toMatchObject({
       alias: "Minimax",
       params: { custom: "value" },
     });
@@ -366,6 +406,7 @@ describe("applyMinimaxApiConfig", () => {
     );
     expect(cfg.models?.providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
     expect(cfg.models?.providers?.minimax?.api).toBe("anthropic-messages");
+    expect(cfg.models?.providers?.minimax?.authHeader).toBe(true);
     expect(cfg.models?.providers?.minimax?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.minimax?.models.map((m) => m.id)).toEqual([
       "old-model",
@@ -473,8 +514,8 @@ describe("primary model defaults", () => {
   it("sets correct primary model", () => {
     const configCases = [
       {
-        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.1-lightning"),
-        primaryModel: "minimax/MiniMax-M2.1-lightning",
+        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5-Lightning"),
+        primaryModel: "minimax/MiniMax-M2.5-Lightning",
       },
       {
         getConfig: () => applyZaiConfig({}, { modelId: "glm-5" }),
@@ -604,8 +645,8 @@ describe("provider alias defaults", () => {
   it("adds expected alias for provider defaults", () => {
     const aliasCases = [
       {
-        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.1"),
-        modelRef: "minimax/MiniMax-M2.1",
+        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5"),
+        modelRef: "minimax/MiniMax-M2.5",
         alias: "Minimax",
       },
       {

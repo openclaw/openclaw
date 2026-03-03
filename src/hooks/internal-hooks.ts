@@ -85,12 +85,102 @@ export type MessageSentHookContext = {
   conversationId?: string;
   /** Message ID returned by the provider */
   messageId?: string;
+  /** Whether this message was sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier, if applicable */
+  groupId?: string;
 };
 
 export type MessageSentHookEvent = InternalHookEvent & {
   type: "message";
   action: "sent";
   context: MessageSentHookContext;
+};
+
+export type MessageTranscribedHookContext = {
+  /** Sender identifier (e.g., phone number, user ID) */
+  from?: string;
+  /** Recipient identifier */
+  to?: string;
+  /** Original raw message body (e.g., "🎤 [Audio]") */
+  body?: string;
+  /** Enriched body shown to the agent, including transcript */
+  bodyForAgent?: string;
+  /** The transcribed text from audio */
+  transcript: string;
+  /** Unix timestamp when the message was received */
+  timestamp?: number;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Message ID from the provider */
+  messageId?: string;
+  /** Sender user ID */
+  senderId?: string;
+  /** Sender display name */
+  senderName?: string;
+  /** Sender username */
+  senderUsername?: string;
+  /** Provider name */
+  provider?: string;
+  /** Surface name */
+  surface?: string;
+  /** Path to the media file that was transcribed */
+  mediaPath?: string;
+  /** MIME type of the media */
+  mediaType?: string;
+};
+
+export type MessageTranscribedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "transcribed";
+  context: MessageTranscribedHookContext;
+};
+
+export type MessagePreprocessedHookContext = {
+  /** Sender identifier (e.g., phone number, user ID) */
+  from?: string;
+  /** Recipient identifier */
+  to?: string;
+  /** Original raw message body */
+  body?: string;
+  /** Fully enriched body shown to the agent (transcripts, image descriptions, link summaries) */
+  bodyForAgent?: string;
+  /** Transcribed audio text, if the message contained audio */
+  transcript?: string;
+  /** Unix timestamp when the message was received */
+  timestamp?: number;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Message ID from the provider */
+  messageId?: string;
+  /** Sender user ID */
+  senderId?: string;
+  /** Sender display name */
+  senderName?: string;
+  /** Sender username */
+  senderUsername?: string;
+  /** Provider name */
+  provider?: string;
+  /** Surface name */
+  surface?: string;
+  /** Path to the media file, if present */
+  mediaPath?: string;
+  /** MIME type of the media, if present */
+  mediaType?: string;
+  /** Whether this message was sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier, if applicable */
+  groupId?: string;
+};
+
+export type MessagePreprocessedHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "preprocessed";
+  context: MessagePreprocessedHookContext;
 };
 
 export interface InternalHookEvent {
@@ -110,8 +200,23 @@ export interface InternalHookEvent {
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
 
-/** Registry of hook handlers by event key */
-const handlers = new Map<string, InternalHookHandler[]>();
+/**
+ * Registry of hook handlers by event key.
+ *
+ * Uses a globalThis singleton so that registerInternalHook and
+ * triggerInternalHook always share the same Map even when the bundler
+ * emits multiple copies of this module into separate chunks (bundle
+ * splitting). Without the singleton, handlers registered in one chunk
+ * are invisible to triggerInternalHook in another chunk, causing hooks
+ * to silently fire with zero handlers.
+ */
+const _g = globalThis as typeof globalThis & {
+  __openclaw_internal_hook_handlers__?: Map<string, InternalHookHandler[]>;
+};
+const handlers = (_g.__openclaw_internal_hook_handlers__ ??= new Map<
+  string,
+  InternalHookHandler[]
+>());
 const log = createSubsystemLogger("internal-hooks");
 
 /**
@@ -281,4 +386,30 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
     typeof context.channelId === "string" &&
     typeof context.success === "boolean"
   );
+}
+
+export function isMessageTranscribedEvent(
+  event: InternalHookEvent,
+): event is MessageTranscribedHookEvent {
+  if (event.type !== "message" || event.action !== "transcribed") {
+    return false;
+  }
+  const context = event.context as Partial<MessageTranscribedHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.transcript === "string" && typeof context.channelId === "string";
+}
+
+export function isMessagePreprocessedEvent(
+  event: InternalHookEvent,
+): event is MessagePreprocessedHookEvent {
+  if (event.type !== "message" || event.action !== "preprocessed") {
+    return false;
+  }
+  const context = event.context as Partial<MessagePreprocessedHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.channelId === "string";
 }

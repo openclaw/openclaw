@@ -1,3 +1,4 @@
+import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { IRC_FIELD_HELP } from "./schema.irc.js";
 
 export const FIELD_HELP: Record<string, string> = {
@@ -45,6 +46,11 @@ export const FIELD_HELP: Record<string, string> = {
     'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
   "logging.redactPatterns":
     "Additional custom redact regex patterns applied to log output before emission/storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+  cli: "CLI presentation controls for local command output behavior such as banner and tagline style. Use this section to keep startup output aligned with operator preference without changing runtime behavior.",
+  "cli.banner":
+    "CLI startup banner controls for title/version line and tagline style behavior. Keep banner enabled for fast version/context checks, then tune tagline mode to your preferred noise level.",
+  "cli.banner.taglineMode":
+    'Controls tagline style in the CLI startup banner: "random" (default) picks from the rotating tagline pool, "default" always shows the neutral default tagline, and "off" hides tagline text while keeping the banner version line.',
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
@@ -133,6 +139,61 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
+  "talk.provider": 'Active Talk provider id (for example "elevenlabs").',
+  "talk.providers":
+    "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
+  "talk.providers.*.voiceId": "Provider default voice ID for Talk mode.",
+  "talk.providers.*.voiceAliases": "Optional provider voice alias map for Talk directives.",
+  "talk.providers.*.modelId": "Provider default model ID for Talk mode.",
+  "talk.providers.*.outputFormat": "Provider default output format for Talk mode.",
+  "talk.providers.*.apiKey": "Provider API key for Talk mode.",
+  "talk.voiceId":
+    "Legacy ElevenLabs default voice ID for Talk mode. Prefer talk.providers.elevenlabs.voiceId.",
+  "talk.voiceAliases":
+    'Use this legacy ElevenLabs voice alias map (for example {"Clawd":"EXAVITQu4vr4xnSDxMaL"}) only during migration. Prefer talk.providers.elevenlabs.voiceAliases.',
+  "talk.modelId":
+    "Legacy ElevenLabs model ID for Talk mode (default: eleven_v3). Prefer talk.providers.elevenlabs.modelId.",
+  "talk.outputFormat":
+    "Use this legacy ElevenLabs output format for Talk mode (for example pcm_44100 or mp3_44100_128) only during migration. Prefer talk.providers.elevenlabs.outputFormat.",
+  "talk.apiKey":
+    "Use this legacy ElevenLabs API key for Talk mode only during migration, and keep secrets in env-backed storage. Prefer talk.providers.elevenlabs.apiKey (fallback: ELEVENLABS_API_KEY).",
+  "talk.interruptOnSpeech":
+    "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
+  acp: "ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and tuning streamed turn projection behavior.",
+  "acp.enabled":
+    "Global ACP feature gate. Keep disabled unless ACP runtime + policy are configured.",
+  "acp.dispatch.enabled":
+    "Independent dispatch gate for ACP session turns. Disable to keep ACP commands available while blocking ACP turn execution.",
+  "acp.backend":
+    "Default ACP runtime backend id (for example: acpx). Must match a registered ACP runtime plugin backend.",
+  "acp.defaultAgent":
+    "Fallback ACP target agent id used when ACP spawns do not specify an explicit target.",
+  "acp.allowedAgents":
+    "Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.",
+  "acp.maxConcurrentSessions":
+    "Maximum concurrently active ACP sessions across this gateway process.",
+  "acp.stream":
+    "ACP streaming projection controls for chunk sizing, metadata visibility, and deduped delivery behavior.",
+  "acp.stream.coalesceIdleMs":
+    "Coalescer idle flush window in milliseconds for ACP streamed text before block replies are emitted.",
+  "acp.stream.maxChunkChars":
+    "Maximum chunk size for ACP streamed block projection before splitting into multiple block replies.",
+  "acp.stream.repeatSuppression":
+    "When true (default), suppress repeated ACP status/tool projection lines in a turn while keeping raw ACP events unchanged.",
+  "acp.stream.deliveryMode":
+    "ACP delivery style: live streams projected output incrementally, final_only buffers all projected ACP output until terminal turn events.",
+  "acp.stream.hiddenBoundarySeparator":
+    "Separator inserted before next visible assistant text when hidden ACP tool lifecycle events occurred (none|space|newline|paragraph). Default: paragraph.",
+  "acp.stream.maxOutputChars":
+    "Maximum assistant output characters projected per ACP turn before truncation notice is emitted.",
+  "acp.stream.maxSessionUpdateChars":
+    "Maximum characters for projected ACP session/update lines (tool/status updates).",
+  "acp.stream.tagVisibility":
+    "Per-sessionUpdate visibility overrides for ACP projection (for example usage_update, available_commands_update).",
+  "acp.runtime.ttlMinutes":
+    "Idle runtime TTL in minutes for ACP session workers before eligible cleanup.",
+  "acp.runtime.installCommand":
+    "Optional operator install/setup command shown by `/acp install` and `/acp doctor` when ACP backend wiring is missing.",
   "agents.list.*.skills":
     "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
   "agents.list[].skills":
@@ -165,6 +226,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Disables Chromium sandbox isolation flags for environments where sandboxing fails at runtime. Keep this off whenever possible because process isolation protections are reduced.",
   "browser.attachOnly":
     "Restricts browser mode to attach-only behavior without starting local browser processes. Use this when all browser sessions are externally managed by a remote CDP provider.",
+  "browser.cdpPortRangeStart":
+    "Starting local CDP port used for auto-allocated browser profile ports. Increase this when host-level port defaults conflict with other local services.",
   "browser.defaultProfile":
     "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
   "browser.profiles":
@@ -175,6 +238,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
   "browser.profiles.*.driver":
     'Per-profile browser driver mode: "clawd" or "extension" depending on connection/runtime strategy. Use the driver that matches your browser control stack to avoid protocol mismatches.',
+  "browser.profiles.*.attachOnly":
+    "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
   "browser.profiles.*.color":
     "Per-profile accent color for visual differentiation in dashboards and browser-related UI hints. Use distinct colors for high-signal operator recognition of active profiles.",
   "browser.evaluateEnabled":
@@ -186,7 +251,9 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.ssrfPolicy":
     "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
   "browser.ssrfPolicy.allowPrivateNetwork":
-    "Allows access to private-network address ranges from browser/network tooling when SSRF protections are active. Keep disabled unless internal-network access is required and separately controlled.",
+    "Legacy alias for browser.ssrfPolicy.dangerouslyAllowPrivateNetwork. Prefer the dangerously-named key so risk intent is explicit.",
+  "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Allows access to private-network address ranges from browser tooling. Default is enabled for trusted-network operator setups; disable to enforce strict public-only resolution checks.",
   "browser.ssrfPolicy.allowedHostnames":
     "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
   "browser.ssrfPolicy.hostnameAllowlist":
@@ -271,24 +338,16 @@ export const FIELD_HELP: Record<string, string> = {
   "canvasHost.liveReload":
     "Enables automatic live-reload behavior for canvas assets during development workflows. Keep disabled in production-like environments where deterministic output is preferred.",
   talk: "Talk-mode voice synthesis settings for voice identity, model selection, output format, and interruption behavior. Use this section to tune human-facing voice UX while controlling latency and cost.",
-  "talk.voiceId":
-    "Primary voice identifier used by talk mode when synthesizing spoken responses. Use a stable voice for consistent persona and switch only when experience goals change.",
-  "talk.voiceAliases":
-    "Alias map for human-friendly voice shortcuts to concrete voice IDs in talk workflows. Use aliases to simplify operator switching without exposing long provider-native IDs.",
-  "talk.modelId":
-    "Model override used for talk pipeline generation when voice workflows require different model behavior. Use this when speech output needs a specialized low-latency or style-tuned model.",
-  "talk.outputFormat":
-    "Audio output format for synthesized talk responses, depending on provider support and client playback expectations. Use formats compatible with your playback channel to avoid decode failures.",
-  "talk.interruptOnSpeech":
-    "When true, interrupts current speech playback on new speech/input events for more conversational turn-taking. Keep enabled for interactive voice UX and disable for uninterrupted long-form playback.",
-  "talk.apiKey":
-    "Optional talk-provider API key override used specifically for speech synthesis requests. Use env-backed secrets and set this only when talk traffic must use separate credentials.",
   "gateway.auth.token":
     "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
   "agents.defaults.sandbox.browser.network":
     "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
   "agents.list[].sandbox.browser.network": "Per-agent override for sandbox browser Docker network.",
+  "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
+    "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
+  "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
+    "Per-agent DANGEROUS override for container namespace joins in sandbox Docker network mode.",
   "agents.defaults.sandbox.browser.cdpSourceRange":
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
   "agents.list[].sandbox.browser.cdpSourceRange":
@@ -298,7 +357,9 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.root":
     "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
   "gateway.controlUi.allowedOrigins":
-    "Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com).",
+    "Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled.",
+  "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
+    "DANGEROUS toggle that enables Host-header based origin fallback for Control UI/WebChat websocket checks. This mode is supported when your deployment intentionally relies on Host-header origin policy; explicit gateway.controlUi.allowedOrigins remains the recommended hardened default.",
   "gateway.controlUi.allowInsecureAuth":
     "Loosens strict browser auth checks for Control UI when you must run a non-standard setup. Keep this off unless you trust your network and proxy path, because impersonation risk is higher.",
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
@@ -314,7 +375,7 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.nodes.allowCommands":
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
   "gateway.nodes.denyCommands":
-    "Commands to block even if present in node claims or default allowlist.",
+    "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
   nodeHost:
     "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
   "nodeHost.browserProxy":
@@ -367,6 +428,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Enable targeted diagnostics logs by flag (e.g. ["telegram.http"]). Supports wildcards like "telegram.*" or "*".',
   "diagnostics.enabled":
     "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Keep enabled for normal observability, and disable only in tightly constrained environments.",
+  "diagnostics.stuckSessionWarnMs":
+    "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
   "diagnostics.otel.enabled":
     "Enables OpenTelemetry export pipeline for traces, metrics, and logs based on configured endpoint/protocol settings. Keep disabled unless your collector endpoint and auth are fully configured.",
   "diagnostics.otel.endpoint":
@@ -470,24 +533,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Ordered model preferences specifically for image understanding when you want to override shared media models. Put the most reliable multimodal model first to reduce fallback attempts.",
   "tools.media.image.scope":
     "Scope selector for when image understanding is attempted (for example only explicit requests versus broader auto-detection). Keep narrow scope in busy channels to control token and API spend.",
-  "tools.media.audio.enabled":
-    "Enable audio understanding so voice notes or audio clips can be transcribed/summarized for agent context. Disable when audio ingestion is outside policy or unnecessary for your workflows.",
-  "tools.media.audio.maxBytes":
-    "Maximum accepted audio payload size in bytes before processing is rejected or clipped by policy. Set this based on expected recording length and upstream provider limits.",
-  "tools.media.audio.maxChars":
-    "Maximum characters retained from audio understanding output to prevent oversized transcript injection. Increase for long-form dictation, or lower to keep conversational turns compact.",
-  "tools.media.audio.prompt":
-    "Instruction template guiding audio understanding output style, such as concise summary versus near-verbatim transcript. Keep wording consistent so downstream automations can rely on output format.",
-  "tools.media.audio.timeoutSeconds":
-    "Timeout in seconds for audio understanding execution before the operation is cancelled. Use longer timeouts for long recordings and tighter ones for interactive chat responsiveness.",
-  "tools.media.audio.language":
-    "Preferred language hint for audio understanding/transcription when provider support is available. Set this to improve recognition accuracy for known primary languages.",
-  "tools.media.audio.attachments":
-    "Attachment policy for audio inputs indicating which uploaded files are eligible for audio processing. Keep restrictive defaults in mixed-content channels to avoid unintended audio workloads.",
-  "tools.media.audio.models":
-    "Ordered model preferences specifically for audio understanding, used before shared media model fallback. Choose models optimized for transcription quality in your primary language/domain.",
-  "tools.media.audio.scope":
-    "Scope selector for when audio understanding runs across inbound messages and attachments. Keep focused scopes in high-volume channels to reduce cost and avoid accidental transcription.",
+  ...MEDIA_AUDIO_FIELD_HELP,
   "tools.media.video.enabled":
     "Enable video understanding so clips can be summarized into text for downstream reasoning and responses. Disable when processing video is out of policy or too expensive for your deployment.",
   "tools.media.video.maxBytes":
@@ -592,7 +638,7 @@ export const FIELD_HELP: Record<string, string> = {
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
-    'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. Keep "merge" unless you intentionally want a strict custom list.',
+    'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json apiKey/baseUrl values and fall back to config when agent values are empty or missing; matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.',
   "models.providers":
     "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Use stable provider keys so references from agents and tooling remain portable across environments.",
   "models.providers.*.baseUrl":
@@ -603,6 +649,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, and "aws-sdk" for AWS credential resolution. Match this to your provider requirements.',
   "models.providers.*.api":
     "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
+  "models.providers.*.injectNumCtxForOpenAICompat":
+    "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
   "models.providers.*.headers":
     "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
   "models.providers.*.authHeader":
@@ -867,6 +915,13 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
+  "agents.defaults.pdfModel.primary":
+    "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
+  "agents.defaults.pdfModel.fallbacks": "Ordered fallback PDF models (provider/model).",
+  "agents.defaults.pdfMaxBytesMb":
+    "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
+  "agents.defaults.pdfMaxPages":
+    "Maximum number of PDF pages to process for the PDF tool (default: 20).",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
@@ -882,16 +937,26 @@ export const FIELD_HELP: Record<string, string> = {
     "Minimum floor enforced for reserveTokens in Pi compaction paths (0 disables the floor guard). Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates.",
   "agents.defaults.compaction.maxHistoryShare":
     "Maximum fraction of total context budget allowed for retained history after compaction (range 0.1-0.9). Use lower shares for more generation headroom or higher shares for deeper historical continuity.",
+  "agents.defaults.compaction.identifierPolicy":
+    'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), "off" disables this prefix, and "custom" uses identifierInstructions. Keep "strict" unless you have a specific compatibility need.',
+  "agents.defaults.compaction.identifierInstructions":
+    'Custom identifier-preservation instruction text used when identifierPolicy="custom". Keep this explicit and safety-focused so compaction summaries do not rewrite opaque IDs, URLs, hosts, or ports.',
   "agents.defaults.compaction.memoryFlush":
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":
     "Enables pre-compaction memory flush before the runtime performs stronger history reduction near token limits. Keep enabled unless you intentionally disable memory side effects in constrained environments.",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
+  "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
+    'Forces pre-compaction memory flush when transcript file size reaches this threshold (bytes or strings like "2mb"). Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
   "agents.defaults.compaction.memoryFlush.prompt":
     "User-prompt template used for the pre-compaction memory flush turn when generating memory candidates. Use this only when you need custom extraction instructions beyond the default memory flush behavior.",
   "agents.defaults.compaction.memoryFlush.systemPrompt":
     "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
+  "agents.defaults.embeddedPi":
+    "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
+  "agents.defaults.embeddedPi.projectSettingsPolicy":
+    'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
@@ -957,6 +1022,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Controls interval for repeated typing indicators while replies are being prepared in typing-capable channels. Increase to reduce chatty updates or decrease for more active typing feedback.",
   "session.typingMode":
     'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
+  "session.parentForkMaxTokens":
+    "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
   "session.mainKey":
     'Overrides the canonical main session key used for continuity when dmScope or routing logic points to "main". Use a stable value only if you intentionally need custom session anchoring.',
   "session.sendPolicy":
@@ -985,8 +1052,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Shared defaults for thread-bound session routing behavior across providers that support thread focus workflows. Configure global defaults here and override per channel only when behavior differs.",
   "session.threadBindings.enabled":
     "Global master switch for thread-bound session routing features and focused thread delivery behavior. Keep enabled for modern thread workflows unless you need to disable thread binding globally.",
-  "session.threadBindings.ttlHours":
-    "Default auto-unfocus TTL in hours for thread-bound sessions across providers/channels (0 disables). Keep 24h-like values for practical focus windows unless your team needs longer-lived thread binding.",
+  "session.threadBindings.idleHours":
+    "Default inactivity window in hours for thread-bound sessions across providers/channels (0 disables idle auto-unfocus). Default: 24.",
+  "session.threadBindings.maxAgeHours":
+    "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
   "session.maintenance":
     "Automatic session-store maintenance controls for pruning age, entry caps, and file rotation behavior. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
   "session.maintenance.mode":
@@ -999,6 +1068,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Caps total session entry count retained in the store to prevent unbounded growth over time. Use lower limits for constrained environments, or higher limits when longer history is required.",
   "session.maintenance.rotateBytes":
     "Rotates the session store when file size exceeds a threshold such as `10mb` or `1gb`. Use this to bound single-file growth and keep backup/restore operations manageable.",
+  "session.maintenance.resetArchiveRetention":
+    "Retention for reset transcript archives (`*.reset.<timestamp>`). Accepts a duration (for example `30d`), or `false` to disable cleanup. Defaults to pruneAfter so reset artifacts do not grow forever.",
+  "session.maintenance.maxDiskBytes":
+    "Optional per-agent sessions-directory disk budget (for example `500mb`). Use this to cap session storage per agent; when exceeded, warn mode reports pressure and enforce mode performs oldest-first cleanup.",
+  "session.maintenance.highWaterBytes":
+    "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks.",
   cron: "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",
@@ -1006,12 +1081,26 @@ export const FIELD_HELP: Record<string, string> = {
     "Path to the cron job store file used to persist scheduled jobs across restarts. Set an explicit path only when you need custom storage layout, backups, or mounted volumes.",
   "cron.maxConcurrentRuns":
     "Limits how many cron jobs can execute at the same time when multiple schedules fire together. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
+  "cron.retry":
+    "Overrides the default retry policy for one-shot jobs when they fail with transient errors (rate limit, network, server_error). Omit to use defaults: maxAttempts 3, backoffMs [30000, 60000, 300000], retry all transient types.",
+  "cron.retry.maxAttempts":
+    "Max retries for one-shot jobs on transient errors before permanent disable (default: 3).",
+  "cron.retry.backoffMs":
+    "Backoff delays in ms for each retry attempt (default: [30000, 60000, 300000]). Use shorter values for faster retries.",
+  "cron.retry.retryOn":
+    "Error types to retry: rate_limit, network, timeout, server_error. Use to restrict which errors trigger retries; omit to retry all transient types.",
   "cron.webhook":
     'Deprecated legacy fallback webhook URL used only for old jobs with `notify=true`. Migrate to per-job delivery using `delivery.mode="webhook"` plus `delivery.to`, and avoid relying on this global field.',
   "cron.webhookToken":
     "Bearer token attached to cron webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
   "cron.sessionRetention":
     "Controls how long completed cron run sessions are kept before pruning (`24h`, `7d`, `1h30m`, or `false` to disable pruning; default: `24h`). Use shorter retention to reduce storage growth on high-frequency schedules.",
+  "cron.runLog":
+    "Pruning controls for per-job cron run history files under `cron/runs/<jobId>.jsonl`, including size and line retention.",
+  "cron.runLog.maxBytes":
+    "Maximum bytes per cron run-log file before pruning rewrites to the last keepLines entries (for example `2mb`, default `2000000`).",
+  "cron.runLog.keepLines":
+    "How many trailing run-log lines to retain when a file exceeds maxBytes (default `2000`). Increase for longer forensic history or lower for smaller disks.",
   hooks:
     "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
   "hooks.enabled":
@@ -1208,6 +1297,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Shows degraded/error heartbeat alerts when true so operator channels surface problems promptly. Keep enabled in production so broken channel states are visible.",
   "channels.defaults.heartbeat.useIndicator":
     "Enables concise indicator-style heartbeat rendering instead of verbose status text where supported. Use indicator mode for dense dashboards with many active channels.",
+  "agents.defaults.heartbeat.directPolicy":
+    'Controls whether heartbeat delivery may target direct/DM chats: "allow" (default) permits DM delivery and "block" suppresses direct-target sends.',
+  "agents.list.*.heartbeat.directPolicy":
+    'Per-agent override for heartbeat direct/DM delivery policy; use "block" for agents that should only send heartbeat alerts to non-DM destinations.',
   "channels.telegram.configWrites":
     "Allow Telegram to write config in response to channel events/commands (default: true).",
   "channels.telegram.botToken":
@@ -1268,7 +1361,7 @@ export const FIELD_HELP: Record<string, string> = {
     "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
-    'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',
+    'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "off"/"none" disables ack reactions entirely.',
   "messages.statusReactions":
     "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
   "messages.statusReactions.enabled":
@@ -1282,7 +1375,7 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
   "channels.telegram.streaming":
-    'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
+    'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streaming":
     'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streamMode":
@@ -1324,18 +1417,32 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.retry.maxDelayMs": "Maximum retry delay cap in ms for Discord outbound calls.",
   "channels.discord.retry.jitter": "Jitter factor (0-1) applied to Discord retry delays.",
   "channels.discord.maxLinesPerMessage": "Soft max line count per Discord message (default: 17).",
+  "channels.discord.eventQueue.listenerTimeout":
+    "Canonical Discord listener timeout control in ms for gateway event handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
+  "channels.discord.eventQueue.maxQueueSize":
+    "Optional Discord EventQueue capacity override (max queued events before backpressure). Set per account via channels.discord.accounts.<id>.eventQueue.maxQueueSize.",
+  "channels.discord.eventQueue.maxConcurrency":
+    "Optional Discord EventQueue concurrency override (max concurrent handler executions). Set per account via channels.discord.accounts.<id>.eventQueue.maxConcurrency.",
   "channels.discord.threadBindings.enabled":
     "Enable Discord thread binding features (/focus, bound-thread routing/delivery, and thread-bound subagent sessions). Overrides session.threadBindings.enabled when set.",
-  "channels.discord.threadBindings.ttlHours":
-    "Auto-unfocus TTL in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable (default: 24). Overrides session.threadBindings.ttlHours when set.",
+  "channels.discord.threadBindings.idleHours":
+    "Inactivity window in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
+  "channels.discord.threadBindings.maxAgeHours":
+    "Optional hard max age in hours for Discord thread-bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
   "channels.discord.threadBindings.spawnSubagentSessions":
     "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
+  "channels.discord.threadBindings.spawnAcpSessions":
+    "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
   "channels.discord.ui.components.accentColor":
     "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
   "channels.discord.voice.enabled":
     "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
   "channels.discord.voice.autoJoin":
     "Voice channels to auto-join on startup (list of guildId/channelId entries).",
+  "channels.discord.voice.daveEncryption":
+    "Toggle DAVE end-to-end encryption for Discord voice joins (default: true in @discordjs/voice; Discord may require this).",
+  "channels.discord.voice.decryptionFailureTolerance":
+    "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
   "channels.discord.voice.tts":
     "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
   "channels.discord.intents.presence":
