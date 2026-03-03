@@ -47,6 +47,9 @@ export type AdaptiveRoutingSavingsLedger = {
     /** Cumulative tokens sent to the cloud escalation model. */
     cloudTokensInput: number;
     cloudTokensOutput: number;
+    /** Tokens from local-success runs only (v2 field, backfilled as 0). */
+    localSuccessTokensInput?: number;
+    localSuccessTokensOutput?: number;
   };
 };
 
@@ -164,6 +167,9 @@ export async function recordAdaptiveRun(
         t.localTokensInput += local.input;
         t.localTokensOutput += local.output;
         t.localTokensCacheRead += local.cacheRead;
+        // Track local-success-only tokens separately for accurate savings.
+        t.localSuccessTokensInput = (t.localSuccessTokensInput ?? 0) + local.input;
+        t.localSuccessTokensOutput = (t.localSuccessTokensOutput ?? 0) + local.output;
       } else {
         // escalated
         t.runsEscalated += 1;
@@ -214,13 +220,15 @@ export function computeSavingsMetrics(ledger: AdaptiveRoutingSavingsLedger) {
 
   // Token-level savings: for escalated runs, both local AND cloud tokens were used.
   // For local-success runs, only local tokens were used (cloud was skipped).
-  // We don't know what cloud would have used for local-success runs, so we
-  // report tokens-processed-locally-without-escalation as the "saved" measure.
-  const localOnlyTokens =
-    t.runsLocal === 0
+  // Use the tracked per-run-type tokens when available (v2 field); fall back to
+  // the proportional estimate for ledgers created before the field existed.
+  const hasPerRunTypeTokens =
+    t.localSuccessTokensInput != null && t.localSuccessTokensOutput != null;
+  const localOnlyTokens = hasPerRunTypeTokens
+    ? (t.localSuccessTokensInput ?? 0) + (t.localSuccessTokensOutput ?? 0)
+    : t.runsLocal === 0
       ? 0
-      : // Scale total local tokens proportionally by local-success share
-        Math.round(
+      : Math.round(
           (t.localTokensInput + t.localTokensOutput) * (t.runsLocal / Math.max(1, t.runsTotal)),
         );
 

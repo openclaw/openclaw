@@ -663,9 +663,7 @@ async function agentCommandInternal(
     let provider = defaultProvider;
     let model = defaultModel;
     const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
-    const hasStoredOverride = Boolean(
-      sessionEntry?.modelOverride || sessionEntry?.providerOverride,
-    );
+    let hasStoredOverride = Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
     const needsModelCatalog = hasAllowlist || hasStoredOverride;
     let allowedModelKeys = new Set<string>();
     let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
@@ -708,6 +706,8 @@ async function agentCommandInternal(
               storePath,
               entry,
             });
+            // Recompute: the allowlist cleanup may have cleared the override.
+            hasStoredOverride = Boolean(entry.modelOverride || entry.providerOverride);
           }
         }
       }

@@ -4,9 +4,11 @@ import {
   makeIsolatedAgentParamsFixture,
 } from "./isolated-agent/job-fixtures.js";
 
+const runEmbeddedPiAgentMockFn = vi.fn();
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
+  runEmbeddedPiAgent: runEmbeddedPiAgentMockFn,
+  createAdaptiveEmbeddedRunner: () => (params: unknown) => runEmbeddedPiAgentMockFn(params),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 

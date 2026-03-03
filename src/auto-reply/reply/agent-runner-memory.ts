@@ -4,7 +4,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { createAdaptiveEmbeddedRunner } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
@@ -467,6 +467,7 @@ export async function runMemoryFlushIfNeeded(params: {
     .filter(Boolean)
     .join("\n\n");
   try {
+    const runAgent = createAdaptiveEmbeddedRunner();
     await runWithModelFallback({
       ...resolveModelFallbackOptions(params.followupRun.run),
       run: (provider, model) => {
@@ -483,7 +484,7 @@ export async function runMemoryFlushIfNeeded(params: {
           runId: flushRunId,
           authProfile,
         });
-        return runEmbeddedPiAgent({
+        return runAgent({
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,

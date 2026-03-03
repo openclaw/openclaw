@@ -438,6 +438,15 @@ export async function runAgentTurnWithFallback(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      // If adaptive routing changed the model, re-emit onModelSelected with the
+      // actual provider/model so callers (e.g. responsePrefix template) see it.
+      if (runResult.adaptiveRoutingMeta) {
+        params.opts?.onModelSelected?.({
+          provider: runResult.adaptiveRoutingMeta.actualProvider,
+          model: runResult.adaptiveRoutingMeta.actualModel,
+          thinkLevel: params.followupRun.run.thinkLevel,
+        });
+      }
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
             provider: String(attempt.provider ?? ""),

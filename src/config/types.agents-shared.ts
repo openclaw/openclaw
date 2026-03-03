@@ -34,6 +34,17 @@ export type AdaptiveRoutingConfig = {
   bypassOnExplicitOverride?: boolean;
   /** Include a redacted summary of the local attempt in the escalation prompt (internal metadata only). Default: false. */
   includeLocalAttemptSummary?: boolean;
+  /**
+   * When true, the local trial run uses a temporary session file and all
+   * user-visible callbacks are suppressed. However, tool calls that mutate
+   * external state (sending messages, writing files, executing commands) are
+   * **not** rolled back if the trial fails and cloud escalation fires.
+   *
+   * v1 limitation: set this to true to bypass the local trial entirely when
+   * agents routinely invoke mutating tools. A future version may support
+   * tool-level read-only gating or speculative execution.
+   */
+  localTrialReadOnly?: boolean;
   /** Outcome validation settings. */
   validation?: AdaptiveRoutingValidationConfig;
 };

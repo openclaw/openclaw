@@ -30,6 +30,7 @@ const embeddedRunMock = {
   isEmbeddedPiRunStreaming: vi.fn(() => false),
   queueEmbeddedPiMessage: vi.fn(() => false),
   waitForEmbeddedPiRunEnd: vi.fn(async () => true),
+  createAdaptiveEmbeddedRunner: () => () => Promise.resolve({ payloads: [], meta: {} }),
 };
 const subagentRegistryMock = {
   isSubagentSessionRunActive: vi.fn(() => true),

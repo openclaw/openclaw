@@ -21,6 +21,7 @@ import type {
 } from "../config/types.agents-shared.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { recordAdaptiveRun } from "./adaptive-routing-savings.js";
+import { FailoverError } from "./failover-error.js";
 import type { RunEmbeddedPiAgentParams } from "./pi-embedded-runner/run/params.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner/types.js";
@@ -95,11 +96,28 @@ export function resolveAdaptiveRoutingConfig(
  */
 export function resolveBypassReason(
   cfg: AdaptiveRoutingConfig,
-  opts: { hasExplicitModelOverride: boolean },
+  opts: {
+    hasExplicitModelOverride: boolean;
+    /** Caller-provided provider (may be the default — check against adaptive config). */
+    callerProvider?: string;
+    /** Caller-provided model (may be the default — check against adaptive config). */
+    callerModel?: string;
+  },
 ): string | null {
   const bypassOnOverride = cfg.bypassOnExplicitOverride ?? true;
   if (bypassOnOverride && opts.hasExplicitModelOverride) {
     return "explicit_override";
+  }
+  // Bypass when the caller explicitly targets a specific model that differs
+  // from the adaptive config's local/cloud pair (e.g. probe runs, direct API
+  // calls with an explicit provider/model).
+  if (opts.callerProvider && opts.callerModel) {
+    const callerRef = `${opts.callerProvider}/${opts.callerModel}`;
+    const localRef = cfg.localFirstModel?.trim();
+    const cloudRef = cfg.cloudEscalationModel?.trim();
+    if (localRef && cloudRef && callerRef !== localRef && callerRef !== cloudRef) {
+      return "explicit_model_target";
+    }
   }
   return null;
 }
@@ -358,6 +376,8 @@ export async function runEmbeddedPiAgentWithAdaptiveRouting(
 
   const bypassReason = resolveBypassReason(arCfg, {
     hasExplicitModelOverride: params._hasExplicitModelOverride ?? false,
+    callerProvider: params.provider?.trim(),
+    callerModel: params.model?.trim(),
   });
 
   if (bypassReason) {
@@ -369,6 +389,16 @@ export async function runEmbeddedPiAgentWithAdaptiveRouting(
 
   const { provider: localProvider, model: localModel } = parseModelRef(arCfg.localFirstModel!);
   const { provider: cloudProvider, model: cloudModel } = parseModelRef(arCfg.cloudEscalationModel!);
+
+  // When localTrialReadOnly is set, agents with mutating tools should skip the
+  // local trial entirely — tool side-effects (messages sent, files written) from
+  // the trial cannot be rolled back if escalation fires.
+  if (arCfg.localTrialReadOnly) {
+    log.debug("[adaptive-routing] bypassed: localTrialReadOnly");
+    logAdaptiveOutcome({ used: false, bypassReason: "local_trial_read_only" });
+    void recordAdaptiveRun(resolveStateDir(), { kind: "bypassed" });
+    return runFn(params);
+  }
 
   // If adaptive routing already escalated earlier in this runWithModelFallback chain
   // (tracked via _adaptiveEscalationDone set by the caller's closure), skip local
@@ -397,90 +427,127 @@ export async function runEmbeddedPiAgentWithAdaptiveRouting(
   const tempSessionFile = `${originalSessionFile}.adaptive-${Date.now()}-${process.pid}`;
 
   // Copy existing session (conversation history) to temp file before local run.
-  await fs.copyFile(originalSessionFile, tempSessionFile).catch(() => {
-    // Session file may not exist yet (new conversation) – that is fine.
+  await fs.copyFile(originalSessionFile, tempSessionFile).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT") {
+      return;
+    } // New conversation — no file yet.
+    throw err; // Real I/O failure — don't silently proceed with stale state.
   });
 
   let localAttemptResult: EmbeddedRunAttemptResult | undefined;
+  let localTrialFailed = false;
 
   try {
-    const localResult = await runFn({
-      ...params,
-      provider: localProvider,
-      model: localModel,
-      sessionFile: tempSessionFile,
-      // Suppress all user-visible streaming callbacks during the local trial run.
-      // They fire again on the definitive run (cloud escalation or local-pass path).
-      // Without this, partial output from the local attempt leaks to the user before
-      // validation decides which model's response to actually deliver, causing
-      // duplicate sends when escalation occurs.
-      onPartialReply: undefined,
-      onAssistantMessageStart: undefined,
-      onBlockReply: undefined,
-      onBlockReplyFlush: undefined,
-      onReasoningStream: undefined,
-      onReasoningEnd: undefined,
-      onToolResult: undefined,
-      // Capture the rich attempt result for validation
-      _onAttemptResult: (r) => {
-        localAttemptResult = r;
-        // Forward to any outer handler too
-        params._onAttemptResult?.(r);
-      },
-    });
-
-    // ── Validate ──────────────────────────────────────────────────────────
-    let validation: ValidationResult;
-
-    if (!localAttemptResult) {
-      // runFn didn't fire the callback (e.g., CLI provider path); fall back to run-result heuristic
-      validation = validateFromRunResult(localResult, arCfg);
-    } else if (validationMode === "llm") {
-      validation = await validateWithLlm(
-        localAttemptResult,
-        params.prompt,
-        arCfg,
-        // LLM run fn: for v1, fall back to heuristic; a future version can wire
-        // in a lightweight completion call here.
-        async () => {
-          log.warn(
-            "[adaptive-routing] LLM validator not wired to a standalone runner; using heuristic",
-          );
-          return JSON.stringify(validateHeuristic(localAttemptResult!, arCfg));
+    let localResult: EmbeddedPiRunResult;
+    try {
+      localResult = await runFn({
+        ...params,
+        provider: localProvider,
+        model: localModel,
+        sessionFile: tempSessionFile,
+        // Suppress all user-visible streaming callbacks during the local trial run.
+        // They fire again on the definitive run (cloud escalation or local-pass path).
+        // Without this, partial output from the local attempt leaks to the user before
+        // validation decides which model's response to actually deliver, causing
+        // duplicate sends when escalation occurs.
+        onPartialReply: undefined,
+        onAssistantMessageStart: undefined,
+        onBlockReply: undefined,
+        onBlockReplyFlush: undefined,
+        onReasoningStream: undefined,
+        onReasoningEnd: undefined,
+        onToolResult: undefined,
+        // Suppress agent-event streaming so trial-run events (tool calls, partial
+        // output, etc.) never surface to the end user or control channel.
+        onAgentEvent: undefined,
+        // Capture the rich attempt result for validation
+        _onAttemptResult: (r) => {
+          localAttemptResult = r;
+          // Forward to any outer handler too
+          params._onAttemptResult?.(r);
         },
-      );
-    } else {
-      validation = validateHeuristic(localAttemptResult, arCfg);
+      });
+    } catch (localErr) {
+      // FailoverError (auth failure, rate limit, provider down) — treat as
+      // automatic local-trial failure and escalate to cloud instead of
+      // propagating the error and aborting the whole agent turn.
+      if (localErr instanceof FailoverError) {
+        log.warn(
+          `[adaptive-routing] local trial threw FailoverError: ${localErr.message} → escalating to cloud`,
+        );
+        localTrialFailed = true;
+        // falls through to the escalation block below
+        localResult = undefined!;
+      } else {
+        throw localErr;
+      }
     }
 
-    log.info(
-      `[adaptive-routing] local validation: passed=${validation.passed} score=${validation.score.toFixed(2)} reason=${validation.reason}`,
-    );
+    // ── Validate ──────────────────────────────────────────────────────────
+    if (!localTrialFailed) {
+      let validation: ValidationResult;
 
-    if (validation.passed || maxEscalations === 0) {
-      // Local result is good – promote temp session file to actual
-      await safeRename(tempSessionFile, originalSessionFile);
-      logAdaptiveOutcome({
-        used: true,
-        localModel: `${localProvider}/${localModel}`,
-        cloudModel: `${cloudProvider}/${cloudModel}`,
-        validationMode,
-        validationScore: validation.score,
-        validationPassed: validation.passed,
-        validationReason: validation.reason,
-        escalated: false,
-      });
-      void recordAdaptiveRun(resolveStateDir(), {
-        kind: "local_success",
-        localUsage: localAttemptResult?.attemptUsage ?? localResult.meta.agentMeta?.usage,
-      });
-      return localResult;
+      if (!localAttemptResult) {
+        // runFn didn't fire the callback (e.g., CLI provider path); fall back to run-result heuristic
+        validation = validateFromRunResult(localResult, arCfg);
+      } else if (validationMode === "llm") {
+        validation = await validateWithLlm(
+          localAttemptResult,
+          params.prompt,
+          arCfg,
+          // LLM run fn: for v1, fall back to heuristic; a future version can wire
+          // in a lightweight completion call here.
+          async () => {
+            log.warn(
+              "[adaptive-routing] LLM validator not wired to a standalone runner; using heuristic",
+            );
+            return JSON.stringify(validateHeuristic(localAttemptResult!, arCfg));
+          },
+        );
+      } else {
+        validation = validateHeuristic(localAttemptResult, arCfg);
+      }
+
+      log.info(
+        `[adaptive-routing] local validation: passed=${validation.passed} score=${validation.score.toFixed(2)} reason=${validation.reason}`,
+      );
+
+      if (validation.passed || maxEscalations === 0) {
+        // Local result is good – promote temp session file to actual
+        await safeRename(tempSessionFile, originalSessionFile);
+        logAdaptiveOutcome({
+          used: true,
+          localModel: `${localProvider}/${localModel}`,
+          cloudModel: `${cloudProvider}/${cloudModel}`,
+          validationMode,
+          validationScore: validation.score,
+          validationPassed: validation.passed,
+          validationReason: validation.reason,
+          escalated: false,
+        });
+        void recordAdaptiveRun(resolveStateDir(), {
+          kind: "local_success",
+          localUsage: localAttemptResult?.attemptUsage ?? localResult.meta.agentMeta?.usage,
+        });
+        localResult.adaptiveRoutingMeta = {
+          actualProvider: localProvider,
+          actualModel: localModel,
+          escalated: false,
+        };
+        return localResult;
+      }
     }
 
     // ── Escalate to cloud model ────────────────────────────────────────────
-    log.info(
-      `[adaptive-routing] escalating: local_score=${validation.score.toFixed(2)} reason=${validation.reason} → ${cloudProvider}/${cloudModel}`,
-    );
+    if (localTrialFailed) {
+      log.info(
+        `[adaptive-routing] escalating (local trial error) → ${cloudProvider}/${cloudModel}`,
+      );
+    } else {
+      log.info(
+        `[adaptive-routing] escalating: local validation failed → ${cloudProvider}/${cloudModel}`,
+      );
+    }
 
     // Discard temp session so cloud run sees original history (not local attempt)
     await fs.unlink(tempSessionFile).catch(() => {});
@@ -490,29 +557,45 @@ export async function runEmbeddedPiAgentWithAdaptiveRouting(
     // runWithModelFallback retries with another candidate.
     params._onAdaptiveEscalation?.();
 
-    const cloudResult = await runFn({
-      ...params,
-      provider: cloudProvider,
-      model: cloudModel,
-      sessionFile: originalSessionFile,
-    });
+    let cloudResult: EmbeddedPiRunResult;
+    try {
+      cloudResult = await runFn({
+        ...params,
+        provider: cloudProvider,
+        model: cloudModel,
+        sessionFile: originalSessionFile,
+      });
+    } catch (cloudErr) {
+      // If the cloud escalation model also fails, let the error propagate up
+      // to runWithModelFallback so the normal fallback chain can try the next
+      // candidate provider/model instead of aborting the turn entirely.
+      log.warn(
+        `[adaptive-routing] cloud escalation failed: ${cloudErr instanceof Error ? cloudErr.message : String(cloudErr)}`,
+      );
+      throw cloudErr;
+    }
 
     logAdaptiveOutcome({
       used: true,
       localModel: `${localProvider}/${localModel}`,
       cloudModel: `${cloudProvider}/${cloudModel}`,
       validationMode,
-      validationScore: validation.score,
-      validationPassed: validation.passed,
-      validationReason: validation.reason,
+      validationScore: localTrialFailed ? 0 : 0,
+      validationPassed: false,
+      validationReason: localTrialFailed ? "local_trial_error" : "validation_failed",
       escalated: true,
     });
     void recordAdaptiveRun(resolveStateDir(), {
       kind: "escalated",
-      localUsage: localAttemptResult?.attemptUsage ?? localResult.meta.agentMeta?.usage,
+      localUsage: localAttemptResult?.attemptUsage ?? localResult?.meta?.agentMeta?.usage,
       cloudUsage: cloudResult.meta.agentMeta?.usage,
     });
 
+    cloudResult.adaptiveRoutingMeta = {
+      actualProvider: cloudProvider,
+      actualModel: cloudModel,
+      escalated: true,
+    };
     return cloudResult;
   } finally {
     // Safety: always clean up temp file on any exit path
@@ -569,14 +652,15 @@ function validateFromRunResult(
 async function safeRename(from: string, to: string): Promise<void> {
   try {
     await fs.rename(from, to);
-  } catch {
-    // rename may fail cross-device; fall back to copy + unlink
-    try {
-      await fs.copyFile(from, to);
-      await fs.unlink(from).catch(() => {});
-    } catch (copyErr) {
-      log.warn(`[adaptive-routing] failed to promote temp session file: ${String(copyErr)}`);
+  } catch (renameErr) {
+    // ENOENT from rename: the temp file was cleaned up or never created (e.g.
+    // tests with mock runFn that don't write actual files). Not a failure.
+    if ((renameErr as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
     }
+    // rename may fail cross-device; fall back to copy + unlink
+    await fs.copyFile(from, to);
+    await fs.unlink(from).catch(() => {});
   }
 }
 

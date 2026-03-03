@@ -16,7 +16,7 @@ vi.mock(
 );
 
 vi.mock("../../agents/pi-embedded.js", () => ({
-  runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+  createAdaptiveEmbeddedRunner: () => (params: unknown) => runEmbeddedPiAgentMock(params),
 }));
 
 vi.mock("./route-reply.js", async (importOriginal) => {
