@@ -206,10 +206,105 @@ NODE
   printf '%s\n' "$token"
 }
 
-AUTH_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-if [[ -z "$AUTH_TOKEN" ]]; then
-  AUTH_TOKEN="$(mint_github_app_token || true)"
-fi
+github_repo_access_ok() {
+  local token="${1:-}"
+  local repo="${2:-}"
+  local probe_json probe_code
+
+  GITHUB_REPO_ACCESS_LAST_CODE=""
+  if [[ -z "$token" || -z "$repo" ]]; then
+    return 1
+  fi
+
+  probe_json="$(mktemp)"
+  probe_code="$(curl -sS -o "$probe_json" -w '%{http_code}' \
+    -H "Authorization: Bearer ${token}" \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${repo}" || true)"
+  rm -f "$probe_json"
+  GITHUB_REPO_ACCESS_LAST_CODE="$probe_code"
+
+  [[ "$probe_code" == "200" ]]
+}
+
+resolve_auth_token_for_repo() {
+  local repo="${1:-}"
+  local env_token app_token env_probe_code app_probe_code
+
+  env_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+  if [[ -n "$env_token" ]] && github_repo_access_ok "$env_token" "$repo"; then
+    printf '%s\n' "$env_token"
+    return 0
+  fi
+  env_probe_code="${GITHUB_REPO_ACCESS_LAST_CODE:-}"
+
+  app_token="$(mint_github_app_token || true)"
+  if [[ -n "$app_token" ]] && github_repo_access_ok "$app_token" "$repo"; then
+    printf '%s\n' "$app_token"
+    return 0
+  fi
+  app_probe_code="${GITHUB_REPO_ACCESS_LAST_CODE:-}"
+
+  # Best-effort fallback only when probe failure is not an explicit auth/access rejection.
+  if [[ -n "$env_token" && "$env_probe_code" != "401" && "$env_probe_code" != "403" && "$env_probe_code" != "404" ]]; then
+    printf '%s\n' "$env_token"
+    return 0
+  fi
+  if [[ -n "$app_token" && "$app_probe_code" != "401" && "$app_probe_code" != "403" && "$app_probe_code" != "404" ]]; then
+    printf '%s\n' "$app_token"
+    return 0
+  fi
+
+  return 1
+}
+
+resolve_checkout_ref() {
+  local repo_path="${1:-}"
+  local requested_ref="${2:-}"
+  local origin_head first_origin_ref
+
+  if [[ -n "$requested_ref" ]]; then
+    printf '%s\n' "$requested_ref"
+    return 0
+  fi
+
+  origin_head="$(git -C "$repo_path" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [[ "$origin_head" == origin/* ]]; then
+    printf '%s\n' "$origin_head"
+    return 0
+  fi
+
+  first_origin_ref="$(git -C "$repo_path" for-each-ref --format='%(refname:short)' refs/remotes/origin | awk '$0 != "origin/HEAD" { print; exit }')"
+  if [[ -n "$first_origin_ref" ]]; then
+    printf '%s\n' "$first_origin_ref"
+    return 0
+  fi
+
+  return 1
+}
+
+checkout_clean_slate() {
+  local repo_path="${1:-}"
+  local requested_ref="${2:-}"
+  local checkout_ref
+
+  if [[ -z "$repo_path" ]]; then
+    echo "checkout_clean_slate requires repo_path" >&2
+    return 1
+  fi
+
+  checkout_ref="$(resolve_checkout_ref "$repo_path" "$requested_ref" || true)"
+  if [[ -z "$checkout_ref" ]]; then
+    echo "failed to resolve checkout ref for clean slate" >&2
+    return 1
+  fi
+
+  git -C "$repo_path" checkout --detach "$checkout_ref"
+  git -C "$repo_path" reset --hard "$checkout_ref"
+  git -C "$repo_path" clean -fdx
+}
+
+AUTH_TOKEN="$(resolve_auth_token_for_repo "$SLUG" || true)"
 if [[ -n "$AUTH_TOKEN" ]]; then
   export GITHUB_TOKEN="$AUTH_TOKEN"
   export GH_TOKEN="$AUTH_TOKEN"
@@ -241,9 +336,7 @@ else
   fi
 fi
 
-if [[ -n "$REF" ]]; then
-  git -C "$DEST_PATH" checkout --detach "$REF"
-fi
+checkout_clean_slate "$DEST_PATH" "$REF"
 
 printf 'repo=%s\n' "$SLUG"
 printf 'path=%s\n' "$DEST_PATH"

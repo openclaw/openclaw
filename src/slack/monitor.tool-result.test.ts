@@ -393,6 +393,77 @@ describe("monitorSlackProvider tool results", () => {
     });
   });
 
+  it("sends progress ack before final reply in progress streaming mode", async () => {
+    replyMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[1] ?? {}) as { onReplyStart?: () => Promise<void> | void };
+      await opts?.onReplyStart?.();
+      return { text: "final reply" };
+    });
+
+    setDirectMessageReplyMode("all");
+    const currentConfig = slackTestState.config as {
+      channels?: { slack?: Record<string, unknown> };
+    };
+    slackTestState.config = {
+      ...currentConfig,
+      channels: {
+        ...currentConfig.channels,
+        slack: {
+          ...currentConfig.channels?.slack,
+          streaming: "progress",
+        },
+      },
+    };
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent(),
+    });
+
+    expect(reactMock).toHaveBeenCalledTimes(1);
+    expect(reactMock.mock.calls[0][0]).toMatchObject({
+      channel: "C1",
+      timestamp: "123",
+      name: "👀",
+    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][1]).toBe("PFX final reply");
+    expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "123" });
+  });
+
+  it("falls back to thread emoji ack when progress reaction is missing_scope", async () => {
+    reactMock.mockRejectedValueOnce(new Error("An API error occurred: missing_scope"));
+    replyMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[1] ?? {}) as { onReplyStart?: () => Promise<void> | void };
+      await opts?.onReplyStart?.();
+      return { text: "final reply" };
+    });
+
+    setDirectMessageReplyMode("all");
+    const currentConfig = slackTestState.config as {
+      channels?: { slack?: Record<string, unknown> };
+    };
+    slackTestState.config = {
+      ...currentConfig,
+      channels: {
+        ...currentConfig.channels,
+        slack: {
+          ...currentConfig.channels?.slack,
+          streaming: "progress",
+        },
+      },
+    };
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent(),
+    });
+
+    expect(reactMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock.mock.calls[0][1]).toBe("👀");
+    expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "123" });
+    expect(sendMock.mock.calls[1][1]).toBe("PFX final reply");
+  });
+
   async function expectMentionPatternMessageAccepted(text: string): Promise<void> {
     setRequireMentionChannelConfig(["\\bopenclaw\\b"]);
     replyMock.mockResolvedValue({ text: "hi" });

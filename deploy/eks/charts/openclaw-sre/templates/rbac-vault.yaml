@@ -1,0 +1,30 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.deploymentName }}-vault-secret
+  labels:
+    app: {{ .Values.appLabel }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "list", "patch", "update", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.deploymentName }}-vault-secret
+  labels:
+    app: {{ .Values.appLabel }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.deploymentName }}-vault-secret
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccountName }}
+    namespace: {{ .Release.Namespace }}

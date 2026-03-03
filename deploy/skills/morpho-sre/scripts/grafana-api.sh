@@ -14,7 +14,12 @@ Examples:
 Env:
   GRAFANA_BASE_URL (required)
   GRAFANA_TOKEN (required)
-  GRAFANA_ALLOWED_HOST (required; must match base URL host)
+  GRAFANA_ALLOWED_HOST (optional; must match base URL host when set)
+  K8S_CONTEXT (optional; used to infer allowed host by env)
+
+Host policy:
+  - dev context => monitoring-dev.morpho.dev
+  - prd/prod context => monitoring.morpho.dev
 EOF
 }
 
@@ -27,8 +32,8 @@ METHOD="$1"
 PATH_PART="$2"
 JSON_FILE="${3:-}"
 
-if [[ -z "${GRAFANA_BASE_URL:-}" || -z "${GRAFANA_TOKEN:-}" || -z "${GRAFANA_ALLOWED_HOST:-}" ]]; then
-  echo "Missing required env: GRAFANA_BASE_URL, GRAFANA_TOKEN, GRAFANA_ALLOWED_HOST" >&2
+if [[ -z "${GRAFANA_BASE_URL:-}" || -z "${GRAFANA_TOKEN:-}" ]]; then
+  echo "Missing required env: GRAFANA_BASE_URL, GRAFANA_TOKEN" >&2
   exit 1
 fi
 
@@ -38,15 +43,47 @@ if [[ "$PATH_PART" != /* ]]; then
 fi
 
 BASE_HOST="$(printf '%s' "$GRAFANA_BASE_URL" | sed -E 's#^https?://([^/]+).*$#\1#')"
-if [[ "$BASE_HOST" != "$GRAFANA_ALLOWED_HOST" ]]; then
-  echo "Blocked Grafana base URL host: $BASE_HOST (allowed: $GRAFANA_ALLOWED_HOST)" >&2
+
+infer_host_from_context() {
+  local ctx="${K8S_CONTEXT:-}"
+  if [[ -z "$ctx" ]] && command -v kubectl >/dev/null 2>&1; then
+    ctx="$(kubectl config current-context 2>/dev/null || true)"
+  fi
+  if [[ "$ctx" =~ (prd|prod) ]]; then
+    printf '%s\n' "monitoring.morpho.dev"
+    return 0
+  fi
+  if [[ "$ctx" =~ (dev|staging|sandbox) ]]; then
+    printf '%s\n' "monitoring-dev.morpho.dev"
+    return 0
+  fi
+  printf '%s\n' ""
+}
+
+ALLOWED_HOST="${GRAFANA_ALLOWED_HOST:-}"
+if [[ -z "$ALLOWED_HOST" ]]; then
+  CONTEXT_HOST="$(infer_host_from_context)"
+  if [[ -n "$CONTEXT_HOST" ]]; then
+    ALLOWED_HOST="$CONTEXT_HOST"
+  else
+    ALLOWED_HOST="monitoring-dev.morpho.dev"
+  fi
+fi
+
+CONTEXT_HOST="$(infer_host_from_context)"
+if [[ -n "$CONTEXT_HOST" && "$BASE_HOST" != "$CONTEXT_HOST" ]]; then
+  echo "Blocked Grafana base URL host: $BASE_HOST (context expects: $CONTEXT_HOST)" >&2
+  exit 1
+fi
+if [[ "$BASE_HOST" != "$ALLOWED_HOST" ]]; then
+  echo "Blocked Grafana base URL host: $BASE_HOST (allowed: $ALLOWED_HOST)" >&2
   exit 1
 fi
 
 URL="${GRAFANA_BASE_URL%/}${PATH_PART}"
 URL_HOST="$(printf '%s' "$URL" | sed -E 's#^https?://([^/]+).*$#\1#')"
-if [[ "$URL_HOST" != "$GRAFANA_ALLOWED_HOST" ]]; then
-  echo "Blocked Grafana URL host: $URL_HOST (allowed: $GRAFANA_ALLOWED_HOST)" >&2
+if [[ "$URL_HOST" != "$ALLOWED_HOST" ]]; then
+  echo "Blocked Grafana URL host: $URL_HOST (allowed: $ALLOWED_HOST)" >&2
   exit 1
 fi
 

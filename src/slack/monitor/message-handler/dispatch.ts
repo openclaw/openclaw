@@ -14,6 +14,7 @@ import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-poli
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
+import { sendMessageSlack } from "../../send.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
 import {
   applyAppendOnlyStreamUpdate,
@@ -210,6 +211,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     mode: slackStreaming.mode,
     nativeStreaming: slackStreaming.nativeStreaming,
   });
+  const sendProgressAck = slackStreaming.mode === "progress";
+  let didSendProgressAck = false;
   const streamThreadHint = resolveSlackStreamingThreadHint({
     replyToMode: prepared.replyToMode,
     incomingThreadTs,
@@ -223,6 +226,46 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
+
+  const maybeSendProgressAck = async (): Promise<void> => {
+    if (!sendProgressAck || didSendProgressAck) {
+      return;
+    }
+    didSendProgressAck = true;
+    const ackThreadTs = resolveSlackThreadTs({
+      replyToMode: ctx.replyToMode,
+      incomingThreadTs,
+      messageTs,
+      hasReplied: hasRepliedRef.value,
+      isThreadReply,
+    });
+    if (!message.ts) {
+      return;
+    }
+    try {
+      await reactSlackMessage(message.channel, message.ts, "👀", {
+        token: ctx.botToken,
+        client: ctx.app.client,
+        accountId: account.accountId,
+      });
+    } catch (err) {
+      const errText = String(err);
+      runtime.error?.(danger(`slack: failed to send progress ack reaction: ${errText}`));
+      if (errText.includes("missing_scope")) {
+        try {
+          await sendMessageSlack(prepared.replyTarget, "👀", {
+            token: ctx.botToken,
+            threadTs: ackThreadTs,
+            accountId: account.accountId,
+          });
+        } catch (fallbackErr) {
+          runtime.error?.(
+            danger(`slack: failed to send progress ack fallback message: ${String(fallbackErr)}`),
+          );
+        }
+      }
+    }
+  };
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
@@ -356,6 +399,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
       typingCallbacks.onIdle?.();
     },
+    onReplyStart: async () => {
+      await maybeSendProgressAck();
+      await typingCallbacks.onReplyStart();
+    },
+    onIdle: typingCallbacks.onIdle,
   });
 
   const draftStream = createSlackDraftStream({

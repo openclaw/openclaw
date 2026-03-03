@@ -1,0 +1,72 @@
+{{- $imageUri := required "values.image.uri is required" .Values.image.uri -}}
+{{- if .Values.selfImproveCron.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Values.deploymentName }}-self-improve-cron
+  labels:
+    app: {{ .Values.appLabel }}
+    component: self-improve-cron
+spec:
+  schedule: {{ .Values.selfImproveCron.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.selfImproveCron.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.selfImproveCron.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ .Values.selfImproveCron.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            app: {{ .Values.appLabel }}
+            component: self-improve-cron
+        spec:
+          serviceAccountName: {{ .Values.serviceAccountName }}
+          restartPolicy: Never
+          containers:
+            - name: self-improve-cron
+              image: {{ $imageUri | quote }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - /bin/sh
+                - -lc
+              args:
+                - |
+                  set -eu
+                  if [ ! -x /home/node/.openclaw/skills/morpho-sre/scripts/self-improve-pr.sh ]; then
+                    echo "self-improve-cron: missing self-improve-pr.sh"
+                    exit 1
+                  fi
+                  /home/node/.openclaw/skills/morpho-sre/scripts/self-improve-pr.sh
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.vault.secretName }}
+              env:
+                - name: HOME
+                  value: /home/node
+                - name: OPENCLAW_STATE_DIR
+                  value: /home/node/.openclaw
+                - name: INCIDENT_STATE_DIR
+                  value: {{ .Values.incidentState.dir | quote }}
+                - name: SELF_IMPROVE_REPO
+                  value: {{ .Values.selfImproveCron.repo | quote }}
+                - name: SELF_IMPROVE_BASE_BRANCH
+                  value: {{ .Values.selfImproveCron.baseBranch | quote }}
+                - name: SELF_IMPROVE_LOOKBACK_HOURS
+                  value: {{ .Values.selfImproveCron.lookbackHours | quote }}
+                - name: SELF_IMPROVE_CONFIDENCE
+                  value: {{ .Values.selfImproveCron.confidence | quote }}
+                - name: SELF_IMPROVE_BRANCH_PREFIX
+                  value: {{ .Values.selfImproveCron.branchPrefix | quote }}
+                - name: SELF_IMPROVE_NAMESPACE
+                  value: {{ .Release.Namespace | quote }}
+                - name: SELF_IMPROVE_DEPLOYMENT_NAME
+                  value: {{ .Values.deploymentName | quote }}
+              volumeMounts:
+                - name: state
+                  mountPath: /home/node/.openclaw
+          volumes:
+            - name: state
+              persistentVolumeClaim:
+                claimName: {{ .Values.persistence.claimName }}
+{{- end }}
