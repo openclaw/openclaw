@@ -8,6 +8,8 @@ import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
+import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import * as sessionsModule from "../config/sessions.js";
@@ -39,6 +41,7 @@ vi.mock("../agents/skills.js", () => ({
 }));
 
 vi.mock("../agents/skills/refresh.js", () => ({
+  ensureSkillsWatcher: vi.fn(),
   getSkillsSnapshotVersion: vi.fn(() => 0),
 }));
 
@@ -353,6 +356,78 @@ describe("agentCommand", () => {
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.sessionId).toBe("session-123");
+    });
+  });
+
+  it("refreshes persisted skills snapshot when the snapshot version advances", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:main";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-123",
+          updatedAt: Date.now(),
+          systemSent: true,
+          skillsSnapshot: {
+            prompt: "old snapshot",
+            skills: [],
+            version: 1,
+          },
+        },
+      });
+      mockConfig(home, store);
+      vi.mocked(getSkillsSnapshotVersion).mockReturnValueOnce(2);
+      vi.mocked(buildWorkspaceSkillSnapshot).mockReturnValueOnce({
+        prompt: "new snapshot",
+        skills: [{ name: "demo-skill" }],
+        version: 2,
+      } as never);
+
+      await agentCommand({ message: "resume me", sessionKey }, runtime);
+
+      expect(buildWorkspaceSkillSnapshot).toHaveBeenCalledTimes(1);
+      const saved = readSessionStore<{
+        skillsSnapshot?: { version?: number; prompt?: string };
+      }>(store);
+      expect(saved[sessionKey]?.skillsSnapshot?.version).toBe(2);
+      expect(saved[sessionKey]?.skillsSnapshot?.prompt).toBe("new snapshot");
+      expect(getLastEmbeddedCall()?.skillsSnapshot).toEqual(
+        expect.objectContaining({ version: 2 }),
+      );
+    });
+  });
+
+  it("refreshes persisted skills snapshot when legacy snapshots are missing version metadata", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:main";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-legacy",
+          updatedAt: Date.now(),
+          systemSent: true,
+          skillsSnapshot: {
+            prompt: "legacy snapshot",
+            skills: [],
+          },
+        },
+      });
+      mockConfig(home, store);
+      vi.mocked(getSkillsSnapshotVersion).mockReturnValueOnce(0);
+      vi.mocked(buildWorkspaceSkillSnapshot).mockReturnValueOnce({
+        prompt: "upgraded snapshot",
+        skills: [{ name: "demo-skill" }],
+        version: 0,
+      } as never);
+
+      await agentCommand({ message: "resume me", sessionKey }, runtime);
+
+      expect(buildWorkspaceSkillSnapshot).toHaveBeenCalledTimes(1);
+      const saved = readSessionStore<{
+        skillsSnapshot?: { version?: number; prompt?: string };
+      }>(store);
+      expect(saved[sessionKey]?.skillsSnapshot?.version).toBe(0);
+      expect(saved[sessionKey]?.skillsSnapshot?.prompt).toBe("upgraded snapshot");
     });
   });
 
