@@ -7,6 +7,7 @@ import { danger, logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { isGifMedia, kindFromMime } from "../../media/mime.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
 import type { TelegramInlineButtons } from "../button-types.js";
@@ -428,6 +429,7 @@ export async function deliverReplies(params: {
   token: string;
   runtime: RuntimeEnv;
   bot: Bot;
+  accountId?: string;
   mediaLocalRoots?: readonly string[];
   replyToMode: ReplyToMode;
   textLimit: number;
@@ -450,62 +452,140 @@ export async function deliverReplies(params: {
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
   });
+  const hookRunner = getGlobalHookRunner();
+  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
   for (const reply of params.replies) {
-    const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
-    if (!reply?.text && !hasMedia) {
-      if (reply?.audioAsVoice) {
+    let outboundReply = reply;
+    const outboundContent = outboundReply?.text ?? "";
+    if (hasMessageSendingHooks) {
+      try {
+        const sendingResult = await hookRunner!.runMessageSending(
+          {
+            to: params.chatId,
+            content: outboundContent,
+            metadata: {
+              channel: "telegram",
+              accountId: params.accountId,
+              mediaUrls:
+                outboundReply.mediaUrls?.length && outboundReply.mediaUrls.length > 0
+                  ? outboundReply.mediaUrls
+                  : outboundReply.mediaUrl
+                    ? [outboundReply.mediaUrl]
+                    : [],
+            },
+          },
+          {
+            channelId: "telegram",
+            accountId: params.accountId,
+          },
+        );
+        if (sendingResult?.cancel) {
+          continue;
+        }
+        if (sendingResult?.content != null) {
+          outboundReply = { ...outboundReply, text: sendingResult.content };
+        }
+      } catch {
+        // Don't block delivery on hook failures.
+      }
+    }
+    const hasMedia =
+      Boolean(outboundReply?.mediaUrl) || (outboundReply?.mediaUrls?.length ?? 0) > 0;
+    if (!outboundReply?.text && !hasMedia) {
+      if (outboundReply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
         continue;
       }
       params.runtime.error?.(danger("reply missing text/media"));
       continue;
     }
+    const hookContent = outboundReply?.text ?? "";
     const replyToId =
-      params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
-    const mediaList = reply.mediaUrls?.length
-      ? reply.mediaUrls
-      : reply.mediaUrl
-        ? [reply.mediaUrl]
+      params.replyToMode === "off" ? undefined : resolveTelegramReplyId(outboundReply.replyToId);
+    const mediaList = outboundReply.mediaUrls?.length
+      ? outboundReply.mediaUrls
+      : outboundReply.mediaUrl
+        ? [outboundReply.mediaUrl]
         : [];
-    const telegramData = reply.channelData?.telegram as
+    const telegramData = outboundReply.channelData?.telegram as
       | { buttons?: TelegramInlineButtons }
       | undefined;
     const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
-    if (mediaList.length === 0) {
-      await deliverTextReply({
-        bot: params.bot,
-        chatId: params.chatId,
-        runtime: params.runtime,
-        thread: params.thread,
-        chunkText,
-        replyText: reply.text || "",
-        replyMarkup,
-        replyQuoteText: params.replyQuoteText,
-        linkPreview: params.linkPreview,
-        replyToId,
-        replyToMode: params.replyToMode,
-        progress,
-      });
-      continue;
+    try {
+      if (mediaList.length === 0) {
+        await deliverTextReply({
+          bot: params.bot,
+          chatId: params.chatId,
+          runtime: params.runtime,
+          thread: params.thread,
+          chunkText,
+          replyText: outboundReply.text || "",
+          replyMarkup,
+          replyQuoteText: params.replyQuoteText,
+          linkPreview: params.linkPreview,
+          replyToId,
+          replyToMode: params.replyToMode,
+          progress,
+        });
+      } else {
+        await deliverMediaReply({
+          reply: outboundReply,
+          mediaList,
+          bot: params.bot,
+          chatId: params.chatId,
+          runtime: params.runtime,
+          thread: params.thread,
+          tableMode: params.tableMode,
+          mediaLocalRoots: params.mediaLocalRoots,
+          chunkText,
+          onVoiceRecording: params.onVoiceRecording,
+          linkPreview: params.linkPreview,
+          replyQuoteText: params.replyQuoteText,
+          replyMarkup,
+          replyToId,
+          replyToMode: params.replyToMode,
+          progress,
+        });
+      }
+      if (hasMessageSentHooks) {
+        try {
+          await hookRunner!.runMessageSent(
+            {
+              to: params.chatId,
+              content: hookContent,
+              success: true,
+            },
+            {
+              channelId: "telegram",
+              accountId: params.accountId,
+            },
+          );
+        } catch {
+          // Don't block delivery on hook failures.
+        }
+      }
+    } catch (err) {
+      if (hasMessageSentHooks) {
+        try {
+          await hookRunner!.runMessageSent(
+            {
+              to: params.chatId,
+              content: hookContent,
+              success: false,
+              error: formatErrorMessage(err),
+            },
+            {
+              channelId: "telegram",
+              accountId: params.accountId,
+            },
+          );
+        } catch {
+          // Don't block delivery on hook failures.
+        }
+      }
+      throw err;
     }
-    await deliverMediaReply({
-      reply,
-      mediaList,
-      bot: params.bot,
-      chatId: params.chatId,
-      runtime: params.runtime,
-      thread: params.thread,
-      tableMode: params.tableMode,
-      mediaLocalRoots: params.mediaLocalRoots,
-      chunkText,
-      onVoiceRecording: params.onVoiceRecording,
-      linkPreview: params.linkPreview,
-      replyQuoteText: params.replyQuoteText,
-      replyMarkup,
-      replyToId,
-      replyToMode: params.replyToMode,
-      progress,
-    });
   }
 
   return { delivered: progress.hasDelivered };

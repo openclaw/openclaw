@@ -4,6 +4,13 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { deliverReplies } from "./delivery.js";
 
 const loadWebMedia = vi.fn();
+const hookState = vi.hoisted(() => ({
+  runner: null as null | {
+    hasHooks: ReturnType<typeof vi.fn<(hookName: string) => boolean>>;
+    runMessageSending: ReturnType<typeof vi.fn>;
+    runMessageSent: ReturnType<typeof vi.fn>;
+  },
+}));
 const baseDeliveryParams = {
   chatId: "123",
   token: "tok",
@@ -20,6 +27,10 @@ type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 
 vi.mock("../../web/media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => hookState.runner,
 }));
 
 vi.mock("grammy", () => ({
@@ -99,6 +110,7 @@ function createVoiceFailureHarness(params: {
 describe("deliverReplies", () => {
   beforeEach(() => {
     loadWebMedia.mockClear();
+    hookState.runner = null;
   });
 
   it("skips audioAsVoice-only payloads without logging an error", async () => {
@@ -137,6 +149,139 @@ describe("deliverReplies", () => {
     expect(onVoiceRecording).toHaveBeenCalledTimes(1);
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["recordVoice", "sendVoice"]);
+  });
+
+  it("runs message_sent hooks for successful telegram replies", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 3,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    const runMessageSent = vi.fn().mockResolvedValue(undefined);
+    hookState.runner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "message_sent"),
+      runMessageSending: vi.fn(),
+      runMessageSent,
+    };
+
+    await deliverWith({
+      replies: [{ text: "Hello from hook test" }],
+      runtime,
+      bot,
+      accountId: "default",
+    });
+
+    expect(runMessageSent).toHaveBeenCalledWith(
+      {
+        to: "123",
+        content: "Hello from hook test",
+        success: true,
+      },
+      {
+        channelId: "telegram",
+        accountId: "default",
+      },
+    );
+  });
+
+  it("applies message_sending hook content overrides before send", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 4,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    const runMessageSent = vi.fn().mockResolvedValue(undefined);
+    hookState.runner = {
+      hasHooks: vi.fn(
+        (hookName: string) => hookName === "message_sending" || hookName === "message_sent",
+      ),
+      runMessageSending: vi.fn().mockResolvedValue({ content: "rewritten by hook" }),
+      runMessageSent,
+    };
+
+    await deliverWith({
+      replies: [{ text: "original text" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("rewritten by hook"),
+      expect.any(Object),
+    );
+    expect(runMessageSent).toHaveBeenCalledWith(
+      {
+        to: "123",
+        content: "rewritten by hook",
+        success: true,
+      },
+      {
+        channelId: "telegram",
+        accountId: undefined,
+      },
+    );
+  });
+
+  it("skips telegram sends when message_sending hook cancels", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 5,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    const runMessageSent = vi.fn().mockResolvedValue(undefined);
+    hookState.runner = {
+      hasHooks: vi.fn(
+        (hookName: string) => hookName === "message_sending" || hookName === "message_sent",
+      ),
+      runMessageSending: vi.fn().mockResolvedValue({ cancel: true }),
+      runMessageSent,
+    };
+
+    await deliverWith({
+      replies: [{ text: "cancel me" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(runMessageSent).not.toHaveBeenCalled();
+  });
+
+  it("emits message_sent failure hook when telegram send throws", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockRejectedValue(new Error("telegram failed"));
+    const bot = createBot({ sendMessage });
+    const runMessageSent = vi.fn().mockResolvedValue(undefined);
+    hookState.runner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "message_sent"),
+      runMessageSending: vi.fn(),
+      runMessageSent,
+    };
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "will fail" }],
+        runtime,
+        bot,
+      }),
+    ).rejects.toThrow("telegram failed");
+
+    expect(runMessageSent).toHaveBeenCalledWith(
+      {
+        to: "123",
+        content: "will fail",
+        success: false,
+        error: expect.stringContaining("telegram failed"),
+      },
+      {
+        channelId: "telegram",
+        accountId: undefined,
+      },
+    );
   });
 
   it("renders markdown in media captions", async () => {
