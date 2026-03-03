@@ -201,6 +201,11 @@ export async function prepareSlackMessage(params: {
   // When replyToMode="all", the bot WILL create a thread using messageTs as thread_ts.
   // Create the thread session eagerly so agent work lands in the thread session, not the channel session.
   const willCreateThread = !isThreadReply && effectiveReplyToMode === "all";
+  // Only fork channel/group messages into thread-specific sessions when they are
+  // actual thread replies (thread_ts present, different from message ts).
+  // Top-level channel messages must stay on the per-channel session for continuity.
+  // Before this fix, every channel message used its own ts as threadId, creating
+  // isolated sessions per message (regression from #10686).
   const effectiveThreadId = isThreadReply
     ? threadTs
     : willCreateThread
