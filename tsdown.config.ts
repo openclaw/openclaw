@@ -45,6 +45,13 @@ export default defineConfig([
     platform: "node",
   },
   {
+    entry: "src/plugin-sdk/windows-spawn-compat.ts",
+    outDir: "dist/plugin-sdk",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
     entry: "src/extensionAPI.ts",
     env,
     fixedExtension: false,

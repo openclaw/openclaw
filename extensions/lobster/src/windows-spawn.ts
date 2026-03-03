@@ -1,44 +1,8 @@
-import type {
-  WindowsSpawnProgramCandidate,
-  WindowsSpawnResolution,
-} from "openclaw/plugin-sdk";
 import {
-  applyWindowsSpawnProgramPolicy as _applyPolicy,
-  materializeWindowsSpawnProgram as _materialize,
-  resolveWindowsSpawnProgramCandidate as _resolveCandidate,
-} from "openclaw/plugin-sdk";
-
-// Graceful fallback when plugin-sdk build lacks windows-spawn exports (#33514).
-const resolveWindowsSpawnProgramCandidate: typeof _resolveCandidate =
-  typeof _resolveCandidate === "function"
-    ? _resolveCandidate
-    : (p: { command: string }): WindowsSpawnProgramCandidate => ({
-        command: p.command,
-        leadingArgv: [],
-        resolution: "direct",
-      });
-
-const applyWindowsSpawnProgramPolicy: typeof _applyPolicy =
-  typeof _applyPolicy === "function"
-    ? _applyPolicy
-    : (p) => ({
-        command: p.candidate.command,
-        leadingArgv: p.candidate.leadingArgv,
-        resolution: p.candidate.resolution as WindowsSpawnResolution,
-        shell: p.candidate.resolution === "unresolved-wrapper" ? true : undefined,
-        windowsHide: p.candidate.windowsHide,
-      });
-
-const materializeWindowsSpawnProgram: typeof _materialize =
-  typeof _materialize === "function"
-    ? _materialize
-    : (program, argv) => ({
-        command: program.command,
-        argv: [...program.leadingArgv, ...argv],
-        resolution: program.resolution,
-        shell: program.shell,
-        windowsHide: program.windowsHide,
-      });
+  applyWindowsSpawnProgramPolicy,
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgramCandidate,
+} from "openclaw/plugin-sdk/windows-spawn-compat";
 
 type SpawnTarget = {
   command: string;
