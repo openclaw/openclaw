@@ -192,24 +192,25 @@ const requireRunningSessionId = (result: { details: unknown }) => {
   return requireSessionId(result.details as { sessionId?: string });
 };
 
-function hasNotifyEventForPrefix(prefix: string): boolean {
-  return peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY).some((event) => event.includes(prefix));
+function hasNotifyEventForSessionId(sessionId: string): boolean {
+  return peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY).some((event) =>
+    event.includes(`session=${sessionId}`),
+  );
 }
 
 async function waitForNotifyEvent(sessionId: string) {
-  const prefix = sessionId.slice(0, 8);
   let finished = getFinishedSession(sessionId);
-  let hasEvent = hasNotifyEventForPrefix(prefix);
+  let hasEvent = hasNotifyEventForSessionId(sessionId);
   await expect
     .poll(() => {
       finished = getFinishedSession(sessionId);
-      hasEvent = hasNotifyEventForPrefix(prefix);
+      hasEvent = hasNotifyEventForSessionId(sessionId);
       return Boolean(finished && hasEvent);
     }, NOTIFY_POLL_OPTIONS)
     .toBe(true);
   return {
     finished: finished ?? getFinishedSession(sessionId),
-    hasEvent: hasEvent || hasNotifyEventForPrefix(prefix),
+    hasEvent: hasEvent || hasNotifyEventForSessionId(sessionId),
   };
 }
 
@@ -517,6 +518,22 @@ describe("exec notifyOnExit", () => {
 
     const { finished, hasEvent } = await waitForNotifyEvent(sessionId);
 
+    expect(finished).toBeTruthy();
+    expect(hasEvent).toBe(true);
+  });
+
+  it("coerces notifyOnExit to true when wakeOnExit is requested", async () => {
+    const tool = createNotifyOnExitExecTool({ notifyOnExit: false });
+    const result = await executeExecCommand(tool, echoAfterDelay("notify"), {
+      background: true,
+      wakeOnExit: true,
+    });
+    expect(readTextContent(result.content) ?? "").toContain(
+      "wakeOnExit=true requires notifyOnExit=true",
+    );
+
+    const sessionId = requireRunningSessionId(result);
+    const { finished, hasEvent } = await waitForNotifyEvent(sessionId);
     expect(finished).toBeTruthy();
     expect(hasEvent).toBe(true);
   });

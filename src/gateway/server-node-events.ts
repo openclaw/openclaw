@@ -9,6 +9,8 @@ import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { registerApnsToken } from "../infra/push-apns.js";
+import { requestSessionEventRun } from "../infra/session-event-run.js";
+import { isAgentScopedSessionKey } from "../infra/session-event-target.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -525,16 +527,18 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const sessionKey =
+      const sessionKeyRaw =
         typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : `node-${nodeId}`;
-      if (!sessionKey) {
+      if (!sessionKeyRaw) {
         return;
       }
+      const wakeOnExit = obj.wakeOnExit === true;
 
       // Respect tools.exec.notifyOnExit setting (default: true)
-      // When false, skip system event notifications for node exec events.
+      // When false, skip system event notifications for node exec events unless
+      // this run explicitly requested wakeOnExit (which implies notifyOnExit).
       const cfg = loadConfig();
-      const notifyOnExit = cfg.tools?.exec?.notifyOnExit !== false;
+      const notifyOnExit = cfg.tools?.exec?.notifyOnExit !== false || wakeOnExit;
       if (!notifyOnExit) {
         return;
       }
@@ -573,8 +577,37 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         }
       }
 
-      enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
-      requestHeartbeatNow({ reason: "exec-event" });
+      const queued = enqueueSystemEvent(text, {
+        sessionKey: sessionKeyRaw,
+        contextKey: runId ? `exec:${runId}` : "exec",
+      });
+      if (!queued) {
+        return;
+      }
+      const shouldImmediateWake =
+        wakeOnExit && (evt.event === "exec.finished" || evt.event === "exec.denied");
+      if (shouldImmediateWake) {
+        const wakeTarget = resolveGatewaySessionStoreTarget({
+          cfg,
+          key: sessionKeyRaw,
+          scanLegacyKeys: false,
+        });
+        if (!isAgentScopedSessionKey(wakeTarget.canonicalKey)) {
+          ctx.logGateway.warn(
+            `exec wakeOnExit ignored for non-agent session key node=${nodeId}${runId ? ` id=${runId}` : ""} sessionKey=${sessionKeyRaw} canonicalKey=${wakeTarget.canonicalKey}`,
+          );
+          requestHeartbeatNow({ reason: "exec-event", sessionKey: sessionKeyRaw });
+          return;
+        }
+        // Known limitation: runs originating from internal webchat sessions may not emit
+        // routable outbound replies because webchat is not supported by route-reply.
+        requestSessionEventRun({ source: "exec-event", sessionKey: sessionKeyRaw });
+        return;
+      }
+      if (wakeOnExit) {
+        return;
+      }
+      requestHeartbeatNow({ reason: "exec-event", sessionKey: sessionKeyRaw });
       return;
     }
     case "push.apns.register": {

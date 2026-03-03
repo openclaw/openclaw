@@ -249,7 +249,7 @@ export type ExecToolConfig = {
   approvalRunningNoticeMs?: number;
   /** How long to keep finished sessions in memory (ms). */
   cleanupMs?: number;
-  /** Emit a system event and heartbeat when a backgrounded exec exits. */
+  /** Emit a system event and heartbeat when a backgrounded exec exits (unless run-level wakeOnExit is used). */
   notifyOnExit?: boolean;
   /**
    * Also emit success exit notifications when a backgrounded exec has no output.

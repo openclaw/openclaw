@@ -1,10 +1,14 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import { loadConfig } from "../config/config.js";
+import { resolveSessionStoreKey } from "../gateway/session-utils.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
+import { requestSessionEventRun } from "../infra/session-event-run.js";
+import { isAgentScopedSessionKey } from "../infra/session-event-target.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -135,6 +139,12 @@ export const execSchema = Type.Object({
       description: "Node id/name for host=node.",
     }),
   ),
+  wakeOnExit: Type.Optional(
+    Type.Boolean({
+      description:
+        "When true, trigger an immediate session event run after enqueueing a background exec completion event (default false). Implies notifyOnExit=true.",
+    }),
+  ),
 });
 
 export type ExecProcessOutcome = {
@@ -199,6 +209,30 @@ function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CH
   return `${normalized.slice(0, safe)}…`;
 }
 
+function requestExecEventWake(opts: { sessionKey: string; agentId?: string }): boolean {
+  const rawSessionKey = opts.sessionKey.trim();
+  if (!rawSessionKey) {
+    return false;
+  }
+
+  const canonicalSessionKey = resolveSessionStoreKey({
+    cfg: loadConfig(),
+    sessionKey: rawSessionKey,
+  });
+  if (!isAgentScopedSessionKey(canonicalSessionKey)) {
+    logWarn(
+      `exec wakeOnExit: immediate wake is only supported for agent-scoped session keys; skipping session key=${rawSessionKey} canonicalKey=${canonicalSessionKey}`,
+    );
+    return false;
+  }
+  requestSessionEventRun({
+    source: "exec-event",
+    sessionKey: rawSessionKey,
+    agentId: opts.agentId,
+  });
+  return true;
+}
+
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
   if (!shellPath) {
     return;
@@ -235,11 +269,21 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
     return;
   }
+  const sessionLabel = `session=${session.id}`;
   const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  enqueueSystemEvent(summary, { sessionKey });
-  requestHeartbeatNow({ reason: `exec:${session.id}:exit` });
+    ? `Exec ${status} (${sessionLabel}, ${exitLabel}) :: ${output}`
+    : `Exec ${status} (${sessionLabel}, ${exitLabel})`;
+  const queued = enqueueSystemEvent(summary, { sessionKey });
+  if (!queued) {
+    return;
+  }
+  if (session.wakeOnExit === true) {
+    const immediateWakeTriggered = requestExecEventWake({ sessionKey, agentId: session.agentId });
+    if (immediateWakeTriggered) {
+      return;
+    }
+  }
+  requestHeartbeatNow({ reason: `exec:${session.id}:exit`, sessionKey });
 }
 
 export function createApprovalSlug(id: string) {
@@ -258,14 +302,23 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 
 export function emitExecSystemEvent(
   text: string,
-  opts: { sessionKey?: string; contextKey?: string },
+  opts: { sessionKey?: string; contextKey?: string; agentId?: string; wakeOnExit?: boolean },
 ) {
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) {
     return;
   }
-  enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
-  requestHeartbeatNow({ reason: "exec-event" });
+  const queued = enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
+  if (!queued) {
+    return;
+  }
+  if (opts.wakeOnExit === true) {
+    const immediateWakeTriggered = requestExecEventWake({ sessionKey, agentId: opts.agentId });
+    if (immediateWakeTriggered) {
+      return;
+    }
+  }
+  requestHeartbeatNow({ reason: "exec-event", sessionKey });
 }
 
 export async function runExecProcess(opts: {
@@ -282,9 +335,11 @@ export async function runExecProcess(opts: {
   maxOutput: number;
   pendingMaxOutput: number;
   notifyOnExit: boolean;
+  wakeOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  agentId?: string;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
@@ -302,7 +357,9 @@ export async function runExecProcess(opts: {
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    agentId: opts.agentId,
     notifyOnExit: opts.notifyOnExit,
+    wakeOnExit: opts.wakeOnExit === true,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
     exitNotified: false,
     child: undefined,

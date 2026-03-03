@@ -351,6 +351,7 @@ async function sendExecFinishedEvent(
       runId: params.runId,
       host: "node",
       command: params.cmdText,
+      ...(params.wakeOnExit ? { wakeOnExit: true } : {}),
       exitCode: params.result.exitCode ?? undefined,
       timedOut: params.result.timedOut,
       success: params.result.success,
@@ -548,8 +549,8 @@ export async function handleInvoke(
     sendInvokeResult: async (result) => {
       await sendInvokeResult(client, frame, result);
     },
-    sendExecFinishedEvent: async ({ sessionKey, runId, cmdText, result }) => {
-      await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
+    sendExecFinishedEvent: async ({ sessionKey, runId, cmdText, wakeOnExit, result }) => {
+      await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, wakeOnExit, result });
     },
     preferMacAppExecHost,
   });

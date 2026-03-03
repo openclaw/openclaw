@@ -308,7 +308,8 @@ export async function runPreparedReply(
   const hasMediaAttachment = Boolean(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
   );
-  if (!baseBodyTrimmed && !hasMediaAttachment) {
+  const allowEmptyBodyForSystemEvent = opts?.allowEmptyBodyForSystemEvent === true;
+  if (!baseBodyTrimmed && !hasMediaAttachment && !allowEmptyBodyForSystemEvent) {
     await typing.onReplyStart();
     logVerbose("Inbound body empty after normalization; skipping agent run");
     typing.cleanup();
@@ -320,7 +321,9 @@ export async function runPreparedReply(
   // run proceeds and the image/document is injected by the embedded runner.
   const effectiveBaseBody = baseBodyTrimmed
     ? baseBodyForPrompt
-    : "[User sent media without caption]";
+    : hasMediaAttachment
+      ? "[User sent media without caption]"
+      : "[System event update]";
   let prefixedBodyBase = await applySessionHints({
     baseBody: effectiveBaseBody,
     abortedLastRun,

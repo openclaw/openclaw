@@ -30,8 +30,12 @@ vi.mock("../infra/system-events.js", () => ({
 vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: vi.fn(),
 }));
+vi.mock("../infra/session-event-run.js", () => ({
+  requestSessionEventRun: vi.fn(),
+}));
 vi.mock("../commands/agent.js", () => ({
   agentCommand: vi.fn(),
+  agentCommandFromIngress: vi.fn(),
 }));
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
@@ -50,22 +54,25 @@ vi.mock("./session-utils.js", () => ({
 }));
 
 import type { CliDeps } from "../cli/deps.js";
-import { agentCommand } from "../commands/agent.js";
+import { agentCommandFromIngress } from "../commands/agent.js";
 import type { HealthSummary } from "../commands/health.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { requestSessionEventRun } from "../infra/session-event-run.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 const enqueueSystemEventMock = vi.mocked(enqueueSystemEvent);
 const requestHeartbeatNowMock = vi.mocked(requestHeartbeatNow);
+const requestSessionEventRunMock = vi.mocked(requestSessionEventRun);
 const loadConfigMock = vi.mocked(loadConfig);
-const agentCommandMock = vi.mocked(agentCommand);
+const agentCommandMock = vi.mocked(agentCommandFromIngress);
 const updateSessionStoreMock = vi.mocked(updateSessionStore);
 const loadSessionEntryMock = vi.mocked(loadSessionEntry);
+const resolveGatewaySessionStoreTargetMock = vi.mocked(resolveGatewaySessionStoreTarget);
 
 function buildCtx(): NodeEventContext {
   return {
@@ -92,8 +99,15 @@ function buildCtx(): NodeEventContext {
 
 describe("node exec events", () => {
   beforeEach(() => {
-    enqueueSystemEventMock.mockClear();
+    enqueueSystemEventMock.mockReset();
+    enqueueSystemEventMock.mockReturnValue(true);
     requestHeartbeatNowMock.mockClear();
+    requestSessionEventRunMock.mockClear();
+    resolveGatewaySessionStoreTargetMock.mockReset();
+    resolveGatewaySessionStoreTargetMock.mockImplementation(({ key }: { key: string }) => ({
+      canonicalKey: key,
+      storeKeys: [key],
+    }));
   });
 
   it("enqueues exec.started events", async () => {
@@ -111,7 +125,11 @@ describe("node exec events", () => {
       "Exec started (node=node-1 id=run-1): ls -la",
       { sessionKey: "agent:main:main", contextKey: "exec:run-1" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
   });
 
   it("enqueues exec.finished events with output", async () => {
@@ -119,18 +137,135 @@ describe("node exec events", () => {
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
+        sessionKey: "agent:main:main",
         runId: "run-2",
         exitCode: 0,
         timedOut: false,
         output: "done",
+        wakeOnExit: true,
       }),
     });
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2 id=run-2, code 0)\ndone",
-      { sessionKey: "node-node-2", contextKey: "exec:run-2" },
+      { sessionKey: "agent:main:main", contextKey: "exec:run-2" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestSessionEventRunMock).toHaveBeenCalledWith({
+      source: "exec-event",
+      sessionKey: "agent:main:main",
+    });
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps raw session keys for exec event runs", async () => {
+    resolveGatewaySessionStoreTargetMock.mockReturnValueOnce({
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:node-node-2",
+      storeKeys: ["agent:main:main"],
+    });
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:main:main",
+        runId: "run-2",
+        exitCode: 0,
+        timedOut: false,
+        output: "done",
+        wakeOnExit: true,
+      }),
+    });
+
+    expect(resolveGatewaySessionStoreTargetMock).toHaveBeenCalledWith({
+      cfg: expect.anything(),
+      key: "agent:main:main",
+      scanLegacyKeys: false,
+    });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-2, code 0)\ndone",
+      { sessionKey: "agent:main:main", contextKey: "exec:run-2" },
+    );
+    expect(requestSessionEventRunMock).toHaveBeenCalledWith({
+      source: "exec-event",
+      sessionKey: "agent:main:main",
+    });
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("treats alias session keys as wake-eligible when canonicalized to agent keys", async () => {
+    resolveGatewaySessionStoreTargetMock.mockReturnValueOnce({
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["main", "agent:main:main"],
+    });
+    const ctx = buildCtx();
+    const warn = vi.fn();
+    ctx.logGateway = { warn };
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        sessionKey: "main",
+        runId: "run-main-alias",
+        exitCode: 0,
+        timedOut: false,
+        output: "done",
+        wakeOnExit: true,
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-main-alias, code 0)\ndone",
+      { sessionKey: "main", contextKey: "exec:run-main-alias" },
+    );
+    expect(requestSessionEventRunMock).toHaveBeenCalledWith({
+      source: "exec-event",
+      sessionKey: "main",
+    });
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("falls back to heartbeat for non-agent session keys when immediate wake is unsupported", async () => {
+    resolveGatewaySessionStoreTargetMock.mockReturnValueOnce({
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "global",
+      storeKeys: ["global"],
+    });
+    const ctx = buildCtx();
+    const warn = vi.fn();
+    ctx.logGateway = { warn };
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-global",
+        exitCode: 0,
+        timedOut: false,
+        output: "done",
+        sessionKey: "global",
+        wakeOnExit: true,
+      }),
+    });
+
+    expect(resolveGatewaySessionStoreTargetMock).toHaveBeenCalledWith({
+      cfg: expect.anything(),
+      key: "global",
+      scanLegacyKeys: false,
+    });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-global, code 0)\ndone",
+      { sessionKey: "global", contextKey: "exec:run-global" },
+    );
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "global",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("exec wakeOnExit ignored for non-agent session key"),
+    );
   });
 
   it("suppresses noisy exec.finished success events with empty output", async () => {
@@ -147,6 +282,30 @@ describe("node exec events", () => {
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+  });
+
+  it("enqueues exec events without waking when wakeOnExit is false", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-no-wake",
+        exitCode: 0,
+        timedOut: false,
+        output: "done",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-no-wake, code 0)\ndone",
+      { sessionKey: "node-node-2", contextKey: "exec:run-no-wake" },
+    );
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "node-node-2",
+    });
   });
 
   it("truncates long exec.finished output in system events", async () => {
@@ -154,10 +313,12 @@ describe("node exec events", () => {
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
+        sessionKey: "agent:main:main",
         runId: "run-long",
         exitCode: 0,
         timedOut: false,
         output: "x".repeat(600),
+        wakeOnExit: true,
       }),
     });
 
@@ -166,7 +327,11 @@ describe("node exec events", () => {
     expect(text.startsWith("Exec finished (node=node-2 id=run-long, code 0)\n")).toBe(true);
     expect(text.endsWith("…")).toBe(true);
     expect(text.length).toBeLessThan(280);
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestSessionEventRunMock).toHaveBeenCalledWith({
+      source: "exec-event",
+      sessionKey: "agent:main:main",
+    });
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
   it("enqueues exec.denied events with reason", async () => {
@@ -178,6 +343,7 @@ describe("node exec events", () => {
         runId: "run-3",
         command: "rm -rf /",
         reason: "allowlist-miss",
+        wakeOnExit: true,
       }),
     });
 
@@ -185,7 +351,34 @@ describe("node exec events", () => {
       "Exec denied (node=node-3 id=run-3, allowlist-miss): rm -rf /",
       { sessionKey: "agent:demo:main", contextKey: "exec:run-3" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestSessionEventRunMock).toHaveBeenCalledWith({
+      source: "exec-event",
+      sessionKey: "agent:demo:main",
+    });
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("heartbeats on exec.denied when wakeOnExit is false", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-3", {
+      event: "exec.denied",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:demo:main",
+        runId: "run-3b",
+        command: "rm -rf /",
+        reason: "allowlist-miss",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec denied (node=node-3 id=run-3b, allowlist-miss): rm -rf /",
+      { sessionKey: "agent:demo:main", contextKey: "exec:run-3b" },
+    );
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:demo:main",
+    });
   });
 
   it("suppresses exec.started when notifyOnExit is false", async () => {
@@ -205,6 +398,7 @@ describe("node exec events", () => {
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
   });
 
   it("suppresses exec.finished when notifyOnExit is false", async () => {
@@ -224,6 +418,36 @@ describe("node exec events", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+  });
+
+  it("allows exec.finished notifications when wakeOnExit is true even if notifyOnExit is false", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      session: { mainKey: "agent:main:main" },
+      tools: { exec: { notifyOnExit: false } },
+    } as ReturnType<typeof loadConfig>);
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:main:main",
+        runId: "run-force-notify",
+        exitCode: 0,
+        timedOut: false,
+        output: "done",
+        wakeOnExit: true,
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-force-notify, code 0)\ndone",
+      { sessionKey: "agent:main:main", contextKey: "exec:run-force-notify" },
+    );
+    expect(requestSessionEventRunMock).toHaveBeenCalledWith({
+      source: "exec-event",
+      sessionKey: "agent:main:main",
+    });
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
@@ -245,6 +469,68 @@ describe("node exec events", () => {
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+  });
+
+  it("allows exec.denied notifications when wakeOnExit is true even if notifyOnExit is false", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      session: { mainKey: "agent:main:main" },
+      tools: { exec: { notifyOnExit: false } },
+    } as ReturnType<typeof loadConfig>);
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-3", {
+      event: "exec.denied",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:demo:main",
+        runId: "run-force-denied",
+        command: "rm -rf /",
+        reason: "allowlist-miss",
+        wakeOnExit: true,
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec denied (node=node-3 id=run-force-denied, allowlist-miss): rm -rf /",
+      { sessionKey: "agent:demo:main", contextKey: "exec:run-force-denied" },
+    );
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestSessionEventRunMock).toHaveBeenCalledWith({
+      source: "exec-event",
+      sessionKey: "agent:demo:main",
+    });
+  });
+
+  it("falls back to heartbeat for non-agent exec.denied session keys when immediate wake is unsupported", async () => {
+    resolveGatewaySessionStoreTargetMock.mockReturnValueOnce({
+      canonicalKey: "global",
+      storeKeys: ["global"],
+    });
+    const ctx = buildCtx();
+    const warn = vi.fn();
+    ctx.logGateway = { warn };
+    await handleNodeEvent(ctx, "node-3", {
+      event: "exec.denied",
+      payloadJSON: JSON.stringify({
+        runId: "run-global-denied",
+        sessionKey: "global",
+        command: "rm -rf /",
+        reason: "allowlist-miss",
+        wakeOnExit: true,
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec denied (node=node-3 id=run-global-denied, allowlist-miss): rm -rf /",
+      { sessionKey: "global", contextKey: "exec:run-global-denied" },
+    );
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "global",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("exec wakeOnExit ignored for non-agent session key"),
+    );
   });
 });
 
@@ -252,10 +538,12 @@ describe("voice transcript events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
     updateSessionStoreMock.mockClear();
+    loadSessionEntryMock.mockReset();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
       update({});
     });
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
   });
 
   it("dedupes repeated transcript payloads for the same session", async () => {
