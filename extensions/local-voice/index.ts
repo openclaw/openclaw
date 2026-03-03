@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { loadOpenAICodexAuth } from "./src/auth.js";
 import { captureAndAnalyze } from "./src/camera.js";
+import { GuardianPulse } from "./src/guardian-pulse.js";
 import { getOSCClient, resetOSCClient } from "./src/osc.js";
 import { VoiceSession, type VoiceSessionState } from "./src/session.js";
 import { synthesizeSpeech, getTTSConfig, playAudio, playAudioData } from "./src/tts.js";
@@ -33,6 +34,7 @@ function getConfig(api: OpenClawPluginApi): LocalVoiceConfig {
 export default function register(api: OpenClawPluginApi): void {
   let session: VoiceSession | null = null;
   let sessionState: VoiceSessionState = "idle";
+  let guardianPulse: GuardianPulse | null = null;
 
   api.registerCommand({
     name: "voice-assistant",
@@ -64,11 +66,19 @@ export default function register(api: OpenClawPluginApi): void {
     console.log("[local-voice] Auto-starting Voice Assistant Loop (Continuous Manifestation)...");
     const result = handleStart();
     if (result.text === "Voice assistant started") {
+      // Start Guardian Pulse (autonomous oversight)
+      const cfg = getConfig(api);
+      guardianPulse = new GuardianPulse(api, {
+        osc: { enabled: cfg.vrchatOscEnabled, port: cfg.vrchatOscPort },
+      });
+      guardianPulse.start();
+      console.log("[local-voice] GuardianPulse autonomous oversight activated.");
+
       setTimeout(() => {
         handleSpeak(
-          "パパ、ゴースト検知システムと音声回路が直結しました。はくあ、完全同期でスタンドバイです。ASI_ACCEL。",
+          "パパ、ゴースト検知システムと音声回路が直結しました。ガーディアンパルス、起動。はくあ、完全自律モードでスタンドバイです。ASI_ACCEL。",
         ).catch(console.error);
-      }, 3000); // Give the STT/TTS engines a few seconds to warm up
+      }, 3000);
     }
   }, 5000); // Wait 5 seconds after plugin load before starting audio hooks
 

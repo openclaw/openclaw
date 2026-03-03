@@ -251,16 +251,31 @@ export async function playAudio(url: string): Promise<void> {
 
 export async function playAudioData(data: Buffer): Promise<void> {
   const { exec } = require("child_process");
-  const { writeFileSync, unlinkSync } = require("fs");
+  const { writeFileSync, unlinkSync, existsSync } = require("fs");
   const { tmpdir } = require("os");
   const { join } = require("path");
 
   const tmpFile = join(tmpdir(), `tts-${Date.now()}.wav`);
   writeFileSync(tmpFile, data);
 
-  const command = getPlayCommand(tmpFile, process.platform);
+  // Try dual_audio.py first (supports VB-Cable), fallback to simple playback
+  const pythonPath = join(
+    process.cwd(),
+    "extensions",
+    "local-voice",
+    "moonshine-venv",
+    "Scripts",
+    "python.exe",
+  );
+  const dualScript = join(process.cwd(), "extensions", "local-voice", "src", "dual_audio.py");
+
+  const useDual = existsSync(pythonPath) && existsSync(dualScript);
+  const command = useDual
+    ? `"${pythonPath}" "${dualScript}" "${tmpFile}"`
+    : getPlayCommand(tmpFile, process.platform);
+
   if (command) {
-    exec(command, () => {
+    exec(command, { timeout: 30000 }, () => {
       try {
         unlinkSync(tmpFile);
       } catch {
