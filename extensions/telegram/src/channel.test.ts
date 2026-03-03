@@ -60,6 +60,30 @@ describe("telegramPlugin security warnings", () => {
     const warnings = (await telegramPlugin.security?.collectWarnings?.({ account, cfg })) ?? [];
     expect(warnings).toEqual([]);
   });
+
+  it("warns for mixed overrides when account-level allowlist is still missing", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          enabled: true,
+          botToken: "token",
+          groupPolicy: "allowlist",
+          groups: {
+            "-100123": {
+              groupPolicy: "open",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const account = telegramPlugin.config.resolveAccount(cfg, "default");
+    const warnings = (await telegramPlugin.security?.collectWarnings?.({ account, cfg })) ?? [];
+    const warningText = warnings.join("\n");
+    expect(warningText).toContain('groupPolicy="allowlist" is active');
+    expect(warningText).toContain(
+      'only chats with explicit per-group/per-topic groupPolicy="open" overrides will work',
+    );
+  });
 });
 
 function createStartAccountCtx(params: {

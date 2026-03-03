@@ -227,9 +227,12 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       const basePath = useAccountPath
         ? `channels.telegram.accounts.${account.accountId}`
         : "channels.telegram";
-      if (groupPolicy === "allowlist" && !hasSenderAllowlist && !hasOpenGroupOrTopicOverride) {
+      if (groupPolicy === "allowlist" && !hasSenderAllowlist) {
+        const impact = hasOpenGroupOrTopicOverride
+          ? `only chats with explicit per-group/per-topic groupPolicy="open" overrides will work. Configure ${basePath}.groupAllowFrom (or per-group/per-topic allowFrom) with numeric sender IDs for the rest.`
+          : `all group senders will be blocked. Configure ${basePath}.groupAllowFrom (or per-group/per-topic allowFrom) with numeric sender IDs.`;
         return [
-          `- Telegram groups: groupPolicy="allowlist" is active, but no sender allowlist is configured; all group senders will be blocked. Configure ${basePath}.groupAllowFrom (or per-group/per-topic allowFrom) with numeric sender IDs.`,
+          `- Telegram groups: groupPolicy="allowlist" is active, but no sender allowlist is configured; ${impact}`,
         ];
       }
       if (groupPolicy !== "open") {
