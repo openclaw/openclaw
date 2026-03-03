@@ -9,6 +9,10 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
   return msg?.role === "assistant";
 }
 
+const LEGACY_TOOL_CALL_SNIPPET_RE = /<tool_call\b[^>]*>(?:(?:"[^"]*"|'[^']*'|[^<"'`])+?)\/>/i;
+const MARKDOWN_CODE_OR_LEGACY_TOOL_CALL_RE =
+  /```[\s\S]*?```|`[^`\n]+`|<tool_call\b[^>]*>(?:(?:"[^"]*"|'[^']*'|[^<"'`])+?)\/>/gi;
+
 /**
  * Strip malformed Minimax tool invocations that leak into text content.
  * Minimax sometimes embeds tool calls as XML in text blocks instead of
@@ -22,7 +26,7 @@ export function stripMinimaxToolCallXml(text: string): string {
     return text;
   }
   const hasMinimaxMarkers = /minimax:tool_call/i.test(text);
-  const hasLegacyToolCallSnippet = /<tool_call\b[^>]*>[^<]*\/>/i.test(text);
+  const hasLegacyToolCallSnippet = LEGACY_TOOL_CALL_SNIPPET_RE.test(text);
   if (!hasMinimaxMarkers && !hasLegacyToolCallSnippet) {
     return text;
   }
@@ -36,7 +40,7 @@ export function stripMinimaxToolCallXml(text: string): string {
     cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
   }
   // Remove legacy self-closing tool call snippets that can leak into user text.
-  cleaned = cleaned.replace(/```[\s\S]*?```|`[^`\n]+`|<tool_call\b[^>]*>[^<]*\/>/gi, (match) =>
+  cleaned = cleaned.replace(MARKDOWN_CODE_OR_LEGACY_TOOL_CALL_RE, (match) =>
     match.startsWith("`") ? match : "",
   );
 

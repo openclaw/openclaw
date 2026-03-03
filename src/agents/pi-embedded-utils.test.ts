@@ -248,6 +248,22 @@ describe("extractAssistantText", () => {
     expect(result).toBe("BeforeAfter");
   });
 
+  it("strips leaked legacy tool_call snippets with '<' inside quoted arguments", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Before<tool_call>exec tool="exec" command="cat < /tmp/in" />After',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("BeforeAfter");
+  });
+
   it("keeps literal tool_call explanations with unrelated self-closing tags", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
