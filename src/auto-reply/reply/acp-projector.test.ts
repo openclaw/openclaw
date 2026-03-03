@@ -18,6 +18,30 @@ function createProjectorHarness(cfgOverrides?: Parameters<typeof createCfg>[0]) 
   return { deliveries, projector };
 }
 
+function createLiveCfgOverrides(
+  streamOverrides: Record<string, unknown>,
+): Parameters<typeof createCfg>[0] {
+  return {
+    acp: {
+      enabled: true,
+      stream: {
+        deliveryMode: "live",
+        ...streamOverrides,
+      },
+    },
+  } as Parameters<typeof createCfg>[0];
+}
+
+function createHiddenBoundaryCfg(
+  streamOverrides: Record<string, unknown> = {},
+): Parameters<typeof createCfg>[0] {
+  return createLiveCfgOverrides({
+    coalesceIdleMs: 0,
+    maxChunkChars: 256,
+    ...streamOverrides,
+  });
+}
+
 function blockDeliveries(deliveries: Delivery[]) {
   return deliveries.filter((entry) => entry.kind === "block");
 }
@@ -92,6 +116,22 @@ function createLiveStatusAndToolLifecycleHarness(params?: {
   });
 }
 
+async function emitToolLifecycleEvent(
+  projector: ReturnType<typeof createProjectorHarness>["projector"],
+  event: {
+    tag: "tool_call" | "tool_call_update";
+    toolCallId: string;
+    status: "in_progress" | "completed";
+    title?: string;
+    text: string;
+  },
+) {
+  await projector.onEvent({
+    type: "tool_call",
+    ...event,
+  });
+}
+
 async function runHiddenBoundaryCase(params: {
   cfgOverrides?: Parameters<typeof createCfg>[0];
   toolCallId: string;
@@ -152,16 +192,12 @@ describe("createAcpReplyProjector", () => {
   });
 
   it("does not suppress identical short text across terminal turn boundaries", async () => {
-    const { deliveries, projector } = createProjectorHarness({
-      acp: {
-        enabled: true,
-        stream: {
-          deliveryMode: "live",
-          coalesceIdleMs: 0,
-          maxChunkChars: 64,
-        },
-      },
-    });
+    const { deliveries, projector } = createProjectorHarness(
+      createLiveCfgOverrides({
+        coalesceIdleMs: 0,
+        maxChunkChars: 64,
+      }),
+    );
 
     await projector.onEvent({ type: "text_delta", text: "A", tag: "agent_message_chunk" });
     await projector.onEvent({ type: "done", stopReason: "end_turn" });
@@ -177,16 +213,12 @@ describe("createAcpReplyProjector", () => {
   it("flushes staggered live text deltas after idle gaps", async () => {
     vi.useFakeTimers();
     try {
-      const { deliveries, projector } = createProjectorHarness({
-        acp: {
-          enabled: true,
-          stream: {
-            deliveryMode: "live",
-            coalesceIdleMs: 50,
-            maxChunkChars: 64,
-          },
-        },
-      });
+      const { deliveries, projector } = createProjectorHarness(
+        createLiveCfgOverrides({
+          coalesceIdleMs: 50,
+          maxChunkChars: 64,
+        }),
+      );
 
       await projector.onEvent({ type: "text_delta", text: "A", tag: "agent_message_chunk" });
       await vi.advanceTimersByTimeAsync(760);
@@ -236,16 +268,12 @@ describe("createAcpReplyProjector", () => {
   it("does not flush short live fragments mid-phrase on idle", async () => {
     vi.useFakeTimers();
     try {
-      const { deliveries, projector } = createProjectorHarness({
-        acp: {
-          enabled: true,
-          stream: {
-            deliveryMode: "live",
-            coalesceIdleMs: 100,
-            maxChunkChars: 256,
-          },
-        },
-      });
+      const { deliveries, projector } = createProjectorHarness(
+        createLiveCfgOverrides({
+          coalesceIdleMs: 100,
+          maxChunkChars: 256,
+        }),
+      );
 
       await projector.onEvent({
         type: "text_delta",
@@ -350,19 +378,15 @@ describe("createAcpReplyProjector", () => {
     });
     expect(hidden).toEqual([]);
 
-    const { deliveries: shown, projector: shownProjector } = createProjectorHarness({
-      acp: {
-        enabled: true,
-        stream: {
-          coalesceIdleMs: 0,
-          maxChunkChars: 64,
-          deliveryMode: "live",
-          tagVisibility: {
-            usage_update: true,
-          },
+    const { deliveries: shown, projector: shownProjector } = createProjectorHarness(
+      createLiveCfgOverrides({
+        coalesceIdleMs: 0,
+        maxChunkChars: 64,
+        tagVisibility: {
+          usage_update: true,
         },
-      },
-    });
+      }),
+    );
 
     await shownProjector.onEvent({
       type: "status",
@@ -406,32 +430,28 @@ describe("createAcpReplyProjector", () => {
   it("dedupes repeated tool lifecycle updates when repeatSuppression is enabled", async () => {
     const { deliveries, projector } = createLiveToolLifecycleHarness();
 
-    await projector.onEvent({
-      type: "tool_call",
+    await emitToolLifecycleEvent(projector, {
       tag: "tool_call",
       toolCallId: "call_1",
       status: "in_progress",
       title: "List files",
       text: "List files (in_progress)",
     });
-    await projector.onEvent({
-      type: "tool_call",
+    await emitToolLifecycleEvent(projector, {
       tag: "tool_call_update",
       toolCallId: "call_1",
       status: "in_progress",
       title: "List files",
       text: "List files (in_progress)",
     });
-    await projector.onEvent({
-      type: "tool_call",
+    await emitToolLifecycleEvent(projector, {
       tag: "tool_call_update",
       toolCallId: "call_1",
       status: "completed",
       title: "List files",
       text: "List files (completed)",
     });
-    await projector.onEvent({
-      type: "tool_call",
+    await emitToolLifecycleEvent(projector, {
       tag: "tool_call_update",
       toolCallId: "call_1",
       status: "completed",
@@ -451,16 +471,14 @@ describe("createAcpReplyProjector", () => {
 
     const longTitle =
       "Run an intentionally long command title that truncates before lifecycle status is visible";
-    await projector.onEvent({
-      type: "tool_call",
+    await emitToolLifecycleEvent(projector, {
       tag: "tool_call",
       toolCallId: "call_truncated_status",
       status: "in_progress",
       title: longTitle,
       text: `${longTitle} (in_progress)`,
     });
-    await projector.onEvent({
-      type: "tool_call",
+    await emitToolLifecycleEvent(projector, {
       tag: "tool_call_update",
       toolCallId: "call_truncated_status",
       status: "completed",
@@ -541,19 +559,15 @@ describe("createAcpReplyProjector", () => {
   });
 
   it("suppresses exact duplicate status updates when repeatSuppression is enabled", async () => {
-    const { deliveries, projector } = createProjectorHarness({
-      acp: {
-        enabled: true,
-        stream: {
-          coalesceIdleMs: 0,
-          maxChunkChars: 256,
-          deliveryMode: "live",
-          tagVisibility: {
-            available_commands_update: true,
-          },
+    const { deliveries, projector } = createProjectorHarness(
+      createLiveCfgOverrides({
+        coalesceIdleMs: 0,
+        maxChunkChars: 256,
+        tagVisibility: {
+          available_commands_update: true,
         },
-      },
-    });
+      }),
+    );
 
     await projector.onEvent({
       type: "status",
@@ -649,16 +663,7 @@ describe("createAcpReplyProjector", () => {
 
   it("inserts a space boundary before visible text after hidden tool updates by default", async () => {
     await runHiddenBoundaryCase({
-      cfgOverrides: {
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-          },
-        },
-      },
+      cfgOverrides: createHiddenBoundaryCfg(),
       toolCallId: "call_hidden_1",
       expectedText: "fallback. I don't",
     });
@@ -666,20 +671,12 @@ describe("createAcpReplyProjector", () => {
 
   it("preserves hidden boundary across nonterminal hidden tool updates", async () => {
     await runHiddenBoundaryCase({
-      cfgOverrides: {
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-            tagVisibility: {
-              tool_call: false,
-              tool_call_update: false,
-            },
-          },
+      cfgOverrides: createHiddenBoundaryCfg({
+        tagVisibility: {
+          tool_call: false,
+          tool_call_update: false,
         },
-      },
+      }),
       toolCallId: "hidden_boundary_1",
       includeNonTerminalUpdate: true,
       expectedText: "fallback. I don't",
@@ -688,17 +685,9 @@ describe("createAcpReplyProjector", () => {
 
   it("supports hiddenBoundarySeparator=space", async () => {
     await runHiddenBoundaryCase({
-      cfgOverrides: {
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-            hiddenBoundarySeparator: "space",
-          },
-        },
-      },
+      cfgOverrides: createHiddenBoundaryCfg({
+        hiddenBoundarySeparator: "space",
+      }),
       toolCallId: "call_hidden_2",
       expectedText: "fallback. I don't",
     });
@@ -706,17 +695,9 @@ describe("createAcpReplyProjector", () => {
 
   it("supports hiddenBoundarySeparator=none", async () => {
     await runHiddenBoundaryCase({
-      cfgOverrides: {
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-            hiddenBoundarySeparator: "none",
-          },
-        },
-      },
+      cfgOverrides: createHiddenBoundaryCfg({
+        hiddenBoundarySeparator: "none",
+      }),
       toolCallId: "call_hidden_3",
       expectedText: "fallback.I don't",
     });
@@ -724,16 +705,7 @@ describe("createAcpReplyProjector", () => {
 
   it("does not duplicate newlines when previous visible text already ends with newline", async () => {
     await runHiddenBoundaryCase({
-      cfgOverrides: {
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-          },
-        },
-      },
+      cfgOverrides: createHiddenBoundaryCfg(),
       toolCallId: "call_hidden_4",
       firstText: "fallback.\n",
       expectedText: "fallback.\nI don't",
