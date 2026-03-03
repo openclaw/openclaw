@@ -11,6 +11,17 @@ describe("isSystemOriginRun", () => {
     ).toBe(true);
   });
 
+  it("treats rewritten messageProvider as system-origin when source provider is system", () => {
+    expect(
+      isSystemOriginRun({
+        messageProvider: "telegram",
+        sourceMessageProvider: "system",
+        sessionProvider: "telegram",
+        sessionSurface: "telegram",
+      }),
+    ).toBe(true);
+  });
+
   it("treats explicit system message providers as system-origin", () => {
     expect(isSystemOriginRun({ messageProvider: "cron" })).toBe(true);
     expect(isSystemOriginRun({ messageProvider: "hook" })).toBe(true);

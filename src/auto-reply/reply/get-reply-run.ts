@@ -475,6 +475,7 @@ export async function runPreparedReply(
       agentDir,
       sessionId: sessionIdFinal,
       sessionKey,
+      sourceMessageProvider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
       messageProvider: resolveOriginMessageProvider({
         originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
         // Prefer Provider over Surface for fallback channel identity.

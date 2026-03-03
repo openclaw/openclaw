@@ -62,10 +62,16 @@ const SYSTEM_MESSAGE_PROVIDERS = new Set(["cron", "hook", "system"]);
 
 export function isSystemOriginRun(params: {
   messageProvider?: string;
+  sourceMessageProvider?: string;
   sessionProvider?: string;
   sessionSurface?: string;
 }): boolean {
-  const providers = [params.messageProvider, params.sessionProvider, params.sessionSurface];
+  const providers = [
+    params.messageProvider,
+    params.sourceMessageProvider,
+    params.sessionProvider,
+    params.sessionSurface,
+  ];
   return providers.some((provider) => {
     const normalized = provider?.trim().toLowerCase();
     return Boolean(normalized && SYSTEM_MESSAGE_PROVIDERS.has(normalized));
@@ -215,6 +221,7 @@ export async function runReplyAgent(params: {
     isHeartbeat,
     isSystemRun: isSystemOriginRun({
       messageProvider: followupRun.run.messageProvider,
+      sourceMessageProvider: followupRun.run.sourceMessageProvider,
       sessionProvider: sessionCtx.Provider,
       sessionSurface: sessionCtx.Surface,
     }),
