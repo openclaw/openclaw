@@ -994,6 +994,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Maps canonical identities to provider-prefixed peer IDs so equivalent users resolve to one DM thread (example: telegram:123456). Use this when the same human appears across multiple channels or accounts.",
   "session.resetTriggers":
     "Lists message triggers that force a session reset when matched in inbound content. Use sparingly for explicit reset phrases so context is not dropped unexpectedly during normal conversation.",
+  "session.livenessTriggers":
+    "Lists message triggers that return an immediate gateway liveness response and skip the LLM pipeline for authorized senders.",
   "session.idleMinutes":
     "Applies a legacy idle reset window in minutes for session reuse behavior across inactivity gaps. Use this only for compatibility and prefer structured reset policies under session.reset/session.resetByType.",
   "session.reset":
