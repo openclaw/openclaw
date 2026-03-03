@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { formatCliCommand } from "../cli/command-format.js";
 import { collectConfigServiceEnvVars } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -75,6 +76,8 @@ export async function buildGatewayInstallPlan(params: {
   // Default working directory to the OpenClaw state dir (e.g. ~/.openclaw) so the
   // daemon does not run with `/` as cwd when launched by launchd/systemd.
   const resolvedWorkingDirectory = workingDirectory ?? resolveGatewayStateDir(params.env);
+  // Ensure the working directory exists so launchd/systemd can CHDIR into it on first install.
+  fs.mkdirSync(resolvedWorkingDirectory, { recursive: true, mode: 0o700 });
 
   return { programArguments, workingDirectory: resolvedWorkingDirectory, environment };
 }

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { formatNodeServiceDescription } from "../daemon/constants.js";
 import { resolveGatewayStateDir } from "../daemon/paths.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
@@ -65,6 +66,8 @@ export async function buildNodeInstallPlan(params: {
   // Default working directory to the OpenClaw state dir (e.g. ~/.openclaw) so the
   // daemon does not run with `/` as cwd when launched by launchd/systemd.
   const resolvedWorkingDirectory = workingDirectory ?? resolveGatewayStateDir(params.env);
+  // Ensure the working directory exists so launchd/systemd can CHDIR into it on first install.
+  fs.mkdirSync(resolvedWorkingDirectory, { recursive: true, mode: 0o700 });
 
   return { programArguments, workingDirectory: resolvedWorkingDirectory, environment, description };
 }
