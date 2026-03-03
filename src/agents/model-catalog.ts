@@ -36,7 +36,7 @@ let providerRuntimePromise:
   | undefined;
 let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
 
-const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
+const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode", "qiniu"]);
 
 function loadProviderRuntime() {
   providerRuntimePromise ??= import("../plugins/provider-runtime.runtime.js");

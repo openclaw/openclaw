@@ -6,6 +6,13 @@ import { XIAOMI_DEFAULT_MODEL_ID } from "../../extensions/xiaomi/provider-catalo
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
+import {
+  QINIU_BASE_URL,
+  QINIU_DEFAULT_CONTEXT_WINDOW,
+  QINIU_DEFAULT_COST,
+  QINIU_DEFAULT_MAX_TOKENS,
+  QINIU_MODEL_CATALOG,
+} from "../providers/qiniu-shared.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
@@ -810,6 +817,13 @@ export async function resolveImplicitProviders(
               : implicitBedrock.models,
         }
       : implicitBedrock;
+  }
+
+  const qiniuKey =
+    resolveEnvApiKeyVarName("qiniu") ??
+    resolveApiKeyFromProfiles({ provider: "qiniu", store: authStore });
+  if (qiniuKey) {
+    providers.qiniu = { ...buildQiniuProvider(), apiKey: qiniuKey };
   }
 
   return providers;
