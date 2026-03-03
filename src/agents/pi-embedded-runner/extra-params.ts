@@ -550,8 +550,8 @@ function createFalOpenrouterAuthWrapper(baseStreamFn: StreamFn | undefined): Str
       // header below overrides the `Authorization: Bearer …` that pi-ai
       // would set from apiKey.
       headers: {
-        ...falHeaders,
         ...options?.headers,
+        ...falHeaders,
       },
     });
   };
