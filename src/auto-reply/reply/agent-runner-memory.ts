@@ -332,6 +332,7 @@ export async function runMemoryFlushIfNeeded(params: {
   const shouldCheckTranscriptSizeForForcedFlush = Boolean(
     canAttemptFlush &&
     entry &&
+    !hasFreshPersistedPromptTokens &&
     Number.isFinite(forceFlushTranscriptBytes) &&
     forceFlushTranscriptBytes > 0,
   );
@@ -347,7 +348,7 @@ export async function runMemoryFlushIfNeeded(params: {
       })
     : undefined;
   const transcriptByteSize = sessionLogSnapshot?.byteSize;
-  const shouldForceFlushByTranscriptSize =
+  const hasOversizedTranscript =
     typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
 
   const transcriptUsageSnapshot = sessionLogSnapshot?.usage;
@@ -398,6 +399,7 @@ export async function runMemoryFlushIfNeeded(params: {
   const hasFreshPromptTokensSnapshot =
     promptTokensSnapshot > 0 &&
     (hasFreshPersistedPromptTokens || hasReliableTranscriptPromptTokens);
+  const shouldForceFlushByTranscriptSize = hasOversizedTranscript && !hasFreshPromptTokensSnapshot;
 
   const projectedTokenCount = hasFreshPromptTokensSnapshot
     ? resolveEffectivePromptTokens(
@@ -423,7 +425,8 @@ export async function runMemoryFlushIfNeeded(params: {
       `persistedPromptTokens=${persistedPromptTokens ?? "undefined"} persistedFresh=${entry?.totalTokensFresh === true} ` +
       `promptTokensEst=${promptTokenEstimate ?? "undefined"} transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} transcriptOutputTokens=${transcriptOutputTokens ?? "undefined"} ` +
       `projectedTokenCount=${projectedTokenCount ?? "undefined"} transcriptBytes=${transcriptByteSize ?? "undefined"} ` +
-      `forceFlushTranscriptBytes=${forceFlushTranscriptBytes} forceFlushByTranscriptSize=${shouldForceFlushByTranscriptSize}`,
+      `forceFlushTranscriptBytes=${forceFlushTranscriptBytes} hasOversizedTranscript=${hasOversizedTranscript} ` +
+      `forceFlushByTranscriptSize=${shouldForceFlushByTranscriptSize}`,
   );
 
   const shouldFlushMemory =
