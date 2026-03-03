@@ -87,7 +87,14 @@ function hasGatewayServiceMarker(content: string): boolean {
   );
 }
 
-function isOpenClawGatewayLaunchdService(label: string, contents: string): boolean {
+function isOpenClawGatewayLaunchdService(
+  label: string,
+  contents: string,
+  profile?: string,
+): boolean {
+  if (label !== resolveGatewayLaunchAgentLabel(profile)) {
+    return false;
+  }
   if (hasGatewayServiceMarker(contents)) {
     return true;
   }
@@ -95,7 +102,7 @@ function isOpenClawGatewayLaunchdService(label: string, contents: string): boole
   if (!lowerContents.includes("gateway")) {
     return false;
   }
-  return label.startsWith("ai.openclaw.");
+  return true;
 }
 
 function isOpenClawGatewaySystemdService(name: string, contents: string): boolean {
@@ -125,9 +132,10 @@ function tryExtractPlistLabel(contents: string): string | null {
   return match[1]?.trim() || null;
 }
 
-function isIgnoredLaunchdLabel(label: string): boolean {
+function isIgnoredLaunchdLabel(label: string, profile?: string): boolean {
   return (
-    label === resolveGatewayLaunchAgentLabel() || IGNORED_NON_GATEWAY_LAUNCHD_LABELS.has(label)
+    label === resolveGatewayLaunchAgentLabel(profile) ||
+    IGNORED_NON_GATEWAY_LAUNCHD_LABELS.has(label)
   );
 }
 
@@ -191,12 +199,13 @@ async function collectServiceFiles(params: {
 async function scanLaunchdDir(params: {
   dir: string;
   scope: "user" | "system";
+  profile?: string;
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
   const candidates = await collectServiceFiles({
     dir: params.dir,
     extension: ".plist",
-    isIgnoredName: isIgnoredLaunchdLabel,
+    isIgnoredName: () => false,
   });
 
   for (const { name: labelFromName, fullPath, contents } of candidates) {
@@ -217,10 +226,10 @@ async function scanLaunchdDir(params: {
       });
       continue;
     }
-    if (isIgnoredLaunchdLabel(label)) {
+    if (isIgnoredLaunchdLabel(label, params.profile)) {
       continue;
     }
-    if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents)) {
+    if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents, params.profile)) {
       continue;
     }
     results.push({
@@ -338,6 +347,7 @@ export async function findExtraGatewayServices(
       for (const svc of await scanLaunchdDir({
         dir: userDir,
         scope: "user",
+        profile: env.OPENCLAW_PROFILE,
       })) {
         push(svc);
       }
@@ -345,12 +355,14 @@ export async function findExtraGatewayServices(
         for (const svc of await scanLaunchdDir({
           dir: path.join(path.sep, "Library", "LaunchAgents"),
           scope: "system",
+          profile: env.OPENCLAW_PROFILE,
         })) {
           push(svc);
         }
         for (const svc of await scanLaunchdDir({
           dir: path.join(path.sep, "Library", "LaunchDaemons"),
           scope: "system",
+          profile: env.OPENCLAW_PROFILE,
         })) {
           push(svc);
         }

@@ -170,4 +170,119 @@ describe("findExtraGatewayServices (darwin)", () => {
       },
     ]);
   });
+
+  it("filters by parsed plist label instead of ignored filename", async () => {
+    readdirMock.mockImplementation(async (dir: string) => {
+      if (dir === "/Users/test/Library/LaunchAgents") {
+        return ["ai.openclaw.mac.plist"];
+      }
+      return [];
+    });
+    readFileMock.mockImplementation(async (filePath: string) => {
+      if (!filePath.endsWith("ai.openclaw.mac.plist")) {
+        return null;
+      }
+      return [
+        "<plist>",
+        "  <dict>",
+        "    <key>Label</key>",
+        "    <string>ai.openclaw.helper</string>",
+        "    <key>ProgramArguments</key>",
+        "    <array>",
+        "      <string>openclaw helper</string>",
+        "    </array>",
+        "  </dict>",
+        "</plist>",
+      ].join("\n");
+    });
+
+    const result = await findExtraGatewayServices({
+      HOME: "/Users/test",
+    });
+
+    expect(result).toEqual([
+      {
+        platform: "darwin",
+        label: "ai.openclaw.helper",
+        detail: "plist: /Users/test/Library/LaunchAgents/ai.openclaw.mac.plist",
+        scope: "user",
+        marker: "openclaw",
+        legacy: false,
+      },
+    ]);
+  });
+
+  it("reports default-profile gateway services as extra when a custom profile is active", async () => {
+    readdirMock.mockImplementation(async (dir: string) => {
+      if (dir === "/Users/test/Library/LaunchAgents") {
+        return ["ai.openclaw.gateway.plist"];
+      }
+      return [];
+    });
+    readFileMock.mockImplementation(async (filePath: string) => {
+      if (!filePath.endsWith("ai.openclaw.gateway.plist")) {
+        return null;
+      }
+      return [
+        "<plist>",
+        "  <dict>",
+        "    <key>Label</key>",
+        "    <string>ai.openclaw.gateway</string>",
+        "    <key>ProgramArguments</key>",
+        "    <array>",
+        "      <string>openclaw gateway run</string>",
+        "    </array>",
+        "  </dict>",
+        "</plist>",
+      ].join("\n");
+    });
+
+    const result = await findExtraGatewayServices({
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "mac",
+    });
+
+    expect(result).toEqual([
+      {
+        platform: "darwin",
+        label: "ai.openclaw.gateway",
+        detail: "plist: /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
+        scope: "user",
+        marker: "openclaw",
+        legacy: false,
+      },
+    ]);
+  });
+
+  it("ignores the node host launch agent", async () => {
+    readdirMock.mockImplementation(async (dir: string) => {
+      if (dir === "/Users/test/Library/LaunchAgents") {
+        return ["ai.openclaw.node.plist"];
+      }
+      return [];
+    });
+    readFileMock.mockImplementation(async (filePath: string) => {
+      if (!filePath.endsWith("ai.openclaw.node.plist")) {
+        return null;
+      }
+      return [
+        "<plist>",
+        "  <dict>",
+        "    <key>Label</key>",
+        "    <string>ai.openclaw.node</string>",
+        "    <key>ProgramArguments</key>",
+        "    <array>",
+        "      <string>openclaw node run</string>",
+        "    </array>",
+        "  </dict>",
+        "</plist>",
+      ].join("\n");
+    });
+
+    const result = await findExtraGatewayServices({
+      HOME: "/Users/test",
+    });
+
+    expect(result).toEqual([]);
+  });
 });
