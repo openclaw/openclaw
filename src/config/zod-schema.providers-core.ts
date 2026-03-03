@@ -1065,6 +1065,7 @@ export const IrcAccountSchemaBase = z
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    groupAuthIncludesPairingStore: z.boolean().optional(),
     groups: z.record(z.string(), IrcGroupSchema.optional()).optional(),
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().min(0).optional(),

@@ -258,6 +258,8 @@ export function resolveIMessageInboundDecision(params: {
 
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
   const commandDmAllowFrom = isGroup ? params.allowFrom : effectiveDmAllowFrom;
+  // Command authorization uses configured allowlists only (not pairing store)
+  const commandGroupAllowFrom = params.groupAllowFrom;
   const ownerAllowedForCommands =
     commandDmAllowFrom.length > 0
       ? isAllowedIMessageSender({
@@ -269,9 +271,9 @@ export function resolveIMessageInboundDecision(params: {
         })
       : false;
   const groupAllowedForCommands =
-    effectiveGroupAllowFrom.length > 0
+    commandGroupAllowFrom.length > 0
       ? isAllowedIMessageSender({
-          allowFrom: effectiveGroupAllowFrom,
+          allowFrom: commandGroupAllowFrom,
           sender,
           chatId,
           chatGuid,
@@ -283,7 +285,7 @@ export function resolveIMessageInboundDecision(params: {
     useAccessGroups,
     authorizers: [
       { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
-      { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+      { configured: commandGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
     ],
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,

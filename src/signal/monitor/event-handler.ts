@@ -483,16 +483,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const hasBodyContent =
       Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
     const senderDisplay = formatSignalSenderDisplay(sender);
-    const { resolveAccessDecision, dmAccess, effectiveDmAllow, effectiveGroupAllow } =
-      await resolveSignalAccessState({
-        accountId: deps.accountId,
-        dmPolicy: deps.dmPolicy,
-        groupPolicy: deps.groupPolicy,
-        allowFrom: deps.allowFrom,
-        groupAllowFrom: deps.groupAllowFrom,
-        groupAuthIncludesPairingStore: deps.groupAuthIncludesPairingStore,
-        sender,
-      });
+    const { resolveAccessDecision, dmAccess, effectiveDmAllow } = await resolveSignalAccessState({
+      accountId: deps.accountId,
+      dmPolicy: deps.dmPolicy,
+      groupPolicy: deps.groupPolicy,
+      allowFrom: deps.allowFrom,
+      groupAllowFrom: deps.groupAllowFrom,
+      groupAuthIncludesPairingStore: deps.groupAuthIncludesPairingStore,
+      sender,
+    });
 
     if (
       reaction &&
@@ -561,14 +560,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;
     const commandDmAllow = isGroup ? deps.allowFrom : effectiveDmAllow;
+    // Command authorization uses configured allowlists only (not pairing store)
+    const commandGroupAllow = deps.groupAllowFrom;
     const ownerAllowedForCommands = isSignalSenderAllowed(sender, commandDmAllow);
-    const groupAllowedForCommands = isSignalSenderAllowed(sender, effectiveGroupAllow);
+    const groupAllowedForCommands = isSignalSenderAllowed(sender, commandGroupAllow);
     const hasControlCommandInMessage = hasControlCommand(messageText, deps.cfg);
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
         { configured: commandDmAllow.length > 0, allowed: ownerAllowedForCommands },
-        { configured: effectiveGroupAllow.length > 0, allowed: groupAllowedForCommands },
+        { configured: commandGroupAllow.length > 0, allowed: groupAllowedForCommands },
       ],
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
