@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
-import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
+import {
+  DEFAULT_PRESERVE_SECTIONS,
+  extractSections,
+} from "../../auto-reply/reply/post-compaction-context.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -385,8 +388,6 @@ function appendSummarySection(summary: string, section: string): string {
   }
   return `${summary}${section}`;
 }
-
-const DEFAULT_PRESERVE_SECTIONS = ["Session Startup", "Red Lines"];
 
 /**
  * Read and format critical workspace context for compaction summary.
