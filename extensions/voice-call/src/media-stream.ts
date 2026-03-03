@@ -10,17 +10,18 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
-import type {
-  OpenAIRealtimeSTTProvider,
-  RealtimeSTTSession,
-} from "./providers/stt-openai-realtime.js";
+import type { RealtimeSTTSession } from "./providers/stt-openai-realtime.js";
+
+export type RealtimeSTTProvider = {
+  createSession: () => RealtimeSTTSession;
+};
 
 /**
  * Configuration for the media stream handler.
  */
 export interface MediaStreamConfig {
   /** STT provider for transcription */
-  sttProvider: OpenAIRealtimeSTTProvider;
+  sttProvider: RealtimeSTTProvider;
   /** Close sockets that never send a valid `start` frame within this window. */
   preStartTimeoutMs?: number;
   /** Max concurrent pre-start sockets. */

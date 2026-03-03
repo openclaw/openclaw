@@ -12,6 +12,7 @@ import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
 import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { LocalWhisperCppSTTProvider } from "./providers/stt-local-whispercpp.js";
 import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
@@ -59,22 +60,51 @@ export class VoiceCallWebhookServer {
   }
 
   /**
-   * Initialize media streaming with OpenAI Realtime STT.
+   * Initialize media streaming with the configured STT provider.
    */
   private initializeMediaStreaming(): void {
-    const apiKey = this.config.streaming?.openaiApiKey || process.env.OPENAI_API_KEY;
+    const sttProviderName = this.config.streaming?.sttProvider ?? "openai-realtime";
 
-    if (!apiKey) {
-      console.warn("[voice-call] Streaming enabled but no OpenAI API key found");
-      return;
+    let sttProvider: MediaStreamConfig["sttProvider"];
+
+    if (sttProviderName === "local-whispercpp") {
+      const binPath =
+        process.env.VOICECALL_WHISPERCPP_BIN ?? process.env.VOICECALL_WHISPER_BIN ?? "";
+      const modelPath =
+        process.env.VOICECALL_WHISPERCPP_MODEL ?? process.env.VOICECALL_WHISPER_MODEL ?? "";
+      const language = process.env.VOICECALL_WHISPERCPP_LANG ?? "zh";
+
+      if (!binPath || !modelPath) {
+        console.warn(
+          "[voice-call] Streaming enabled (local-whispercpp) but VOICECALL_WHISPERCPP_BIN/VOICECALL_WHISPERCPP_MODEL are not set",
+        );
+        return;
+      }
+
+      sttProvider = new LocalWhisperCppSTTProvider({
+        binPath,
+        modelPath,
+        language,
+        silenceDurationMs: this.config.streaming?.silenceDurationMs,
+        vadThreshold: this.config.streaming?.vadThreshold,
+      });
+    } else {
+      const apiKey = this.config.streaming?.openaiApiKey || process.env.OPENAI_API_KEY;
+
+      if (!apiKey) {
+        console.warn(
+          "[voice-call] Streaming enabled (openai-realtime) but no OpenAI API key found (set streaming.openaiApiKey or OPENAI_API_KEY)",
+        );
+        return;
+      }
+
+      sttProvider = new OpenAIRealtimeSTTProvider({
+        apiKey,
+        model: this.config.streaming?.sttModel,
+        silenceDurationMs: this.config.streaming?.silenceDurationMs,
+        vadThreshold: this.config.streaming?.vadThreshold,
+      });
     }
-
-    const sttProvider = new OpenAIRealtimeSTTProvider({
-      apiKey,
-      model: this.config.streaming?.sttModel,
-      silenceDurationMs: this.config.streaming?.silenceDurationMs,
-      vadThreshold: this.config.streaming?.vadThreshold,
-    });
 
     const streamConfig: MediaStreamConfig = {
       sttProvider,

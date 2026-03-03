@@ -178,4 +178,33 @@ Actions:
 - Adds replay protection for Twilio and Plivo webhooks (valid duplicate callbacks are ignored safely).
 - Twilio speech turns include a per-turn token so stale/replayed callbacks cannot complete a newer turn.
 - `responseModel` / `responseSystemPrompt` control AI auto-responses.
-- Media streaming requires `ws` and OpenAI Realtime API key.
+- Media streaming can use OpenAI Realtime STT **or** a local whisper.cpp CLI (this fork).
+
+## Local streaming STT (whisper.cpp)
+
+This fork adds a `streaming.sttProvider` option: `"local-whispercpp"`.
+
+It runs a local `whisper.cpp` CLI binary for transcription. Configure via env vars:
+
+- `VOICECALL_WHISPERCPP_BIN` (or `VOICECALL_WHISPER_BIN`): path to `whisper-cli`/`main`
+- `VOICECALL_WHISPERCPP_MODEL` (or `VOICECALL_WHISPER_MODEL`): path to ggml model file
+- `VOICECALL_WHISPERCPP_LANG`: language code (default: `zh`)
+
+Example (Mac):
+
+```bash
+export VOICECALL_WHISPERCPP_BIN=/path/to/whisper-cli
+export VOICECALL_WHISPERCPP_MODEL=/path/to/ggml-small.bin
+export VOICECALL_WHISPERCPP_LANG=zh
+```
+
+Then in plugin config:
+
+```json5
+{
+  streaming: {
+    enabled: true,
+    sttProvider: "local-whispercpp"
+  }
+}
+```

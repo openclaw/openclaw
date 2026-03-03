@@ -200,7 +200,7 @@ export const OutboundConfigSchema = z
 export type OutboundConfig = z.infer<typeof OutboundConfigSchema>;
 
 // -----------------------------------------------------------------------------
-// Streaming Configuration (OpenAI Realtime STT)
+// Streaming Configuration (Realtime STT)
 // -----------------------------------------------------------------------------
 
 export const VoiceCallStreamingConfigSchema = z
@@ -208,7 +208,7 @@ export const VoiceCallStreamingConfigSchema = z
     /** Enable real-time audio streaming (requires WebSocket support) */
     enabled: z.boolean().default(false),
     /** STT provider for real-time transcription */
-    sttProvider: z.enum(["openai-realtime"]).default("openai-realtime"),
+    sttProvider: z.enum(["openai-realtime", "local-whispercpp"]).default("openai-realtime"),
     /** OpenAI API key for Realtime API (uses OPENAI_API_KEY env if not set) */
     openaiApiKey: z.string().min(1).optional(),
     /** OpenAI transcription model (default: gpt-4o-transcribe) */

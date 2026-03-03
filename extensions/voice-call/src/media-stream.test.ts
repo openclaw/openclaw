@@ -3,10 +3,7 @@ import http from "node:http";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { MediaStreamHandler } from "./media-stream.js";
-import type {
-  OpenAIRealtimeSTTProvider,
-  RealtimeSTTSession,
-} from "./providers/stt-openai-realtime.js";
+import type { RealtimeSTTSession } from "./providers/stt-openai-realtime.js";
 
 const createStubSession = (): RealtimeSTTSession => ({
   connect: async () => {},
@@ -19,10 +16,9 @@ const createStubSession = (): RealtimeSTTSession => ({
   isConnected: () => true,
 });
 
-const createStubSttProvider = (): OpenAIRealtimeSTTProvider =>
-  ({
-    createSession: () => createStubSession(),
-  }) as unknown as OpenAIRealtimeSTTProvider;
+const createStubSttProvider = () => ({
+  createSession: () => createStubSession(),
+});
 
 const flush = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 0));
