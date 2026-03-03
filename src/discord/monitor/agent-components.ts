@@ -61,6 +61,7 @@ import {
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
+  resolveDiscordOwnerAccess,
   resolveDiscordOwnerAllowFrom,
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
@@ -764,18 +765,15 @@ function resolveComponentCommandAuthorized(params: {
     return true;
   }
 
-  const ownerAllowList = normalizeDiscordAllowList(ctx.allowFrom, ["discord:", "user:", "pk:"]);
-  const ownerOk = ownerAllowList
-    ? resolveDiscordAllowListMatch({
-        allowList: ownerAllowList,
-        candidate: {
-          id: interactionCtx.user.id,
-          name: interactionCtx.user.username,
-          tag: formatDiscordUserTag(interactionCtx.user),
-        },
-        allowNameMatching: params.allowNameMatching,
-      }).allowed
-    : false;
+  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
+    allowFrom: ctx.allowFrom,
+    sender: {
+      id: interactionCtx.user.id,
+      name: interactionCtx.user.username,
+      tag: formatDiscordUserTag(interactionCtx.user),
+    },
+    allowNameMatching: params.allowNameMatching,
+  });
 
   const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
     channelConfig,
@@ -870,8 +868,8 @@ async function dispatchDiscordComponentEvent(params: {
         allowFrom: channelConfig?.users ?? guildInfo?.users,
         normalizeEntry: (entry) => {
           const normalized = normalizeDiscordAllowList([entry], ["discord:", "user:", "pk:"]);
-          const candidate = normalized?.[0];
-          return candidate && /^\d+$/.test(candidate) ? candidate : undefined;
+          const candidate = normalized?.ids.values().next().value;
+          return typeof candidate === "string" && /^\d+$/.test(candidate) ? candidate : undefined;
         },
       })
     : null;

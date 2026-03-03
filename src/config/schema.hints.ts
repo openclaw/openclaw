@@ -13,6 +13,7 @@ export type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-type
 const GROUP_LABELS: Record<string, string> = {
   wizard: "Wizard",
   update: "Update",
+  cli: "CLI",
   diagnostics: "Diagnostics",
   logging: "Logging",
   gateway: "Gateway",
@@ -41,6 +42,7 @@ const GROUP_LABELS: Record<string, string> = {
 const GROUP_ORDER: Record<string, number> = {
   wizard: 20,
   update: 25,
+  cli: 26,
   diagnostics: 27,
   gateway: 30,
   nodeHost: 35,

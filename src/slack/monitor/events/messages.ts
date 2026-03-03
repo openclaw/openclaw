@@ -2,6 +2,7 @@ import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { danger } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
+import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
@@ -63,6 +64,14 @@ export function registerSlackMessageEvents(params: {
       }
 
       const mention = event as SlackAppMentionEvent;
+
+      // Skip app_mention for DMs - they're already handled by message.im event
+      // This prevents duplicate processing when both message and app_mention fire for DMs
+      const channelType = normalizeSlackChannelType(mention.channel_type, mention.channel);
+      if (channelType === "im" || channelType === "mpim") {
+        return;
+      }
+
       await handleSlackMessage(mention as unknown as SlackMessageEvent, {
         source: "app_mention",
         wasMentioned: true,

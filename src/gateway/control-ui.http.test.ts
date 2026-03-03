@@ -402,19 +402,18 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("returns 405 for POST requests under configured basePath", async () => {
+  it("falls through POST requests under configured basePath (plugin webhook passthrough)", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         for (const route of ["/openclaw", "/openclaw/", "/openclaw/some-page"]) {
-          const { handled, res, end } = runControlUiRequest({
+          const { handled, end } = runControlUiRequest({
             url: route,
             method: "POST",
             rootPath: tmp,
             basePath: "/openclaw",
           });
-          expect(handled, `expected ${route} to be handled`).toBe(true);
-          expect(res.statusCode, `expected ${route} status`).toBe(405);
-          expect(end, `expected ${route} body`).toHaveBeenCalledWith("Method Not Allowed");
+          expect(handled, `POST to ${route} should pass through to plugin handlers`).toBe(false);
+          expect(end, `POST to ${route} should not write a response`).not.toHaveBeenCalled();
         }
       },
     });

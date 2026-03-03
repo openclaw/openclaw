@@ -30,6 +30,7 @@ type AllowFromReadCacheEntry = {
   size: number | null;
   entries: string[];
 };
+type AllowFromStatLike = { mtimeMs: number; size: number } | null;
 
 const allowFromReadCache = new Map<string, AllowFromReadCacheEntry>();
 
@@ -321,6 +322,31 @@ function resolveAllowFromReadCacheHit(params: {
   return cloneAllowFromCacheEntry(cached);
 }
 
+function resolveAllowFromReadCacheOrMissing(
+  filePath: string,
+  stat: AllowFromStatLike,
+): { entries: string[]; exists: boolean } | null {
+  const cached = resolveAllowFromReadCacheHit({
+    filePath,
+    exists: Boolean(stat),
+    mtimeMs: stat?.mtimeMs ?? null,
+    size: stat?.size ?? null,
+  });
+  if (cached) {
+    return { entries: cached.entries, exists: cached.exists };
+  }
+  if (!stat) {
+    setAllowFromReadCache(filePath, {
+      exists: false,
+      mtimeMs: null,
+      size: null,
+      entries: [],
+    });
+    return { entries: [], exists: false };
+  }
+  return null;
+}
+
 async function readAllowFromStateForPathWithExists(
   channel: PairingChannel,
   filePath: string,
@@ -335,23 +361,11 @@ async function readAllowFromStateForPathWithExists(
     }
   }
 
-  const cached = resolveAllowFromReadCacheHit({
-    filePath,
-    exists: Boolean(stat),
-    mtimeMs: stat?.mtimeMs ?? null,
-    size: stat?.size ?? null,
-  });
-  if (cached) {
-    return { entries: cached.entries, exists: cached.exists };
+  const cachedOrMissing = resolveAllowFromReadCacheOrMissing(filePath, stat);
+  if (cachedOrMissing) {
+    return cachedOrMissing;
   }
-
   if (!stat) {
-    setAllowFromReadCache(filePath, {
-      exists: false,
-      mtimeMs: null,
-      size: null,
-      entries: [],
-    });
     return { entries: [], exists: false };
   }
 
@@ -360,6 +374,7 @@ async function readAllowFromStateForPathWithExists(
     allowFrom: [],
   });
   const entries = normalizeAllowFromList(channel, value);
+  // stat is guaranteed non-null here: resolveAllowFromReadCacheOrMissing returns early when stat is null.
   setAllowFromReadCache(filePath, {
     exists,
     mtimeMs: stat.mtimeMs,
@@ -387,23 +402,11 @@ function readAllowFromStateForPathSyncWithExists(
     }
   }
 
-  const cached = resolveAllowFromReadCacheHit({
-    filePath,
-    exists: Boolean(stat),
-    mtimeMs: stat?.mtimeMs ?? null,
-    size: stat?.size ?? null,
-  });
-  if (cached) {
-    return { entries: cached.entries, exists: cached.exists };
+  const cachedOrMissing = resolveAllowFromReadCacheOrMissing(filePath, stat);
+  if (cachedOrMissing) {
+    return cachedOrMissing;
   }
-
   if (!stat) {
-    setAllowFromReadCache(filePath, {
-      exists: false,
-      mtimeMs: null,
-      size: null,
-      entries: [],
-    });
     return { entries: [], exists: false };
   }
 
@@ -417,6 +420,7 @@ function readAllowFromStateForPathSyncWithExists(
     }
     return { entries: [], exists: false };
   }
+  // stat is guaranteed non-null here: resolveAllowFromReadCacheOrMissing returns early when stat is null.
   try {
     const parsed = JSON.parse(raw) as AllowFromStore;
     const entries = normalizeAllowFromList(channel, parsed);

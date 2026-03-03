@@ -146,6 +146,70 @@ type LegacyMainDeliveryRetirement = {
   entry: SessionEntry;
 };
 
+type SessionHookContext = {
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+};
+
+function buildSessionHookContext(params: {
+  sessionId: string;
+  sessionKey: string;
+  cfg: OpenClawConfig;
+}): SessionHookContext {
+  return {
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg }),
+  };
+}
+
+function buildSessionStartHookPayload(params: {
+  sessionId: string;
+  sessionKey: string;
+  cfg: OpenClawConfig;
+  resumedFrom?: string;
+}): {
+  event: { sessionId: string; sessionKey: string; resumedFrom?: string };
+  context: SessionHookContext;
+} {
+  return {
+    event: {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      resumedFrom: params.resumedFrom,
+    },
+    context: buildSessionHookContext({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      cfg: params.cfg,
+    }),
+  };
+}
+
+function buildSessionEndHookPayload(params: {
+  sessionId: string;
+  sessionKey: string;
+  cfg: OpenClawConfig;
+  messageCount?: number;
+}): {
+  event: { sessionId: string; sessionKey: string; messageCount: number };
+  context: SessionHookContext;
+} {
+  return {
+    event: {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      messageCount: params.messageCount ?? 0,
+    },
+    context: buildSessionHookContext({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      cfg: params.cfg,
+    }),
+  };
+}
+
 function resolveParentForkMaxTokens(cfg: OpenClawConfig): number {
   const configured = cfg.session?.parentForkMaxTokens;
   if (typeof configured === "number" && Number.isFinite(configured) && configured >= 0) {
@@ -643,35 +707,24 @@ export async function initSessionState(params: {
     // If replacing an existing session, fire session_end for the old one
     if (previousSessionEntry?.sessionId && previousSessionEntry.sessionId !== effectiveSessionId) {
       if (hookRunner.hasHooks("session_end")) {
-        void hookRunner
-          .runSessionEnd(
-            {
-              sessionId: previousSessionEntry.sessionId,
-              messageCount: 0,
-            },
-            {
-              sessionId: previousSessionEntry.sessionId,
-              agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
-            },
-          )
-          .catch(() => {});
+        const payload = buildSessionEndHookPayload({
+          sessionId: previousSessionEntry.sessionId,
+          sessionKey,
+          cfg,
+        });
+        void hookRunner.runSessionEnd(payload.event, payload.context).catch(() => {});
       }
     }
 
     // Fire session_start for the new session
     if (hookRunner.hasHooks("session_start")) {
-      void hookRunner
-        .runSessionStart(
-          {
-            sessionId: effectiveSessionId,
-            resumedFrom: previousSessionEntry?.sessionId,
-          },
-          {
-            sessionId: effectiveSessionId,
-            agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
-          },
-        )
-        .catch(() => {});
+      const payload = buildSessionStartHookPayload({
+        sessionId: effectiveSessionId,
+        sessionKey,
+        cfg,
+        resumedFrom: previousSessionEntry?.sessionId,
+      });
+      void hookRunner.runSessionStart(payload.event, payload.context).catch(() => {});
     }
   }
 
