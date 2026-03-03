@@ -48,4 +48,14 @@ describe("TUI CLI config", () => {
 
     expect(deliver).toBe(false);
   });
+
+  it("should allow --no-deliver to override config default", () => {
+    const mockConfig = { cli: { tui: { deliver: true } } };
+    const opts = { deliver: false }; // commander sets this when --no-deliver is passed
+
+    const deliver =
+      opts.deliver !== undefined ? Boolean(opts.deliver) : (mockConfig.cli?.tui?.deliver ?? false);
+
+    expect(deliver).toBe(false);
+  });
 });
