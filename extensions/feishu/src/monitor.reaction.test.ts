@@ -1,10 +1,11 @@
-import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasControlCommand } from "../../../src/auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../../src/auto-reply/inbound-debounce.js";
+import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 import * as dedup from "./dedup.js";
 import { monitorSingleAccount } from "./monitor.account.js";
@@ -367,17 +368,19 @@ describe("Feishu inbound debounce regressions", () => {
     vi.useFakeTimers();
     handlers = {};
     handleFeishuMessageMock.mockClear();
-    setFeishuRuntime({
-      channel: {
-        debounce: {
-          createInboundDebouncer,
-          resolveInboundDebounceMs,
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        channel: {
+          debounce: {
+            createInboundDebouncer,
+            resolveInboundDebounceMs,
+          },
+          text: {
+            hasControlCommand,
+          },
         },
-        text: {
-          hasControlCommand,
-        },
-      },
-    } as unknown as PluginRuntime);
+      }),
+    );
   });
 
   afterEach(() => {

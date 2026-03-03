@@ -1,5 +1,6 @@
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { buildFeishuAgentBody, handleFeishuMessage, toMessageResourceType } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -143,38 +144,40 @@ describe("handleFeishuMessage command authorization", () => {
       },
     });
     mockEnqueueSystemEvent.mockReset();
-    setFeishuRuntime({
-      system: {
-        enqueueSystemEvent: mockEnqueueSystemEvent,
-      },
-      channel: {
-        routing: {
-          resolveAgentRoute: mockResolveAgentRoute,
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        system: {
+          enqueueSystemEvent: mockEnqueueSystemEvent,
         },
-        reply: {
-          resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
-          formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-          finalizeInboundContext: mockFinalizeInboundContext,
-          dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-          withReplyDispatcher: mockWithReplyDispatcher,
-        },
-        commands: {
-          shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
-          resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+        channel: {
+          routing: {
+            resolveAgentRoute: mockResolveAgentRoute,
+          },
+          reply: {
+            resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext: mockFinalizeInboundContext,
+            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+            withReplyDispatcher: mockWithReplyDispatcher,
+          },
+          commands: {
+            shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+            resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+          },
+          media: {
+            saveMediaBuffer: mockSaveMediaBuffer,
+          },
+          pairing: {
+            readAllowFromStore: mockReadAllowFromStore,
+            upsertPairingRequest: mockUpsertPairingRequest,
+            buildPairingReply: mockBuildPairingReply,
+          },
         },
         media: {
-          saveMediaBuffer: mockSaveMediaBuffer,
+          detectMime: vi.fn(async () => "application/octet-stream"),
         },
-        pairing: {
-          readAllowFromStore: mockReadAllowFromStore,
-          upsertPairingRequest: mockUpsertPairingRequest,
-          buildPairingReply: mockBuildPairingReply,
-        },
-      },
-      media: {
-        detectMime: vi.fn(async () => "application/octet-stream"),
-      },
-    } as unknown as PluginRuntime);
+      }),
+    );
   });
 
   it("does not enqueue inbound preview text as system events", async () => {
