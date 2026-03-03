@@ -1657,7 +1657,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           if ((isBlock || isFinal) && blockStreamingClient && mediaUrls.length === 0 && text) {
             if (isBlock && blockStreamMessageId) {
               // Subsequent block: accumulate and edit the existing message
-              blockStreamAccumulatedText += (blockStreamAccumulatedText ? "\n" : "") + text;
+              // Append exactly as we receive blocks; do not inject separators.
+              blockStreamAccumulatedText += text;
               try {
                 await patchMattermostPost(blockStreamingClient, {
                   postId: blockStreamMessageId,

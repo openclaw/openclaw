@@ -6,7 +6,6 @@ import {
   formatPairingApproveHint,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
-  registerPluginHttpRoute,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
