@@ -495,7 +495,7 @@ export async function sendMSTeamsMessages(params: {
   if (params.replyStyle === "thread") {
     const ctx = params.context;
     if (!ctx) {
-      throw new Error("Missing context for replyStyle=thread");
+      return await sendProactively(messages, 0);
     }
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
