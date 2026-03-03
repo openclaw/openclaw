@@ -126,6 +126,22 @@ describe("deliverReplies", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
+  it("skips malformed replies and continues with valid entries", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [undefined, { text: "hello" }] as unknown as DeliverRepliesParams["replies"],
+      runtime,
+      bot,
+    });
+
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toBe("hello");
+  });
+
   it("reports message_sent success=false when hooks blank out a text-only reply", async () => {
     messageHookRunner.hasHooks.mockImplementation(
       (name: string) => name === "message_sending" || name === "message_sent",
@@ -146,6 +162,40 @@ describe("deliverReplies", () => {
     expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
       expect.objectContaining({ success: false, content: "" }),
       expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+    );
+  });
+
+  it("passes accountId into message hooks", async () => {
+    messageHookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      accountId: "work",
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+    });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        channelId: "telegram",
+        accountId: "work",
+        conversationId: "123",
+      }),
+    );
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true }),
+      expect.objectContaining({
+        channelId: "telegram",
+        accountId: "work",
+        conversationId: "123",
+      }),
     );
   });
 
