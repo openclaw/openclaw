@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { VERSION } from "../version.js";
@@ -19,6 +20,7 @@ export type MinimalServicePathOptions = {
   extraDirs?: string[];
   home?: string;
   env?: Record<string, string | undefined>;
+  requireExistingUserDirs?: boolean;
 };
 
 type BuildServicePathOptions = MinimalServicePathOptions & {
@@ -64,8 +66,8 @@ function readServiceProxyEnvironment(
   return out;
 }
 
-function addNonEmptyDir(dirs: string[], dir: string | undefined): void {
-  if (dir) {
+function addDir(dirs: string[], dir: string, requireExistingUserDirs: boolean): void {
+  if (!requireExistingUserDirs || fs.existsSync(dir)) {
     dirs.push(dir);
   }
 }
@@ -77,24 +79,37 @@ function appendSubdir(base: string | undefined, subdir: string): string | undefi
   return base.endsWith(`/${subdir}`) ? base : path.posix.join(base, subdir);
 }
 
-function addCommonUserBinDirs(dirs: string[], home: string): void {
-  dirs.push(`${home}/.local/bin`);
-  dirs.push(`${home}/.npm-global/bin`);
-  dirs.push(`${home}/bin`);
-  dirs.push(`${home}/.volta/bin`);
-  dirs.push(`${home}/.asdf/shims`);
-  dirs.push(`${home}/.bun/bin`);
+function addCommonUserBinDirs(
+  dirs: string[],
+  home: string,
+  requireExistingUserDirs: boolean,
+): void {
+  addDir(dirs, `${home}/.local/bin`, requireExistingUserDirs);
+  addDir(dirs, `${home}/.npm-global/bin`, requireExistingUserDirs);
+  addDir(dirs, `${home}/bin`, requireExistingUserDirs);
+  addDir(dirs, `${home}/.volta/bin`, requireExistingUserDirs);
+  addDir(dirs, `${home}/.asdf/shims`, requireExistingUserDirs);
+  addDir(dirs, `${home}/.bun/bin`, requireExistingUserDirs);
 }
 
 function addCommonEnvConfiguredBinDirs(
   dirs: string[],
   env: Record<string, string | undefined> | undefined,
+  requireExistingUserDirs: boolean,
 ): void {
-  addNonEmptyDir(dirs, env?.PNPM_HOME);
-  addNonEmptyDir(dirs, appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"));
-  addNonEmptyDir(dirs, appendSubdir(env?.BUN_INSTALL, "bin"));
-  addNonEmptyDir(dirs, appendSubdir(env?.VOLTA_HOME, "bin"));
-  addNonEmptyDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"));
+  const configuredDirs = [
+    env?.PNPM_HOME,
+    appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"),
+    appendSubdir(env?.BUN_INSTALL, "bin"),
+    appendSubdir(env?.VOLTA_HOME, "bin"),
+    appendSubdir(env?.ASDF_DATA_DIR, "shims"),
+  ];
+  for (const dir of configuredDirs) {
+    if (!dir) {
+      continue;
+    }
+    addDir(dirs, dir, requireExistingUserDirs);
+  }
 }
 
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
@@ -118,6 +133,7 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
 export function resolveDarwinUserBinDirs(
   home: string | undefined,
   env?: Record<string, string | undefined>,
+  requireExistingUserDirs = false,
 ): string[] {
   if (!home) {
     return [];
@@ -128,25 +144,34 @@ export function resolveDarwinUserBinDirs(
   // Env-configured bin roots (override defaults when present).
   // Note: FNM_DIR on macOS defaults to ~/Library/Application Support/fnm
   // Note: PNPM_HOME on macOS defaults to ~/Library/pnpm
-  addCommonEnvConfiguredBinDirs(dirs, env);
+  addCommonEnvConfiguredBinDirs(dirs, env, requireExistingUserDirs);
   // nvm: no stable default path, relies on env or user's shell config
   // User must set NVM_DIR and source nvm.sh for it to work
-  addNonEmptyDir(dirs, env?.NVM_DIR);
+  if (env?.NVM_DIR) {
+    addDir(dirs, env.NVM_DIR, requireExistingUserDirs);
+  }
   // fnm: use aliases/default (not current)
-  addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"));
+  const fnmAliasesDir = appendSubdir(env?.FNM_DIR, "aliases/default/bin");
+  if (fnmAliasesDir) {
+    addDir(dirs, fnmAliasesDir, requireExistingUserDirs);
+  }
   // pnpm: binary is directly in PNPM_HOME (not in bin subdirectory)
 
   // Common user bin directories
-  addCommonUserBinDirs(dirs, home);
+  addCommonUserBinDirs(dirs, home, requireExistingUserDirs);
 
   // Node version managers - macOS specific paths
   // nvm: no stable default path, depends on user's shell configuration
   // fnm: macOS default is ~/Library/Application Support/fnm, not ~/.fnm
-  dirs.push(`${home}/Library/Application Support/fnm/aliases/default/bin`); // fnm default
-  dirs.push(`${home}/.fnm/aliases/default/bin`); // fnm if customized to ~/.fnm
+  addDir(
+    dirs,
+    `${home}/Library/Application Support/fnm/aliases/default/bin`,
+    requireExistingUserDirs,
+  ); // fnm default
+  addDir(dirs, `${home}/.fnm/aliases/default/bin`, requireExistingUserDirs); // fnm if customized to ~/.fnm
   // pnpm: macOS default is ~/Library/pnpm, not ~/.local/share/pnpm
-  dirs.push(`${home}/Library/pnpm`); // pnpm default
-  dirs.push(`${home}/.local/share/pnpm`); // pnpm XDG fallback
+  addDir(dirs, `${home}/Library/pnpm`, requireExistingUserDirs); // pnpm default
+  addDir(dirs, `${home}/.local/share/pnpm`, requireExistingUserDirs); // pnpm XDG fallback
 
   return dirs;
 }
@@ -158,6 +183,7 @@ export function resolveDarwinUserBinDirs(
 export function resolveLinuxUserBinDirs(
   home: string | undefined,
   env?: Record<string, string | undefined>,
+  requireExistingUserDirs = false,
 ): string[] {
   if (!home) {
     return [];
@@ -166,17 +192,23 @@ export function resolveLinuxUserBinDirs(
   const dirs: string[] = [];
 
   // Env-configured bin roots (override defaults when present).
-  addCommonEnvConfiguredBinDirs(dirs, env);
-  addNonEmptyDir(dirs, appendSubdir(env?.NVM_DIR, "current/bin"));
-  addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"));
+  addCommonEnvConfiguredBinDirs(dirs, env, requireExistingUserDirs);
+  const nvmCurrentDir = appendSubdir(env?.NVM_DIR, "current/bin");
+  if (nvmCurrentDir) {
+    addDir(dirs, nvmCurrentDir, requireExistingUserDirs);
+  }
+  const fnmCurrentDir = appendSubdir(env?.FNM_DIR, "current/bin");
+  if (fnmCurrentDir) {
+    addDir(dirs, fnmCurrentDir, requireExistingUserDirs);
+  }
 
   // Common user bin directories
-  addCommonUserBinDirs(dirs, home);
+  addCommonUserBinDirs(dirs, home, requireExistingUserDirs);
 
   // Node version managers
-  dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
-  dirs.push(`${home}/.fnm/current/bin`); // fnm
-  dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
+  addDir(dirs, `${home}/.nvm/current/bin`, requireExistingUserDirs); // nvm with current symlink
+  addDir(dirs, `${home}/.fnm/current/bin`, requireExistingUserDirs); // fnm
+  addDir(dirs, `${home}/.local/share/pnpm`, requireExistingUserDirs); // pnpm global bin
 
   return dirs;
 }
@@ -194,9 +226,9 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   // Add user bin directories for version managers (npm global, nvm, fnm, volta, etc.)
   const userDirs =
     platform === "linux"
-      ? resolveLinuxUserBinDirs(options.home, options.env)
+      ? resolveLinuxUserBinDirs(options.home, options.env, options.requireExistingUserDirs)
       : platform === "darwin"
-        ? resolveDarwinUserBinDirs(options.home, options.env)
+        ? resolveDarwinUserBinDirs(options.home, options.env, options.requireExistingUserDirs)
         : [];
 
   const add = (dir: string) => {
@@ -326,7 +358,7 @@ function resolveSharedServiceEnvironmentFields(
     stateDir,
     configPath,
     tmpDir,
-    minimalPath: buildMinimalServicePath({ env }),
+    minimalPath: buildMinimalServicePath({ env, requireExistingUserDirs: true }),
     proxyEnv,
     nodeCaCerts,
     nodeUseSystemCa,

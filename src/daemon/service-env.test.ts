@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -280,6 +281,29 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
     if (process.platform === "darwin") {
       expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
+    }
+  });
+
+  it("skips non-existent user bin directories when building service PATH", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-service-home-"));
+    const existingPnpmHome = path.join(home, ".local/share/pnpm");
+    fs.mkdirSync(existingPnpmHome, { recursive: true });
+    try {
+      const env = buildServiceEnvironment({
+        env: {
+          HOME: home,
+          NPM_CONFIG_PREFIX: path.join(home, ".npm-global"),
+          NVM_DIR: path.join(home, ".nvm"),
+        },
+        port: 18789,
+        platform: "linux",
+      });
+      const parts = (env.PATH ?? "").split(path.posix.delimiter);
+      expect(parts).toContain(existingPnpmHome);
+      expect(parts).not.toContain(path.join(home, ".npm-global/bin"));
+      expect(parts).not.toContain(path.join(home, ".nvm/current/bin"));
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 
