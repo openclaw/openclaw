@@ -13,7 +13,10 @@ import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
-import { wrapHostEditToolWithPostWriteRecovery } from "./pi-tools.host-edit.js";
+import {
+  wrapHostEditToolWithPostWriteRecovery,
+  wrapHostEditToolWithMismatchContent,
+} from "./pi-tools.host-edit.js";
 import {
   CLAUDE_PARAM_GROUPS,
   assertRequiredParams,
