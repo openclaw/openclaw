@@ -108,6 +108,71 @@ describe("temporal decay", () => {
     expect(merged[0]?.score ?? 0).toBeGreaterThan(merged[1]?.score ?? 0);
   });
 
+  it("extracts date from memory path with topic suffix", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/2026-02-10-niki-blog.md", score: 1, source: "memory" }],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    // Date matches today (NOW_MS), so no decay
+    expect(decayed[0]?.score).toBeCloseTo(1);
+  });
+
+  it("extracts date from memory subdirectory path", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/archive/2025-01-11.md", score: 1, source: "memory" }],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    // ~395 days old, heavy decay
+    expect(decayed[0]?.score ?? 1).toBeLessThan(0.01);
+  });
+
+  it("extracts date from memory subdirectory path with suffix", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/reference/2026-02-10-detail.md", score: 1, source: "memory" }],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    // Date matches today (NOW_MS), so no decay
+    expect(decayed[0]?.score).toBeCloseTo(1);
+  });
+
+  it("extracts date when not at start of basename", async () => {
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [
+        { path: "memory/archive/morning-summary-2026-02-10.md", score: 1, source: "memory" },
+      ],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    // Date matches today (NOW_MS), so no decay
+    expect(decayed[0]?.score).toBeCloseTo(1);
+  });
+
+  it("treats dated files in subdirectories as temporal, not evergreen", async () => {
+    const dir = await makeTempDir();
+
+    // Create a dated file in a memory subdirectory
+    const datedSubPath = path.join(dir, "memory", "archive", "2010-01-01.md");
+    await fs.mkdir(path.dirname(datedSubPath), { recursive: true });
+    await fs.writeFile(datedSubPath, "old dated");
+
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/archive/2010-01-01.md", score: 1, source: "memory" }],
+      workspaceDir: dir,
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    // Very old date means heavy decay — file must NOT be treated as evergreen
+    expect(decayed[0]?.score ?? 1).toBeLessThan(0.001);
+  });
+
   it("handles future dates, zero age, and very old memories", async () => {
     const merged = await mergeHybridResults({
       vectorWeight: 1,
