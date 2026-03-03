@@ -670,7 +670,64 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  return wrapEditToolWithCurrentContent(base, params.bridge);
+}
+
+/**
+ * Wraps the edit tool to return the current file content on mismatch.
+ * This allows the agent to retry immediately without a separate Read call.
+ * Implements Option 1 from https://github.com/openclaw/openclaw/issues/18132
+ */
+function wrapEditToolWithCurrentContent(tool: AnyAgentTool, bridge: SandboxFsBridge): AnyAgentTool {
+  const wrapped = wrapToolParamNormalization(tool, CLAUDE_PARAM_GROUPS.edit);
+  return {
+    ...wrapped,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const result = await wrapped.execute(toolCallId, params, signal, onUpdate);
+
+      // Check if edit failed due to oldText mismatch (specific error from pi-coding-agent)
+      if (
+        result.isError &&
+        result.content.some((block) => {
+          if (block.type === "text") {
+            const text = block.text.toLowerCase();
+            // Only match specific oldText mismatch errors from createEditTool
+            return text.includes("oldtext") && text.includes("not found");
+          }
+          return false;
+        })
+      ) {
+        // Try to read current file content and append it to the error
+        const record = params as Record<string, unknown>;
+        const filePath = record?.file_path || record?.path;
+
+        if (typeof filePath === "string") {
+          try {
+            // bridge.readFile returns Buffer, no encoding parameter
+            const content = await bridge.readFile({ filePath, cwd: "" });
+            const currentContent = Buffer.from(content).toString("utf-8");
+
+            // Append current content to error message
+            return {
+              ...result,
+              content: [
+                ...result.content,
+                {
+                  type: "text" as const,
+                  text: `\n\n--- Current file content ---\n${currentContent}\n--- End of current content ---`,
+                },
+              ],
+            };
+          } catch {
+            // If we can't read the file, just return the original error
+            return result;
+          }
+        }
+      }
+
+      return result;
+    },
+  };
 }
 
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
@@ -684,7 +741,67 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  return wrapHostEditToolWithCurrentContent(base, root);
+}
+
+/**
+ * Wraps the host edit tool to return the current file content on mismatch.
+ * Implements Option 1 from https://github.com/openclaw/openclaw/issues/18132
+ */
+function wrapHostEditToolWithCurrentContent(tool: AnyAgentTool, root: string): AnyAgentTool {
+  const wrapped = wrapToolParamNormalization(tool, CLAUDE_PARAM_GROUPS.edit);
+  return {
+    ...wrapped,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const result = await wrapped.execute(toolCallId, params, signal, onUpdate);
+
+      // Check if edit failed due to oldText mismatch (specific error from pi-coding-agent)
+      if (
+        result.isError &&
+        result.content.some((block) => {
+          if (block.type === "text") {
+            const text = block.text.toLowerCase();
+            // Only match specific oldText mismatch errors from createEditTool
+            return text.includes("oldtext") && text.includes("not found");
+          }
+          return false;
+        })
+      ) {
+        // Try to read current file content and append it to the error
+        const record = params as Record<string, unknown>;
+        const filePath = record?.file_path || record?.path;
+
+        if (typeof filePath === "string") {
+          try {
+            // Use readFileWithinRoot to enforce workspace boundary
+            const relative = toRelativeWorkspacePath(root, filePath);
+            const safeRead = await readFileWithinRoot({
+              rootDir: root,
+              relativePath: relative,
+            });
+            const content = safeRead.buffer.toString("utf-8");
+
+            // Append current content to error message
+            return {
+              ...result,
+              content: [
+                ...result.content,
+                {
+                  type: "text" as const,
+                  text: `\n\n--- Current file content ---\n${content}\n--- End of current content ---`,
+                },
+              ],
+            };
+          } catch {
+            // If we can't read the file, just return the original error
+            return result;
+          }
+        }
+      }
+
+      return result;
+    },
+  };
 }
 
 export function createOpenClawReadTool(
@@ -763,12 +880,6 @@ function createSandboxEditOperations(params: SandboxToolParams) {
   } as const;
 }
 
-async function writeHostFile(absolutePath: string, content: string) {
-  const resolved = path.resolve(absolutePath);
-  await fs.mkdir(path.dirname(resolved), { recursive: true });
-  await fs.writeFile(resolved, content, "utf-8");
-}
-
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
@@ -779,7 +890,12 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         const resolved = path.resolve(dir);
         await fs.mkdir(resolved, { recursive: true });
       },
-      writeFile: writeHostFile,
+      writeFile: async (absolutePath: string, content: string) => {
+        const resolved = path.resolve(absolutePath);
+        const dir = path.dirname(resolved);
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(resolved, content, "utf-8");
+      },
     } as const;
   }
 
@@ -813,7 +929,12 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         const resolved = path.resolve(absolutePath);
         return await fs.readFile(resolved);
       },
-      writeFile: writeHostFile,
+      writeFile: async (absolutePath: string, content: string) => {
+        const resolved = path.resolve(absolutePath);
+        const dir = path.dirname(resolved);
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(resolved, content, "utf-8");
+      },
       access: async (absolutePath: string) => {
         const resolved = path.resolve(absolutePath);
         await fs.access(resolved);
