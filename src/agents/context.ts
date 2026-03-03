@@ -3,6 +3,7 @@
 
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -19,6 +20,12 @@ type AgentModelEntry = { params?: Record<string, unknown> };
 
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
+const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
+  initialMs: 1_000,
+  maxMs: 60_000,
+  factor: 2,
+  jitter: 0,
+};
 
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
@@ -68,7 +75,9 @@ export function applyConfiguredContextWindows(params: {
 
 const MODEL_CACHE = new Map<string, number>();
 let loadPromise: Promise<void> | null = null;
-let configuredWindowsPrimed = false;
+let configuredConfig: OpenClawConfig | undefined;
+let configLoadFailures = 0;
+let nextConfigLoadAttemptAtMs = 0;
 
 function getCommandPathFromArgv(argv: string[]): string[] {
   const args = argv.slice(2);
@@ -100,33 +109,42 @@ function shouldSkipEagerContextWindowWarmup(argv: string[] = process.argv): bool
 }
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
-  if (configuredWindowsPrimed) {
+  if (configuredConfig) {
+    return configuredConfig;
+  }
+  if (Date.now() < nextConfigLoadAttemptAtMs) {
     return undefined;
   }
-  configuredWindowsPrimed = true;
   try {
     const cfg = loadConfig();
     applyConfiguredContextWindows({
       cache: MODEL_CACHE,
       modelsConfig: cfg.models as ModelsConfig | undefined,
     });
+    configuredConfig = cfg;
+    configLoadFailures = 0;
+    nextConfigLoadAttemptAtMs = 0;
     return cfg;
   } catch {
-    // If config can't be loaded, leave cache empty.
+    configLoadFailures += 1;
+    const backoffMs = computeBackoff(CONFIG_LOAD_RETRY_POLICY, configLoadFailures);
+    nextConfigLoadAttemptAtMs = Date.now() + backoffMs;
+    // If config can't be loaded, leave cache empty and retry after backoff.
     return undefined;
   }
 }
 
 function ensureContextWindowCacheLoaded(): Promise<void> {
-  const cfg = primeConfiguredContextWindows();
   if (loadPromise) {
     return loadPromise;
   }
-  loadPromise = (async () => {
-    if (!cfg) {
-      return;
-    }
 
+  const cfg = primeConfiguredContextWindows();
+  if (!cfg) {
+    return Promise.resolve();
+  }
+
+  loadPromise = (async () => {
     try {
       await ensureOpenClawModelsJson(cfg);
     } catch {

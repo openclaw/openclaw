@@ -61,4 +61,54 @@ describe("lookupContextTokens", () => {
       process.argv = argvSnapshot;
     }
   });
+
+  it("retries config loading after backoff when an initial load fails", async () => {
+    vi.useFakeTimers();
+    const loadConfigMock = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("transient");
+      })
+      .mockImplementation(() => ({
+        models: {
+          providers: {
+            openrouter: {
+              models: [{ id: "openrouter/claude-sonnet", contextWindow: 654_321 }],
+            },
+          },
+        },
+      }));
+
+    vi.doMock("../config/config.js", () => ({
+      loadConfig: loadConfigMock,
+    }));
+    vi.doMock("./models-config.js", () => ({
+      ensureOpenClawModelsJson: vi.fn(async () => {}),
+    }));
+    vi.doMock("./agent-paths.js", () => ({
+      resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
+    }));
+    vi.doMock("./pi-model-discovery.js", () => ({
+      discoverAuthStorage: vi.fn(() => ({})),
+      discoverModels: vi.fn(() => ({
+        getAll: () => [],
+      })),
+    }));
+
+    const argvSnapshot = process.argv;
+    process.argv = ["node", "openclaw", "config", "validate"];
+    try {
+      const { lookupContextTokens } = await import("./context.js");
+      expect(lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();
+      expect(loadConfigMock).toHaveBeenCalledTimes(1);
+      expect(lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();
+      expect(loadConfigMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(654_321);
+      expect(loadConfigMock).toHaveBeenCalledTimes(2);
+    } finally {
+      process.argv = argvSnapshot;
+      vi.useRealTimers();
+    }
+  });
 });
