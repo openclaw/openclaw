@@ -80,3 +80,50 @@ export function wrapHostEditToolWithPostWriteRecovery(
     },
   };
 }
+
+/**
+ * Wraps the edit tool to return current file content on oldText mismatch.
+ * Implements Option 1 from https://github.com/openclaw/openclaw/issues/18132
+ */
+export function wrapEditToolWithMismatchContent(
+  base: AnyAgentTool,
+  root: string,
+  readFile: (path: string) => Promise<string>,
+): AnyAgentTool {
+  return {
+    ...base,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const result = await base.execute(toolCallId, params, signal, onUpdate);
+
+      if (
+        result.isError &&
+        result.content.some(
+          (b: unknown) =>
+            b.type === "text" &&
+            b.text.toLowerCase().includes("oldtext") &&
+            b.text.toLowerCase().includes("not found"),
+        )
+      ) {
+        const record = params as Record<string, unknown>;
+        const filePath = record?.file_path || record?.path;
+
+        if (typeof filePath === "string") {
+          try {
+            const content = await readFile(filePath);
+            return {
+              ...result,
+              content: [
+                ...result.content,
+                {
+                  type: "text" as const,
+                  text: `\n\n--- Current file content ---\n${content}\n--- End of current content ---`,
+                },
+              ],
+            };
+          } catch {}
+        }
+      }
+      return result;
+    },
+  };
+}
