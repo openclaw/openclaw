@@ -88,7 +88,12 @@ function resolveMinimaxApiKey(): string | undefined {
 function resolveMinimaxCnApiKey(): string | undefined {
   return resolveProviderApiKeyFromConfigAndStore({
     providerId: "minimax-cn",
-    envDirect: [process.env.MINIMAX_CN_CODE_PLAN_KEY, process.env.MINIMAX_CN_API_KEY],
+    envDirect: [
+      process.env.MINIMAX_CN_CODE_PLAN_KEY,
+      process.env.MINIMAX_CN_API_KEY,
+      // Fallback to generic MINIMAX_API_KEY for env-only setups
+      process.env.MINIMAX_API_KEY,
+    ],
   });
 }
 
