@@ -20,6 +20,7 @@ export type DiscordThreadBindingLookupRecord = {
 
 export type DiscordThreadBindingLookup = {
   listBySessionKey: (targetSessionKey: string) => DiscordThreadBindingLookupRecord[];
+  touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
 
 function resolveTargetChannelId(target: string): string | undefined {
@@ -50,7 +51,7 @@ function _resolveBoundThreadBinding(params: {
   return bindings.find((entry) => entry.threadId === targetChannelId);
 }
 
-function _resolveBindingPersona(binding: DiscordThreadBindingLookupRecord | undefined): {
+function resolveBindingPersona(binding: DiscordThreadBindingLookupRecord | undefined): {
   username?: string;
   avatarUrl?: string;
 } {
@@ -72,7 +73,7 @@ function _resolveBindingPersona(binding: DiscordThreadBindingLookupRecord | unde
   return { username, avatarUrl };
 }
 
-async function _sendDiscordChunkWithFallback(params: {
+async function sendDiscordChunkWithFallback(params: {
   target: string;
   text: string;
   token: string;
@@ -112,7 +113,7 @@ async function _sendDiscordChunkWithFallback(params: {
   });
 }
 
-async function _sendAdditionalDiscordMedia(params: {
+async function sendAdditionalDiscordMedia(params: {
   target: string;
   token: string;
   rest?: RequestClient;
@@ -154,7 +155,7 @@ export async function deliverDiscordReply(params: {
   // For "first" mode, track whether the replyToId has been consumed by a non-empty send.
   let replyToConsumed = false;
 
-  const resolveReplyTo = (isNonEmpty: boolean): string | undefined => {
+  const resolveReplyTo = (isNonEmpty?: boolean): string | undefined => {
     if (!baseReplyTo) {
       return undefined;
     }
@@ -176,8 +177,8 @@ export async function deliverDiscordReply(params: {
     sessionKey: params.sessionKey,
     target: params.target,
   });
-  const persona = _resolveBindingPersona(binding);
-
+  const persona = resolveBindingPersona(binding);
+  let deliveredAny = false;
   for (const payload of params.replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = payload.text ?? "";
@@ -203,7 +204,7 @@ export async function deliverDiscordReply(params: {
           continue;
         }
         const replyTo = resolveReplyTo(true);
-        await _sendDiscordChunkWithFallback({
+        await sendDiscordChunkWithFallback({
           target: params.target,
           text: chunk,
           token: params.token,
@@ -214,6 +215,7 @@ export async function deliverDiscordReply(params: {
           username: persona.username,
           avatarUrl: persona.avatarUrl,
         });
+        deliveredAny = true;
       }
       continue;
     }
@@ -232,27 +234,28 @@ export async function deliverDiscordReply(params: {
         accountId: params.accountId,
         replyTo,
       });
-      // Voice messages cannot include text; send remaining text separately if present
-      if (text.trim()) {
-        const replyToText = resolveReplyTo(true);
-        await sendMessageDiscord(params.target, text, {
-          token: params.token,
-          rest: params.rest,
-          accountId: params.accountId,
-          replyTo: replyToText,
-        });
-      }
-      // Additional media items are sent as regular attachments (voice is single-file only)
-      for (const extra of mediaList.slice(1)) {
-        const replyToExtra = resolveReplyTo(true);
-        await sendMessageDiscord(params.target, "", {
-          token: params.token,
-          rest: params.rest,
-          mediaUrl: extra,
-          accountId: params.accountId,
-          replyTo: replyToExtra,
-        });
-      }
+      deliveredAny = true;
+      // Voice messages cannot include text; send remaining text separately if present.
+      await sendDiscordChunkWithFallback({
+        target: params.target,
+        text,
+        token: params.token,
+        rest: params.rest,
+        accountId: params.accountId,
+        replyTo: resolveReplyTo(),
+        binding,
+        username: persona.username,
+        avatarUrl: persona.avatarUrl,
+      });
+      // Additional media items are sent as regular attachments (voice is single-file only).
+      await sendAdditionalDiscordMedia({
+        target: params.target,
+        token: params.token,
+        rest: params.rest,
+        accountId: params.accountId,
+        mediaUrls: mediaList.slice(1),
+        resolveReplyTo,
+      });
       continue;
     }
 
@@ -264,15 +267,18 @@ export async function deliverDiscordReply(params: {
       accountId: params.accountId,
       replyTo,
     });
-    for (const extra of mediaList.slice(1)) {
-      const replyToExtra = resolveReplyTo(true);
-      await sendMessageDiscord(params.target, "", {
-        token: params.token,
-        rest: params.rest,
-        mediaUrl: extra,
-        accountId: params.accountId,
-        replyTo: replyToExtra,
-      });
-    }
+    deliveredAny = true;
+    await sendAdditionalDiscordMedia({
+      target: params.target,
+      token: params.token,
+      rest: params.rest,
+      accountId: params.accountId,
+      mediaUrls: mediaList.slice(1),
+      resolveReplyTo,
+    });
+  }
+
+  if (binding && deliveredAny) {
+    params.threadBindings?.touchThread?.({ threadId: binding.threadId });
   }
 }

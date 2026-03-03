@@ -167,6 +167,11 @@ export type CompactionStatus = {
   completedAt: number | null;
 };
 
+export type FallbackStatus = {
+  active: boolean;
+  reason?: string | null;
+};
+
 type CompactionHost = ToolStreamHost & {
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: number | null;

@@ -460,6 +460,13 @@ export type CronDelivery = {
   bestEffort?: boolean;
 };
 
+export type CronFailureAlert = {
+  after?: number;
+  channel?: string;
+  to?: string;
+  cooldownMs?: number;
+};
+
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
@@ -467,6 +474,7 @@ export type CronJobState = {
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   lastDurationMs?: number;
+  lastFailureAlertAtMs?: number;
 };
 
 export type CronJob = {
@@ -483,6 +491,7 @@ export type CronJob = {
   wakeMode: CronWakeMode;
   payload: CronPayload;
   delivery?: CronDelivery;
+  failureAlert?: CronFailureAlert | false;
   state?: CronJobState;
 };
 
@@ -565,4 +574,8 @@ export type LogEntry = {
   subsystem?: string | null;
   message?: string | null;
   meta?: Record<string, unknown> | null;
+};
+
+export type ToolsCatalogResult = {
+  tools: Array<Record<string, unknown>>;
 };

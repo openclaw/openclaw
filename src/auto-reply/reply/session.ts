@@ -30,9 +30,14 @@ import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import { buildAgentMainSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  deliveryContextKey,
+  normalizeDeliveryContext,
+  normalizeSessionDeliveryFields,
+} from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -57,6 +62,12 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
   return normalizeMessageChannel(head);
 }
 
+function isExternalRoutingChannel(channel?: string): channel is string {
+  return Boolean(
+    channel && channel !== INTERNAL_MESSAGE_CHANNEL && isDeliverableMessageChannel(channel),
+  );
+}
+
 function resolveLastChannelRaw(params: {
   originatingChannelRaw?: string;
   persistedLastChannel?: string;
@@ -66,24 +77,42 @@ function resolveLastChannelRaw(params: {
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   let resolved = params.originatingChannelRaw || params.persistedLastChannel;
-  // Internal webchat/system turns should not overwrite previously known external
-  // delivery routes (or explicit channel hints encoded in the session key).
-  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL) {
-    if (
-      persistedChannel &&
-      persistedChannel !== INTERNAL_MESSAGE_CHANNEL &&
-      isDeliverableMessageChannel(persistedChannel)
-    ) {
+  // Internal/non-deliverable sources should not overwrite previously known
+  // external delivery routes (or explicit channel hints from the session key).
+  if (!isExternalRoutingChannel(originatingChannel)) {
+    if (isExternalRoutingChannel(persistedChannel)) {
       resolved = persistedChannel;
-    } else if (
-      sessionKeyChannelHint &&
-      sessionKeyChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
-      isDeliverableMessageChannel(sessionKeyChannelHint)
-    ) {
+    } else if (isExternalRoutingChannel(sessionKeyChannelHint)) {
       resolved = sessionKeyChannelHint;
     }
   }
   return resolved;
+}
+
+function resolveLastToRaw(params: {
+  originatingChannelRaw?: string;
+  originatingToRaw?: string;
+  toRaw?: string;
+  persistedLastTo?: string;
+  persistedLastChannel?: string;
+  sessionKey?: string;
+}): string | undefined {
+  const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+  const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
+  const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
+
+  // When the turn originates from an internal/non-deliverable source, do not
+  // replace an established external destination with internal routing ids
+  // (e.g., session/webchat ids).
+  if (!isExternalRoutingChannel(originatingChannel)) {
+    const hasExternalFallback =
+      isExternalRoutingChannel(persistedChannel) || isExternalRoutingChannel(sessionKeyChannelHint);
+    if (hasExternalFallback && params.persistedLastTo) {
+      return params.persistedLastTo;
+    }
+  }
+
+  return params.originatingToRaw || params.toRaw || params.persistedLastTo;
 }
 
 export type SessionInitResult = {
@@ -112,12 +141,78 @@ export type SessionInitResult = {
  */
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
 
+type LegacyMainDeliveryRetirement = {
+  key: string;
+  entry: SessionEntry;
+};
+
 function resolveParentForkMaxTokens(cfg: OpenClawConfig): number {
   const configured = cfg.session?.parentForkMaxTokens;
   if (typeof configured === "number" && Number.isFinite(configured) && configured >= 0) {
     return Math.floor(configured);
   }
   return DEFAULT_PARENT_FORK_MAX_TOKENS;
+}
+
+function maybeRetireLegacyMainDeliveryRoute(params: {
+  sessionCfg: OpenClawConfig["session"] | undefined;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  agentId: string;
+  mainKey: string;
+  isGroup: boolean;
+  ctx: MsgContext;
+}): LegacyMainDeliveryRetirement | undefined {
+  const dmScope = params.sessionCfg?.dmScope ?? "main";
+  if (dmScope === "main" || params.isGroup) {
+    return undefined;
+  }
+  const canonicalMainSessionKey = buildAgentMainSessionKey({
+    agentId: params.agentId,
+    mainKey: params.mainKey,
+  }).toLowerCase();
+  if (params.sessionKey === canonicalMainSessionKey) {
+    return undefined;
+  }
+  const legacyMain = params.sessionStore[canonicalMainSessionKey];
+  if (!legacyMain) {
+    return undefined;
+  }
+  const legacyRouteKey = deliveryContextKey(deliveryContextFromSession(legacyMain));
+  if (!legacyRouteKey) {
+    return undefined;
+  }
+  const activeDirectRouteKey = deliveryContextKey(
+    normalizeDeliveryContext({
+      channel: params.ctx.OriginatingChannel as string | undefined,
+      to: params.ctx.OriginatingTo || params.ctx.To,
+      accountId: params.ctx.AccountId,
+      threadId: params.ctx.MessageThreadId,
+    }),
+  );
+  if (!activeDirectRouteKey || activeDirectRouteKey !== legacyRouteKey) {
+    return undefined;
+  }
+  if (
+    legacyMain.deliveryContext === undefined &&
+    legacyMain.lastChannel === undefined &&
+    legacyMain.lastTo === undefined &&
+    legacyMain.lastAccountId === undefined &&
+    legacyMain.lastThreadId === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    key: canonicalMainSessionKey,
+    entry: {
+      ...legacyMain,
+      deliveryContext: undefined,
+      lastChannel: undefined,
+      lastTo: undefined,
+      lastAccountId: undefined,
+      lastThreadId: undefined,
+    },
+  };
 }
 
 function forkSessionFromParent(params: {
@@ -273,6 +368,18 @@ export async function initSessionState(params: {
   }
 
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
+  const retiredLegacyMainDelivery = maybeRetireLegacyMainDeliveryRoute({
+    sessionCfg,
+    sessionKey,
+    sessionStore,
+    agentId,
+    mainKey,
+    isGroup,
+    ctx,
+  });
+  if (retiredLegacyMainDelivery) {
+    sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
+  }
   const entry = sessionStore[sessionKey];
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
@@ -339,7 +446,14 @@ export async function initSessionState(params: {
     persistedLastChannel: baseEntry?.lastChannel,
     sessionKey,
   });
-  const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
+  const lastToRaw = resolveLastToRaw({
+    originatingChannelRaw,
+    originatingToRaw: ctx.OriginatingTo,
+    toRaw: ctx.To,
+    persistedLastTo: baseEntry?.lastTo,
+    persistedLastChannel: baseEntry?.lastChannel,
+    sessionKey,
+  });
   const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
   // Only fall back to persisted threadId for thread sessions.  Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
@@ -477,6 +591,9 @@ export async function initSessionState(params: {
     (store) => {
       // Preserve per-session overrides while resetting compaction state on /new.
       store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+      if (retiredLegacyMainDelivery) {
+        store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
+      }
     },
     {
       activeSessionKey: sessionKey,

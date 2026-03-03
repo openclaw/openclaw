@@ -1,4 +1,3 @@
-import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import {
   Embed,
   RequestClient,
@@ -8,10 +7,12 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { PollLayoutType } from "discord-api-types/payloads/v10";
+import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import { Routes, type APIChannel, type APIEmbed } from "discord-api-types/v10";
 import type { ChunkMode } from "../auto-reply/chunk.js";
-import type { RetryRunner } from "../infra/retry-policy.js";
 import { loadConfig } from "../config/config.js";
+import type { RetryRunner } from "../infra/retry-policy.js";
+import { buildOutboundMediaLoadOptions } from "../media/load-options.js";
 import { normalizePollDurationHours, normalizePollInput, type PollInput } from "../polls.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
@@ -420,19 +421,12 @@ async function sendDiscordMedia(
   chunkMode?: ChunkMode,
   silent?: boolean,
 ) {
-  const media = await loadWebMedia(mediaUrl, { localRoots: mediaLocalRoots });
+  const media = await loadWebMedia(mediaUrl, buildOutboundMediaLoadOptions({ mediaLocalRoots }));
   const chunks = text ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode }) : [];
   const caption = chunks[0] ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
-  let fileData: Blob;
-  if (media.buffer instanceof Blob) {
-    fileData = media.buffer;
-  } else {
-    const arrayBuffer = new ArrayBuffer(media.buffer.byteLength);
-    new Uint8Array(arrayBuffer).set(media.buffer);
-    fileData = new Blob([arrayBuffer]);
-  }
+  const fileData = toDiscordFileBlob(media.buffer);
   const captionComponents = resolveDiscordSendComponents({
     components,
     text: caption,

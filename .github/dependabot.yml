@@ -7,29 +7,17 @@ registries:
   npm-npmjs:
     type: npm-registry
     url: https://registry.npmjs.org
+    token: ${{secrets.NPM_NPMJS_TOKEN}}
     replaces-base: true
 
 updates:
-  # Docker base images (root Dockerfiles)
-  - package-ecosystem: docker
-    directory: /
-    schedule:
-      interval: weekly
-    cooldown:
-      default-days: 7
-    groups:
-      docker-images:
-        patterns:
-          - "*"
-    open-pull-requests-limit: 5
-
   # npm dependencies (root)
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
+      interval: daily
     cooldown:
-      default-days: 7
+      default-days: 2
     groups:
       production:
         dependency-type: production
@@ -49,9 +37,9 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: daily
     cooldown:
-      default-days: 7
+      default-days: 2
     groups:
       actions:
         patterns:
@@ -65,9 +53,9 @@ updates:
   - package-ecosystem: swift
     directory: /apps/macos
     schedule:
-      interval: weekly
+      interval: daily
     cooldown:
-      default-days: 7
+      default-days: 2
     groups:
       swift-deps:
         patterns:
@@ -81,9 +69,9 @@ updates:
   - package-ecosystem: swift
     directory: /apps/shared/MoltbotKit
     schedule:
-      interval: weekly
+      interval: daily
     cooldown:
-      default-days: 7
+      default-days: 2
     groups:
       swift-deps:
         patterns:
@@ -97,9 +85,9 @@ updates:
   - package-ecosystem: swift
     directory: /Swabble
     schedule:
-      interval: weekly
+      interval: daily
     cooldown:
-      default-days: 7
+      default-days: 2
     groups:
       swift-deps:
         patterns:
@@ -113,9 +101,9 @@ updates:
   - package-ecosystem: gradle
     directory: /apps/android
     schedule:
-      interval: weekly
+      interval: daily
     cooldown:
-      default-days: 7
+      default-days: 2
     groups:
       android-deps:
         patterns:
@@ -123,4 +111,17 @@ updates:
         update-types:
           - minor
           - patch
+    open-pull-requests-limit: 5
+
+  # Docker base images
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 2
+    groups:
+      docker-images:
+        patterns:
+          - "*"
     open-pull-requests-limit: 5

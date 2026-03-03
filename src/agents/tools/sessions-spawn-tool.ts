@@ -1,15 +1,23 @@
 import { Type } from "@sinclair/typebox";
-import { emit } from "../../infra/events/bus.js";
-import { EVENT_TYPES } from "../../infra/events/schemas.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { ACP_SPAWN_MODES, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam } from "./common.js";
+import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
+const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
+const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
+  "target",
+  "transport",
+  "channel",
+  "to",
+  "threadId",
+  "thread_id",
+  "replyTo",
+  "reply_to",
+] as const;
 
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
@@ -25,12 +33,7 @@ const SessionsSpawnToolSchema = Type.Object({
   thread: Type.Optional(Type.Boolean()),
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
-  // Collaboration tracking fields
-  taskId: Type.Optional(Type.String()),
-  workSessionId: Type.Optional(Type.String()),
-  parentConversationId: Type.Optional(Type.String()),
-  depth: Type.Optional(Type.Number()),
-  hop: Type.Optional(Type.Number()),
+  sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
 });
 
 export function createSessionsSpawnTool(opts?: {
@@ -54,6 +57,14 @@ export function createSessionsSpawnTool(opts?: {
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
+        Object.hasOwn(params, key),
+      );
+      if (unsupportedParam) {
+        throw new ToolInputError(
+          `sessions_spawn does not support "${unsupportedParam}". Use "message" or "sessions_send" for channel delivery.`,
+        );
+      }
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
@@ -64,6 +75,7 @@ export function createSessionsSpawnTool(opts?: {
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
+      const sandbox = params.sandbox === "require" ? "require" : "inherit";
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -77,138 +89,51 @@ export function createSessionsSpawnTool(opts?: {
           : undefined;
       const thread = params.thread === true;
 
-      // Collaboration tracking fields
-      const taskId = readStringParam(params, "taskId");
-      const workSessionId = readStringParam(params, "workSessionId");
-      const parentConversationId = readStringParam(params, "parentConversationId");
-      const depth = typeof params.depth === "number" ? params.depth : undefined;
-      const hop = typeof params.hop === "number" ? params.hop : undefined;
-
-      // Resolve requester agent id for event emission
-      const requesterAgentId = normalizeAgentId(
-        opts?.requesterAgentIdOverride ?? parseAgentSessionKey(opts?.agentSessionKey)?.agentId,
-      );
-      const targetAgentId = requestedAgentId
-        ? normalizeAgentId(requestedAgentId)
-        : requesterAgentId;
-      // Use parentConversationId as the shared conversationId for this spawn
-      const conversationId = parentConversationId ?? undefined;
-      const eventTs = Date.now();
-
-      // Emit spawn event before dispatching
-      emit({
-        type: EVENT_TYPES.A2A_SPAWN,
-        agentId: requesterAgentId,
-        ts: eventTs,
-        data: {
-          fromAgent: requesterAgentId,
-          toAgent: targetAgentId,
-          conversationId,
-          parentConversationId,
-          workSessionId,
-          taskId,
-          depth,
-          hop,
-        },
-      });
-
-      // Emit send event
-      emit({
-        type: EVENT_TYPES.A2A_SEND,
-        agentId: requesterAgentId,
-        ts: eventTs,
-        data: {
-          fromAgent: requesterAgentId,
-          toAgent: targetAgentId,
-          conversationId,
-          workSessionId,
-          taskId,
-        },
-      });
-
-      let result: Awaited<ReturnType<typeof spawnSubagentDirect>>;
-      try {
-        result =
-          runtime === "acp"
-            ? await spawnAcpDirect(
-                {
-                  task,
-                  label: label || undefined,
-                  agentId: requestedAgentId,
-                  cwd,
-                  mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
-                  thread,
-                },
-                {
-                  agentSessionKey: opts?.agentSessionKey,
-                  agentChannel: opts?.agentChannel,
-                  agentAccountId: opts?.agentAccountId,
-                  agentTo: opts?.agentTo,
-                  agentThreadId: opts?.agentThreadId,
-                },
-              )
-            : await spawnSubagentDirect(
-                {
-                  task,
-                  label: label || undefined,
-                  agentId: requestedAgentId,
-                  model: modelOverride,
-                  thinking: thinkingOverrideRaw,
-                  runTimeoutSeconds,
-                  thread,
-                  mode,
-                  cleanup,
-                  expectsCompletionMessage: true,
-                },
-                {
-                  agentSessionKey: opts?.agentSessionKey,
-                  agentChannel: opts?.agentChannel,
-                  agentAccountId: opts?.agentAccountId,
-                  agentTo: opts?.agentTo,
-                  agentThreadId: opts?.agentThreadId,
-                  agentGroupId: opts?.agentGroupId,
-                  agentGroupChannel: opts?.agentGroupChannel,
-                  agentGroupSpace: opts?.agentGroupSpace,
-                  requesterAgentIdOverride: opts?.requesterAgentIdOverride,
-                  conversationId,
-                  parentConversationId,
-                  workSessionId,
-                  taskId,
-                  depth,
-                  hop,
-                },
-              );
-      } catch (err) {
-        const error = err instanceof Error ? err.message : String(err);
-        emit({
-          type: EVENT_TYPES.A2A_SPAWN_RESULT,
-          agentId: requesterAgentId,
-          ts: Date.now(),
-          data: {
-            status: "error",
-            error,
-            conversationId,
-            workSessionId,
-            taskId,
-          },
-        });
-        throw err;
-      }
-
-      // Emit spawn result event
-      emit({
-        type: EVENT_TYPES.A2A_SPAWN_RESULT,
-        agentId: requesterAgentId,
-        ts: Date.now(),
-        data: {
-          status: result.status,
-          runId: result.runId,
-          conversationId,
-          workSessionId,
-          taskId,
-          error: result.status === "error" ? result.error : undefined,
-        },
-      });
+      const result =
+        runtime === "acp"
+          ? await spawnAcpDirect(
+              {
+                task,
+                label: label || undefined,
+                agentId: requestedAgentId,
+                cwd,
+                mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
+                thread,
+              },
+              {
+                agentSessionKey: opts?.agentSessionKey,
+                agentChannel: opts?.agentChannel,
+                agentAccountId: opts?.agentAccountId,
+                agentTo: opts?.agentTo,
+                agentThreadId: opts?.agentThreadId,
+              },
+            )
+          : await spawnSubagentDirect(
+              {
+                task,
+                label: label || undefined,
+                agentId: requestedAgentId,
+                model: modelOverride,
+                thinking: thinkingOverrideRaw,
+                runTimeoutSeconds,
+                thread,
+                mode,
+                cleanup,
+                sandbox,
+                expectsCompletionMessage: true,
+              },
+              {
+                agentSessionKey: opts?.agentSessionKey,
+                agentChannel: opts?.agentChannel,
+                agentAccountId: opts?.agentAccountId,
+                agentTo: opts?.agentTo,
+                agentThreadId: opts?.agentThreadId,
+                agentGroupId: opts?.agentGroupId,
+                agentGroupChannel: opts?.agentGroupChannel,
+                agentGroupSpace: opts?.agentGroupSpace,
+                requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+              },
+            );
 
       return jsonResult(result);
     },
