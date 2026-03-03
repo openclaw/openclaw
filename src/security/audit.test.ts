@@ -150,6 +150,7 @@ describe("security audit", () => {
   let fixtureRoot = "";
   let caseId = 0;
   let channelSecurityRoot = "";
+  let sharedChannelSecurityStateDir = "";
   let sharedCodeSafetyStateDir = "";
   let sharedCodeSafetyWorkspaceDir = "";
   let sharedExtensionsStateDir = "";
@@ -161,12 +162,24 @@ describe("security audit", () => {
     return dir;
   };
 
+  const createFilesystemAuditFixture = async (label: string) => {
+    const tmp = await makeTmpDir(label);
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    if (!isWindows) {
+      await fs.chmod(configPath, 0o600);
+    }
+    return { tmp, stateDir, configPath };
+  };
+
   const withChannelSecurityStateDir = async (fn: (tmp: string) => Promise<void>) => {
-    const channelSecurityStateDir = path.join(channelSecurityRoot, `state-${caseId++}`);
-    const credentialsDir = path.join(channelSecurityStateDir, "credentials");
+    const credentialsDir = path.join(sharedChannelSecurityStateDir, "credentials");
+    await fs.rm(credentialsDir, { recursive: true, force: true }).catch(() => undefined);
     await fs.mkdir(credentialsDir, { recursive: true, mode: 0o700 });
-    await withEnvAsync({ OPENCLAW_STATE_DIR: channelSecurityStateDir }, () =>
-      fn(channelSecurityStateDir),
+    await withEnvAsync({ OPENCLAW_STATE_DIR: sharedChannelSecurityStateDir }, () =>
+      fn(sharedChannelSecurityStateDir),
     );
   };
 
@@ -214,6 +227,11 @@ description: test skill
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
     channelSecurityRoot = path.join(fixtureRoot, "channel-security");
     await fs.mkdir(channelSecurityRoot, { recursive: true, mode: 0o700 });
+    sharedChannelSecurityStateDir = path.join(channelSecurityRoot, "state-shared");
+    await fs.mkdir(path.join(sharedChannelSecurityStateDir, "credentials"), {
+      recursive: true,
+      mode: 0o700,
+    });
     const codeSafetyFixture = await createSharedCodeSafetyFixture();
     sharedCodeSafetyStateDir = codeSafetyFixture.stateDir;
     sharedCodeSafetyWorkspaceDir = codeSafetyFixture.workspaceDir;
@@ -682,12 +700,7 @@ description: test skill
   });
 
   it("warns when sandbox browser containers have missing or stale hash labels", async () => {
-    const tmp = await makeTmpDir("browser-hash-labels");
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}\n", "utf-8");
-    await fs.chmod(configPath, 0o600);
+    const { stateDir, configPath } = await createFilesystemAuditFixture("browser-hash-labels");
 
     const execDockerRawFn = (async (args: string[]) => {
       if (args[0] === "ps") {
@@ -736,12 +749,7 @@ description: test skill
   });
 
   it("skips sandbox browser hash label checks when docker inspect is unavailable", async () => {
-    const tmp = await makeTmpDir("browser-hash-labels-skip");
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}\n", "utf-8");
-    await fs.chmod(configPath, 0o600);
+    const { stateDir, configPath } = await createFilesystemAuditFixture("browser-hash-labels-skip");
 
     const execDockerRawFn = (async () => {
       throw new Error("spawn docker ENOENT");
@@ -761,12 +769,9 @@ description: test skill
   });
 
   it("flags sandbox browser containers with non-loopback published ports", async () => {
-    const tmp = await makeTmpDir("browser-non-loopback-publish");
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}\n", "utf-8");
-    await fs.chmod(configPath, 0o600);
+    const { stateDir, configPath } = await createFilesystemAuditFixture(
+      "browser-non-loopback-publish",
+    );
 
     const execDockerRawFn = (async (args: string[]) => {
       if (args[0] === "ps") {
