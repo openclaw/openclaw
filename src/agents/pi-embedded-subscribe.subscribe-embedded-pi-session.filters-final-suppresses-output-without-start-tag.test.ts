@@ -4,7 +4,7 @@ import {
   createStubSessionHarness,
   emitAssistantTextDelta,
   emitMessageStartAndEndForAssistantText,
-  expectSingleAgentEventText,
+  extractAgentEventPayloads,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
@@ -37,7 +37,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onPartialReply).not.toHaveBeenCalled();
   });
-  it("emits agent events on message_end even without <final> tags", () => {
+  it("suppresses agent events on message_end without <final> tags when enforced", () => {
     const { session, emit } = createStubSessionHarness();
 
     const onAgentEvent = vi.fn();
@@ -49,7 +49,34 @@ describe("subscribeEmbeddedPiSession", () => {
       onAgentEvent,
     });
     emitMessageStartAndEndForAssistantText({ emit, text: "Hello world" });
-    expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
+    // With enforceFinalTag, text without <final> tags is treated as leaked
+    // reasoning and should NOT be recovered by the message_end fallback.
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(0);
+  });
+  it("emits via streaming when <final> tags are present and enforcement is on", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onPartialReply,
+      onAgentEvent,
+    });
+
+    // With enforceFinalTag, content is emitted via streaming (text_delta path),
+    // NOT recovered from message_end fallback. extractAssistantText strips
+    // <final> tags, so message_end would see plain text with no <final> markers
+    // and correctly suppress it (treated as reasoning leak).
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "<final>Hello world</final>" });
+
+    expect(onPartialReply).toHaveBeenCalled();
+    expect(onPartialReply.mock.calls[0][0].text).toBe("Hello world");
   });
   it("does not require <final> when enforcement is off", () => {
     const { session, emit } = createStubSessionHarness();

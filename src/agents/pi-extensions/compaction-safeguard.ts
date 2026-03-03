@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
+import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   BASE_CHUNK_RATIO,
@@ -17,6 +18,8 @@ import {
   summarizeInStages,
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
+import { repairToolUseResultPairing } from "../session-transcript-repair.js";
+import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
@@ -28,6 +31,9 @@ const TURN_PREFIX_INSTRUCTIONS =
   " early progress, and any details needed to understand the retained suffix.";
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
+const DEFAULT_RECENT_TURNS_PRESERVE = 3;
+const MAX_RECENT_TURNS_PRESERVE = 12;
+const MAX_RECENT_TURN_TEXT_CHARS = 600;
 
 type ToolFailure = {
   toolCallId: string;
@@ -35,6 +41,18 @@ type ToolFailure = {
   summary: string;
   meta?: string;
 };
+
+function clampNonNegativeInt(value: unknown, fallback: number): number {
+  const normalized = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.max(0, Math.floor(normalized));
+}
+
+function resolveRecentTurnsPreserve(value: unknown): number {
+  return Math.min(
+    MAX_RECENT_TURNS_PRESERVE,
+    clampNonNegativeInt(value, DEFAULT_RECENT_TURNS_PRESERVE),
+  );
+}
 
 function normalizeFailureText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
@@ -130,6 +148,10 @@ function formatToolFailuresSection(failures: ToolFailure[]): string {
   return `\n\n## Tool Failures\n${lines.join("\n")}`;
 }
 
+function isRealConversationMessage(message: AgentMessage): boolean {
+  return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
+}
+
 function computeFileLists(fileOps: FileOperations): {
   readFiles: string[];
   modifiedFiles: string[];
@@ -154,6 +176,216 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
   return `\n\n${sections.join("\n\n")}`;
 }
 
+function extractMessageText(message: AgentMessage): string {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text === "string" && text.trim().length > 0) {
+      parts.push(text.trim());
+    }
+  }
+  return parts.join("\n").trim();
+}
+
+function formatNonTextPlaceholder(content: unknown): string | null {
+  if (content === null || content === undefined) {
+    return null;
+  }
+  if (typeof content === "string") {
+    return null;
+  }
+  if (!Array.isArray(content)) {
+    return "[non-text content]";
+  }
+  const typeCounts = new Map<string, number>();
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typeRaw = (block as { type?: unknown }).type;
+    const type = typeof typeRaw === "string" && typeRaw.trim().length > 0 ? typeRaw : "unknown";
+    if (type === "text") {
+      continue;
+    }
+    typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
+  }
+  if (typeCounts.size === 0) {
+    return null;
+  }
+  const parts = [...typeCounts.entries()].map(([type, count]) =>
+    count > 1 ? `${type} x${count}` : type,
+  );
+  return `[non-text content: ${parts.join(", ")}]`;
+}
+
+function splitPreservedRecentTurns(params: {
+  messages: AgentMessage[];
+  recentTurnsPreserve: number;
+}): { summarizableMessages: AgentMessage[]; preservedMessages: AgentMessage[] } {
+  const preserveTurns = Math.min(
+    MAX_RECENT_TURNS_PRESERVE,
+    clampNonNegativeInt(params.recentTurnsPreserve, 0),
+  );
+  if (preserveTurns <= 0) {
+    return { summarizableMessages: params.messages, preservedMessages: [] };
+  }
+  const conversationIndexes: number[] = [];
+  const userIndexes: number[] = [];
+  for (let i = 0; i < params.messages.length; i += 1) {
+    const role = (params.messages[i] as { role?: unknown }).role;
+    if (role === "user" || role === "assistant") {
+      conversationIndexes.push(i);
+      if (role === "user") {
+        userIndexes.push(i);
+      }
+    }
+  }
+  if (conversationIndexes.length === 0) {
+    return { summarizableMessages: params.messages, preservedMessages: [] };
+  }
+
+  const preservedIndexSet = new Set<number>();
+  if (userIndexes.length >= preserveTurns) {
+    const boundaryStartIndex = userIndexes[userIndexes.length - preserveTurns] ?? -1;
+    if (boundaryStartIndex >= 0) {
+      for (const index of conversationIndexes) {
+        if (index >= boundaryStartIndex) {
+          preservedIndexSet.add(index);
+        }
+      }
+    }
+  } else {
+    const fallbackMessageCount = preserveTurns * 2;
+    for (const userIndex of userIndexes) {
+      preservedIndexSet.add(userIndex);
+    }
+    for (let i = conversationIndexes.length - 1; i >= 0; i -= 1) {
+      const index = conversationIndexes[i];
+      if (index === undefined) {
+        continue;
+      }
+      preservedIndexSet.add(index);
+      if (preservedIndexSet.size >= fallbackMessageCount) {
+        break;
+      }
+    }
+  }
+  if (preservedIndexSet.size === 0) {
+    return { summarizableMessages: params.messages, preservedMessages: [] };
+  }
+  const preservedToolCallIds = new Set<string>();
+  for (let i = 0; i < params.messages.length; i += 1) {
+    if (!preservedIndexSet.has(i)) {
+      continue;
+    }
+    const message = params.messages[i];
+    const role = (message as { role?: unknown }).role;
+    if (role !== "assistant") {
+      continue;
+    }
+    const toolCalls = extractToolCallsFromAssistant(
+      message as Extract<AgentMessage, { role: "assistant" }>,
+    );
+    for (const toolCall of toolCalls) {
+      preservedToolCallIds.add(toolCall.id);
+    }
+  }
+  if (preservedToolCallIds.size > 0) {
+    let preservedStartIndex = -1;
+    for (let i = 0; i < params.messages.length; i += 1) {
+      if (preservedIndexSet.has(i)) {
+        preservedStartIndex = i;
+        break;
+      }
+    }
+    if (preservedStartIndex >= 0) {
+      for (let i = preservedStartIndex; i < params.messages.length; i += 1) {
+        const message = params.messages[i];
+        if ((message as { role?: unknown }).role !== "toolResult") {
+          continue;
+        }
+        const toolResultId = extractToolResultId(
+          message as Extract<AgentMessage, { role: "toolResult" }>,
+        );
+        if (toolResultId && preservedToolCallIds.has(toolResultId)) {
+          preservedIndexSet.add(i);
+        }
+      }
+    }
+  }
+  const summarizableMessages = params.messages.filter((_, idx) => !preservedIndexSet.has(idx));
+  // Preserving recent assistant turns can orphan downstream toolResult messages.
+  // Repair pairings here so compaction summarization doesn't trip strict providers.
+  const repairedSummarizableMessages = repairToolUseResultPairing(summarizableMessages).messages;
+  const preservedMessages = params.messages
+    .filter((_, idx) => preservedIndexSet.has(idx))
+    .filter((msg) => {
+      const role = (msg as { role?: unknown }).role;
+      return role === "user" || role === "assistant" || role === "toolResult";
+    });
+  return { summarizableMessages: repairedSummarizableMessages, preservedMessages };
+}
+
+function formatPreservedTurnsSection(messages: AgentMessage[]): string {
+  if (messages.length === 0) {
+    return "";
+  }
+  const lines = messages
+    .map((message) => {
+      let roleLabel: string;
+      if (message.role === "assistant") {
+        roleLabel = "Assistant";
+      } else if (message.role === "user") {
+        roleLabel = "User";
+      } else if (message.role === "toolResult") {
+        const toolName = (message as { toolName?: unknown }).toolName;
+        const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
+        roleLabel = `Tool result (${safeToolName})`;
+      } else {
+        return null;
+      }
+      const text = extractMessageText(message);
+      const nonTextPlaceholder = formatNonTextPlaceholder(
+        (message as { content?: unknown }).content,
+      );
+      const rendered =
+        text && nonTextPlaceholder ? `${text}\n${nonTextPlaceholder}` : text || nonTextPlaceholder;
+      if (!rendered) {
+        return null;
+      }
+      const trimmed =
+        rendered.length > MAX_RECENT_TURN_TEXT_CHARS
+          ? `${rendered.slice(0, MAX_RECENT_TURN_TEXT_CHARS)}...`
+          : rendered;
+      return `- ${roleLabel}: ${trimmed}`;
+    })
+    .filter((line): line is string => Boolean(line));
+  if (lines.length === 0) {
+    return "";
+  }
+  return `\n\n## Recent turns preserved verbatim\n${lines.join("\n")}`;
+}
+
+function appendSummarySection(summary: string, section: string): string {
+  if (!section) {
+    return summary;
+  }
+  if (!summary.trim()) {
+    return section.trimStart();
+  }
+  return `${summary}${section}`;
+}
+
 /**
  * Read and format critical workspace context for compaction summary.
  * Extracts "Session Startup" and "Red Lines" from AGENTS.md.
@@ -165,11 +397,22 @@ async function readWorkspaceContextForSummary(): Promise<string> {
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
 
   try {
-    if (!fs.existsSync(agentsPath)) {
+    const opened = await openBoundaryFile({
+      absolutePath: agentsPath,
+      rootPath: workspaceDir,
+      boundaryLabel: "workspace root",
+    });
+    if (!opened.ok) {
       return "";
     }
 
-    const content = await fs.promises.readFile(agentsPath, "utf-8");
+    const content = (() => {
+      try {
+        return fs.readFileSync(opened.fd, "utf-8");
+      } finally {
+        fs.closeSync(opened.fd);
+      }
+    })();
     const sections = extractSections(content, ["Session Startup", "Red Lines"]);
 
     if (sections.length === 0) {
@@ -191,6 +434,12 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
+    if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
+      log.warn(
+        "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
+      );
+      return { cancel: true };
+    }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([
@@ -202,6 +451,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
     // Fall back to runtime.model which is explicitly passed when building extension paths.
     const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
+    const summarizationInstructions = {
+      identifierPolicy: runtime?.identifierPolicy,
+      identifierInstructions: runtime?.identifierInstructions,
+    };
     const model = ctx.model ?? runtime?.model;
     if (!model) {
       // Log warning once per session when both models are missing (diagnostic for future issues).
@@ -230,6 +483,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
       const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
       let messagesToSummarize = preparation.messagesToSummarize;
+      const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
 
       const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
 
@@ -285,6 +539,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   maxChunkTokens: droppedMaxChunkTokens,
                   contextWindow: contextWindowTokens,
                   customInstructions,
+                  summarizationInstructions,
                   previousSummary: preparation.previousSummary,
                 });
               } catch (droppedError) {
@@ -298,6 +553,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           }
         }
       }
+
+      const {
+        summarizableMessages: summaryTargetMessages,
+        preservedMessages: preservedRecentMessages,
+      } = splitPreservedRecentTurns({
+        messages: messagesToSummarize,
+        recentTurnsPreserve,
+      });
+      messagesToSummarize = summaryTargetMessages;
+      const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
 
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
       // the summarization prompt, system prompt, previous summary, and reasoning budget
@@ -314,17 +579,21 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // incorporates context from pruned messages instead of losing it entirely.
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
 
-      const historySummary = await summarizeInStages({
-        messages: messagesToSummarize,
-        model,
-        apiKey,
-        signal,
-        reserveTokens,
-        maxChunkTokens,
-        contextWindow: contextWindowTokens,
-        customInstructions,
-        previousSummary: effectivePreviousSummary,
-      });
+      const historySummary =
+        messagesToSummarize.length > 0
+          ? await summarizeInStages({
+              messages: messagesToSummarize,
+              model,
+              apiKey,
+              signal,
+              reserveTokens,
+              maxChunkTokens,
+              contextWindow: contextWindowTokens,
+              customInstructions,
+              summarizationInstructions,
+              previousSummary: effectivePreviousSummary,
+            })
+          : (effectivePreviousSummary?.trim() ?? "");
 
       let summary = historySummary;
       if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
@@ -337,18 +606,23 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           maxChunkTokens,
           contextWindow: contextWindowTokens,
           customInstructions: TURN_PREFIX_INSTRUCTIONS,
+          summarizationInstructions,
           previousSummary: undefined,
         });
-        summary = `${historySummary}\n\n---\n\n**Turn Context (split turn):**\n\n${prefixSummary}`;
+        const splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
+        summary = historySummary.trim()
+          ? `${historySummary}\n\n---\n\n${splitTurnSection}`
+          : splitTurnSection;
       }
+      summary = appendSummarySection(summary, preservedTurnsSection);
 
-      summary += toolFailureSection;
-      summary += fileOpsSummary;
+      summary = appendSummarySection(summary, toolFailureSection);
+      summary = appendSummarySection(summary, fileOpsSummary);
 
       // Append workspace critical context (Session Startup + Red Lines from AGENTS.md)
       const workspaceContext = await readWorkspaceContextForSummary();
       if (workspaceContext) {
-        summary += workspaceContext;
+        summary = appendSummarySection(summary, workspaceContext);
       }
 
       return {
@@ -373,8 +647,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 export const __testing = {
   collectToolFailures,
   formatToolFailuresSection,
+  splitPreservedRecentTurns,
+  formatPreservedTurnsSection,
+  appendSummarySection,
+  resolveRecentTurnsPreserve,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
+  readWorkspaceContextForSummary,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,

@@ -34,6 +34,9 @@ Security trust model:
 
 - By default, OpenClaw is a personal agent: one trusted operator boundary.
 - Shared/multi-user setups require lock-down (split trust boundaries, keep tool access minimal, and follow [Security](/gateway/security)).
+- Local onboarding now defaults new configs to `tools.profile: "messaging"` so broad runtime/filesystem tools are opt-in.
+- If hooks/webhooks or other untrusted content feeds are enabled, use a strong modern model tier and keep strict tool policy/sandboxing.
+
 </Step>
 <Step title="Local vs Remote">
 <Frame>
@@ -50,9 +53,11 @@ Where does the **Gateway** run?
 
 <Tip>
 **Gateway auth tip:**
+
 - The wizard now generates a **token** even for loopback, so local WS clients must authenticate.
 - If you disable auth, any local process can connect; use that only on fully trusted machines.
 - Use a **token** for multi‑machine access or non‑loopback binds.
+
 </Tip>
 </Step>
 <Step title="Permissions">
