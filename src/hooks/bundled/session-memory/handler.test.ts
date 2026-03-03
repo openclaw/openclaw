@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
+import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import type { HookHandler } from "../../hooks.js";
 import { createHookEvent } from "../../hooks.js";
 

@@ -627,7 +627,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).toHaveBeenCalledTimes(1);
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
-        replies: [expect.objectContaining({ text: "\u26a0\ufe0f \ud83d\udee0\ufe0f Exec: cmd failed: error" })],
+        replies: [
+          expect.objectContaining({
+            text: "\u26a0\ufe0f \ud83d\udee0\ufe0f Exec: cmd failed: error",
+          }),
+        ],
       }),
     );
     // Preview should NOT be cleared since it was finalized via edit.

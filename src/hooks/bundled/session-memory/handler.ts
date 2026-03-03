@@ -12,7 +12,6 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
-import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { localDateStr, localTimeStr, tzOffsetLabel } from "../../../logging/timestamp.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";

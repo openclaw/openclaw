@@ -221,7 +221,6 @@ function formatConsoleLine(opts: {
           : color.cyan;
   const displayMessage = stripRedundantSubsystemPrefixForConsole(opts.message, displaySubsystem);
   const time = (() => {
-    const now = new Date();
     if (opts.style === "pretty") {
       return color.gray(formatConsoleTimestamp("pretty"));
     }
