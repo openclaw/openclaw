@@ -246,6 +246,22 @@ describe("fs-safe", () => {
     await expect(fs.readFile(path.join(root, "nested", "out.txt"), "utf8")).resolves.toBe("hello");
   });
 
+  it.runIf(process.platform !== "win32")("respects umask for newly created files", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const oldUmask = process.umask(0o027);
+    try {
+      await writeFileWithinRoot({
+        rootDir: root,
+        relativePath: "nested/mode.txt",
+        data: "hello",
+      });
+      const stat = await fs.stat(path.join(root, "nested", "mode.txt"));
+      expect(stat.mode & 0o777).toBe(0o640);
+    } finally {
+      process.umask(oldUmask);
+    }
+  });
+
   it("does not truncate existing target when atomic rename fails", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const targetPath = path.join(root, "nested", "out.txt");
