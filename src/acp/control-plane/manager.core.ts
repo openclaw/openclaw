@@ -4,6 +4,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import {
   AcpRuntimeError,
+  isAcpRuntimeError,
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
@@ -215,6 +216,15 @@ export class AcpSessionManager {
               failureReason: "session identity remained pending after runtime status refresh",
             });
           } catch (error) {
+            // Do not reap sessions that fail due to capacity limits — these are
+            // retryable on the next reconcile pass, not stale/corrupt.
+            if (
+              isAcpRuntimeError(error) &&
+              error.code === "ACP_SESSION_INIT_FAILED" &&
+              /concurrent.*session.*limit/i.test(error.message)
+            ) {
+              return null;
+            }
             return await this.reapSessionAfterStartupIdentityReconcileFailure({
               cfg: params.cfg,
               sessionKey: session.sessionKey,
@@ -234,8 +244,15 @@ export class AcpSessionManager {
         );
       } catch (error) {
         failed += 1;
+        // Best-effort: clear the runtime cache even without the actor lock,
+        // so this session no longer counts against maxConcurrentSessions.
+        // We skip setSessionState (requires actor) but the cache clear is
+        // an in-memory operation that is safe without the lock.
+        this.clearCachedRuntimeState(session.sessionKey);
+        reaped += 1;
+        reapedSessionKeys.push(session.sessionKey);
         logVerbose(
-          `acp-manager: startup identity reconcile failed for ${session.sessionKey}: ${String(error)}`,
+          `acp-manager: startup identity reconcile reaped (actor-lock failure) ${session.sessionKey}: ${String(error)}`,
         );
       }
     }
