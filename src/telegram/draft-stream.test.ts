@@ -145,6 +145,18 @@ describe("createTelegramDraftStream", () => {
     );
   });
 
+  it("does not prepend RLM when the first strong letter is LTR", async () => {
+    const api = createMockDraftApi();
+    const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+
+    stream.update("Summary: שלום");
+    await vi.waitFor(() =>
+      expect(api.sendMessageDraft).toHaveBeenCalledWith(123, expect.any(Number), "Summary: שלום", {
+        message_thread_id: 42,
+      }),
+    );
+  });
+
   it("keeps rendered HTML draft previews unchanged", async () => {
     const api = createMockDraftApi();
     const stream = createTelegramDraftStream({
@@ -224,6 +236,28 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
+  });
+
+  it("uses unhinted text when draft transport falls back to message transport", async () => {
+    const api = createMockDraftApi();
+    api.sendMessageDraft.mockRejectedValueOnce(
+      new Error(
+        "Call to 'sendMessageDraft' failed! (400: Bad Request: method sendMessageDraft can be used only in private chats)",
+      ),
+    );
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+    });
+
+    stream.update("שלום");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "שלום", { message_thread_id: 42 });
+
+    stream.update("שלום");
+    await stream.flush();
+    expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
   it("retries DM message preview send without thread when thread is not found", async () => {

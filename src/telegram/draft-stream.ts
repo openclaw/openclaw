@@ -11,6 +11,7 @@ const DRAFT_METHOD_UNAVAILABLE_RE =
 const DRAFT_CHAT_UNSUPPORTED_RE = /(can't be used|can be used only)/i;
 const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
 const BIDI_CONTROL_RE = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+const UNICODE_LETTER_RE = /\p{Letter}/u;
 const RTL_DIRECTION_MARK = "\u200F";
 
 type TelegramSendMessageDraft = (
@@ -60,10 +61,19 @@ function applyDraftDirectionalityHint(text: string, parseMode?: "HTML"): string 
   if (parseMode === "HTML") {
     return text;
   }
-  if (!RTL_SCRIPT_RE.test(text) || BIDI_CONTROL_RE.test(text)) {
+  if (BIDI_CONTROL_RE.test(text)) {
     return text;
   }
-  return `${RTL_DIRECTION_MARK}${text}`;
+  for (const char of text) {
+    if (RTL_SCRIPT_RE.test(char)) {
+      return `${RTL_DIRECTION_MARK}${text}`;
+    }
+    // Only add a RTL direction hint when the first strong letter is RTL.
+    if (UNICODE_LETTER_RE.test(char)) {
+      return text;
+    }
+  }
+  return text;
 }
 
 export type TelegramDraftStream = {
@@ -291,11 +301,15 @@ export function createTelegramDraftStream(params: {
           params.warn?.(
             "telegram stream preview: sendMessageDraft rejected by API; falling back to sendMessage/editMessageText",
           );
+          const fallbackText = renderedText;
           sent = await sendMessageTransportPreview({
-            renderedText: transportText,
+            renderedText: fallbackText,
             renderedParseMode,
             sendGeneration,
           });
+          if (sent) {
+            lastSentText = fallbackText;
+          }
         }
       } else {
         sent = await sendMessageTransportPreview({
