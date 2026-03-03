@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   applyCustomApiConfig,
@@ -78,32 +77,31 @@ function expectOpenAiCompatResult(params: {
   expect(params.result.config.models?.providers?.custom?.api).toBe("openai-completions");
 }
 
-function buildCustomProviderConfig(contextWindow?: number): OpenClawConfig {
+function buildCustomProviderConfig(contextWindow?: number) {
   if (contextWindow === undefined) {
-    return {};
+    return {} as OpenClawConfig;
   }
-  const customProvider = {
-    api: "openai-completions",
-    baseUrl: "https://llm.example.com/v1",
-    models: [
-      {
-        id: "foo-large",
-        name: "foo-large",
-        contextWindow,
-        maxTokens: contextWindow > CONTEXT_WINDOW_HARD_MIN_TOKENS ? 4096 : 1024,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        reasoning: false,
-      },
-    ],
-  } satisfies ModelProviderConfig;
   return {
     models: {
       providers: {
-        custom: customProvider,
+        custom: {
+          api: "openai-completions" as const,
+          baseUrl: "https://llm.example.com/v1",
+          models: [
+            {
+              id: "foo-large",
+              name: "foo-large",
+              contextWindow,
+              maxTokens: contextWindow > CONTEXT_WINDOW_HARD_MIN_TOKENS ? 4096 : 1024,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              reasoning: false,
+            },
+          ],
+        },
       },
     },
-  };
+  } as OpenClawConfig;
 }
 
 function applyCustomModelConfigWithContextWindow(contextWindow?: number) {

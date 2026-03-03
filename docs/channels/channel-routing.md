@@ -41,6 +41,19 @@ Examples:
 - `agent:main:telegram:group:-1001234567890:topic:42`
 - `agent:main:discord:channel:123456:thread:987654`
 
+## Main DM route pinning
+
+When `session.dmScope` is `main`, direct messages may share one main session.
+To prevent the session’s `lastRoute` from being overwritten by non-owner DMs,
+OpenClaw infers a pinned owner from `allowFrom` when all of these are true:
+
+- `allowFrom` has exactly one non-wildcard entry.
+- The entry can be normalized to a concrete sender ID for that channel.
+- The inbound DM sender does not match that pinned owner.
+
+In that mismatch case, OpenClaw still records inbound session metadata, but it
+skips updating the main session `lastRoute`.
+
 ## Routing rules (how an agent is chosen)
 
 Routing picks **one agent** for each inbound message:

@@ -5,6 +5,11 @@ import {
   unwrapDispatchWrappersForResolution,
   unwrapKnownShellMultiplexerInvocation,
 } from "./exec-wrapper-resolution.js";
+import {
+  POSIX_INLINE_COMMAND_FLAGS,
+  POWERSHELL_INLINE_COMMAND_FLAGS,
+  resolveInlineCommandMatch,
+} from "./shell-inline-command.js";
 
 export type SystemRunCommandValidation =
   | {
@@ -63,39 +68,10 @@ const POSIX_OR_POWERSHELL_INLINE_WRAPPER_NAMES = new Set([
   "zsh",
 ]);
 
-const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
-const POWERSHELL_INLINE_COMMAND_FLAGS = new Set(["-c", "-command", "--command"]);
-
 function unwrapShellWrapperArgv(argv: string[]): string[] {
   const dispatchUnwrapped = unwrapDispatchWrappersForResolution(argv);
   const shellMultiplexer = unwrapKnownShellMultiplexerInvocation(dispatchUnwrapped);
   return shellMultiplexer.kind === "unwrapped" ? shellMultiplexer.argv : dispatchUnwrapped;
-}
-
-function resolveInlineCommandTokenIndex(
-  argv: string[],
-  flags: ReadonlySet<string>,
-  options: { allowCombinedC?: boolean } = {},
-): number | null {
-  for (let i = 1; i < argv.length; i += 1) {
-    const token = argv[i]?.trim();
-    if (!token) {
-      continue;
-    }
-    const lower = token.toLowerCase();
-    if (lower === "--") {
-      break;
-    }
-    if (flags.has(lower)) {
-      return i + 1 < argv.length ? i + 1 : null;
-    }
-    if (options.allowCombinedC && /^-[^-]*c[^-]*$/i.test(token)) {
-      const commandIndex = lower.indexOf("c");
-      const inline = token.slice(commandIndex + 1).trim();
-      return inline ? i : i + 1 < argv.length ? i + 1 : null;
-    }
-  }
-  return null;
 }
 
 function hasTrailingPositionalArgvAfterInlineCommand(argv: string[]): boolean {
@@ -112,10 +88,10 @@ function hasTrailingPositionalArgvAfterInlineCommand(argv: string[]): boolean {
 
   const inlineCommandIndex =
     wrapper === "powershell" || wrapper === "pwsh"
-      ? resolveInlineCommandTokenIndex(wrapperArgv, POWERSHELL_INLINE_COMMAND_FLAGS)
-      : resolveInlineCommandTokenIndex(wrapperArgv, POSIX_INLINE_COMMAND_FLAGS, {
+      ? resolveInlineCommandMatch(wrapperArgv, POWERSHELL_INLINE_COMMAND_FLAGS).valueTokenIndex
+      : resolveInlineCommandMatch(wrapperArgv, POSIX_INLINE_COMMAND_FLAGS, {
           allowCombinedC: true,
-        });
+        }).valueTokenIndex;
   if (inlineCommandIndex === null) {
     return false;
   }

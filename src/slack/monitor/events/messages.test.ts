@@ -17,6 +17,7 @@ vi.mock("../../../pairing/pairing-store.js", () => ({
 }));
 
 type MessageHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
+type AppMentionHandler = MessageHandler;
 
 type MessageCase = {
   overrides?: SlackSystemEventTestOverrides;
@@ -33,6 +34,19 @@ function createMessageHandlers(overrides?: SlackSystemEventTestOverrides) {
   });
   return {
     handler: harness.getHandler("message") as MessageHandler | null,
+    handleSlackMessage,
+  };
+}
+
+function createAppMentionHandlers(overrides?: SlackSystemEventTestOverrides) {
+  const harness = createSlackSystemEventTestHarness(overrides);
+  const handleSlackMessage = vi.fn(async () => {});
+  registerSlackMessageEvents({
+    ctx: harness.ctx,
+    handleSlackMessage,
+  });
+  return {
+    handler: harness.getHandler("app_mention") as AppMentionHandler | null,
     handleSlackMessage,
   };
 }
@@ -131,7 +145,6 @@ describe("registerSlackMessageEvents", () => {
       calls: 0,
     },
   ];
-
   it.each(cases)("$name", async ({ input, calls }) => {
     await runMessageCase(input);
     expect(messageQueueMock).toHaveBeenCalledTimes(calls);
@@ -156,5 +169,101 @@ describe("registerSlackMessageEvents", () => {
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
     expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("handles channel and group messages via the unified message handler", async () => {
+    messageQueueMock.mockClear();
+    messageAllowMock.mockReset().mockResolvedValue([]);
+    const { handler, handleSlackMessage } = createMessageHandlers({
+      dmPolicy: "open",
+      channelType: "channel",
+    });
+
+    expect(handler).toBeTruthy();
+
+    // channel_type distinguishes the source; all arrive as event type "message"
+    const channelMessage = {
+      type: "message",
+      channel: "C1",
+      channel_type: "channel",
+      user: "U1",
+      text: "hello channel",
+      ts: "123.100",
+    };
+    await handler!({ event: channelMessage, body: {} });
+    await handler!({
+      event: {
+        ...channelMessage,
+        channel_type: "group",
+        channel: "G1",
+        ts: "123.200",
+      },
+      body: {},
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(2);
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("applies subtype system-event handling for channel messages", async () => {
+    messageQueueMock.mockClear();
+    messageAllowMock.mockReset().mockResolvedValue([]);
+    const { handler, handleSlackMessage } = createMessageHandlers({
+      dmPolicy: "open",
+      channelType: "channel",
+    });
+
+    expect(handler).toBeTruthy();
+
+    // message_changed events from channels arrive via the generic "message"
+    // handler with channel_type:"channel" — not a separate event type.
+    await handler!({
+      event: {
+        ...makeChangedEvent({ channel: "C1", user: "U1" }),
+        channel_type: "channel",
+      },
+      body: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips app_mention events for DM channel ids even with contradictory channel_type", async () => {
+    const { handler, handleSlackMessage } = createAppMentionHandlers({ dmPolicy: "open" });
+    expect(handler).toBeTruthy();
+
+    await handler!({
+      event: {
+        type: "app_mention",
+        channel: "D123",
+        channel_type: "channel",
+        user: "U1",
+        text: "<@U_BOT> hello",
+        ts: "123.456",
+      },
+      body: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it("routes app_mention events from channels to the message handler", async () => {
+    const { handler, handleSlackMessage } = createAppMentionHandlers({ dmPolicy: "open" });
+    expect(handler).toBeTruthy();
+
+    await handler!({
+      event: {
+        type: "app_mention",
+        channel: "C123",
+        channel_type: "channel",
+        user: "U1",
+        text: "<@U_BOT> hello",
+        ts: "123.789",
+      },
+      body: {},
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
   });
 });

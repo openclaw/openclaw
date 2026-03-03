@@ -1,3 +1,4 @@
+import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { IRC_FIELD_LABELS } from "./schema.irc.js";
 
 export const FIELD_LABELS: Record<string, string> = {
@@ -25,6 +26,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "logging.consoleStyle": "Console Log Style",
   "logging.redactSensitive": "Sensitive Data Redaction Mode",
   "logging.redactPatterns": "Custom Redaction Patterns",
+  cli: "CLI",
+  "cli.banner": "CLI Banner",
+  "cli.banner.taglineMode": "CLI Banner Tagline Mode",
   update: "Updates",
   "update.channel": "Update Channel",
   "update.checkOnStart": "Update Check on Start",
@@ -111,6 +115,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.profiles.*.cdpPort": "Browser Profile CDP Port",
   "browser.profiles.*.cdpUrl": "Browser Profile CDP URL",
   "browser.profiles.*.driver": "Browser Profile Driver",
+  "browser.profiles.*.attachOnly": "Browser Profile Attach-only Mode",
   "browser.profiles.*.color": "Browser Profile Accent Color",
   tools: "Tools",
   "tools.allow": "Tool Allowlist",
@@ -127,15 +132,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.media.image.scope": "Image Understanding Scope",
   "tools.media.models": "Media Understanding Shared Models",
   "tools.media.concurrency": "Media Understanding Concurrency",
-  "tools.media.audio.enabled": "Enable Audio Understanding",
-  "tools.media.audio.maxBytes": "Audio Understanding Max Bytes",
-  "tools.media.audio.maxChars": "Audio Understanding Max Chars",
-  "tools.media.audio.prompt": "Audio Understanding Prompt",
-  "tools.media.audio.timeoutSeconds": "Audio Understanding Timeout (sec)",
-  "tools.media.audio.language": "Audio Understanding Language",
-  "tools.media.audio.attachments": "Audio Understanding Attachment Policy",
-  "tools.media.audio.models": "Audio Understanding Models",
-  "tools.media.audio.scope": "Audio Understanding Scope",
+  ...MEDIA_AUDIO_FIELD_LABELS,
   "tools.media.video.enabled": "Enable Video Understanding",
   "tools.media.video.maxBytes": "Video Understanding Max Bytes",
   "tools.media.video.maxChars": "Video Understanding Max Chars",
