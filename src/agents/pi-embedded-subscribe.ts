@@ -57,6 +57,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastStreamedAssistantCleaned: undefined,
     emittedAssistantUpdate: false,
     lastStreamedReasoning: undefined,
+    lastStreamedReasoningRaw: undefined,
     lastBlockReplyText: undefined,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
@@ -550,17 +551,27 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!shouldStreamToWs) {
       return;
     }
-    const formatted = formatReasoningMessage(text);
-    if (!formatted) {
+    const trimmed = text.trim();
+    if (!trimmed) {
       return;
     }
-    if (formatted === state.lastStreamedReasoning) {
+    // Compute delta using raw text before formatting, since formatting
+    // may alter whitespace/structure causing prefix match to fail.
+    const priorRaw = state.lastStreamedReasoningRaw ?? "";
+    const deltaRaw = trimmed.startsWith(priorRaw)
+      ? trimmed.slice(priorRaw.length)
+      : trimmed;
+    if (trimmed === state.lastStreamedReasoningRaw) {
       return;
     }
-    // Compute delta: new text since the last emitted reasoning.
-    // Guard against non-prefix changes (e.g. trim/format altering earlier content).
-    const prior = state.lastStreamedReasoning ?? "";
-    const delta = formatted.startsWith(prior) ? formatted.slice(prior.length) : formatted;
+    state.lastStreamedReasoningRaw = trimmed;
+
+    const formatted = formatReasoningMessage(trimmed);
+    // Compute formatted delta - only add "Reasoning:" prefix for full text,
+    // delta should be incremental without prefix.
+    const delta = deltaRaw
+      ? formatReasoningMessage(deltaRaw).replace(/^Reasoning:\n/, "")
+      : "";
     state.lastStreamedReasoning = formatted;
 
     // Broadcast thinking event to WebSocket clients in real-time

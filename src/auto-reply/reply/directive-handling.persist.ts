@@ -71,7 +71,10 @@ export async function persistInlineDirectives(params: {
       (sessionEntry.elevatedLevel as ElevatedLevel | undefined) ??
       (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
       (elevatedAllowed ? ("on" as ElevatedLevel) : ("off" as ElevatedLevel));
-    const prevReasoningLevel = (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ?? "off";
+    const prevReasoningLevel =
+      (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ??
+      (agentCfg?.reasoningDefault as ReasoningLevel | undefined) ??
+      "off";
     let elevatedChanged =
       directives.hasElevatedDirective &&
       directives.elevatedLevel !== undefined &&
