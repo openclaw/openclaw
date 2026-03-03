@@ -137,11 +137,11 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
-  it("returns a friendly message for 'Unexpected' JSON parse errors", () => {
+  it("returns a friendly message for 'Unexpected end of JSON input'", () => {
     const msg = makeAssistantError("Unexpected end of JSON input");
-    // This doesn't match "in JSON at position" — it's a different variant.
-    // The generic fallback catches it instead.
-    expect(formatAssistantErrorText(msg)).toBe("An unexpected error occurred. Please try again.");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned a malformed response. Please try again.",
+    );
   });
 
   it("never returns raw unclassified error text to users", () => {

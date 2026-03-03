@@ -625,6 +625,12 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
       }
       return formatRawAssistantErrorForUi(trimmed);
     }
+
+    // Generic fallback for errorContext — never forward raw unclassified error text.
+    // This mirrors the catch-all in formatAssistantErrorText and closes the gap for
+    // exception-path errors that bypass formatAssistantErrorText entirely.
+    log.warn(`Unclassified caught error (not forwarded verbatim): ${trimmed.slice(0, 300)}`);
+    return "An unexpected error occurred. Please try again.";
   }
 
   // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
@@ -657,7 +663,7 @@ const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
  * never be forwarded verbatim to user-facing channels.
  */
 const JSON_PARSE_ERROR_RE =
-  /(?:Expected|Unexpected|Bad control character|Unterminated).*in JSON at position/i;
+  /(?:Expected|Unexpected|Bad control character|Unterminated).*(?:in JSON(?: at position)?|JSON input)/i;
 const SYNTAX_ERROR_JSON_RE = /SyntaxError.*JSON/i;
 
 export function isJsonParseError(raw: string): boolean {
