@@ -448,6 +448,7 @@ export const DiscordAccountSchema = z
         moderation: z.boolean().optional(),
         channels: z.boolean().optional(),
         presence: z.boolean().optional(),
+        selfProfile: z.boolean().optional(),
       })
       .strict()
       .optional(),

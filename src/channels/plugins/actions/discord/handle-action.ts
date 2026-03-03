@@ -280,6 +280,35 @@ export async function handleDiscordMessageAction(
     );
   }
 
+  if (action === "self-profile") {
+    return await handleDiscordAction(
+      {
+        action: "updateSelfProfile",
+        accountId: accountId ?? undefined,
+        guildId: readStringParam(params, "guildId"),
+        userId: readStringParam(params, "userId"),
+        memberId: readStringParam(params, "memberId"),
+        target: readStringParam(params, "target"),
+        nickname: readStringParam(params, "nickname", { allowEmpty: true }),
+        avatar: readStringParam(params, "avatar", { trim: false }),
+        mediaUrl:
+          readStringParam(params, "media", { trim: false }) ??
+          readStringParam(params, "path", { trim: false }) ??
+          readStringParam(params, "filePath", { trim: false }),
+        buffer: readStringParam(params, "buffer", { trim: false }),
+        contentType: readStringParam(params, "contentType") ?? readStringParam(params, "mimeType"),
+        status: readStringParam(params, "status"),
+        statusMessage: readStringParam(params, "statusMessage", { allowEmpty: true }),
+        activityType: readStringParam(params, "activityType"),
+        activityName: readStringParam(params, "activityName"),
+        activityUrl: readStringParam(params, "activityUrl"),
+        activityState: readStringParam(params, "activityState", { allowEmpty: true }),
+      },
+      cfg,
+      actionOptions,
+    );
+  }
+
   const adminResult = await tryHandleDiscordMessageActionGuildAdmin({
     ctx,
     resolveChannelId,
