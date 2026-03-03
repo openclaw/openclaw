@@ -36,6 +36,7 @@ OpenClaw uses Brave Search as the default provider for `web_search`.
 ## Notes
 
 - The Data for AI plan is **not** compatible with `web_search`.
-- Brave provides a free tier plus paid plans; check the Brave API portal for current limits.
+- Brave provides paid plans; check the Brave API portal for current limits.
+- Brave Terms include restrictions on some AI-related uses of Search Results. Review the Brave Terms of Service and confirm your intended use is compliant. For legal questions, consult your counsel.
 
 See [Web tools](/tools/web) for the full web_search configuration.
