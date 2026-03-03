@@ -32,6 +32,7 @@ export async function applyAuthChoiceMiniMax(
   const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
   const ensureMinimaxApiKey = async (opts: {
     profileId: string;
+    provider: "minimax" | "minimax-cn";
     promptMessage: string;
   }): Promise<void> => {
     await ensureApiKeyFromOptionEnvOrPrompt({
@@ -41,7 +42,7 @@ export async function applyAuthChoiceMiniMax(
       config: nextConfig,
       agentDir: params.agentDir,
       expectedProviders: ["minimax", "minimax-cn"],
-      provider: "minimax",
+      provider: opts.provider,
       envLabel: "MINIMAX_API_KEY",
       promptMessage: opts.promptMessage,
       normalize: normalizeApiKeyInput,
@@ -68,6 +69,7 @@ export async function applyAuthChoiceMiniMax(
   }): Promise<ApplyAuthChoiceResult> => {
     await ensureMinimaxApiKey({
       profileId: opts.profileId,
+      provider: opts.provider,
       promptMessage: opts.promptMessage,
     });
     nextConfig = applyAuthProfileConfig(nextConfig, {

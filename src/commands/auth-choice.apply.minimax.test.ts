@@ -220,4 +220,51 @@ describe("applyAuthChoiceMiniMax", () => {
     const parsed = await readAuthProfiles(agentDir);
     expect(parsed.profiles?.["minimax:default"]?.key).toBe("mm-lightning-token");
   });
+
+  it("reuses minimax-cn credentials for minimax-api-key-cn instead of minimax global key", async () => {
+    const agentDir = await setupTempState();
+    resetMiniMaxEnv();
+    const runtime = createExitThrowingRuntime();
+
+    await applyAuthChoiceMiniMax({
+      authChoice: "minimax-api",
+      config: {},
+      prompter: createMinimaxPrompter(),
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "minimax",
+        token: "mm-global-key",
+      },
+    });
+    const seededCn = await applyAuthChoiceMiniMax({
+      authChoice: "minimax-api-key-cn",
+      config: {},
+      prompter: createMinimaxPrompter(),
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "minimax-cn",
+        token: "mm-cn-key",
+      },
+    });
+    expect(seededCn).not.toBeNull();
+
+    const confirm = vi.fn(async () => true);
+    const text = vi.fn(async () => "should-not-be-used");
+    const result = await applyAuthChoiceMiniMax({
+      authChoice: "minimax-api-key-cn",
+      config: seededCn?.config ?? {},
+      prompter: createMinimaxPrompter({ confirm, text }),
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result).not.toBeNull();
+    expect(text).not.toHaveBeenCalled();
+
+    const parsed = await readAuthProfiles(agentDir);
+    expect(parsed.profiles?.["minimax-cn:default"]?.key).toBe("mm-cn-key");
+    expect(parsed.profiles?.["minimax:default"]?.key).toBe("mm-global-key");
+  });
 });
