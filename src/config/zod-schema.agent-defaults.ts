@@ -84,6 +84,20 @@ export const AgentDefaultsSchema = z
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+        thinking: z
+          .union([
+            z.literal("off"),
+            z.literal("minimal"),
+            z.literal("low"),
+            z.literal("medium"),
+            z.literal("high"),
+            z.literal("xhigh"),
+            z.literal("adaptive"),
+          ])
+          .optional()
+          .describe(
+            'Thinking level for compaction summarization. Defaults to "off" — compaction runs without thinking unless explicitly set, preventing timeout races on slow/high-think session models.',
+          ),
         reserveTokens: z.number().int().nonnegative().optional(),
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),

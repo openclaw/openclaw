@@ -1,3 +1,4 @@
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type {
@@ -285,6 +286,8 @@ export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
+  /** Thinking level for compaction summarization. Defaults to "off" regardless of session model. */
+  thinking?: ThinkLevel;
   /** Pi reserve tokens target before floor enforcement. */
   reserveTokens?: number;
   /** Pi keepRecentTokens budget used for cut-point selection. */

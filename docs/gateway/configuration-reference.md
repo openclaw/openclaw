@@ -960,6 +960,7 @@ Periodic heartbeat runs.
     defaults: {
       compaction: {
         mode: "safeguard", // default | safeguard
+        thinking: "off", // off | minimal | low | medium | high | xhigh | adaptive — defaults to "off"
         reserveTokensFloor: 24000,
         identifierPolicy: "strict", // strict | off | custom
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
@@ -976,6 +977,7 @@ Periodic heartbeat runs.
 ```
 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
+- `thinking`: thinking level for compaction summarization. Defaults to `"off"` — compaction always runs without extended thinking regardless of the session model, preventing timeout races on channels with strict reply windows (Discord 30s, Telegram 240s). Set to a level (e.g. `"low"`) to opt in. When a compaction run times out with thinking enabled, it automatically retries once without thinking.
 - `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Skipped when workspace is read-only.
