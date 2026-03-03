@@ -142,10 +142,12 @@ describe("gateway register option collisions", () => {
   });
 
   it("forwards --token to gateway usage-sessions when parent and child option names collide", async () => {
-    await runRegisteredCli({
-      register: registerGatewayCli as (program: Command) => void,
-      argv: ["gateway", "usage-sessions", "--token", "tok_usage", "--json"],
-    });
+    await sharedProgram.parseAsync(
+      ["gateway", "usage-sessions", "--token", "tok_usage", "--json"],
+      {
+        from: "user",
+      },
+    );
 
     expect(callGatewayCli).toHaveBeenNthCalledWith(
       1,
