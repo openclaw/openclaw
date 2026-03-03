@@ -3,6 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
+type NativeCommandSpecMock = {
+  name: string;
+  description: string;
+  acceptsArgs: boolean;
+};
+
+type PluginCommandSpecMock = {
+  name: string;
+  description: string;
+  acceptsArgs: boolean;
+};
+
 const {
   clientFetchUserMock,
   clientGetPluginMock,
@@ -13,6 +25,7 @@ const {
   createThreadBindingManagerMock,
   reconcileAcpThreadBindingsOnStartupMock,
   createdBindingManagers,
+  getPluginCommandSpecsMock,
   listNativeCommandSpecsForConfigMock,
   listSkillCommandsForAgentsMock,
   monitorLifecycleMock,
@@ -50,7 +63,10 @@ const {
       staleSessionKeys: [],
     })),
     createdBindingManagers,
-    listNativeCommandSpecsForConfigMock: vi.fn(() => [{ name: "cmd" }]),
+    getPluginCommandSpecsMock: vi.fn<() => PluginCommandSpecMock[]>(() => []),
+    listNativeCommandSpecsForConfigMock: vi.fn<() => NativeCommandSpecMock[]>(() => [
+      { name: "cmd", description: "built-in", acceptsArgs: false },
+    ]),
     listSkillCommandsForAgentsMock: vi.fn(() => []),
     monitorLifecycleMock: vi.fn(async (params: { threadBindings: { stop: () => void } }) => {
       params.threadBindings.stop();
@@ -146,6 +162,10 @@ vi.mock("../../infra/retry-policy.js", () => ({
 
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ info: vi.fn(), error: vi.fn() }),
+}));
+
+vi.mock("../../plugins/commands.js", () => ({
+  getPluginCommandSpecs: getPluginCommandSpecsMock,
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -298,7 +318,10 @@ describe("monitorDiscordProvider", () => {
       staleSessionKeys: [],
     });
     createdBindingManagers.length = 0;
-    listNativeCommandSpecsForConfigMock.mockClear().mockReturnValue([{ name: "cmd" }]);
+    getPluginCommandSpecsMock.mockClear().mockReturnValue([]);
+    listNativeCommandSpecsForConfigMock
+      .mockClear()
+      .mockReturnValue([{ name: "cmd", description: "built-in", acceptsArgs: false }]);
     listSkillCommandsForAgentsMock.mockClear().mockReturnValue([]);
     monitorLifecycleMock.mockClear().mockImplementation(async (params) => {
       params.threadBindings.stop();
@@ -403,6 +426,27 @@ describe("monitorDiscordProvider", () => {
 
     const eventQueue = getConstructedEventQueue();
     expect(eventQueue?.listenerTimeout).toBe(300_000);
+  });
+
+  it("registers plugin commands as native Discord commands", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+    listNativeCommandSpecsForConfigMock.mockReturnValue([
+      { name: "cmd", description: "built-in", acceptsArgs: false },
+    ]);
+    getPluginCommandSpecsMock.mockReturnValue([
+      { name: "cron_jobs", description: "List cron jobs", acceptsArgs: false },
+    ]);
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const commandNames = (createDiscordNativeCommandMock.mock.calls as Array<unknown[]>)
+      .map((call) => (call[0] as { command?: { name?: string } } | undefined)?.command?.name)
+      .filter((value): value is string => typeof value === "string");
+    expect(commandNames).toContain("cmd");
+    expect(commandNames).toContain("cron_jobs");
   });
 
   it("reports connected status on startup and shutdown", async () => {
