@@ -1,0 +1,96 @@
+deploymentName: openclaw-sre
+serviceName: openclaw-sre
+appLabel: openclaw-sre
+replicaCount: 1
+serviceAccountName: incident-readonly-agent
+serviceAccount:
+  create: false
+  roleArn: ""
+vault:
+  secretsPath: "secret/data/openclaw-sre/all-secrets"
+  secretName: "openclaw-sre-vault-secrets"
+  roleName: ""
+
+image:
+  uri: "openclaw-sre:dev"
+  pullPolicy: Always
+
+aws:
+  region: eu-west-3
+
+signals:
+  scopeNamespaces: morpho-dev,monitoring
+
+prometheus:
+  url: http://prometheus-stack-kube-prom-prometheus.monitoring:9090
+
+incidentState:
+  dir: /home/node/.openclaw/state/sentinel
+
+rca:
+  mode: single
+  serviceContextEnabled: "0"
+  chainEnabled: "0"
+  chainStageEEnabled: "0"
+  incidentLearningEnabled: "0"
+  chainTotalTimeoutMs: "60000"
+  stageTimeoutMs: "10000"
+  evidenceTotalTimeoutMs: "80000"
+  minRerunIntervalSeconds: "3600"
+  chainCostAlertThreshold: "750"
+
+persistence:
+  enabled: true
+  claimName: openclaw-sre-state
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+
+service:
+  enabled: true
+  port: 18789
+
+secrets:
+  configName: openclaw-sre-config
+
+configMaps:
+  skillName: openclaw-sre-skill
+
+cron:
+  enabled: false
+  schedule: "*/30 * * * *"
+  activeDeadlineSeconds: 240
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  nodeAffinity: true
+
+costCron:
+  enabled: false
+  schedule: "0 8 * * *"
+  activeDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  target: "channel:#staging-infra-monitoring"
+  accountId: ""
+
+selfImproveCron:
+  enabled: false
+  schedule: "17 4 * * *"
+  activeDeadlineSeconds: 900
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  repo: "morpho-org/openclaw-sre"
+  baseBranch: "main"
+  lookbackHours: "24"
+  confidence: "92"
+  branchPrefix: "openclaw/sre-self-improve"
+
+probes:
+  readiness:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 3
+  liveness:
+    initialDelaySeconds: 40
+    periodSeconds: 20
+    timeoutSeconds: 3

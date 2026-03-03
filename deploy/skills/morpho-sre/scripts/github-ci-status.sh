@@ -181,11 +181,113 @@ NODE
   printf '%s\n' "$token"
 }
 
-AUTH_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-if [[ -z "$AUTH_TOKEN" ]]; then
-  AUTH_TOKEN="$(mint_github_app_token || true)"
-fi
 STRICT_MODE="${GITHUB_CI_STRICT:-1}"
+
+github_repo_access_ok() {
+  local token="${1:-}"
+  local repo="${2:-}"
+  local probe_json probe_code
+
+  GITHUB_REPO_ACCESS_LAST_CODE=""
+  if [[ -z "$token" || -z "$repo" ]]; then
+    return 1
+  fi
+
+  probe_json="$(mktemp)"
+  probe_code="$(curl -sS -o "$probe_json" -w '%{http_code}' \
+    -H "Authorization: Bearer ${token}" \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${repo}" || true)"
+  rm -f "$probe_json"
+  GITHUB_REPO_ACCESS_LAST_CODE="$probe_code"
+
+  [[ "$probe_code" == "200" ]]
+}
+
+resolve_auth_token_for_repo() {
+  local repo="${1:-}"
+  local env_token app_token env_probe_code app_probe_code
+
+  env_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+  if [[ -n "$env_token" ]] && github_repo_access_ok "$env_token" "$repo"; then
+    printf '%s\n' "$env_token"
+    return 0
+  fi
+  env_probe_code="${GITHUB_REPO_ACCESS_LAST_CODE:-}"
+
+  app_token="$(mint_github_app_token || true)"
+  if [[ -n "$app_token" ]] && github_repo_access_ok "$app_token" "$repo"; then
+    printf '%s\n' "$app_token"
+    return 0
+  fi
+  app_probe_code="${GITHUB_REPO_ACCESS_LAST_CODE:-}"
+
+  if [[ -n "$env_token" && "$env_probe_code" != "401" && "$env_probe_code" != "403" && "$env_probe_code" != "404" ]]; then
+    printf '%s\n' "$env_token"
+    return 0
+  fi
+  if [[ -n "$app_token" && "$app_probe_code" != "401" && "$app_probe_code" != "403" && "$app_probe_code" != "404" ]]; then
+    printf '%s\n' "$app_token"
+    return 0
+  fi
+
+  return 1
+}
+
+github_actions_runs_http() {
+  local repo="${1:-}"
+  local limit="${2:-5}"
+  local token="${3:-}"
+  local out_file="${4:-}"
+
+  if [[ -z "$repo" || -z "$out_file" ]]; then
+    return 1
+  fi
+
+  if [[ -n "$token" ]]; then
+    curl -sS \
+      -H "Authorization: Bearer ${token}" \
+      -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/${repo}/actions/runs?per_page=${limit}" \
+      -o "$out_file" \
+      -w '%{http_code}'
+    return 0
+  fi
+
+  curl -sS \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${repo}/actions/runs?per_page=${limit}" \
+    -o "$out_file" \
+    -w '%{http_code}'
+}
+
+fetch_actions_runs_for_repo() {
+  local repo="${1:-}"
+  local limit="${2:-5}"
+  local out_file="${3:-}"
+  local preferred_token="${4:-}"
+  local repo_token http_code refreshed_token
+
+  if [[ -z "$repo" || -z "$out_file" ]]; then
+    return 1
+  fi
+
+  repo_token="$preferred_token"
+  if [[ -z "$repo_token" ]]; then
+    repo_token="$(resolve_auth_token_for_repo "$repo" || true)"
+  fi
+
+  http_code="$(github_actions_runs_http "$repo" "$limit" "$repo_token" "$out_file")"
+  if [[ "$http_code" == "401" || "$http_code" == "403" ]]; then
+    refreshed_token="$(resolve_auth_token_for_repo "$repo" || true)"
+    if [[ -n "$refreshed_token" ]]; then
+      repo_token="$refreshed_token"
+      http_code="$(github_actions_runs_http "$repo" "$limit" "$repo_token" "$out_file")"
+    fi
+  fi
+
+  printf '%s\t%s\n' "$http_code" "$repo_token"
+}
 
 REPOS=()
 if [[ -n "$IMAGE_FILTER" ]]; then
@@ -203,25 +305,24 @@ if [[ "${#REPOS[@]}" -eq 0 ]]; then
   exit 1
 fi
 
+AUTH_TOKEN=""
+
 echo -e "repo\tworkflow\trun_number\tstatus\tconclusion\tbranch\tsha\tupdated_at\turl"
 
 failures=0
 successes=0
 for repo in "${REPOS[@]}"; do
   tmp_json="$(mktemp)"
-  if [[ -n "$AUTH_TOKEN" ]]; then
-    http_code="$(curl -sS \
-      -H "Authorization: Bearer ${AUTH_TOKEN}" \
-      -H "Accept: application/vnd.github+json" \
-      "https://api.github.com/repos/${repo}/actions/runs?per_page=${LIMIT}" \
-      -o "$tmp_json" \
-      -w '%{http_code}')"
-  else
-    http_code="$(curl -sS \
-      -H "Accept: application/vnd.github+json" \
-      "https://api.github.com/repos/${repo}/actions/runs?per_page=${LIMIT}" \
-      -o "$tmp_json" \
-      -w '%{http_code}')"
+  fetch_result="$(fetch_actions_runs_for_repo "$repo" "$LIMIT" "$tmp_json" "$AUTH_TOKEN" || true)"
+  http_code="${fetch_result%%$'\t'*}"
+  repo_token=""
+  if [[ "$fetch_result" == *$'\t'* ]]; then
+    repo_token="${fetch_result#*$'\t'}"
+  fi
+  if [[ -n "$repo_token" ]]; then
+    AUTH_TOKEN="$repo_token"
+    export GITHUB_TOKEN="$AUTH_TOKEN"
+    export GH_TOKEN="$AUTH_TOKEN"
   fi
 
   if [[ "$http_code" != "200" ]]; then

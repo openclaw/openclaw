@@ -1,0 +1,69 @@
+{{- $skillConfigMapName := .Values.configMaps.skillName -}}
+{{- $existingSkillConfigMap := lookup "v1" "ConfigMap" .Release.Namespace $skillConfigMapName -}}
+{{- $scriptAssets := list
+  "image-repo-map.sh"
+  "grafana-api.sh"
+  "betterstack-api.sh"
+  "repo-clone.sh"
+  "github-ci-status.sh"
+  "autofix-pr.sh"
+  "sentinel-triage.sh"
+  "prometheus-trends.sh"
+  "argocd-sync-status.sh"
+  "cert-secret-health.sh"
+  "aws-resource-signals.sh"
+  "aws-cost-report.sh"
+  "self-improve-pr.sh"
+  "sentinel-snapshot.sh"
+  "lib-incident-id.sh"
+  "lib-state-file.sh"
+  "lib-continuity-matcher.sh"
+  "lib-outbox.sh"
+  "lib-linear-preflight.sh"
+  "lib-linear-ticket.sh"
+  "lib-rca-prompt.sh"
+  "lib-rca-llm.sh"
+  "lib-rca-crossreview.sh"
+  "lib-rca-safety.sh"
+  "lib-thread-archival.sh"
+  "lib-meta-alerts.sh"
+  "linear-memory-lookup.sh"
+  "lib-service-graph.sh"
+  "relationship-knowledge-build.sh"
+  "lib-service-overlay.sh"
+  "lib-incident-memory.sh"
+  "lib-service-context.sh"
+  "lib-rca-chain.sh"
+  "lib-rca-sink.sh"
+  "lib-overlay-suggestions.sh"
+-}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $skillConfigMapName }}
+  labels:
+    app: {{ .Values.appLabel }}
+data:
+{{- if and $existingSkillConfigMap $existingSkillConfigMap.data }}
+{{ toYaml $existingSkillConfigMap.data | nindent 2 }}
+{{- else }}
+  SKILL.md: |
+    # placeholder
+  HEARTBEAT.md: |
+    # placeholder
+  repo-map.md: |
+    # placeholder
+{{- range $scriptAssets }}
+  {{ . }}: |
+    #!/usr/bin/env bash
+    echo "placeholder {{ . }}" >&2
+{{- end }}
+  rca_hypothesis_ids.v1.json: |
+    {}
+  safety.md: |
+    # placeholder
+{{- end }}
+{{- if and $existingSkillConfigMap $existingSkillConfigMap.binaryData }}
+binaryData:
+{{ toYaml $existingSkillConfigMap.binaryData | nindent 2 }}
+{{- end }}

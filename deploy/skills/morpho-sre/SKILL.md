@@ -8,9 +8,11 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 
 ## Hard Rules
 
-- Diagnose first. Mutate only after explicit approval.
+- Diagnose first. Never mutate cluster resources automatically.
+- Auto-remediation pull requests are allowed when confidence gate passes (`AUTO_PR_*`) and evidence is attached.
 - Default scope: `dev-morpho` + `monitoring` namespace.
 - Print command target before execution: AWS identity, kube context, namespace.
+- Always include explicit Kubernetes context in commands: `kubectl --context "$K8S_CONTEXT" ...`
 
 ## Paths
 
@@ -21,7 +23,9 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Correlation script: `/home/node/.openclaw/skills/morpho-sre/scripts/image-repo-map.sh`
 - Repo clone helper: `/home/node/.openclaw/skills/morpho-sre/scripts/repo-clone.sh`
 - CI status helper: `/home/node/.openclaw/skills/morpho-sre/scripts/github-ci-status.sh`
+- Auto PR helper: `/home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh`
 - Grafana API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh`
+- BetterStack API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/betterstack-api.sh`
 - Sentinel snapshot helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-snapshot.sh`
 - Sentinel triage helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-triage.sh`
 
@@ -32,14 +36,41 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 3. Find affected image, app, repo, revision.
 4. Clone related repo, inspect suspect commit/config, and check CI signal.
 5. Cross-check k8s state + logs + metrics + traces.
-6. Return evidence, hypotheses, confidence, and minimal next checks.
+6. If confidence is high and fix is scoped, create fix PR automatically.
+7. Return evidence, hypotheses, confidence, and PR URL (or blocked reason).
+
+## Slack BetterStack Alert Intake
+
+- Monitored channels:
+  - `#staging-infra-monitoring` (dev)
+  - `#public-api-monitoring` (prod)
+  - `#platform-monitoring` (prod)
+- Trigger on BetterStack alert/update posts (including bot-authored messages).
+- Always answer in the incident thread under alert root; never post RCA in channel root.
+- Keep thread reply concise (8-16 lines, no prose wall).
+- Use Slack mrkdwn only:
+  - bold = `*text*`, inline code = `` `text` ``
+  - never use Markdown `**text**` or heading syntax (`##`, `###`)
+- For each incident thread, include:
+  - incident summary + impact
+  - concrete evidence (k8s/events/logs/metrics/traces)
+  - ranked root-cause hypotheses + confidence
+  - immediate mitigations + rollback
+  - validation checks + next actions
+- If fix is scoped/reversible and confidence >= `AUTO_PR_MIN_CONFIDENCE`, create PR via `autofix-pr.sh` and post PR URL in-thread.
+- If a thread question is vague/underspecified:
+  - Do not refuse with “insufficient context” only.
+  - Infer likely intent from latest triage sections (`impact_scope`, `signal_summary`, `rca_result`, `top_*` tables).
+  - State assumptions explicitly in one line (`Assumption: ...`).
+  - Propose 2-3 concrete next actions/solutions with commands and rollback when relevant.
+  - Ask at most one clarifying question only if it materially changes the recommendation.
 
 ## Mandatory First Commands
 
 ```bash
 aws sts get-caller-identity
-kubectl config current-context
-kubectl get ns | sed -n '1,20p'
+export K8S_CONTEXT="${K8S_CONTEXT:-$(kubectl config current-context)}"
+kubectl --context "$K8S_CONTEXT" get ns | sed -n '1,20p'
 ```
 
 ## Docker Image -> GitHub Repo Correlation
@@ -89,15 +120,15 @@ For each RCA output, include latest failing/successful run references with run U
 
 ```bash
 # failing pods + events
-kubectl -n <ns> get pods -o wide
-kubectl -n <ns> get events --sort-by=.lastTimestamp | tail -n 40
+kubectl --context "$K8S_CONTEXT" -n <ns> get pods -o wide
+kubectl --context "$K8S_CONTEXT" -n <ns> get events --sort-by=.lastTimestamp | tail -n 40
 
 # rollout + images
-kubectl -n <ns> get deploy/<name> -o jsonpath='{.spec.template.spec.containers[*].image}{"\n"}'
-kubectl -n <ns> rollout history deploy/<name>
+kubectl --context "$K8S_CONTEXT" -n <ns> get deploy/<name> -o jsonpath='{.spec.template.spec.containers[*].image}{"\n"}'
+kubectl --context "$K8S_CONTEXT" -n <ns> rollout history deploy/<name>
 
 # logs + metrics
-kubectl -n <ns> logs deploy/<name> --since=30m | tail -n 200
+kubectl --context "$K8S_CONTEXT" -n <ns> logs deploy/<name> --since=30m | tail -n 200
 curl -s 'http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090/api/v1/alerts' | jq '.data.alerts[] | select(.state=="firing")'
 ```
 
@@ -122,11 +153,32 @@ Use this first during heartbeat/sentinel runs. It emits:
 
 Use this first in heartbeat mode. It outputs:
 
+- 12-step pipeline (0-11):
+  - `00` linear memory lookup (`linear-memory-lookup.sh`, optional)
+  - `01` pod/deploy runtime signals (required)
+  - `02` events + alert signals (required)
+  - `03` Prometheus trends (optional)
+  - `04` ArgoCD sync drift (optional)
+  - `05` log signal enrichment (optional)
+  - `06` cert/secret health (optional)
+  - `07` AWS resource signals (optional)
+  - `08` image->repo mapping (optional)
+  - `09` deployed revision/PR correlation (optional)
+  - `10` repo CI signal (optional)
+  - `11` RCA synthesis (`RCA_MODE=single|dual|heuristic`, fallback to ranked heuristics)
 - `health_status` (`state\tok|incident`)
-- `incident_gate` (`should_alert`, `gate_reason`, `incident_fingerprint`)
+- `incident_gate` (`should_alert`, `gate_reason`, `incident_id`, `rca_version`, `incident_fingerprint`)
 - `incident_routing` (`severity_level`, `severity_score`, `recommended_target`)
 - `impact_scope` (primary namespace impact vs supporting namespace noise)
 - `signal_summary` counters
+- `linear_incident_memory` (step 0 status + rows)
+- `prometheus_trends` (step 3 status + rows)
+- `argocd_sync` (step 4 status + rows)
+- `cert_secret_health` (step 6 status + rows)
+- `aws_resource_signals` (step 7 status + rows)
+- `rca_result` (mode/status/confidence/agreement/degradation + JSON)
+- `triage_metrics` (`evidence_completeness_pct`, step timeout/error/skip counts)
+- `meta_alerts` (bot-health alerts when `lib-meta-alerts.sh` available)
 - `top_container_failures` (container-level state/reason/exit/message)
 - `top_log_signals` (runtime error log snippets, token-redacted)
 - `impacted_repos` (pod/image -> GitHub repo correlation)
@@ -146,9 +198,21 @@ Optional toggles:
 - `CI_REPO_LIMIT=<n>` and `CI_RUN_LIMIT=<n>` to control API load
 - `LOG_SNIPPET_PODS_LIMIT=<n>`, `LOG_SNIPPET_LINES=<n>`, `LOG_SNIPPET_ERRORS_PER_CONTAINER=<n>` to bound log scraping
 - `ALERT_COOLDOWN_SECONDS=<n>` to suppress duplicate alerts for unchanged incidents
+- `ALERT_MIN_INTERVAL_SECONDS=<n>` to enforce minimum spacing between any incident alerts
 - `SEVERITY_*_SCORE=<n>` to tune severity thresholds
 - `ROUTE_TARGET_{CRITICAL,HIGH,MEDIUM,LOW}=<target>` for recommended routing
 - `PRIMARY_NAMESPACES=<ns1,ns2>` to prioritize severity/routing for app-critical namespaces
+- `PROMETHEUS_URL=<url>` and `ARGOCD_BASE_URL=<url>` to enable steps `03/04`
+- `RCA_MODE=single|dual|heuristic` for Step 11 execution mode
+- `LINEAR_MEMORY_LIMIT=<n>` for Step 0 lookup rows
+- `INCIDENT_STATE_DIR`, `ACTIVE_INCIDENTS_FILE`, `RESOLVED_INCIDENTS_FILE`, `INCIDENT_LAST_ACTIVE_FILE` for incident identity/state persistence
+- `SPOOL_DIR` for cron fallback + dedup spool
+
+State + delivery notes:
+
+- Active incident state row persists `incident_id`, namespace/category, timestamps, workloads, `rca_version`, fingerprint.
+- Outbox-related columns are preserved in the state row for Slack/Linear delivery libraries.
+- Spool files (`triage-*.json`) are still written for cron/heartbeat fallback and dedup.
 
 Heartbeat routing directive:
 
@@ -157,18 +221,70 @@ Heartbeat routing directive:
 - Directive is stripped before delivery text is sent
 - Delivery override applies only when target is in `agents.defaults.heartbeat.routeAllowlist`
 
-## Grafana Dashboard Create/Update (Dev Only)
+## Auto Remediation PR
 
-- Use only `grafana-api.sh` wrapper; do not call Grafana with raw curl.
-- Wrapper enforces host guard via `GRAFANA_ALLOWED_HOST` (dev must be `monitoring-dev.morpho.dev`).
+Use this flow only when:
+
+- top hypothesis confidence is high (>= `AUTO_PR_MIN_CONFIDENCE`)
+- patch scope is small and reversible
+- validation command succeeds (lint/test/helm template/etc.)
 
 ```bash
-# Check API health
+/home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh \
+  --repo morpho-org/<repo> \
+  --path /home/node/.openclaw/repos/morpho-org/<repo> \
+  --title "fix(<scope>): <short-summary>" \
+  --commit "fix(<scope>): <short-summary>" \
+  --confidence 90 \
+  --check-cmd "<targeted validation command>" \
+  --body-file /tmp/sre-pr-body.md
+```
+
+`autofix-pr.sh` enforces:
+
+- repo allowlist (`AUTO_PR_ALLOWED_REPOS`)
+- confidence threshold (`AUTO_PR_MIN_CONFIDENCE`)
+- secret-pattern scan in staged diff before push
+- authenticated push + `gh pr create`
+- Slack DM warning to operator before PR creation (`AUTO_PR_NOTIFY_*`)
+
+If gate fails, report blocked reason and fallback manual next step.
+
+## Grafana Dashboard Assistance (Env-Aware)
+
+- Use only `grafana-api.sh` wrapper; do not call Grafana with raw curl.
+- Environment host policy:
+  - dev bot/context: `monitoring-dev.morpho.dev`
+  - prd bot/context: `monitoring.morpho.dev`
+- Wrapper enforces host guard and blocks cross-environment access.
+- For vague dashboard asks, do not refuse; discover what exists and guide the user with available dashboards/panels.
+
+Discovery flow (before proposing changes):
+
+```bash
+# Check auth + target host
 /home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh GET /api/health
 
-# Search dashboards
-/home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh GET '/api/search?type=dash-db&query='
+# List folders
+/home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh GET '/api/folders?limit=200'
 
+# Search dashboards by keyword
+/home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh GET '/api/search?type=dash-db&query=<keyword>'
+
+# Inspect one dashboard (panels, queries, variables)
+/home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh GET '/api/dashboards/uid/<uid>'
+```
+
+When answering users about dashboards:
+
+- Mention target Grafana URL explicitly (`monitoring-dev.morpho.dev` or `monitoring.morpho.dev`).
+- Report what is available now (folders, matching dashboards, key panels/variables).
+- Provide guided next steps:
+  - where to click/search in Grafana UI
+  - API commands to fetch deeper details
+  - safe edit plan (and rollback) if dashboard changes are requested
+
+```bash
 # Create or update dashboard from file
 cat >/tmp/dashboard-payload.json <<'EOF'
 {
@@ -186,6 +302,20 @@ cat >/tmp/dashboard-payload.json <<'EOF'
 }
 EOF
 /home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh POST /api/dashboards/db /tmp/dashboard-payload.json
+```
+
+## BetterStack Incident API
+
+Use BetterStack API for incident metadata when token is available:
+
+```bash
+/home/node/.openclaw/skills/morpho-sre/scripts/betterstack-api.sh GET '/incidents?per_page=5'
+```
+
+If incident id is known:
+
+```bash
+/home/node/.openclaw/skills/morpho-sre/scripts/betterstack-api.sh GET '/incidents/<id>'
 ```
 
 ## Subagent Team Pattern
@@ -209,4 +339,4 @@ Use specialized subagents for speed:
 - Evidence (commands + concrete output snippets)
 - Root-cause hypotheses (ranked + confidence)
 - Next commands
-- Approval request (only if mutation required)
+- PR URL when created (or blocked reason + manual fallback)
