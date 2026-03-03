@@ -5,6 +5,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../config/runtime-group-policy.js";
 import { logVerbose } from "../../globals.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import {
@@ -181,16 +182,25 @@ export async function checkInboundAccessControl(params: {
           logVerbose(
             `whatsapp pairing request sender=${candidate} name=${params.pushName ?? "unknown"}`,
           );
-          try {
-            await params.sock.sendMessage(params.remoteJid, {
-              text: buildPairingReply({
-                channel: "whatsapp",
-                idLine: `Your WhatsApp phone number: ${candidate}`,
-                code,
-              }),
-            });
-          } catch (err) {
-            logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
+          const outboundSuppressed = isOutboundSuppressed({
+            cfg,
+            channel: "whatsapp",
+            accountId: account.accountId,
+          });
+          if (outboundSuppressed) {
+            logVerbose(`[suppressOutbound] Blocked pairing reply for ${candidate}.`);
+          } else {
+            try {
+              await params.sock.sendMessage(params.remoteJid, {
+                text: buildPairingReply({
+                  channel: "whatsapp",
+                  idLine: `Your WhatsApp phone number: ${candidate}`,
+                  code,
+                }),
+              });
+            } catch (err) {
+              logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
+            }
           }
         }
       }

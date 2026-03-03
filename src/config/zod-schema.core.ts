@@ -332,6 +332,7 @@ export const ReplyRuntimeConfigSchemaShape = {
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   responsePrefix: z.string().optional(),
   mediaMaxMb: z.number().positive().optional(),
+  suppressOutbound: z.boolean().optional(),
 };
 
 export const BlockStreamingChunkSchema = z

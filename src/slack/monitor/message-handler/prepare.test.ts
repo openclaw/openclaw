@@ -680,3 +680,105 @@ describe("prepareSlackMessage sender prefix", () => {
     expect(result?.ctxPayload.CommandAuthorized).toBe(true);
   });
 });
+
+describe("prepareSlackMessage suppressOutbound", () => {
+  function createSuppressCtx(suppressOutbound: boolean): SlackMonitorContext {
+    return {
+      cfg: {
+        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+        messages: { ackReaction: "eyes" },
+        channels: { slack: { enabled: true, suppressOutbound } },
+      },
+      accountId: "default",
+      botToken: "xoxb",
+      app: { client: {} },
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: (code: number): never => {
+          throw new Error(`exit ${code}`);
+        },
+      },
+      botUserId: "BOT",
+      teamId: "T1",
+      apiAppId: "A1",
+      historyLimit: 0,
+      channelHistories: new Map(),
+      sessionScope: "per-sender",
+      mainKey: "agent:main:main",
+      dmEnabled: true,
+      dmPolicy: "open",
+      allowFrom: [],
+      groupDmEnabled: false,
+      groupDmChannels: [],
+      defaultRequireMention: false,
+      groupPolicy: "open",
+      useAccessGroups: false,
+      reactionMode: "off",
+      reactionAllowlist: [],
+      replyToMode: "off",
+      threadHistoryScope: "channel",
+      threadInheritParent: false,
+      slashCommand: {
+        enabled: false,
+        name: "openclaw",
+        sessionPrefix: "slack:slash",
+        ephemeral: true,
+      },
+      textLimit: 2000,
+      ackReactionScope: "all",
+      mediaMaxBytes: 1000,
+      removeAckAfterReply: false,
+      logger: { info: vi.fn(), warn: vi.fn() },
+      markMessageSeen: () => false,
+      shouldDropMismatchedSlackEvent: () => false,
+      resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:c1",
+      isChannelAllowed: () => true,
+      resolveChannelName: async () => ({ name: "general", type: "channel" }),
+      resolveUserName: async () => ({ name: "Alice" }),
+      setSlackThreadStatus: async () => undefined,
+    } as unknown as SlackMonitorContext;
+  }
+
+  it("sets ackReactionPromise to null when suppressed", async () => {
+    const ctx = createSuppressCtx(true);
+    const result = await prepareSlackMessage({
+      ctx,
+      account: { accountId: "default", config: {} } as never,
+      message: {
+        type: "message",
+        channel: "D1",
+        channel_type: "im",
+        text: "hi",
+        user: "U1",
+        ts: "1.000",
+        event_ts: "1.000",
+      } as never,
+      opts: { source: "message" },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.ackReactionPromise).toBeNull();
+  });
+
+  it("sets ackReactionPromise to a Promise when not suppressed", async () => {
+    const ctx = createSuppressCtx(false);
+    const result = await prepareSlackMessage({
+      ctx,
+      account: { accountId: "default", config: {} } as never,
+      message: {
+        type: "message",
+        channel: "D1",
+        channel_type: "im",
+        text: "hi",
+        user: "U1",
+        ts: "1.000",
+        event_ts: "1.000",
+      } as never,
+      opts: { source: "message" },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.ackReactionPromise).toBeInstanceOf(Promise);
+  });
+});

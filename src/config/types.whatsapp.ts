@@ -78,6 +78,8 @@ type WhatsAppSharedConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** When true, block all outbound delivery for this account. */
+  suppressOutbound?: boolean;
 };
 
 type WhatsAppConfigCore = {

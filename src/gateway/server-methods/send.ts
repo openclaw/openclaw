@@ -11,6 +11,7 @@ import {
 } from "../../infra/outbound/outbound-session.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
 import {
@@ -167,6 +168,16 @@ export const sendHandlers: GatewayRequestHandlers = {
       typeof request.threadId === "string" && request.threadId.trim().length
         ? request.threadId.trim()
         : undefined;
+    if (isOutboundSuppressed({ cfg, channel, accountId })) {
+      console.warn(`[suppressOutbound] Blocked send → ${channel}/${to}`);
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `Outbound suppressed for channel ${channel}`),
+      );
+      return;
+    }
+
     const outboundChannel = channel;
     const plugin = resolveOutboundChannelPlugin({ channel, cfg });
     if (!plugin) {
@@ -399,6 +410,17 @@ export const sendHandlers: GatewayRequestHandlers = {
       typeof request.accountId === "string" && request.accountId.trim().length
         ? request.accountId.trim()
         : undefined;
+
+    if (isOutboundSuppressed({ cfg, channel, accountId })) {
+      console.warn(`[suppressOutbound] Blocked poll → ${channel}/${to}`);
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `Outbound suppressed for channel ${channel}`),
+      );
+      return;
+    }
+
     try {
       const plugin = resolveOutboundChannelPlugin({ channel, cfg });
       const outbound = plugin?.outbound;

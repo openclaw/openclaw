@@ -2,8 +2,10 @@ import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/bailey
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
 import { createInboundDebouncer } from "../../auto-reply/inbound-debounce.js";
 import { formatLocationText } from "../../channels/location.js";
+import { loadConfig } from "../../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -56,13 +58,20 @@ export async function monitorWebInbox(options: {
     resolver(reason);
   };
 
-  try {
-    await sock.sendPresenceUpdate("available");
-    if (shouldLogVerbose()) {
-      logVerbose("Sent global 'available' presence on connect");
+  const connectSuppressed = isOutboundSuppressed({
+    cfg: loadConfig(),
+    channel: "whatsapp",
+    accountId: options.accountId,
+  });
+  if (!connectSuppressed) {
+    try {
+      await sock.sendPresenceUpdate("available");
+      if (shouldLogVerbose()) {
+        logVerbose("Sent global 'available' presence on connect");
+      }
+    } catch (err) {
+      logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
     }
-  } catch (err) {
-    logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
   }
 
   const selfJid = sock.user?.id;
@@ -239,6 +248,15 @@ export async function monitorWebInbox(options: {
   const maybeMarkInboundAsRead = async (inbound: NormalizedInboundMessage) => {
     const { id, remoteJid, participantJid, access } = inbound;
     if (id && !access.isSelfChat && options.sendReadReceipts !== false) {
+      const suppressReceipt = isOutboundSuppressed({
+        cfg: loadConfig(),
+        channel: "whatsapp",
+        accountId: access.resolvedAccountId,
+      });
+      if (suppressReceipt) {
+        logVerbose(`[suppressOutbound] Skipping read receipt for ${id}`);
+        return;
+      }
       try {
         await sock.readMessages([{ remoteJid, id, participant: participantJid, fromMe: false }]);
         if (shouldLogVerbose()) {

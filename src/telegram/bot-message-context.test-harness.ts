@@ -16,6 +16,7 @@ type BuildTelegramMessageContextForTestParams = {
   allMedia?: TelegramMediaRef[];
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
+  ackReactionScope?: BuildTelegramMessageContextParams["ackReactionScope"];
   resolveGroupActivation?: BuildTelegramMessageContextParams["resolveGroupActivation"];
   resolveGroupRequireMention?: BuildTelegramMessageContextParams["resolveGroupRequireMention"];
   resolveTelegramGroupConfig?: BuildTelegramMessageContextParams["resolveTelegramGroupConfig"];
@@ -51,7 +52,7 @@ export async function buildTelegramMessageContextForTest(
     dmPolicy: "open",
     allowFrom: [],
     groupAllowFrom: [],
-    ackReactionScope: "off",
+    ackReactionScope: params.ackReactionScope ?? "off",
     logger: { info: vi.fn() },
     resolveGroupActivation: params.resolveGroupActivation ?? (() => undefined),
     resolveGroupRequireMention: params.resolveGroupRequireMention ?? (() => false),

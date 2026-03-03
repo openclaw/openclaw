@@ -110,6 +110,8 @@ export type GoogleChatAccountConfig = {
   typingIndicator?: "none" | "message" | "reaction";
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** When true, block all outbound delivery for this channel/account. */
+  suppressOutbound?: boolean;
 };
 
 export type GoogleChatConfig = {

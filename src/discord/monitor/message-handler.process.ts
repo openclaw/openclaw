@@ -26,6 +26,7 @@ import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-st
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
@@ -140,7 +141,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         shouldBypassMention,
       }),
     );
-  const statusReactionsEnabled = shouldAckReaction();
+  const outboundSuppressed = isOutboundSuppressed({ cfg, channel: "discord", accountId });
+  const statusReactionsEnabled = shouldAckReaction() && !outboundSuppressed;
   const discordAdapter: StatusReactionAdapter = {
     setReaction: async (emoji) => {
       await reactMessageDiscord(messageChannelId, message.id, emoji, {
@@ -416,17 +418,21 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
   const chunkMode = resolveChunkMode(cfg, "discord", accountId);
 
-  const typingCallbacks = createTypingCallbacks({
-    start: () => sendTyping({ client, channelId: typingChannelId }),
-    onStartError: (err) => {
-      logTypingFailure({
-        log: logVerbose,
-        channel: "discord",
-        target: typingChannelId,
-        error: err,
-      });
-    },
-  });
+  const typingCallbacks = createTypingCallbacks(
+    outboundSuppressed
+      ? { start: async () => {}, onStartError: () => {} }
+      : {
+          start: () => sendTyping({ client, channelId: typingChannelId }),
+          onStartError: (err) => {
+            logTypingFailure({
+              log: logVerbose,
+              channel: "discord",
+              target: typingChannelId,
+              error: err,
+            });
+          },
+        },
+  );
 
   // --- Discord draft stream (edit-based preview streaming) ---
   const discordStreamMode = resolveDiscordPreviewStreamMode(discordConfig);
@@ -435,7 +441,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     typeof discordConfig?.blockStreaming === "boolean"
       ? discordConfig.blockStreaming
       : cfg.agents?.defaults?.blockStreamingDefault === "on";
-  const canStreamDraft = discordStreamMode !== "off" && !accountBlockStreamingEnabled;
+  const canStreamDraft =
+    discordStreamMode !== "off" && !accountBlockStreamingEnabled && !outboundSuppressed;
   const draftReplyToMessageId = () => replyReference.use();
   const deliverChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
@@ -665,6 +672,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         chunkMode,
         sessionKey: ctxPayload.SessionKey,
         threadBindings,
+        cfg,
       });
       replyReference.markSent();
     },

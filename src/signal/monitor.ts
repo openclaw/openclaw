@@ -9,7 +9,9 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 import type { SignalReactionNotificationMode } from "../config/types.js";
+import { logVerbose } from "../globals.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
+import { isOutboundSuppressed } from "../infra/outbound/suppress-outbound.js";
 import { waitForTransportReady } from "../infra/transport-ready.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
@@ -288,7 +290,15 @@ async function deliverReplies(params: {
   maxBytes: number;
   textLimit: number;
   chunkMode: "length" | "newline";
+  cfg?: OpenClawConfig;
 }) {
+  if (
+    params.cfg &&
+    isOutboundSuppressed({ cfg: params.cfg, channel: "signal", accountId: params.accountId })
+  ) {
+    logVerbose(`[suppressOutbound] Blocked Signal reply to ${params.target}`);
+    return;
+  }
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
   for (const payload of replies) {
@@ -368,7 +378,13 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const reactionAllowlist = normalizeAllowList(accountInfo.config.reactionAllowlist);
   const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
-  const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
+  const outboundSuppressed = isOutboundSuppressed({
+    cfg,
+    channel: "signal",
+    accountId: accountInfo.accountId,
+  });
+  const sendReadReceipts =
+    !outboundSuppressed && Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
 
   const autoStart = opts.autoStart ?? accountInfo.config.autoStart ?? !accountInfo.config.httpUrl;
   const startupTimeoutMs = Math.min(
@@ -440,7 +456,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       sendReadReceipts,
       readReceiptsViaDaemon,
       fetchAttachment,
-      deliverReplies: (params) => deliverReplies({ ...params, chunkMode }),
+      deliverReplies: (params) => deliverReplies({ ...params, chunkMode, cfg }),
       resolveSignalReactionTargets,
       isSignalReactionMessage,
       shouldEmitSignalReactionNotification,

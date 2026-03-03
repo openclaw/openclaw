@@ -2,6 +2,8 @@ import { chunkTextWithMode, resolveChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
+import { logVerbose } from "../../globals.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { createIMessageRpcClient } from "../client.js";
@@ -22,6 +24,10 @@ export async function deliverReplies(params: {
     params;
   const scope = `${accountId ?? ""}:${target}`;
   const cfg = loadConfig();
+  if (isOutboundSuppressed({ cfg, channel: "imessage", accountId })) {
+    logVerbose(`[suppressOutbound] Blocked iMessage reply to ${target}`);
+    return;
+  }
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "imessage",

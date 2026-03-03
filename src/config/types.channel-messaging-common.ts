@@ -47,4 +47,6 @@ export type CommonChannelMessagingConfig = {
   responsePrefix?: string;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
+  /** When true, block all outbound delivery for this channel/account. */
+  suppressOutbound?: boolean;
 };

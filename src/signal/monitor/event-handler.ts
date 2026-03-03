@@ -28,6 +28,7 @@ import { createTypingCallbacks } from "../../channels/typing.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { kindFromMime } from "../../media/mime.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
@@ -224,26 +225,33 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       accountId: route.accountId,
     });
 
-    const typingCallbacks = createTypingCallbacks({
-      start: async () => {
-        if (!ctxPayload.To) {
-          return;
-        }
-        await sendTypingSignal(ctxPayload.To, {
-          baseUrl: deps.baseUrl,
-          account: deps.account,
-          accountId: deps.accountId,
-        });
-      },
-      onStartError: (err) => {
-        logTypingFailure({
-          log: logVerbose,
-          channel: "signal",
-          target: ctxPayload.To ?? undefined,
-          error: err,
-        });
-      },
-    });
+    const signalSuppressed =
+      deps.cfg &&
+      isOutboundSuppressed({ cfg: deps.cfg, channel: "signal", accountId: deps.accountId });
+    const typingCallbacks = createTypingCallbacks(
+      signalSuppressed
+        ? { start: async () => {}, onStartError: () => {} }
+        : {
+            start: async () => {
+              if (!ctxPayload.To) {
+                return;
+              }
+              await sendTypingSignal(ctxPayload.To, {
+                baseUrl: deps.baseUrl,
+                account: deps.account,
+                accountId: deps.accountId,
+              });
+            },
+            onStartError: (err) => {
+              logTypingFailure({
+                log: logVerbose,
+                channel: "signal",
+                target: ctxPayload.To ?? undefined,
+                error: err,
+              });
+            },
+          },
+    );
 
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
       ...prefixOptions,
@@ -531,6 +539,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         senderName: envelope.sourceName ?? undefined,
         accountId: deps.accountId,
         sendPairingReply: async (text) => {
+          if (
+            deps.cfg &&
+            isOutboundSuppressed({ cfg: deps.cfg, channel: "signal", accountId: deps.accountId })
+          ) {
+            logVerbose(`[suppressOutbound] Blocked Signal pairing reply for ${senderRecipient}`);
+            return;
+          }
           await sendMessageSignal(`signal:${senderRecipient}`, text, {
             baseUrl: deps.baseUrl,
             account: deps.account,
@@ -694,7 +709,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         : typeof dataMessage.timestamp === "number"
           ? dataMessage.timestamp
           : undefined;
-    if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup && receiptTimestamp) {
+    const suppressReadReceipt =
+      deps.cfg &&
+      isOutboundSuppressed({ cfg: deps.cfg, channel: "signal", accountId: deps.accountId });
+    if (
+      deps.sendReadReceipts &&
+      !deps.readReceiptsViaDaemon &&
+      !isGroup &&
+      receiptTimestamp &&
+      !suppressReadReceipt
+    ) {
       try {
         await sendReadReceiptSignal(`signal:${senderRecipient}`, receiptTimestamp, {
           baseUrl: deps.baseUrl,

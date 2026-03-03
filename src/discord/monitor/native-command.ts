@@ -43,6 +43,7 @@ import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matc
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
@@ -1234,7 +1235,13 @@ async function dispatchDiscordCommandInteraction(params: {
     threadBindings,
     suppressReplies,
   } = params;
+  const discordCommandSuppressed = isOutboundSuppressed({ cfg, channel: "discord", accountId });
+
   const respond = async (content: string, options?: { ephemeral?: boolean }) => {
+    if (discordCommandSuppressed) {
+      logVerbose("[suppressOutbound] Blocked Discord native-command respond");
+      return;
+    }
     const payload = {
       content,
       ...(options?.ephemeral !== undefined ? { ephemeral: options.ephemeral } : {}),
@@ -1424,6 +1431,10 @@ async function dispatchDiscordCommandInteraction(params: {
     cfg,
   });
   if (menu) {
+    if (discordCommandSuppressed) {
+      logVerbose("[suppressOutbound] Blocked Discord command-arg menu");
+      return;
+    }
     const menuPayload = buildDiscordCommandArgMenu({
       command,
       menu,
@@ -1459,6 +1470,10 @@ async function dispatchDiscordCommandInteraction(params: {
     commandArgs,
   });
   if (pickerCommandContext) {
+    if (discordCommandSuppressed) {
+      logVerbose("[suppressOutbound] Blocked Discord model picker");
+      return;
+    }
     await replyWithDiscordModelPickerProviders({
       interaction,
       cfg,
@@ -1577,7 +1592,7 @@ async function dispatchDiscordCommandInteraction(params: {
       ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(cfg, effectiveRoute.agentId),
       deliver: async (payload) => {
-        if (suppressReplies) {
+        if (suppressReplies || discordCommandSuppressed) {
           return;
         }
         try {

@@ -349,6 +349,11 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+      if (isDeferredDeliveryError(errMsg)) {
+        deferredBackoff += 1;
+        opts.log.info(`Delivery ${entry.id} deferred (suppress active): ${errMsg}`);
+        continue;
+      }
       if (isPermanentDeliveryError(errMsg)) {
         opts.log.warn(`Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`);
         try {
@@ -390,4 +395,10 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
+}
+
+const DEFERRED_ERROR_PATTERNS: readonly RegExp[] = [/\[suppressOutbound\]/i];
+
+export function isDeferredDeliveryError(error: string): boolean {
+  return DEFERRED_ERROR_PATTERNS.some((re) => re.test(error));
 }

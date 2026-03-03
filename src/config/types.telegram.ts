@@ -171,6 +171,8 @@ export type TelegramAccountConfig = {
    * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
    */
   ackReaction?: string;
+  /** When true, block all outbound delivery for this channel/account. */
+  suppressOutbound?: boolean;
 };
 
 export type TelegramTopicConfig = {

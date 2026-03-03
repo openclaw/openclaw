@@ -3,7 +3,10 @@ import { chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
+import { logVerbose } from "../../globals.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
@@ -18,7 +21,15 @@ export async function deliverReplies(params: {
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all";
   identity?: SlackSendIdentity;
-}) {
+  cfg?: OpenClawConfig;
+}): Promise<{ delivered: boolean }> {
+  if (
+    params.cfg &&
+    isOutboundSuppressed({ cfg: params.cfg, channel: "slack", accountId: params.accountId })
+  ) {
+    logVerbose(`[suppressOutbound] Blocked Slack reply to ${params.target}`);
+    return { delivered: false };
+  }
   for (const payload of params.replies) {
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
     // must not force threading.
@@ -57,6 +68,7 @@ export async function deliverReplies(params: {
     }
     params.runtime.log?.(`delivered reply to ${params.target}`);
   }
+  return { delivered: true };
 }
 
 export type SlackRespondFn = (payload: {
@@ -143,7 +155,16 @@ export async function deliverSlackSlashReplies(params: {
   textLimit: number;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
+  cfg?: OpenClawConfig;
+  accountId?: string;
 }) {
+  if (
+    params.cfg &&
+    isOutboundSuppressed({ cfg: params.cfg, channel: "slack", accountId: params.accountId })
+  ) {
+    logVerbose("[suppressOutbound] Blocked Slack slash reply");
+    return;
+  }
   const messages: string[] = [];
   const chunkLimit = Math.min(params.textLimit, 4000);
   for (const payload of params.replies) {

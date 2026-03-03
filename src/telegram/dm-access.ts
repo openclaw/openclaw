@@ -1,7 +1,9 @@
 import type { Message } from "@grammyjs/types";
 import type { Bot } from "grammy";
+import type { OpenClawConfig } from "../config/config.js";
 import type { DmPolicy } from "../config/types.js";
 import { logVerbose } from "../globals.js";
+import { isOutboundSuppressed } from "../infra/outbound/suppress-outbound.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -40,6 +42,7 @@ export async function enforceTelegramDmAccess(params: {
   accountId: string;
   bot: Bot;
   logger: TelegramDmAccessLogger;
+  cfg?: OpenClawConfig;
 }): Promise<boolean> {
   const { isGroup, dmPolicy, msg, chatId, effectiveDmAllow, accountId, bot, logger } = params;
   if (isGroup) {
@@ -93,18 +96,25 @@ export async function enforceTelegramDmAccess(params: {
           },
           "telegram pairing request",
         );
-        await withTelegramApiErrorLogging({
-          operation: "sendMessage",
-          fn: () =>
-            bot.api.sendMessage(
-              chatId,
-              buildPairingReply({
-                channel: "telegram",
-                idLine: `Your Telegram user id: ${telegramUserId}`,
-                code,
-              }),
-            ),
-        });
+        if (
+          params.cfg &&
+          isOutboundSuppressed({ cfg: params.cfg, channel: "telegram", accountId })
+        ) {
+          logVerbose(`[suppressOutbound] Blocked Telegram pairing reply for chat ${chatId}`);
+        } else {
+          await withTelegramApiErrorLogging({
+            operation: "sendMessage",
+            fn: () =>
+              bot.api.sendMessage(
+                chatId,
+                buildPairingReply({
+                  channel: "telegram",
+                  idLine: `Your Telegram user id: ${telegramUserId}`,
+                  code,
+                }),
+              ),
+          });
+        }
       }
     } catch (err) {
       logVerbose(`telegram pairing reply failed for chat ${chatId}: ${String(err)}`);

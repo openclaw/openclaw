@@ -32,6 +32,7 @@ import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import type { DiscordAccountConfig } from "../../config/types.discord.js";
 import { logVerbose } from "../../globals.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug, logError } from "../../logger.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
@@ -478,16 +479,23 @@ async function ensureDmComponentAuthorized(params: {
   replyOpts: { ephemeral?: boolean };
 }): Promise<boolean> {
   const { ctx, interaction, user, componentLabel, replyOpts } = params;
+  const suppressed = isOutboundSuppressed({
+    cfg: ctx.cfg,
+    channel: "discord",
+    accountId: ctx.accountId,
+  });
   const dmPolicy = ctx.dmPolicy ?? "pairing";
   if (dmPolicy === "disabled") {
     logVerbose(`agent ${componentLabel}: blocked (DM policy disabled)`);
-    try {
-      await interaction.reply({
-        content: "DM interactions are disabled.",
-        ...replyOpts,
-      });
-    } catch {
-      // Interaction may have expired
+    if (!suppressed) {
+      try {
+        await interaction.reply({
+          content: "DM interactions are disabled.",
+          ...replyOpts,
+        });
+      } catch {
+        // Interaction may have expired
+      }
     }
     return false;
   }
@@ -527,31 +535,35 @@ async function ensureDmComponentAuthorized(params: {
         name: user.username,
       },
     });
-    try {
-      await interaction.reply({
-        content: created
-          ? buildPairingReply({
-              channel: "discord",
-              idLine: `Your Discord user id: ${user.id}`,
-              code,
-            })
-          : "Pairing already requested. Ask the bot owner to approve your code.",
-        ...replyOpts,
-      });
-    } catch {
-      // Interaction may have expired
+    if (!suppressed) {
+      try {
+        await interaction.reply({
+          content: created
+            ? buildPairingReply({
+                channel: "discord",
+                idLine: `Your Discord user id: ${user.id}`,
+                code,
+              })
+            : "Pairing already requested. Ask the bot owner to approve your code.",
+          ...replyOpts,
+        });
+      } catch {
+        // Interaction may have expired
+      }
     }
     return false;
   }
 
   logVerbose(`agent ${componentLabel}: blocked DM user ${user.id} (not in allowFrom)`);
-  try {
-    await interaction.reply({
-      content: `You are not authorized to use this ${componentLabel}.`,
-      ...replyOpts,
-    });
-  } catch {
-    // Interaction may have expired
+  if (!suppressed) {
+    try {
+      await interaction.reply({
+        content: `You are not authorized to use this ${componentLabel}.`,
+        ...replyOpts,
+      });
+    } catch {
+      // Interaction may have expired
+    }
   }
   return false;
 }
@@ -1005,16 +1017,19 @@ async function dispatchDiscordComponentEvent(params: {
           maxLinesPerMessage: ctx.discordConfig?.maxLinesPerMessage,
           tableMode,
           chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
+          cfg: ctx.cfg,
         });
         replyReference.markSent();
       },
-      onReplyStart: async () => {
-        try {
-          await sendTyping({ client: interaction.client, channelId: typingChannelId });
-        } catch (err) {
-          logVerbose(`discord: typing failed for component reply: ${String(err)}`);
-        }
-      },
+      onReplyStart: isOutboundSuppressed({ cfg: ctx.cfg, channel: "discord", accountId })
+        ? undefined
+        : async () => {
+            try {
+              await sendTyping({ client: interaction.client, channelId: typingChannelId });
+            } catch (err) {
+              logVerbose(`discord: typing failed for component reply: ${String(err)}`);
+            }
+          },
       onError: (err) => {
         logError(`discord component dispatch failed: ${String(err)}`);
       },

@@ -138,13 +138,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
     context: TelegramMessageContext;
     telegramCfg?: Parameters<typeof dispatchTelegramMessage>[0]["telegramCfg"];
     streamMode?: Parameters<typeof dispatchTelegramMessage>[0]["streamMode"];
+    cfg?: Parameters<typeof dispatchTelegramMessage>[0]["cfg"];
     bot?: Bot;
   }) {
     const bot = params.bot ?? createBot();
     await dispatchTelegramMessage({
       context: params.context,
       bot,
-      cfg: {},
+      cfg: params.cfg ?? {},
       runtime: createRuntime(),
       replyToMode: "first",
       streamMode: params.streamMode ?? "partial",
@@ -1490,5 +1491,43 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(draftA.clear).toHaveBeenCalledTimes(1);
     expect(draftB.clear).toHaveBeenCalledTimes(1);
+  });
+
+  describe("suppressOutbound guards", () => {
+    it("disables draft streaming when suppressed", async () => {
+      setupDraftStreams();
+      const context = createContext();
+
+      await dispatchWithContext({
+        context,
+        cfg: { channels: { telegram: { suppressOutbound: true } } },
+      });
+
+      expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    });
+
+    it("does not call statusReactionController methods when suppressed", async () => {
+      const setThinking = vi.fn();
+      const setDone = vi.fn();
+      const setError = vi.fn();
+      const context = createContext({
+        statusReactionController: {
+          setQueued: vi.fn(),
+          setThinking,
+          setTool: vi.fn(),
+          setDone,
+          setError,
+          dispose: vi.fn(),
+        } as never,
+      });
+
+      await dispatchWithContext({
+        context,
+        cfg: { channels: { telegram: { suppressOutbound: true } } },
+      });
+
+      expect(setThinking).not.toHaveBeenCalled();
+      expect(setDone).not.toHaveBeenCalled();
+    });
   });
 });

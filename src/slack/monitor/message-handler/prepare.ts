@@ -26,6 +26,7 @@ import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating
 import { recordInboundSession } from "../../../channels/session.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
+import { isOutboundSuppressed } from "../../../infra/outbound/suppress-outbound.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
@@ -175,6 +176,11 @@ async function authorizeSlackInboundMessage(params: {
   const { ctx, account, message, conversation } = params;
   const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBots } =
     conversation;
+  const slackSuppressed = isOutboundSuppressed({
+    cfg: ctx.cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
 
   if (isBotMessage) {
     if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
@@ -224,13 +230,17 @@ async function authorizeSlackInboundMessage(params: {
       senderId: directUserId,
       allowFromLower,
       resolveSenderName: ctx.resolveUserName,
-      sendPairingReply: async (text) => {
-        await sendMessageSlack(message.channel, text, {
-          token: ctx.botToken,
-          client: ctx.app.client,
-          accountId: account.accountId,
-        });
-      },
+      sendPairingReply: slackSuppressed
+        ? async () => {
+            logVerbose("[suppressOutbound] Blocked Slack DM pairing reply");
+          }
+        : async (text) => {
+            await sendMessageSlack(message.channel, text, {
+              token: ctx.botToken,
+              client: ctx.app.client,
+              accountId: account.accountId,
+            });
+          },
       onDisabled: () => {
         logVerbose("slack: drop dm (dms disabled)");
       },
@@ -322,6 +332,11 @@ export async function prepareSlackMessage(params: {
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
   const cfg = ctx.cfg;
+  const slackSuppressed = isOutboundSuppressed({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
   const conversation = await resolveSlackConversationContext({ ctx, account, message });
   const {
     channelInfo,
@@ -555,7 +570,7 @@ export async function prepareSlackMessage(params: {
 
   const ackReactionMessageTs = message.ts;
   const ackReactionPromise =
-    shouldAckReaction() && ackReactionMessageTs && ackReactionValue
+    shouldAckReaction() && ackReactionMessageTs && ackReactionValue && !slackSuppressed
       ? reactSlackMessage(message.channel, ackReactionMessageTs, ackReactionValue, {
           token: ctx.botToken,
           client: ctx.app.client,

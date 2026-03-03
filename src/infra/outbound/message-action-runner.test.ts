@@ -1081,3 +1081,85 @@ describe("runMessageAction accountId defaults", () => {
     expect(ctx.params.accountId).toBe("account-b");
   });
 });
+
+describe("suppressOutbound blocks agent tool actions", () => {
+  const suppressed = {
+    channels: {
+      slack: {
+        botToken: "xoxb-test",
+        appToken: "xapp-test",
+        suppressOutbound: true,
+      },
+    },
+  } as OpenClawConfig;
+
+  it("blocks send when suppressOutbound is active", async () => {
+    await expect(
+      runMessageAction({
+        cfg: suppressed,
+        action: "send",
+        params: { channel: "slack", target: "#general", message: "hi" },
+        dryRun: false,
+      }),
+    ).rejects.toThrow(/outbound suppressed/i);
+  });
+
+  it("blocks poll when suppressOutbound is active", async () => {
+    await expect(
+      runMessageAction({
+        cfg: suppressed,
+        action: "poll",
+        params: {
+          channel: "slack",
+          target: "#general",
+          question: "pick",
+          options: ["a", "b"],
+        },
+        dryRun: false,
+      }),
+    ).rejects.toThrow(/outbound suppressed/i);
+  });
+
+  it("does not block dry-run actions", async () => {
+    const result = await runMessageAction({
+      cfg: suppressed,
+      action: "send",
+      params: { channel: "slack", target: "#general", message: "hi" },
+      dryRun: true,
+    });
+    expect(result.kind).toBe("send");
+  });
+
+  it("allows read-only actions (search) past suppress guard", async () => {
+    const err = await runMessageAction({
+      cfg: suppressed,
+      action: "search",
+      params: { channel: "slack", query: "hello" },
+      dryRun: false,
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toMatch(/outbound suppressed/i);
+  });
+
+  it("allows read-only actions (channel-list) past suppress guard", async () => {
+    const err = await runMessageAction({
+      cfg: suppressed,
+      action: "channel-list",
+      params: { channel: "slack" },
+      dryRun: false,
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toMatch(/outbound suppressed/i);
+  });
+
+  it("allows download-file past suppress guard", async () => {
+    const err = await runMessageAction({
+      cfg: suppressed,
+      action: "download-file",
+      params: { channel: "slack", url: "https://files.slack.com/test.pdf" },
+      dryRun: false,
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toMatch(/outbound suppressed/i);
+  });
+});

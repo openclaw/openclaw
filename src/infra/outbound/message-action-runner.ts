@@ -46,8 +46,27 @@ import {
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { isOutboundSuppressed } from "./suppress-outbound.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
+
+const SUPPRESS_EXEMPT_ACTIONS: ReadonlySet<string> = new Set([
+  "search",
+  "reactions",
+  "read",
+  "member-info",
+  "role-info",
+  "emoji-list",
+  "channel-info",
+  "channel-list",
+  "list-pins",
+  "permissions",
+  "download-file",
+  "thread-list",
+  "voice-status",
+  "event-list",
+  "sticker-search",
+]);
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -767,6 +786,14 @@ export async function runMessageAction(
   });
 
   const gateway = resolveGateway(input);
+
+  if (
+    !dryRun &&
+    !SUPPRESS_EXEMPT_ACTIONS.has(action) &&
+    isOutboundSuppressed({ cfg, channel, accountId })
+  ) {
+    throw new Error(`Outbound suppressed for channel ${channel}`);
+  }
 
   if (action === "send") {
     return handleSendAction({

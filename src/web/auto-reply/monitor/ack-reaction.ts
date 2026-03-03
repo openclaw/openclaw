@@ -1,6 +1,7 @@
 import { shouldAckReactionForWhatsApp } from "../../../channels/ack-reactions.js";
 import type { loadConfig } from "../../../config/config.js";
 import { logVerbose } from "../../../globals.js";
+import { isOutboundSuppressed } from "../../../infra/outbound/suppress-outbound.js";
 import { sendReactionWhatsApp } from "../../outbound.js";
 import { formatError } from "../../session.js";
 import type { WebInboundMsg } from "../types.js";
@@ -48,6 +49,11 @@ export function maybeSendAckReaction(params: {
     });
 
   if (!shouldSendReaction()) {
+    return;
+  }
+
+  if (isOutboundSuppressed({ cfg: params.cfg, channel: "whatsapp", accountId: params.accountId })) {
+    logVerbose(`[suppressOutbound] Blocked ack reaction for ${params.msg.chatId}`);
     return;
   }
 

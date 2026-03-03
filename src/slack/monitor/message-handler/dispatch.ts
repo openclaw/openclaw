@@ -10,6 +10,7 @@ import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
+import { isOutboundSuppressed } from "../../../infra/outbound/suppress-outbound.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
@@ -139,46 +140,55 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     isThreadReply,
   });
 
-  const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
-  const typingCallbacks = createTypingCallbacks({
-    start: async () => {
-      didSetStatus = true;
-      await ctx.setSlackThreadStatus({
-        channelId: message.channel,
-        threadTs: statusThreadTs,
-        status: "is typing...",
-      });
-    },
-    stop: async () => {
-      if (!didSetStatus) {
-        return;
-      }
-      didSetStatus = false;
-      await ctx.setSlackThreadStatus({
-        channelId: message.channel,
-        threadTs: statusThreadTs,
-        status: "",
-      });
-    },
-    onStartError: (err) => {
-      logTypingFailure({
-        log: (message) => runtime.error?.(danger(message)),
-        channel: "slack",
-        action: "start",
-        target: typingTarget,
-        error: err,
-      });
-    },
-    onStopError: (err) => {
-      logTypingFailure({
-        log: (message) => runtime.error?.(danger(message)),
-        channel: "slack",
-        action: "stop",
-        target: typingTarget,
-        error: err,
-      });
-    },
+  const slackOutboundSuppressed = isOutboundSuppressed({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
   });
+  const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
+  const typingCallbacks = createTypingCallbacks(
+    slackOutboundSuppressed
+      ? { start: async () => {}, onStartError: () => {} }
+      : {
+          start: async () => {
+            didSetStatus = true;
+            await ctx.setSlackThreadStatus({
+              channelId: message.channel,
+              threadTs: statusThreadTs,
+              status: "is typing...",
+            });
+          },
+          stop: async () => {
+            if (!didSetStatus) {
+              return;
+            }
+            didSetStatus = false;
+            await ctx.setSlackThreadStatus({
+              channelId: message.channel,
+              threadTs: statusThreadTs,
+              status: "",
+            });
+          },
+          onStartError: (err) => {
+            logTypingFailure({
+              log: (message) => runtime.error?.(danger(message)),
+              channel: "slack",
+              action: "start",
+              target: typingTarget,
+              error: err,
+            });
+          },
+          onStopError: (err) => {
+            logTypingFailure({
+              log: (message) => runtime.error?.(danger(message)),
+              channel: "slack",
+              action: "stop",
+              target: typingTarget,
+              error: err,
+            });
+          },
+        },
+  );
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
@@ -192,7 +202,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     streamMode: account.config.streamMode,
     nativeStreaming: account.config.nativeStreaming,
   });
-  const previewStreamingEnabled = slackStreaming.mode !== "off";
+  const previewStreamingEnabled = slackStreaming.mode !== "off" && !slackOutboundSuppressed;
   const streamingEnabled = isSlackStreamingEnabled({
     mode: slackStreaming.mode,
     nativeStreaming: slackStreaming.nativeStreaming,
@@ -213,7 +223,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
-    await deliverReplies({
+    const result = await deliverReplies({
       replies: [payload],
       target: prepared.replyTarget,
       token: ctx.botToken,
@@ -223,8 +233,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyThreadTs,
       replyToMode: prepared.replyToMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
+      cfg,
     });
-    // Record the thread ts only after confirmed delivery success.
+    if (!result.delivered) {
+      return;
+    }
     if (replyThreadTs) {
       usedReplyThreadTs ??= replyThreadTs;
     }
@@ -232,6 +245,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
 
   const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
+    if (isOutboundSuppressed({ cfg, channel: "slack", accountId: account.accountId })) {
+      logVerbose("[suppressOutbound] Blocked Slack streamed reply");
+      return;
+    }
     if (streamFailed || hasMedia(payload) || !payload.text?.trim()) {
       await deliverNormally(payload, streamSession?.threadTs);
       return;
@@ -460,8 +477,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,
   // or draft stream). Falls back to statusThreadTs for edge cases.
+  // Skip when outbound is suppressed to avoid false participation state.
   const participationThreadTs = usedReplyThreadTs ?? statusThreadTs;
-  if (anyReplyDelivered && participationThreadTs) {
+  if (
+    anyReplyDelivered &&
+    participationThreadTs &&
+    !isOutboundSuppressed({ cfg, channel: "slack", accountId: account.accountId })
+  ) {
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs);
   }
 

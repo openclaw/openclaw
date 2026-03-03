@@ -31,6 +31,7 @@ import type {
   TelegramTopicConfig,
 } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
+import { isOutboundSuppressed } from "../infra/outbound/suppress-outbound.js";
 import { getChildLogger } from "../logging.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import {
@@ -204,7 +205,16 @@ async function resolveTelegramCommandAuth(params: {
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const senderUsername = msg.from?.username ?? "";
 
+  const telegramCommandSuppressed = isOutboundSuppressed({
+    cfg,
+    channel: "telegram",
+    accountId,
+  });
   const sendAuthMessage = async (text: string) => {
+    if (telegramCommandSuppressed) {
+      logVerbose("[suppressOutbound] Blocked Telegram auth/command reply");
+      return null;
+    }
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
       fn: () => bot.api.sendMessage(chatId, text),
@@ -450,6 +460,7 @@ export const registerTelegramNativeCommands = ({
     threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: ReturnType<typeof resolveChunkMode>;
+    accountId?: string;
   }) => ({
     chatId: String(params.chatId),
     accountId: params.accountId,
@@ -463,6 +474,8 @@ export const registerTelegramNativeCommands = ({
     tableMode: params.tableMode,
     chunkMode: params.chunkMode,
     linkPreview: telegramCfg.linkPreview,
+    cfg,
+    accountId: params.accountId,
   });
 
   if (commandsToRegister.length > 0 || pluginCatalog.commands.length > 0) {
@@ -520,6 +533,7 @@ export const registerTelegramNativeCommands = ({
             threadSpec,
             tableMode,
             chunkMode,
+            accountId: route.accountId,
           });
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
 
@@ -562,15 +576,17 @@ export const registerTelegramNativeCommands = ({
               );
             }
             const replyMarkup = buildInlineKeyboard(rows);
-            await withTelegramApiErrorLogging({
-              operation: "sendMessage",
-              runtime,
-              fn: () =>
-                bot.api.sendMessage(chatId, title, {
-                  ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-                  ...threadParams,
-                }),
-            });
+            if (!isOutboundSuppressed({ cfg, channel: "telegram", accountId: route.accountId })) {
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                runtime,
+                fn: () =>
+                  bot.api.sendMessage(chatId, title, {
+                    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+                    ...threadParams,
+                  }),
+              });
+            }
             return;
           }
           const baseSessionKey = route.sessionKey;
@@ -705,11 +721,13 @@ export const registerTelegramNativeCommands = ({
           const commandBody = `/${pluginCommand.command}${rawText ? ` ${rawText}` : ""}`;
           const match = matchPluginCommand(commandBody);
           if (!match) {
-            await withTelegramApiErrorLogging({
-              operation: "sendMessage",
-              runtime,
-              fn: () => bot.api.sendMessage(chatId, "Command not found."),
-            });
+            if (!isOutboundSuppressed({ cfg, channel: "telegram", accountId })) {
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                runtime,
+                fn: () => bot.api.sendMessage(chatId, "Command not found."),
+              });
+            }
             return;
           }
           const auth = await resolveTelegramCommandAuth({
@@ -743,6 +761,7 @@ export const registerTelegramNativeCommands = ({
             threadSpec,
             tableMode,
             chunkMode,
+            accountId,
           });
           const from = isGroup
             ? buildTelegramGroupFrom(chatId, threadSpec.id)
