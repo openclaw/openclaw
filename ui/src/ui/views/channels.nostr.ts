@@ -15,7 +15,7 @@ import type { ChannelsProps } from "./channels.types.ts";
  */
 function truncatePubkey(pubkey: string | null | undefined): string {
   if (!pubkey) {
-    return "n/a";
+    return t("common.na");
   }
   if (pubkey.length <= 20) {
     return pubkey;
@@ -170,7 +170,7 @@ export function renderNostrCard(params: {
                     ? html`<div><span class="label">${t("channels.nostr.about")}</span><span style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;">${about}</span></div>`
                     : nothing
                 }
-                ${nip05 ? html`<div><span class="label">NIP-05</span><span>${nip05}</span></div>` : nothing}
+                ${nip05 ? html`<div><span class="label">${t("channels.nostr.nip05Identifier")}</span><span>${nip05}</span></div>` : nothing}
               </div>
             `
             : html`
