@@ -93,7 +93,7 @@ block-beta
   space:1 TH["Task Hub"] GW["Gateway"] EA["실행 에이전트"] EV["평가 에이전트"]
 
   P0["Phase 0<br/>Big Bang"]:1 p0th["████"]:1 p0gw["█"]:1 space:1 p0ev["████"]:1
-  P1["Phase 1<br/>PAL Router"]:1 p1th["█"]:1 p1gw["████"]:1 space:1 space:1
+  P1["Phase 1<br/>PAL Router"]:1 p1th["████"]:1 p1gw["█"]:1 space:1 space:1
   P2["Phase 2<br/>Double Diamond"]:1 p2th["██"]:1 p2gw["████"]:1 p2ea["████"]:1 p2ev["██"]:1
   P3["Phase 3<br/>Resilience"]:1 p3th["█"]:1 p3gw["████"]:1 p3ea["█"]:1 space:1
   P4["Phase 4<br/>Evaluation"]:1 p4th["███"]:1 p4gw["██"]:1 p4ea["█"]:1 p4ev["████"]:1
@@ -246,10 +246,12 @@ if (!project.ambiguityScore || project.ambiguityScore.overall > 0.2) {
 
 ### 분리 아키텍처 배치
 
-PAL Router는 **LLM 호출이 필요 없는 순수 함수**이므로 Gateway에서 직접 처리.
+PAL Router는 **LLM 호출이 필요 없는 순수 함수**이므로 **Task Hub에서 Launch 시점에 직접 처리**.
+Task Hub이 이미 HarnessItem의 spec (requirements, steps, verificationChecklist)을 모두 갖고 있어
+복잡도 계산에 필요한 입력값을 별도 API 호출 없이 즉시 사용 가능.
 
 ```typescript
-// Gateway: src/services/pal-router.ts (신규)
+// Task Hub: src/lib/harness/pal-router.ts (신규)
 
 type ModelTier = "frugal" | "standard" | "frontier";
 
@@ -278,9 +280,20 @@ function computeComplexity(ctx: {
     score < THRESHOLDS.frugal ? "frugal" : score < THRESHOLDS.standard ? "standard" : "frontier";
   return { score, breakdown: { tokenScore, toolScore, depthScore }, tier };
 }
+
+// Launch route에서 호출:
+// const complexity = computeComplexity({
+//   estimatedTokens: buildTaskDescription(item).length * 0.4,
+//   toolCount: item.spec.steps.length,
+//   acDepth: 1,  // 분해 전
+// });
+// delegateToAgent(agentId, desc, { palTier: complexity.tier, ... });
 ```
 
 ### 에스컬레이션/다운그레이드
+
+런타임 적응(연속 실패/성공에 따른 티어 변경)은 **Gateway**에서 처리.
+task-continuation-runner가 이미 실패 횟수를 추적하고 있으므로, 여기서 티어를 조정.
 
 ```typescript
 interface TierState {
@@ -289,27 +302,26 @@ interface TierState {
   consecutiveSuccesses: number; // ≥5 → 하위 티어
 }
 
-// TaskFile에 저장
+// TaskFile에 저장 (Gateway 측)
 interface TaskFile {
   // ... 기존 필드
-  palTierState?: TierState;
+  palTierState?: TierState; // 초기값은 Task Hub에서 전달받은 tier
 }
 ```
 
 ### 모델 매핑 (config)
 
 ```yaml
-agents:
-  defaults:
-    ouroboros:
-      palRouter:
-        enabled: true
-        tierModels:
-          frugal: "claude-haiku-4-5-20251001"
-          standard: "claude-sonnet-4-6"
-          frontier: "claude-opus-4-6"
-        escalationThreshold: 2
-        downgradeThreshold: 5
+# HarnessProject.ouroboros 또는 openclaw.json에서 관리
+ouroboros:
+  palRouter:
+    enabled: true
+    tierModels:
+      frugal: "claude-haiku-4-5-20251001"
+      standard: "claude-sonnet-4-6"
+      frontier: "claude-opus-4-6"
+    escalationThreshold: 2
+    downgradeThreshold: 5
 ```
 
 ---
@@ -763,8 +775,8 @@ sequenceDiagram
 
   rect rgb(245, 255, 245)
   Note right of TH: Phase 1 — PAL Router
-  GW->>GW: computeComplexity() (순수 함수)
-  GW->>TH: 복잡도 저장
+  TH->>TH: computeComplexity() (순수 함수)
+  TH->>GW: delegateToAgent(tier="frugal/standard/frontier")
   end
 
   rect rgb(255, 248, 240)
@@ -816,16 +828,25 @@ sequenceDiagram
 
 ## 11. 역할 분리 원칙
 
+### Task Hub: 스펙 관리 + 사전 계산 (Launch 시점)
+
+| 수행                                | 비수행                           |
+| ----------------------------------- | -------------------------------- |
+| PAL Router (순수 함수, Launch 시점) | 태스크 실행/오케스트레이션       |
+| 복잡도 계산 → 모델 티어 선택        | 런타임 에스컬레이션/다운그레이드 |
+| 스펙/검증 상태 관리 (MongoDB)       | LLM 호출                         |
+| 모호성 게이트 (≤0.2 확인)           | 페르소나 선택                    |
+
 ### Gateway: 오케스트레이션만 (LLM 호출 없음)
 
-| 수행                                 | 비수행              |
-| ------------------------------------ | ------------------- |
-| 태스크 위임/라우팅                   | LLM 호출            |
-| 정체 감지 (규칙 기반 해시/수치 비교) | 시맨틱 평가         |
-| 수렴 판정 (수학적 similarity)        | Wonder/Reflect 생성 |
-| PAL Router (순수 함수)               | 모호성 점수 계산    |
-| 페르소나 프롬프트 선택 (매핑 테이블) | 합의 투표           |
-| Consensus 트리거 판단 (수치 비교)    | AC 원자성 판단      |
+| 수행                                    | 비수행              |
+| --------------------------------------- | ------------------- |
+| 태스크 위임/라우팅                      | LLM 호출            |
+| 정체 감지 (규칙 기반 해시/수치 비교)    | 시맨틱 평가         |
+| 수렴 판정 (수학적 similarity)           | Wonder/Reflect 생성 |
+| 티어 에스컬레이션/다운그레이드 (런타임) | 모호성 점수 계산    |
+| 페르소나 프롬프트 선택 (매핑 테이블)    | 합의 투표           |
+| Consensus 트리거 판단 (수치 비교)       | AC 원자성 판단      |
 
 ### 평가 에이전트: LLM 판단 전담
 
@@ -850,7 +871,7 @@ sequenceDiagram
 
 ## 12. 구현 파일 목록
 
-### Task Hub (Next.js) — 8개 파일
+### Task Hub (Next.js) — 9개 파일
 
 | #   | 파일                                                | 변경 유형 | 설명                                          |
 | --- | --------------------------------------------------- | --------- | --------------------------------------------- |
@@ -861,48 +882,48 @@ sequenceDiagram
 | 5   | `src/app/api/harness/[id]/consensus/route.ts`       | **신규**  | Consensus 투표 저장                           |
 | 6   | `src/app/api/harness/[id]/evolution/route.ts`       | **신규**  | Wonder/Reflect/세대 관리                      |
 | 7   | `src/app/api/harness/[id]/drift/route.ts`           | **신규**  | 드리프트 측정 저장                            |
-| 8   | `src/app/api/harness/[id]/launch/route.ts`          | 수정      | ambiguity 게이트                              |
+| 8   | `src/app/api/harness/[id]/launch/route.ts`          | 수정      | ambiguity 게이트 + PAL Router 호출            |
+| 9   | `src/lib/harness/pal-router.ts`                     | **신규**  | 복잡도 계산 + 티어 선택 (순수 함수)           |
 
-### Gateway — 신규 서비스 5개 (LLM 호출 없음)
+### Gateway — 신규 서비스 4개 (LLM 호출 없음)
 
-| #   | 파일                                     | 설명                                |
-| --- | ---------------------------------------- | ----------------------------------- |
-| 1   | `src/services/pal-router.ts`             | 복잡도 계산 + 티어 선택 (순수 함수) |
-| 2   | `src/services/stagnation-detector.ts`    | 4패턴 정체 감지 (규칙 기반)         |
-| 3   | `src/services/convergence-checker.ts`    | 수렴 판정 (규칙 기반 수학)          |
-| 4   | `src/services/ac-tree.ts`                | ACTree/ACNode 타입 + 유틸           |
-| 5   | `src/services/evolution-orchestrator.ts` | 진화 루프 총괄 (태스크 위임 조율)   |
+| #   | 파일                                     | 설명                              |
+| --- | ---------------------------------------- | --------------------------------- |
+| 1   | `src/services/stagnation-detector.ts`    | 4패턴 정체 감지 (규칙 기반)       |
+| 2   | `src/services/convergence-checker.ts`    | 수렴 판정 (규칙 기반 수학)        |
+| 3   | `src/services/ac-tree.ts`                | ACTree/ACNode 타입 + 유틸         |
+| 4   | `src/services/evolution-orchestrator.ts` | 진화 루프 총괄 (태스크 위임 조율) |
 
 ### Gateway — 신규 도구 2개
 
 | #   | 파일                                        | 설명                          |
 | --- | ------------------------------------------- | ----------------------------- |
-| 6   | `src/agents/tools/evaluation-tool.ts`       | 평가 에이전트 전용 도구 (7개) |
-| 7   | `src/agents/tools/ac-decomposition-tool.ts` | AC 분해 결과 보고 도구        |
+| 5   | `src/agents/tools/evaluation-tool.ts`       | 평가 에이전트 전용 도구 (7개) |
+| 6   | `src/agents/tools/ac-decomposition-tool.ts` | AC 분해 결과 보고 도구        |
 
 ### Gateway — 기존 파일 수정 5개
 
 | #   | 파일                                    | 설명                                       |
 | --- | --------------------------------------- | ------------------------------------------ |
-| 8   | `src/agents/tools/task-file-io.ts`      | palTierState, acNodeId, executionHistory   |
-| 9   | `src/agents/tools/task-blocking.ts`     | ac_node_id, pal_tier                       |
-| 10  | `src/agents/openclaw-tools.ts`          | 도구 등록                                  |
-| 11  | `src/infra/task-continuation-runner.ts` | Double Diamond + 정체 감지 + 페르소나 주입 |
-| 12  | `src/config/types.agent-defaults.ts`    | OuroborosConfig                            |
+| 7   | `src/agents/tools/task-file-io.ts`      | palTierState, acNodeId, executionHistory   |
+| 8   | `src/agents/tools/task-blocking.ts`     | ac_node_id, pal_tier                       |
+| 9   | `src/agents/openclaw-tools.ts`          | 도구 등록                                  |
+| 10  | `src/infra/task-continuation-runner.ts` | Double Diamond + 정체 감지 + 페르소나 주입 |
+| 11  | `src/config/types.agent-defaults.ts`    | OuroborosConfig                            |
 
 ### prontoclaw-config — 2개
 
 | #   | 파일                                     | 설명                     |
 | --- | ---------------------------------------- | ------------------------ |
-| 13  | `workspace-shared/OUROBOROS-PROTOCOL.md` | 실행 에이전트용 프로토콜 |
-| 14  | `workspace-evaluator/AGENTS.md`          | 평가 에이전트 설정       |
+| 12  | `workspace-shared/OUROBOROS-PROTOCOL.md` | 실행 에이전트용 프로토콜 |
+| 13  | `workspace-evaluator/AGENTS.md`          | 평가 에이전트 설정       |
 
 ---
 
 ## 13. 설정 스키마
 
 ```yaml
-# openclaw.json
+# openclaw.json (Gateway 측)
 
 agents:
   defaults:
@@ -914,13 +935,15 @@ agents:
         threshold: 0.2
         weights: { goal: 0.40, constraint: 0.30, success: 0.30, context: 0.15 }
 
-      # Phase 1
+      # Phase 1 — PAL Router (Task Hub 측, HarnessProject.ouroboros에 저장)
+      # Gateway는 tierModels를 참조하지 않음. Task Hub이 launch 시 tier를 계산하여 전달.
       palRouter:
         enabled: true
         tierModels:
           frugal: "claude-haiku-4-5-20251001"
           standard: "claude-sonnet-4-6"
           frontier: "claude-opus-4-6"
+        # 에스컬레이션/다운그레이드 임계값은 Gateway가 런타임에 사용
         escalationThreshold: 2
         downgradeThreshold: 5
 
@@ -967,7 +990,7 @@ gantt
   axisFormat %s
 
   section Phase 1: 기반 인프라
-  pal-router.ts (순수 함수)           :p1a, 0, 1
+  Task Hub pal-router.ts (순수 함수)  :p1a, 0, 1
   stagnation-detector.ts (규칙 기반)  :p1b, 0, 1
   convergence-checker.ts (규칙 기반)  :p1c, 0, 1
   ac-tree.ts (타입 + 유틸)            :p1d, 0, 1
@@ -1079,15 +1102,16 @@ Q3: 기존 harness_report_step은 HarnessItem.stepProgress를 추적하는데,
 
 ### 15-4. PAL Router 입력값 출처
 
-**설계**: `computeComplexity({ estimatedTokens, toolCount, acDepth })` — 이 값들을 어디서 얻는가?
+**설계**: `computeComplexity({ estimatedTokens, toolCount, acDepth })` — Task Hub이 Launch 시점에 직접 계산.
 
 ```
-estimatedTokens: 태스크 설명 길이(chars) × 0.4 (추정 토큰 변환)로 근사
-toolCount: HarnessItem.spec.steps.length 또는 AC 분해 후 자식 수로 근사
-acDepth: AC Tree의 깊이 (분해 전 = 1)
+estimatedTokens: buildTaskDescription(item).length × 0.4 (추정 토큰 변환)로 근사
+toolCount: item.spec.steps.length (Task Hub이 이미 보유)
+acDepth: 1 (분해 전)
 
-→ Launch 시점에는 정확한 값을 모르므로 휴리스틱 추정.
-→ Phase 2 분해 후 재계산하여 정확도 향상.
+→ Task Hub이 HarnessItem의 spec 데이터를 이미 갖고 있으므로 별도 API 호출 불필요.
+→ Launch route에서 computeComplexity() 호출 → tier를 delegateToAgent()에 전달.
+→ Phase 2 분해 후 Gateway가 Task Hub API를 통해 재계산 요청 가능.
 ```
 
 ### 15-5. 정체 감지용 출력 해시 수집
@@ -1202,7 +1226,7 @@ T+4   │ 사용자 (Task Hub)  │ Launch 버튼 활성화 → 클릭
       │                    │ agentId: "baram", mode: "direct"
 
 [Phase 1: PAL Router — 모델 선택]
-T+4   │ Gateway            │ computeComplexity({
+T+4   │ Task Hub           │ computeComplexity({
       │                    │   estimatedTokens: 450 (태스크 설명 ~1100 chars × 0.4),
       │                    │   toolCount: 3 (spec.steps.length),
       │                    │   acDepth: 1 (분해 전)
@@ -1210,7 +1234,7 @@ T+4   │ Gateway            │ computeComplexity({
       │                    │ → score = 0.3×(450/4000) + 0.3×(3/5) + 0.4×(1/5)
       │                    │        = 0.3×0.11 + 0.3×0.6 + 0.4×0.2 = 0.293
       │                    │ → tier = "frugal" (< 0.4)
-      │                    │ → 모델: claude-haiku-4-5
+      │                    │ → delegateToAgent(agentId, desc, { palTier: "frugal" })
 
 [Phase 2: Double Diamond — AC 분해 판단]
 T+5   │ Gateway → 평가     │ "이 AC의 원자성을 판단하세요:
@@ -1454,9 +1478,9 @@ T+46  │ Gateway → Task Hub │ 2세대 HarnessItem 세트 생성:
       │                    │ - 개선된 spec.requirements (pagination 포함)
       │                    │ - 개선된 spec.verificationChecklist
       │                    │
-T+47  │ Gateway            │ 2세대 Launch → Phase 1부터 재시작
-      │                    │ → PAL Router: complexity 약간 증가 → 여전히 frugal
-      │                    │ → 실행 에이전트에 위임 (개선된 스펙)
+T+47  │ Task Hub           │ 2세대 Launch → Phase 1부터 재시작
+      │                    │ → PAL Router: computeComplexity() 재계산 → 여전히 frugal
+      │                    │ → delegateToAgent(palTier: "frugal") → 실행 에이전트에 위임
 
 [2세대 — 성공]
 T+55  │ 평가 에이전트       │ Stage 2: score 0.92, ac_compliance: true ✅
