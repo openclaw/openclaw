@@ -826,6 +826,69 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("supports text-only plugin outbound adapters that omit sendMedia", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "line", messageId: "ln-text-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "line",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "line",
+      to: "U123",
+      payloads: [{ text: "hello from text-only plugin" }],
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello from text-only plugin" }),
+    );
+    expect(results).toEqual([{ channel: "line", messageId: "ln-text-1" }]);
+  });
+
+  it("falls back to sendText for media payloads when plugin sendMedia is omitted", async () => {
+    const sendText = vi
+      .fn()
+      .mockResolvedValue({ channel: "line", messageId: "ln-media-fallback-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "line",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "line",
+      to: "U123",
+      payloads: [{ text: "media caption", mediaUrl: "https://example.com/a.png" }],
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "media caption",
+        mediaUrl: "https://example.com/a.png",
+      }),
+    );
+    expect(results).toEqual([{ channel: "line", messageId: "ln-media-fallback-1" }]);
+  });
+
   it("emits message_sent success for sendPayload deliveries", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });

@@ -143,12 +143,19 @@ function createPluginHandler(
   params: ChannelHandlerParams & { outbound?: ChannelOutboundAdapter },
 ): ChannelHandler | null {
   const outbound = params.outbound;
-  if (!outbound?.sendText || !outbound?.sendMedia) {
+  if (!outbound?.sendText) {
     return null;
   }
   const baseCtx = createChannelOutboundContextBase(params);
   const sendText = outbound.sendText;
-  const sendMedia = outbound.sendMedia;
+  const sendMedia =
+    outbound.sendMedia ??
+    (async (ctx: ChannelOutboundContext) =>
+      // Allow text-only channel plugins to degrade media payloads into captions.
+      sendText({
+        ...ctx,
+        text: ctx.text,
+      }));
   const chunker = outbound.chunker ?? null;
   const chunkerMode = outbound.chunkerMode;
   const resolveCtx = (overrides?: {
