@@ -59,7 +59,8 @@ type FirecrawlSearchResult = {
 
 type FirecrawlSearchResponse = {
   success?: boolean;
-  data?: FirecrawlSearchResult[];
+  /** v2: data is { web: [...], news?: [...], images?: [...] } */
+  data?: { web?: FirecrawlSearchResult[] } | FirecrawlSearchResult[];
   error?: string;
 };
 
@@ -105,7 +106,12 @@ export function createFirecrawlSearchTool(options?: {
         throw new Error(`Firecrawl search failed (${res.status}): ${detail}`);
       }
 
-      const results = (payload?.data ?? []).map((item) => ({
+      // v2 returns { data: { web: [...] } }, v1 returned { data: [...] }
+      const rawData = payload?.data;
+      const items: FirecrawlSearchResult[] = Array.isArray(rawData)
+        ? rawData
+        : ((rawData as { web?: FirecrawlSearchResult[] })?.web ?? []);
+      const results = items.map((item) => ({
         title: item.title
           ? wrapExternalContent(item.title, { source: "web_search", includeWarning: false })
           : undefined,

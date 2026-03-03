@@ -138,6 +138,28 @@ describe("firecrawl_search tool", () => {
     });
   });
 
+  it("handles v2 nested data.web format", async () => {
+    installMockFetch({
+      success: true,
+      data: {
+        web: [
+          {
+            title: "V2 Result",
+            url: "https://example.com/v2",
+            description: "From v2 API",
+          },
+        ],
+      },
+    });
+    const tool = createFirecrawlSearchTool(configWithApiKey("fc-test-key"));
+    const result = await tool?.execute?.("call-1", { query: "test" });
+    const details = result?.details as {
+      results?: Array<{ url?: string }>;
+    };
+    expect(details.results).toHaveLength(1);
+    expect(details.results?.[0]?.url).toBe("https://example.com/v2");
+  });
+
   it("throws on API error", async () => {
     const mockFetch = vi.fn(() =>
       Promise.resolve({
