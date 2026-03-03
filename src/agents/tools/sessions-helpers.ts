@@ -32,6 +32,7 @@ import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
   stripDowngradedToolCallText,
   stripGlmToolCallXml,
+  stripLeakedShellCommands,
   stripMinimaxToolCallXml,
   stripThinkingTagsFromText,
 } from "../pi-embedded-utils.js";
@@ -144,7 +145,9 @@ export function sanitizeTextContent(text: string): string {
     return text;
   }
   return stripThinkingTagsFromText(
-    stripDowngradedToolCallText(stripGlmToolCallXml(stripMinimaxToolCallXml(text))),
+    stripLeakedShellCommands(
+      stripDowngradedToolCallText(stripGlmToolCallXml(stripMinimaxToolCallXml(text))),
+    ),
   );
 }
 

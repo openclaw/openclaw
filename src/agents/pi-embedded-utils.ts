@@ -223,6 +223,44 @@ export function stripDowngradedToolCallText(text: string): string {
 }
 
 /**
+ * Strip leaked shell commands that some models (Qwen, GLM) output as plain text
+ * instead of routing through the `exec` tool. Common patterns include:
+ * - `timeout 180 claude -p "..."` (Claude Code CLI invocations)
+ * - `CLAUDECODE= claude -p "..."`  (env-unset Claude Code invocations)
+ * - Lines that are purely a shell command with no surrounding prose
+ */
+export function stripLeakedShellCommands(text: string): string {
+  if (!text) {
+    return text;
+  }
+  // Quick bailout: only apply if text contains strong shell-command indicators.
+  if (!/\bclaude\s+-p\b/i.test(text) && !/\btimeout\s+\d+\s+/i.test(text)) {
+    return text;
+  }
+
+  // Remove lines that are purely shell command invocations (no surrounding prose).
+  // These patterns match standalone command lines that models dump as text.
+  const shellPatterns = [
+    // `timeout <N> claude -p "..."` or `timeout <N> CLAUDECODE= claude -p "..."`
+    /^[ \t]*timeout\s+\d+\s+(?:CLAUDECODE=\s*)?claude\s+-p\b.*$/gim,
+    // `CLAUDECODE= claude -p "..."` without timeout
+    /^[ \t]*CLAUDECODE=\s*claude\s+-p\b.*$/gim,
+    // Bare `claude -p "..."` on its own line (not inside prose)
+    /^[ \t]*claude\s+-p\s+["'].*$/gim,
+  ];
+
+  let cleaned = text;
+  for (const pattern of shellPatterns) {
+    cleaned = cleaned.replace(pattern, "");
+  }
+
+  // Collapse excessive blank lines left behind.
+  cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
+
+  return cleaned.trim();
+}
+
+/**
  * Strip thinking tags and their content from text.
  * This is a safety net for cases where the model outputs <think> tags
  * that slip through other filtering mechanisms.
@@ -236,7 +274,9 @@ export function extractAssistantText(msg: AssistantMessage): string {
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripGlmToolCallXml(stripMinimaxToolCallXml(text))),
+          stripLeakedShellCommands(
+            stripDowngradedToolCallText(stripGlmToolCallXml(stripMinimaxToolCallXml(text))),
+          ),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
