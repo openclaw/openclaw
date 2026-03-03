@@ -111,7 +111,7 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
-import { clearThinkingSignatures, dropThinkingBlocks } from "../thinking.js";
+import { clearThinkingSignatures } from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
@@ -1078,21 +1078,20 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
 
-      // GitHub Copilot's Claude endpoints may have issues with thinking block signatures
-      // on follow-up provider calls (including tool continuations). Wrap the stream function
-      // so every outbound request sees sanitized messages.
-      if (transcriptPolicy.dropThinkingBlocks || transcriptPolicy.clearThinkingSignatures) {
+      // GitHub Copilot's Claude endpoints require thinking signature clearing to prevent
+      // signature validation issues on follow-up provider calls. Clear signatures while
+      // preserving thinking content for multi-turn reasoning coherence.
+      if (transcriptPolicy.clearThinkingSignatures) {
         const inner = activeSession.agent.streamFn;
-        const sanitize = transcriptPolicy.clearThinkingSignatures
-          ? clearThinkingSignatures
-          : dropThinkingBlocks;
         activeSession.agent.streamFn = (model, context, options) => {
           const ctx = context as unknown as { messages?: unknown };
           const messages = ctx?.messages;
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          const sanitized = sanitize(messages as unknown as AgentMessage[]) as unknown;
+          const sanitized = clearThinkingSignatures(
+            messages as unknown as AgentMessage[],
+          ) as unknown;
           if (sanitized === messages) {
             return inner(model, context, options);
           }
