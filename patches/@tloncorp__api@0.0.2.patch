@@ -1,0 +1,104 @@
+diff --git a/package.json b/package.json
+index 0d23dfdacf2ea291f1cbcb3566ef26bcc4e6df63..354f09bdae2ffa0fe19d6737cd3108c1cd935f16 100644
+--- a/package.json
++++ b/package.json
+@@ -51,6 +51,10 @@
+     "vite-plugin-dts": "^3.7.0",
+     "vitest": "^1.4.0"
+   },
++  "peerDependencies": {
++    "react": ">=18",
++    "@tanstack/react-query": ">=5"
++  },
+   "files": [
+     "dist",
+     "src"
+diff --git a/src/api/channelContentConfig.ts b/src/api/channelContentConfig.ts
+index db04389912b806c2205a9a7810b0e8dccd3f42fe..86256a804edf156ef5ecc5775dda8c9627358e0a 100644
+--- a/src/api/channelContentConfig.ts
++++ b/src/api/channelContentConfig.ts
+@@ -15,7 +15,7 @@ interface StringParameterSpec extends BaseParameterSpec {
+ 
+ interface RadioParameterSpec extends BaseParameterSpec {
+   type: 'radio';
+-  options: { displayName: string; value: string }[];
++  options: ReadonlyArray<{ readonly displayName: string; readonly value: string }>;
+ }
+ 
+ type ParameterSpec =
+diff --git a/src/domain/groupTemplates.ts b/src/domain/groupTemplates.ts
+index 270994d9a1faedcebee752c0dcc122e1ef3c5161..ef86d08cb43e8470aca089aa45cd4867ba137cda 100644
+--- a/src/domain/groupTemplates.ts
++++ b/src/domain/groupTemplates.ts
+@@ -12,7 +12,7 @@ export interface GroupTemplate {
+   subtitle: string;
+   description: string;
+   icon: string;
+-  channels: TemplateChannel[];
++  channels: readonly TemplateChannel[];
+ }
+ 
+ export const groupTemplates = [
+diff --git a/src/logic/postContent.ts b/src/logic/postContent.ts
+index 81b062d74855bd4b680dc70b21416778388a3bec..08f258ca8779edf7caf8f9011a9d188cec8e8cdb 100644
+--- a/src/logic/postContent.ts
++++ b/src/logic/postContent.ts
+@@ -450,7 +450,7 @@ function convertBlock(block: ub.Block): BlockData {
+   });
+ 
+   switch (true) {
+-    case is(block, 'image'): {
++    case is(block, 'image') && 'image' in block: {
+       if (VIDEO_REGEX.test(block.image.src)) {
+         return {
+           type: 'video',
+@@ -464,20 +464,20 @@ function convertBlock(block: ub.Block): BlockData {
+       }
+     }
+ 
+-    case is(block, 'listing'): {
++    case is(block, 'listing') && 'listing' in block: {
+       return {
+         type: 'list',
+         list: convertListing(block.listing),
+       };
+     }
+-    case is(block, 'header'): {
++    case is(block, 'header') && 'header' in block: {
+       return {
+         type: 'header',
+         level: block.header.tag,
+         children: convertInlineContent(block.header.content),
+       };
+     }
+-    case is(block, 'code'): {
++    case is(block, 'code') && 'code' in block: {
+       return {
+         type: 'code',
+         content: block.code.code,
+@@ -489,12 +489,12 @@ function convertBlock(block: ub.Block): BlockData {
+         type: 'rule',
+       };
+     }
+-    case is(block, 'cite'): {
++    case is(block, 'cite') && 'cite' in block: {
+       return (
+         api.toContentReference(block.cite) ?? errorMessage('Failed to parse')
+       );
+     }
+-    case is(block, 'link'): {
++    case is(block, 'link') && 'link' in block: {
+       return {
+         ...block.link.meta,
+         type: 'link',
+diff --git a/src/logic/utilHooks.ts b/src/logic/utilHooks.ts
+index 572406c092e344d8d47f0c892f99e8e93c5f85cb..bb39810f51ffdb4d0f7a44d6938ffaecabc7b24c 100644
+--- a/src/logic/utilHooks.ts
++++ b/src/logic/utilHooks.ts
+@@ -58,5 +58,5 @@ export function useMutableCallback<Args extends unknown[], Result>(
+   callback: (...args: Args) => Result
+ ): (...args: Args) => Result {
+   const callbackRef = useMutableRef(callback);
+-  return useCallback((...args) => callbackRef.current(...args), [callbackRef]);
++  return useCallback((...args: Args) => callbackRef.current(...args), [callbackRef]);
+ }
