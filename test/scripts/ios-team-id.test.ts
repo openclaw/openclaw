@@ -220,16 +220,16 @@ printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
   it.runIf(!IS_WINDOWS)(
     "prints actionable guidance when Xcode account exists but no Team ID is resolvable",
     async () => {
-    const result = runScript(sharedHomeDir);
-    expect(result.ok).toBe(false);
-    expect(
-      result.stderr.includes("An Apple account is signed in to Xcode") ||
-        result.stderr.includes("No Apple Team ID found in Xcode accounts"),
-    ).toBe(true);
-    expect(
-      result.stderr.includes("IOS_DEVELOPMENT_TEAM") ||
-        result.stderr.includes("IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK"),
-    ).toBe(true);
+      const result = runScript(sharedHomeDir);
+      expect(result.ok).toBe(false);
+      expect(
+        result.stderr.includes("An Apple account is signed in to Xcode") ||
+          result.stderr.includes("No Apple Team ID found in Xcode accounts"),
+      ).toBe(true);
+      expect(
+        result.stderr.includes("IOS_DEVELOPMENT_TEAM") ||
+          result.stderr.includes("IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK"),
+      ).toBe(true);
     },
   );
 });
