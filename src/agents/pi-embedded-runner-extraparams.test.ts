@@ -172,8 +172,13 @@ describe("applyExtraParamsToAgent", () => {
     options?: SimpleStreamOptions;
     cfg?: Record<string, unknown>;
     payload?: Record<string, unknown>;
+    initialPayload?: Record<string, unknown>;
   }) {
-    const payload = params.payload ?? { store: false };
+    const payload: Record<string, unknown> = {
+      store: false,
+      ...(params.payload ?? {}),
+      ...(params.initialPayload ?? {}),
+    };
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       options?.onPayload?.(payload);
       return {} as ReturnType<StreamFn>;
@@ -1556,4 +1561,48 @@ describe("applyExtraParamsToAgent", () => {
       expect(run().store).toBe(false);
     },
   );
+
+  it("forces store=true and sanitizes references for sub2api codex responses", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api",
+      applyModelId: "gpt-5.3-codex-spark",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api",
+        id: "gpt-5.3-codex-spark",
+      } as Model<"openai-responses">,
+      initialPayload: {
+        store: false,
+        previous_response_id: "resp_prev",
+        include: ["reasoning.encrypted_content"],
+        prompt_cache_key: "session-key",
+        max_output_tokens: 32000,
+        reasoning: { effort: "medium" },
+        instructions: "",
+        input: [
+          "rs_deadbeef",
+          { type: "item_reference", id: "rs_deadbeef_2" },
+          { role: "developer", content: "dev note" },
+          {
+            role: "assistant",
+            content: [{ type: "input_text", text: "assistant output" }],
+          },
+        ],
+      },
+    });
+
+    expect(payload.store).toBe(true);
+    expect(payload.previous_response_id).toBeUndefined();
+    expect(payload.include).toBeUndefined();
+    expect(payload.prompt_cache_key).toBeUndefined();
+    expect(payload.max_output_tokens).toBeUndefined();
+    expect(payload.reasoning).toBeUndefined();
+    expect(payload.instructions).toBe("dev note");
+    expect(payload.input).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "assistant output" }],
+      },
+    ]);
+  });
 });

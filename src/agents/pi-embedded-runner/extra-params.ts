@@ -288,6 +288,144 @@ function shouldEnableOpenAIResponsesServerCompaction(
   return model.provider === "openai";
 }
 
+function shouldApplySub2apiCodexCompat(model: {
+  api?: unknown;
+  provider?: unknown;
+  id?: unknown;
+}): boolean {
+  if (typeof model.api !== "string" || typeof model.provider !== "string") {
+    return false;
+  }
+  if (model.provider !== "sub2api") {
+    return false;
+  }
+  if (model.api !== "openai-responses" && model.api !== "openai-codex-responses") {
+    return false;
+  }
+  if (typeof model.id !== "string") {
+    return false;
+  }
+  return /codex/i.test(model.id);
+}
+
+function extractTextFromContentBlocks(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const blocks: string[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const text = (item as { text?: unknown }).text;
+    if (typeof text === "string" && text.trim()) {
+      blocks.push(text.trim());
+    }
+  }
+  return blocks;
+}
+
+function isRsReference(value: unknown): boolean {
+  return typeof value === "string" && /^rs_/i.test(value);
+}
+
+function sanitizeSub2apiCodexInput(input: unknown, instructionParts: string[]): unknown[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const normalized: unknown[] = [];
+
+  for (const rawEntry of input) {
+    if (isRsReference(rawEntry)) {
+      continue;
+    }
+    if (!rawEntry || typeof rawEntry !== "object") {
+      normalized.push(rawEntry);
+      continue;
+    }
+
+    const entry = rawEntry as {
+      id?: unknown;
+      type?: unknown;
+      role?: unknown;
+      content?: unknown;
+      [key: string]: unknown;
+    };
+
+    if (isRsReference(entry.id)) {
+      continue;
+    }
+    if (typeof entry.type === "string" && /item_reference/i.test(entry.type)) {
+      continue;
+    }
+
+    const role = typeof entry.role === "string" ? entry.role : "";
+    if (role === "developer" || role === "system") {
+      if (typeof entry.content === "string" && entry.content.trim()) {
+        instructionParts.push(entry.content.trim());
+      } else {
+        const blocks = extractTextFromContentBlocks(entry.content);
+        if (blocks.length > 0) {
+          instructionParts.push(blocks.join("\n"));
+        }
+      }
+      continue;
+    }
+
+    if (role !== "assistant") {
+      normalized.push(entry);
+      continue;
+    }
+
+    if (typeof entry.content === "string") {
+      normalized.push({
+        ...entry,
+        content: [{ type: "output_text", text: entry.content }],
+      });
+      continue;
+    }
+
+    if (!Array.isArray(entry.content)) {
+      normalized.push(entry);
+      continue;
+    }
+
+    const content = entry.content
+      .map((rawPart) => {
+        if (!rawPart || typeof rawPart !== "object") {
+          return rawPart;
+        }
+        const part = rawPart as {
+          id?: unknown;
+          type?: unknown;
+          text?: unknown;
+          [key: string]: unknown;
+        };
+        if (isRsReference(part.id)) {
+          return null;
+        }
+        if (typeof part.type === "string" && /item_reference/i.test(part.type)) {
+          return null;
+        }
+        if (part.type === "input_text") {
+          return { ...part, type: "output_text" };
+        }
+        if (part.type === "text") {
+          return { type: "output_text", text: typeof part.text === "string" ? part.text : "" };
+        }
+        return part;
+      })
+      .filter((part) => part != null);
+
+    normalized.push({
+      ...entry,
+      content,
+    });
+  }
+
+  return normalized;
+}
+
 function createOpenAIResponsesContextManagementWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -296,22 +434,36 @@ function createOpenAIResponsesContextManagementWrapper(
   return (model, context, options) => {
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
-    if (!forceStore && !useServerCompaction) {
+    const sub2apiCodexCompat = shouldApplySub2apiCodexCompat(model);
+    if (!forceStore && !useServerCompaction && !sub2apiCodexCompat) {
       return underlying(model, context, options);
     }
 
-    const compactThreshold =
-      parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
-      resolveOpenAIResponsesCompactThreshold(model);
+    const compactThreshold = useServerCompaction
+      ? (parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
+        resolveOpenAIResponsesCompactThreshold(model))
+      : undefined;
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          if (forceStore) {
+          const payloadObj = payload as {
+            store?: unknown;
+            previous_response_id?: unknown;
+            include?: unknown;
+            prompt_cache_key?: unknown;
+            max_output_tokens?: unknown;
+            reasoning?: unknown;
+            instructions?: unknown;
+            input?: unknown;
+            context_management?: unknown;
+          };
+
+          if (forceStore || sub2apiCodexCompat) {
             payloadObj.store = true;
           }
+
           if (useServerCompaction && payloadObj.context_management === undefined) {
             payloadObj.context_management = [
               {
@@ -319,6 +471,23 @@ function createOpenAIResponsesContextManagementWrapper(
                 compact_threshold: compactThreshold,
               },
             ];
+          }
+
+          if (sub2apiCodexCompat) {
+            delete payloadObj.previous_response_id;
+            delete payloadObj.include;
+            delete payloadObj.prompt_cache_key;
+            delete payloadObj.max_output_tokens;
+            delete payloadObj.reasoning;
+
+            const instructionParts: string[] = [];
+            if (typeof payloadObj.instructions === "string" && payloadObj.instructions.trim()) {
+              instructionParts.push(payloadObj.instructions.trim());
+            }
+
+            payloadObj.input = sanitizeSub2apiCodexInput(payloadObj.input, instructionParts);
+            const mergedInstructions = instructionParts.join("\n\n").trim();
+            payloadObj.instructions = mergedInstructions || "You are a helpful assistant.";
           }
         }
         originalOnPayload?.(payload);
