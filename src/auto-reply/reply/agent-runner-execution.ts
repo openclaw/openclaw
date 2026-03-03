@@ -33,6 +33,7 @@ import {
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  stripContinuationSignal,
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -151,6 +152,14 @@ export async function runAgentTurnWithFallback(params: {
           isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
         ) {
           return { skip: true };
+        }
+        // Strip continuation signal from display text during streaming to avoid
+        // showing the raw token to users. Detection happens post-run on final payloads.
+        if (text) {
+          const continuationResult = stripContinuationSignal(text);
+          if (continuationResult.signal) {
+            text = continuationResult.text;
+          }
         }
         if (!text) {
           // Allow media-only payloads (e.g. tool result screenshots) through.

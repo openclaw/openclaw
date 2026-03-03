@@ -277,6 +277,15 @@ export type AgentDefaultsConfig = {
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
+  /** Agent self-elected turn continuation (CONTINUE_WORK signal). */
+  continuation?: {
+    enabled?: boolean;
+    defaultDelayMs?: number;
+    minDelayMs?: number;
+    maxDelayMs?: number;
+    maxChainLength?: number;
+    costCapTokens?: number;
+  };
 };
 
 export type AgentCompactionMode = "default" | "safeguard";

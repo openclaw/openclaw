@@ -15,6 +15,9 @@ const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const enqueueSystemEventMock = vi.fn();
+const spawnSubagentDirectMock = vi.fn();
+const requestHeartbeatNowMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -76,6 +79,25 @@ vi.mock("../../cron/store.js", async () => {
   };
 });
 
+vi.mock("../../infra/system-events.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/system-events.js")>(
+    "../../infra/system-events.js",
+  );
+  return {
+    ...actual,
+    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  };
+});
+
+vi.mock("../../agents/subagent-spawn.js", () => ({
+  SUBAGENT_SPAWN_MODES: ["run", "session"],
+  spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
+}));
+
+vi.mock("../../infra/heartbeat-wake.js", () => ({
+  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+}));
+
 import { runReplyAgent } from "./agent-runner.js";
 
 type RunWithModelFallbackParams = {
@@ -89,6 +111,9 @@ beforeEach(() => {
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  enqueueSystemEventMock.mockClear();
+  spawnSubagentDirectMock.mockClear();
+  requestHeartbeatNowMock.mockClear();
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
@@ -1626,5 +1651,370 @@ describe("runReplyAgent transient HTTP retry", () => {
 
     const payload = Array.isArray(result) ? result[0] : result;
     expect(payload?.text).toContain("Recovered response");
+  });
+});
+describe("runReplyAgent continuation signal handling", () => {
+  function buildFollowupRun(params?: {
+    sessionKey?: string;
+    continuation?: {
+      enabled?: boolean;
+      minDelayMs?: number;
+      maxDelayMs?: number;
+      defaultDelayMs?: number;
+      maxChainLength?: number;
+    };
+  }): FollowupRun {
+    const sessionKey = params?.sessionKey ?? "main";
+    return {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey,
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {
+          agents: {
+            defaults: {
+              continuation: params?.continuation,
+            },
+          },
+        },
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+  }
+
+  async function runTurn(params: {
+    commandBody: string;
+    followupRun: FollowupRun;
+    sessionKey: string;
+    sessionEntry: SessionEntry;
+  }) {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      MessageSid: "msg",
+      OriginatingTo: "chat",
+      AccountId: "primary",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+
+    return runReplyAgent({
+      commandBody: params.commandBody,
+      followupRun: params.followupRun,
+      queueKey: params.sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      sessionStore: { [params.sessionKey]: params.sessionEntry },
+      defaultModel: "anthropic/claude-opus-4-5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  function hasContinuationEnqueueCall(): boolean {
+    return enqueueSystemEventMock.mock.calls.some((call) =>
+      String(call[0] ?? "").includes("[continuation] Turn"),
+    );
+  }
+
+  it("does not schedule continuation when feature is not explicitly enabled", async () => {
+    vi.useFakeTimers();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Done for now. CONTINUE_WORK" }],
+      meta: {},
+    });
+
+    const sessionKey = "agent:main:telegram:dm:123";
+    const sessionEntry = { sessionId: "session", updatedAt: Date.now() } as SessionEntry;
+
+    await runTurn({
+      commandBody: "hello",
+      followupRun: buildFollowupRun({ sessionKey }),
+      sessionKey,
+      sessionEntry,
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(hasContinuationEnqueueCall()).toBe(false);
+  });
+
+  it("does not false-trigger continuation from partial streaming text", async () => {
+    vi.useFakeTimers();
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: {
+        onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void>;
+      }) => {
+        await params.onPartialReply?.({
+          text: "```ts\nconst token = 'CONTINUE_WORK'",
+          mediaUrls: [],
+        });
+        return {
+          payloads: [{ text: "That token was just an example in code." }],
+          meta: {},
+        };
+      },
+    );
+
+    const sessionKey = "agent:main:telegram:dm:456";
+    const sessionEntry = { sessionId: "session", updatedAt: Date.now() } as SessionEntry;
+
+    await runTurn({
+      commandBody: "hello",
+      followupRun: buildFollowupRun({
+        sessionKey,
+        continuation: {
+          enabled: true,
+          minDelayMs: 0,
+          maxDelayMs: 10_000,
+        },
+      }),
+      sessionKey,
+      sessionEntry,
+    });
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(hasContinuationEnqueueCall()).toBe(false);
+  });
+
+  it("cancels pending continuation timer when an external message arrives", async () => {
+    vi.useFakeTimers();
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "Continuing shortly. CONTINUE_WORK:1" }],
+        meta: {},
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "External message received." }],
+        meta: {},
+      });
+
+    const sessionKey = "agent:main:telegram:dm:789";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      continuationChainCount: 0,
+    } as SessionEntry;
+
+    const followupRun = buildFollowupRun({
+      sessionKey,
+      continuation: {
+        enabled: true,
+        minDelayMs: 0,
+        maxDelayMs: 10_000,
+      },
+    });
+
+    await runTurn({
+      commandBody: "[continuation] Turn 1/10",
+      followupRun,
+      sessionKey,
+      sessionEntry,
+    });
+
+    await runTurn({
+      commandBody: "Actually, new input from user",
+      followupRun,
+      sessionKey,
+      sessionEntry,
+    });
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(hasContinuationEnqueueCall()).toBe(false);
+  });
+
+  it("caps requested continuation delay to maxDelayMs", async () => {
+    vi.useFakeTimers();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Will continue. CONTINUE_WORK:30" }],
+      meta: {},
+    });
+
+    const sessionKey = "agent:main:telegram:dm:999";
+    const sessionEntry = { sessionId: "session", updatedAt: Date.now() } as SessionEntry;
+
+    await runTurn({
+      commandBody: "hello",
+      followupRun: buildFollowupRun({
+        sessionKey,
+        continuation: {
+          enabled: true,
+          minDelayMs: 0,
+          maxDelayMs: 100,
+        },
+      }),
+      sessionKey,
+      sessionEntry,
+    });
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(hasContinuationEnqueueCall()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(hasContinuationEnqueueCall()).toBe(true);
+  });
+
+  it("DELEGATE: spawns sub-agent with correct task and attachment", async () => {
+    const delegateTask = "Build the flux capacitor";
+    const delegateContext = "The capacitor needs 1.21 gigawatts of power.";
+
+    spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:delegate-1",
+      runId: "run-delegate-1",
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [
+        {
+          text: `Starting delegation.\nCONTINUE_DELEGATE:${delegateTask}\n---CONTEXT---\n${delegateContext}`,
+        },
+      ],
+      meta: {},
+    });
+
+    const sessionKey = "agent:main:telegram:dm:delegate-1";
+    const sessionEntry = { sessionId: "session", updatedAt: Date.now() } as SessionEntry;
+
+    await runTurn({
+      commandBody: "hello",
+      followupRun: buildFollowupRun({
+        sessionKey,
+        continuation: {
+          enabled: true,
+          minDelayMs: 0,
+          maxDelayMs: 10_000,
+        },
+      }),
+      sessionKey,
+      sessionEntry,
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+
+    // Verify the spawn params contain the task and attachments
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0][0];
+    expect(spawnParams.task).toContain(delegateTask);
+    expect(spawnParams.sessionKey).toBe(sessionKey);
+    expect(spawnParams.attachments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "continuation-context.md",
+          content: delegateContext,
+        }),
+      ]),
+    );
+
+    // Should NOT enqueue a continuation system event (no timer-based continuation)
+    expect(hasContinuationEnqueueCall()).toBe(false);
+  });
+
+  it("DELEGATE: falls back to system event on spawn failure", async () => {
+    const delegateTask = "Fix the broken thing";
+
+    spawnSubagentDirectMock.mockRejectedValueOnce(new Error("Agent not available"));
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: `Delegating now.\nCONTINUE_DELEGATE:${delegateTask}` }],
+      meta: {},
+    });
+
+    const sessionKey = "agent:main:telegram:dm:delegate-2";
+    const sessionEntry = { sessionId: "session", updatedAt: Date.now() } as SessionEntry;
+
+    await runTurn({
+      commandBody: "hello",
+      followupRun: buildFollowupRun({
+        sessionKey,
+        continuation: {
+          enabled: true,
+          minDelayMs: 0,
+          maxDelayMs: 10_000,
+        },
+      }),
+      sessionKey,
+      sessionEntry,
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+
+    // Verify fallback system event was enqueued with error message
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("[continuation] DELEGATE spawn failed"),
+      expect.objectContaining({ sessionKey }),
+    );
+    // Verify the original task is included in the fallback message
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining(delegateTask),
+      expect.objectContaining({ sessionKey }),
+    );
+  });
+
+  it("DELEGATE: no continuation timer scheduled", async () => {
+    vi.useFakeTimers();
+    const delegateTask = "Autonomous background work";
+
+    spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:delegate-3",
+      runId: "run-delegate-3",
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: `Handing off.\nCONTINUE_DELEGATE:${delegateTask}` }],
+      meta: {},
+    });
+
+    const sessionKey = "agent:main:telegram:dm:delegate-3";
+    const sessionEntry = { sessionId: "session", updatedAt: Date.now() } as SessionEntry;
+
+    await runTurn({
+      commandBody: "hello",
+      followupRun: buildFollowupRun({
+        sessionKey,
+        continuation: {
+          enabled: true,
+          minDelayMs: 0,
+          maxDelayMs: 10_000,
+        },
+      }),
+      sessionKey,
+      sessionEntry,
+    });
+
+    // Advance timers well past any possible continuation delay
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // No continuation timer should have fired — DELEGATE does not schedule timers
+    expect(hasContinuationEnqueueCall()).toBe(false);
+
+    // The spawn should have been called instead
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 });
