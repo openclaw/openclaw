@@ -584,7 +584,14 @@ export const buildTelegramMessageContext = async ({
                 ]);
               }
             },
-            // Telegram replaces atomically — no removeReaction needed
+            removeReaction: async () => {
+              if (reactionApi) {
+                // Clear all reactions by sending an empty array to the Telegram API.
+                // This is needed so that clear() actually removes dangling emojis
+                // on silent NO_REPLY turns (#32294).
+                await reactionApi(chatId, msg.message_id, []);
+              }
+            },
           },
           initialEmoji: ackReaction,
           emojis: resolvedStatusReactionEmojis,

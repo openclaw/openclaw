@@ -351,8 +351,9 @@ export function createStatusReactionController(params: {
           }
         }
       } else {
-        // For platforms without removeReaction, set empty or just skip
-        // (Telegram handles this atomically on the next setReaction)
+        // Platforms without removeReaction rely on atomic replacement via setReaction.
+        // If a platform needs explicit removal (e.g. on silent turns), it should
+        // provide removeReaction in its adapter.
       }
       currentEmoji = "";
       pendingEmoji = "";
