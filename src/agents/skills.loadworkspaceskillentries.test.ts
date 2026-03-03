@@ -139,4 +139,20 @@ describe("loadWorkspaceSkillEntries", () => {
 
     expect(entries.map((entry) => entry.skill.name)).toContain("diffs");
   });
+
+  it("excludes diffs plugin skill when the plugin is disabled", async () => {
+    const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithDiffsPlugin();
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        plugins: {
+          entries: { diffs: { enabled: false } },
+        },
+      },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("diffs");
+  });
 });
