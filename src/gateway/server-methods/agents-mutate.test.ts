@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 /* ------------------------------------------------------------------ */
@@ -136,6 +137,7 @@ function makeFileStat(params?: {
   mtimeMs?: number;
   dev?: number;
   ino?: number;
+  nlink?: number;
 }): import("node:fs").Stats {
   return {
     isFile: () => true,
@@ -144,6 +146,7 @@ function makeFileStat(params?: {
     mtimeMs: params?.mtimeMs ?? 1234,
     dev: params?.dev ?? 1,
     ino: params?.ino ?? 1,
+    nlink: params?.nlink ?? 1,
   } as unknown as import("node:fs").Stats;
 }
 
@@ -198,6 +201,20 @@ function expectNotFoundResponseAndNoWrite(respond: ReturnType<typeof vi.fn>) {
   expect(mocks.writeConfigFile).not.toHaveBeenCalled();
 }
 
+async function expectUnsafeWorkspaceFile(method: "agents.files.get" | "agents.files.set") {
+  const params =
+    method === "agents.files.set"
+      ? { agentId: "main", name: "AGENTS.md", content: "x" }
+      : { agentId: "main", name: "AGENTS.md" };
+  const { respond, promise } = makeCall(method, params);
+  await promise;
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+  );
+}
+
 beforeEach(() => {
   mocks.fsReadFile.mockImplementation(async () => {
     throw createEnoentError();
@@ -214,6 +231,7 @@ beforeEach(() => {
       ({
         stat: async () => makeFileStat(),
         readFile: async () => Buffer.from(""),
+        truncate: async () => {},
         writeFile: async () => {},
         close: async () => {},
       }) as unknown,
@@ -513,9 +531,9 @@ describe("agents.files.get/set symlink safety", () => {
     mocks.fsMkdir.mockResolvedValue(undefined);
   });
 
-  it("rejects agents.files.get when allowlisted file symlink escapes workspace", async () => {
+  function mockWorkspaceEscapeSymlink() {
     const workspace = "/workspace/test-agent";
-    const candidate = `${workspace}/AGENTS.md`;
+    const candidate = path.resolve(workspace, "AGENTS.md");
     mocks.fsRealpath.mockImplementation(async (p: string) => {
       if (p === workspace) {
         return workspace;
@@ -532,59 +550,26 @@ describe("agents.files.get/set symlink safety", () => {
       }
       throw createEnoentError();
     });
+  }
 
-    const { respond, promise } = makeCall("agents.files.get", {
-      agentId: "main",
-      name: "AGENTS.md",
-    });
-    await promise;
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
-    );
-  });
-
-  it("rejects agents.files.set when allowlisted file symlink escapes workspace", async () => {
-    const workspace = "/workspace/test-agent";
-    const candidate = `${workspace}/AGENTS.md`;
-    mocks.fsRealpath.mockImplementation(async (p: string) => {
-      if (p === workspace) {
-        return workspace;
+  it.each([
+    { method: "agents.files.get" as const, expectNoOpen: false },
+    { method: "agents.files.set" as const, expectNoOpen: true },
+  ])(
+    "rejects $method when allowlisted file symlink escapes workspace",
+    async ({ method, expectNoOpen }) => {
+      mockWorkspaceEscapeSymlink();
+      await expectUnsafeWorkspaceFile(method);
+      if (expectNoOpen) {
+        expect(mocks.fsOpen).not.toHaveBeenCalled();
       }
-      if (p === candidate) {
-        return "/outside/secret.txt";
-      }
-      return p;
-    });
-    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
-      const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === candidate) {
-        return makeSymlinkStat();
-      }
-      throw createEnoentError();
-    });
-
-    const { respond, promise } = makeCall("agents.files.set", {
-      agentId: "main",
-      name: "AGENTS.md",
-      content: "x",
-    });
-    await promise;
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
-    );
-    expect(mocks.fsOpen).not.toHaveBeenCalled();
-  });
+    },
+  );
 
   it("allows in-workspace symlink targets for get/set", async () => {
     const workspace = "/workspace/test-agent";
-    const candidate = `${workspace}/AGENTS.md`;
-    const target = `${workspace}/policies/AGENTS.md`;
+    const candidate = path.resolve(workspace, "AGENTS.md");
+    const target = path.resolve(workspace, "policies", "AGENTS.md");
     const targetStat = makeFileStat({ size: 7, mtimeMs: 1700, dev: 9, ino: 42 });
 
     mocks.fsRealpath.mockImplementation(async (p: string) => {
@@ -618,6 +603,7 @@ describe("agents.files.get/set symlink safety", () => {
         ({
           stat: async () => targetStat,
           readFile: async () => Buffer.from("inside\n"),
+          truncate: async () => {},
           writeFile: async () => {},
           close: async () => {},
         }) as unknown,
@@ -648,4 +634,36 @@ describe("agents.files.get/set symlink safety", () => {
       undefined,
     );
   });
+
+  function mockHardlinkedWorkspaceAlias() {
+    const workspace = "/workspace/test-agent";
+    const candidate = path.resolve(workspace, "AGENTS.md");
+    mocks.fsRealpath.mockImplementation(async (p: string) => {
+      if (p === workspace) {
+        return workspace;
+      }
+      return p;
+    });
+    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === candidate) {
+        return makeFileStat({ nlink: 2 });
+      }
+      throw createEnoentError();
+    });
+  }
+
+  it.each([
+    { method: "agents.files.get" as const, expectNoOpen: false },
+    { method: "agents.files.set" as const, expectNoOpen: true },
+  ])(
+    "rejects $method when allowlisted file is a hardlinked alias",
+    async ({ method, expectNoOpen }) => {
+      mockHardlinkedWorkspaceAlias();
+      await expectUnsafeWorkspaceFile(method);
+      if (expectNoOpen) {
+        expect(mocks.fsOpen).not.toHaveBeenCalled();
+      }
+    },
+  );
 });
