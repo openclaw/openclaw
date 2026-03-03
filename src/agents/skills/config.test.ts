@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { shouldIncludeSkill } from "./config.js";
 import type { SkillEntry } from "./types.js";
+
+vi.mock("../../shared/config-eval.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../shared/config-eval.js")>()),
+  hasBinary: vi.fn().mockReturnValue(false),
+}));
 
 function makeEntry(overrides?: Partial<SkillEntry>): SkillEntry {
   return {
@@ -39,7 +44,7 @@ describe("shouldIncludeSkill", () => {
   });
 
   it("falls through to runtime eligibility when enabled is undefined", () => {
-    // requires.bins = ["nonexistent-bin"] and hasBinary will return false
+    // hasBinary is mocked to return false, so requires.bins rejects
     const result = shouldIncludeSkill({
       entry: makeEntry(),
     });
