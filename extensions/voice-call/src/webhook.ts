@@ -185,10 +185,18 @@ export class VoiceCallWebhookServer {
 
   /**
    * Start the webhook server.
+   * Idempotent: returns immediately if the server is already listening.
    */
   async start(): Promise<string> {
     const { port, bind, path: webhookPath } = this.config.serve;
     const streamPath = this.config.streaming?.streamPath || "/voice/stream";
+
+    // Guard: if a server is already listening, return the existing URL.
+    // This prevents EADDRINUSE when start() is called more than once on the
+    // same instance (e.g. during config hot-reload or concurrent ensureRuntime).
+    if (this.server?.listening) {
+      return `http://${bind}:${port}${webhookPath}`;
+    }
 
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
