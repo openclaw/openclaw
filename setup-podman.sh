@@ -161,13 +161,10 @@ if ! user_exists "$OPENCLAW_USER"; then
     if ! dscl . -read /Users/$OPENCLAW_USER >/dev/null 2>&1; then
       echo "Creating user $OPENCLAW_USER on macOS..."
       run_root dscl . -create /Users/$OPENCLAW_USER
-      run_root dscl . -create /Users/$OPENCLAW_USER UserShell $(resolve_nologin_shell)
-      run_root dscl . -create /Users/$OPENCLAW_USER RealName "OpenClaw User"
-      run_root dscl . -create /Users/$OPENCLAW_USER UniqueID "$(dscl . -list /Users UniqueID | awk 'BEGIN{max=500} {if($2+0>max) max=$2+0} END{print max+1}')"
-      run_root dscl . -create /Users/$OPENCLAW_USER PrimaryGroupID 20
-      run_root dscl . -create /Users/$OPENCLAW_USER NFSHomeDirectory /Users/$OPENCLAW_USER
-      run_root mkdir -p /Users/$OPENCLAW_USER
-      run_root chown -R $OPENCLAW_USER:staff /Users/$OPENCLAW_USER
+      run_root dscl . -create "/Users/$OPENCLAW_USER" UserShell "$(resolve_nologin_shell)"
+      run_root dscl . -create "/Users/$OPENCLAW_USER" NFSHomeDirectory "/Users/$OPENCLAW_USER"
+      run_root mkdir -p "/Users/$OPENCLAW_USER"
+      run_root chown -R "$OPENCLAW_USER":staff "/Users/$OPENCLAW_USER"
     else
       echo "User $OPENCLAW_USER already exists on macOS."
     fi
