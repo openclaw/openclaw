@@ -342,11 +342,27 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
+      const baseRoute = core.channel.routing.resolveAgentRoute({
+        cfg,
+        channel: "matrix",
+        accountId,
+        peer: {
+          kind: isDirectMessage ? "direct" : "channel",
+          id: isDirectMessage ? senderId : roomId,
+        },
+      });
+      const agentMentionRegexes =
+        typeof core.channel.mentions?.buildMentionRegexes === "function"
+          ? core.channel.mentions.buildMentionRegexes(cfg, baseRoute.agentId)
+          : mentionRegexes;
+      const resolvedMentionRegexes =
+        agentMentionRegexes.length > 0 ? agentMentionRegexes : mentionRegexes;
+
       const { wasMentioned, hasExplicitMention } = resolveMentions({
         content,
         userId: selfUserId,
         text: bodyText,
-        mentionRegexes,
+        mentionRegexes: resolvedMentionRegexes,
       });
       const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
         cfg,
@@ -408,7 +424,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         !hasExplicitMention &&
         commandAuthorized &&
         hasControlCommandInMessage;
-      const canDetectMention = mentionRegexes.length > 0 || hasExplicitMention;
+      const canDetectMention = resolvedMentionRegexes.length > 0 || hasExplicitMention;
       if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
         logger.info("skipping room message", { roomId, reason: "no-mention" });
         return;
@@ -422,16 +438,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         messageId,
         threadRootId,
         isThreadRoot: false, // @vector-im/matrix-bot-sdk doesn't have this info readily available
-      });
-
-      const baseRoute = core.channel.routing.resolveAgentRoute({
-        cfg,
-        channel: "matrix",
-        accountId,
-        peer: {
-          kind: isDirectMessage ? "direct" : "channel",
-          id: isDirectMessage ? senderId : roomId,
-        },
       });
 
       const route = {
