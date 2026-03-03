@@ -1,3 +1,4 @@
+import path from "node:path";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
@@ -68,7 +69,9 @@ import {
   registerAgentRunContext,
 } from "../infra/agent-events.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
+import { logMessageQueued, logMessageProcessed } from "../logging/diagnostic.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
@@ -447,6 +450,10 @@ async function agentCommandInternal(
         sessionKey,
       })
     : null;
+  const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
+  const diagStartedAt = Date.now();
+  let agentCommandOutcome: "completed" | "error" = "completed";
+  let agentCommandError: string | undefined;
 
   try {
     if (opts.deliver === true) {
@@ -591,6 +598,14 @@ async function agentCommandInternal(
       registerAgentRunContext(runId, {
         sessionKey,
         verboseLevel: resolvedVerboseLevel,
+      });
+    }
+    if (diagnosticsEnabled && sessionKey) {
+      logMessageQueued({
+        sessionId,
+        sessionKey,
+        channel: resolveMessageChannel(opts.replyChannel, opts.channel),
+        source: "agent-command",
       });
     }
 
@@ -872,6 +887,30 @@ async function agentCommandInternal(
       result = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      if (diagnosticsEnabled) {
+        const agentMeta = result.meta.agentMeta;
+        const usage = agentMeta?.usage;
+        emitDiagnosticEvent({
+          type: "run.completed",
+          runId,
+          sessionKey,
+          sessionId,
+          channel: resolveMessageChannel(opts.replyChannel, opts.channel),
+          provider: agentMeta?.provider ?? fallbackProvider,
+          model: agentMeta?.model ?? fallbackModel,
+          usage: {
+            input: usage?.input,
+            output: usage?.output,
+            cacheRead: usage?.cacheRead,
+            cacheWrite: usage?.cacheWrite,
+            total: usage?.total,
+          },
+          durationMs: Date.now() - startedAt,
+          operationName: "chat",
+          error: result.meta.error?.message,
+          errorType: result.meta.error?.kind,
+        });
+      }
       if (!lifecycleEnded) {
         const stopReason = result.meta.stopReason;
         if (stopReason && stopReason !== "end_turn") {
@@ -890,6 +929,24 @@ async function agentCommandInternal(
         });
       }
     } catch (err) {
+      agentCommandOutcome = "error";
+      agentCommandError = String(err);
+      if (diagnosticsEnabled) {
+        emitDiagnosticEvent({
+          type: "run.completed",
+          runId,
+          sessionKey,
+          sessionId,
+          channel: resolveMessageChannel(opts.replyChannel, opts.channel),
+          provider: fallbackProvider,
+          model: fallbackModel,
+          usage: {},
+          durationMs: Date.now() - startedAt,
+          operationName: "chat",
+          error: String(err),
+          errorType: "exception",
+        });
+      }
       if (!lifecycleEnded) {
         emitAgentEvent({
           runId,
@@ -934,6 +991,16 @@ async function agentCommandInternal(
       payloads,
     });
   } finally {
+    if (diagnosticsEnabled && sessionKey) {
+      logMessageProcessed({
+        channel: resolveMessageChannel(opts.replyChannel, opts.channel) ?? "agent-command",
+        sessionId,
+        sessionKey,
+        durationMs: Date.now() - diagStartedAt,
+        outcome: agentCommandOutcome,
+        error: agentCommandError,
+      });
+    }
     clearAgentRunContext(runId);
   }
 }

@@ -209,7 +209,9 @@ export const OpenClawSchema = z
           .object({
             enabled: z.boolean().optional(),
             endpoint: z.string().optional(),
-            protocol: z.union([z.literal("http/protobuf"), z.literal("grpc")]).optional(),
+            protocol: z
+              .union([z.literal("http/protobuf"), z.literal("http/json"), z.literal("grpc")])
+              .optional(),
             headers: z.record(z.string(), z.string()).optional(),
             serviceName: z.string().optional(),
             traces: z.boolean().optional(),
@@ -217,6 +219,20 @@ export const OpenClawSchema = z
             logs: z.boolean().optional(),
             sampleRate: z.number().min(0).max(1).optional(),
             flushIntervalMs: z.number().int().nonnegative().optional(),
+            captureContent: z
+              .union([
+                z.boolean(),
+                z
+                  .object({
+                    inputMessages: z.boolean().optional(),
+                    outputMessages: z.boolean().optional(),
+                    systemInstructions: z.boolean().optional(),
+                    toolDefinitions: z.boolean().optional(),
+                    toolContent: z.boolean().optional(),
+                  })
+                  .strict(),
+              ])
+              .optional(),
           })
           .strict()
           .optional(),
