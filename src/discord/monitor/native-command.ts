@@ -115,9 +115,11 @@ function buildDiscordCommandOptions(params: {
       };
     }
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
+    const isAcpActionArg = command.key === "acp" && arg.name === "action";
     const shouldAutocomplete =
-      resolvedChoices.length > 0 &&
-      (typeof arg.choices === "function" || resolvedChoices.length > 25);
+      isAcpActionArg ||
+      (resolvedChoices.length > 0 &&
+        (typeof arg.choices === "function" || resolvedChoices.length > 25));
     const autocomplete = shouldAutocomplete
       ? async (interaction: AutocompleteInteraction) => {
           const focused = interaction.options.getFocused();
