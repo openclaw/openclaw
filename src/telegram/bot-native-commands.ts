@@ -435,12 +435,14 @@ export const registerTelegramNativeCommands = ({
   };
   const buildCommandDeliveryBaseOptions = (params: {
     chatId: string | number;
+    accountId?: string;
     mediaLocalRoots?: readonly string[];
     threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: ReturnType<typeof resolveChunkMode>;
   }) => ({
     chatId: String(params.chatId),
+    accountId: params.accountId,
     token: opts.token,
     runtime,
     bot,
@@ -503,6 +505,7 @@ export const registerTelegramNativeCommands = ({
             });
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
+            accountId,
             mediaLocalRoots,
             threadSpec,
             tableMode,
@@ -727,6 +730,7 @@ export const registerTelegramNativeCommands = ({
             });
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
+            accountId,
             mediaLocalRoots,
             threadSpec,
             tableMode,

@@ -4,6 +4,9 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { deliverReplies } from "./delivery.js";
 
 const loadWebMedia = vi.fn();
+const hookRunnerGlobal = vi.hoisted(() => ({
+  getGlobalHookRunner: vi.fn(),
+}));
 const baseDeliveryParams = {
   chatId: "123",
   token: "tok",
@@ -20,6 +23,10 @@ type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 
 vi.mock("../../web/media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: hookRunnerGlobal.getGlobalHookRunner,
 }));
 
 vi.mock("grammy", () => ({
@@ -99,6 +106,84 @@ function createVoiceFailureHarness(params: {
 describe("deliverReplies", () => {
   beforeEach(() => {
     loadWebMedia.mockClear();
+    hookRunnerGlobal.getGlobalHookRunner.mockReset();
+    hookRunnerGlobal.getGlobalHookRunner.mockReturnValue(null);
+  });
+
+  it("emits message_sent hook when telegram delivery succeeds", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 21,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    const runMessageSent = vi.fn().mockResolvedValue(undefined);
+    hookRunnerGlobal.getGlobalHookRunner.mockReturnValue({
+      hasHooks: (name: string) => name === "message_sent",
+      runMessageSent,
+    });
+
+    await deliverWith({
+      replies: [{ text: "hello hooks" }],
+      runtime,
+      bot,
+      accountId: "acc-1",
+    });
+
+    expect(runMessageSent).toHaveBeenCalledWith(
+      {
+        to: "123",
+        content: "hello hooks",
+        success: true,
+      },
+      {
+        channelId: "telegram",
+        accountId: "acc-1",
+        conversationId: "123",
+      },
+    );
+  });
+
+  it("applies message_sending hook content before telegram send", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 22,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    const runMessageSending = vi.fn().mockResolvedValue({ content: "patched content" });
+    hookRunnerGlobal.getGlobalHookRunner.mockReturnValue({
+      hasHooks: (name: string) => name === "message_sending",
+      runMessageSending,
+    });
+
+    await deliverWith({
+      replies: [{ text: "original content" }],
+      runtime,
+      bot,
+    });
+
+    expect(runMessageSending).toHaveBeenCalledWith(
+      {
+        to: "123",
+        content: "original content",
+        metadata: {
+          channel: "telegram",
+          accountId: undefined,
+          mediaUrls: [],
+        },
+      },
+      {
+        channelId: "telegram",
+        accountId: undefined,
+        conversationId: "123",
+      },
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("patched content"),
+      expect.any(Object),
+    );
   });
 
   it("skips audioAsVoice-only payloads without logging an error", async () => {
