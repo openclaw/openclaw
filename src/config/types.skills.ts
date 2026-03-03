@@ -9,6 +9,11 @@ export type SkillConfig = {
 
 export type SkillsLoadConfig = {
   /**
+   * Path to a shared directory containing skills available to all agents.
+   * Loaded with source name "openclaw-global", precedence between extra and bundled.
+   */
+  globalSkillsPath?: string;
+  /**
    * Additional skill folders to scan (lowest precedence).
    * Each directory should contain skill subfolders with `SKILL.md`.
    */

@@ -334,6 +334,14 @@ function loadSkillEntries(
   });
   const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
 
+  const globalSkillsPathRaw = opts?.config?.skills?.load?.globalSkillsPath?.trim();
+  const globalSkills = globalSkillsPathRaw
+    ? loadSkills({
+        dir: resolveUserPath(globalSkillsPathRaw),
+        source: "openclaw-global",
+      })
+    : [];
+
   const bundledSkills = bundledSkillsDir
     ? loadSkills({
         dir: bundledSkillsDir,
@@ -367,8 +375,11 @@ function loadSkillEntries(
   });
 
   const merged = new Map<string, Skill>();
-  // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
+  // Precedence: extra < global < bundled < managed < agents-skills-personal < agents-skills-project < workspace
   for (const skill of extraSkills) {
+    merged.set(skill.name, skill);
+  }
+  for (const skill of globalSkills) {
     merged.set(skill.name, skill);
   }
   for (const skill of bundledSkills) {

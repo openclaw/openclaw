@@ -155,4 +155,32 @@ describe("loadWorkspaceSkillEntries", () => {
 
     expect(entries.map((entry) => entry.skill.name)).not.toContain("diffs");
   });
+
+  it("loads skills from globalSkillsPath", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const globalDir = path.join(workspaceDir, ".global-skills");
+
+    await fs.mkdir(path.join(globalDir, "shared-tool"), { recursive: true });
+    await fs.writeFile(
+      path.join(globalDir, "shared-tool", "SKILL.md"),
+      `---\nname: shared-tool\ndescription: A globally shared skill\n---\nGlobal skill content.\n`,
+      "utf-8",
+    );
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        skills: {
+          load: { globalSkillsPath: globalDir },
+        },
+      },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("shared-tool");
+    const globalEntry = entries.find((entry) => entry.skill.name === "shared-tool");
+    expect(globalEntry?.skill.source).toBe("openclaw-global");
+  });
 });
