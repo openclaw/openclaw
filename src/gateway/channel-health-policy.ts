@@ -52,12 +52,12 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
-    const upSince = snapshot.lastStartAt ?? 0;
-    const upDuration = policy.now - upSince;
+  // Only check for stale sockets when we have actual event history;
+  // channels that never received messages (lastEventAt null) are idle, not stuck.
+  if (snapshot.lastEventAt != null && snapshot.lastStartAt != null) {
+    const upDuration = policy.now - snapshot.lastStartAt;
     if (upDuration > policy.staleEventThresholdMs) {
-      const lastEvent = snapshot.lastEventAt ?? 0;
-      const eventAge = policy.now - lastEvent;
+      const eventAge = policy.now - snapshot.lastEventAt;
       if (eventAge > policy.staleEventThresholdMs) {
         return { healthy: false, reason: "stale-socket" };
       }
