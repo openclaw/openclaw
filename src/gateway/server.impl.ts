@@ -61,6 +61,7 @@ import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.j
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import { startDeliveryRecoveryLoop } from "./delivery-recovery-loop.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
@@ -666,9 +667,9 @@ export async function startGatewayServer(
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
 
-  // Recover pending outbound deliveries from previous crash/restart.
-  if (!minimalTestGateway) {
-    void (async () => {
+  const deliveryRecoveryLoop = startDeliveryRecoveryLoop({
+    enabled: !minimalTestGateway,
+    run: async () => {
       const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
       const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
       const logRecovery = log.child("delivery-recovery");
@@ -677,8 +678,9 @@ export async function startGatewayServer(
         log: logRecovery,
         cfg: cfgAtStart,
       });
-    })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
-  }
+    },
+    onError: (err) => log.error(`Delivery recovery failed: ${String(err)}`),
+  });
 
   const execApprovalManager = new ExecApprovalManager();
   const execApprovalForwarder = createExecApprovalForwarder();
@@ -936,6 +938,7 @@ export async function startGatewayServer(
         clearTimeout(skillsRefreshTimer);
         skillsRefreshTimer = null;
       }
+      deliveryRecoveryLoop.stop();
       skillsChangeUnsub();
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
