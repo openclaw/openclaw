@@ -296,6 +296,37 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.RawBody).toContain("Readiness probe failed");
   });
 
+  it("does not duplicate is_share attachment text in bot messages (#27616)", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Bot" }) as any;
+
+    const account = createSlackAccount({ allowBots: true });
+    const message = createSlackMessage({
+      text: "",
+      bot_id: "B0AGV8EQYA3",
+      subtype: "bot_message",
+      attachments: [
+        // is_share — handled by resolveSlackAttachmentContent
+        { is_share: true, author_name: "Alice", text: "Forwarded alert" },
+      ],
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, account, message);
+
+    expect(prepared).toBeTruthy();
+    // Text should appear exactly once, not duplicated
+    const body: string = prepared!.ctxPayload.RawBody;
+    expect(body.indexOf("Forwarded alert")).toBe(body.lastIndexOf("Forwarded alert"));
+  });
+
   it("keeps channel metadata out of GroupSystemPrompt", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
