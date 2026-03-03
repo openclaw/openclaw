@@ -158,8 +158,10 @@ export function buildGatewayCronService(params: {
       normalized !== undefined &&
       Array.isArray(runtimeConfig.agents?.list) &&
       runtimeConfig.agents.list.some(
-        (entry) =>
-          entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === normalized,
+        (entry): entry is Exclude<typeof entry, false> =>
+          Boolean(entry) &&
+          typeof entry.id === "string" &&
+          normalizeAgentId(entry.id) === normalized,
       );
     const agentId = hasAgent ? normalized : resolveDefaultAgentId(runtimeConfig);
     return { agentId, cfg: runtimeConfig };
