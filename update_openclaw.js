@@ -25,7 +25,7 @@ for (const p of pjsons) {
   let d;
   try {
     d = JSON.parse(content);
-  } catch (e) {
+  } catch {
     continue;
   }
 
