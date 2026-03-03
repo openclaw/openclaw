@@ -70,6 +70,43 @@ describe("runGatewayUpdateCheck stable-promotion alias handling", () => {
     );
   });
 
+  it("still reports latest stable on beta channel for same base version", async () => {
+    const { resolveOpenClawPackageRoot } = await import("./openclaw-root.js");
+    const { checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js");
+    const { getUpdateAvailable, resetUpdateAvailableStateForTest, runGatewayUpdateCheck } =
+      await import("./update-startup.js");
+
+    resetUpdateAvailableStateForTest();
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: "/opt/openclaw",
+      installKind: "package",
+      packageManager: "npm",
+    } satisfies UpdateCheckResult);
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.3.1",
+    });
+
+    const onUpdateAvailableChange = vi.fn();
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "beta" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      onUpdateAvailableChange,
+    });
+
+    expect(getUpdateAvailable()).toEqual({
+      currentVersion: "2026.3.1-beta.1",
+      latestVersion: "2026.3.1",
+      channel: "latest",
+    });
+    expect(onUpdateAvailableChange).toHaveBeenCalledWith(
+      expect.objectContaining({ latestVersion: "2026.3.1" }),
+    );
+  });
+
   it("keeps persisted prerelease-equivalent update visible on beta channel", async () => {
     const { resolveOpenClawPackageRoot } = await import("./openclaw-root.js");
     const { checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js");
