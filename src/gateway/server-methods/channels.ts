@@ -150,6 +150,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
               lastProbeAt = Date.now();
             } catch (err) {
               probeResult = { ok: false, error: formatForLog(err) };
+              lastProbeAt = Date.now();
             }
           }
         }

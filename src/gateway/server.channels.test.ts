@@ -204,7 +204,11 @@ describe("gateway server channels", () => {
     const res = await rpcReq<{
       channelAccounts?: Record<
         string,
-        Array<{ accountId?: string; probe?: { ok?: boolean; error?: string } }>
+        Array<{
+          accountId?: string;
+          probe?: { ok?: boolean; error?: string };
+          lastProbeAt?: number | null;
+        }>
       >;
     }>(ws, "channels.status", { probe: true, timeoutMs: 2000 });
     expect(res.ok).toBe(true);
@@ -215,6 +219,7 @@ describe("gateway server channels", () => {
       ok: false,
       error: expect.stringContaining("probe unreachable"),
     });
+    expect(typeof accounts![0].lastProbeAt).toBe("number");
     expect(res.payload?.channelAccounts?.whatsapp).toBeDefined();
   });
 });
