@@ -171,6 +171,12 @@ export async function resolveDeliveryTarget(
     }
   }
 
+  // allowSendTo is resolved from config — no pairing-store merge needed.
+  const allowSendToOverride =
+    channel === "whatsapp"
+      ? resolveWhatsAppAccount({ cfg, accountId: normalizeAccountId(accountId) }).allowSendTo
+      : undefined;
+
   const docked = resolveOutboundTarget({
     channel,
     to: toCandidate,
@@ -178,6 +184,7 @@ export async function resolveDeliveryTarget(
     accountId,
     mode,
     allowFrom: allowFromOverride,
+    allowSendTo: allowSendToOverride,
   });
   if (!docked.ok) {
     return {
