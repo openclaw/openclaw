@@ -1895,8 +1895,6 @@
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--secondary);
-  overflow-wrap: normal;
-  word-break: keep-all;
 }
 
 :root[data-theme="light"] .chat-text :where(:not(pre) > code) {
