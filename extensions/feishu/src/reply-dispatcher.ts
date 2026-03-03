@@ -94,6 +94,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       ) {
         return;
       }
+      // Feishu reactions persist until explicitly removed, so skip keepalive
+      // re-adds when a reaction already exists. Re-adding the same emoji
+      // triggers a new push notification for every call (#28660).
+      if (typingState?.reactionId) {
+        return;
+      }
       typingState = await addTypingIndicator({
         cfg,
         messageId: replyToMessageId,
