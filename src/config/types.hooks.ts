@@ -132,6 +132,8 @@ export type HooksConfig = {
    */
   allowedAgentIds?: string[];
   maxBodyBytes?: number;
+  /** How long to keep completed hook run sessions before pruning (`24h`, `30m`, or false to disable). */
+  sessionRetention?: string | false;
   presets?: string[];
   transformsDir?: string;
   mappings?: HookMappingConfig[];
