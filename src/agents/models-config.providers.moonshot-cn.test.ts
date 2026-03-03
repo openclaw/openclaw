@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -26,6 +26,7 @@ describe("moonshot implicit provider respects explicit baseUrl (#32607)", () => 
       expect(providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
     } finally {
       envSnapshot.restore();
+      rmSync(agentDir, { recursive: true, force: true });
     }
   });
 
@@ -40,6 +41,7 @@ describe("moonshot implicit provider respects explicit baseUrl (#32607)", () => 
       expect(providers?.moonshot?.baseUrl).toBe("https://api.moonshot.ai/v1");
     } finally {
       envSnapshot.restore();
+      rmSync(agentDir, { recursive: true, force: true });
     }
   });
 });
