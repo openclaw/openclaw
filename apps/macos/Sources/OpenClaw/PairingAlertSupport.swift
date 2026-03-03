@@ -134,7 +134,8 @@ enum PairingAlertSupport {
         messageText: String,
         informativeText: String,
         alertHostWindow: inout NSWindow?,
-        completion: @escaping (NSApplication.ModalResponse, NSWindow) -> Void) -> NSAlert {
+        completion: @escaping (NSApplication.ModalResponse, NSWindow) -> Void) -> NSAlert
+    {
         NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
@@ -169,49 +170,22 @@ enum PairingAlertSupport {
         requestId: String,
         messageText: String,
         informativeText: String,
-        activeAlert: inout NSAlert?,
-        activeRequestId: inout String?,
-        alertHostWindow: inout NSWindow?,
-        clearActive: @escaping @MainActor (NSWindow) -> Void,
-        onResponse: @escaping @MainActor (NSApplication.ModalResponse, Request) async -> Void)
-    {
-        self.presentPairingAlert(
-            requestId: requestId,
-            messageText: messageText,
-            informativeText: informativeText,
-            activeAlert: &activeAlert,
-            activeRequestId: &activeRequestId,
-            alertHostWindow: &alertHostWindow)
-        { response, hostWindow in
-            Task { @MainActor in
-                clearActive(hostWindow)
-                await onResponse(response, request)
-            }
-        }
-    }
-
-    static func presentPairingAlert<Request>(
-        request: Request,
-        requestId: String,
-        messageText: String,
-        informativeText: String,
         state: PairingAlertState,
         onResponse: @escaping @MainActor (NSApplication.ModalResponse, Request) async -> Void)
     {
         self.presentPairingAlert(
-            request: request,
             requestId: requestId,
             messageText: messageText,
             informativeText: informativeText,
             activeAlert: &state.activeAlert,
             activeRequestId: &state.activeRequestId,
-            alertHostWindow: &state.alertHostWindow)
-        { response, hostWindow in
-            Task { @MainActor in
-                self.clearActivePairingAlert(state: state, hostWindow: hostWindow)
-                await onResponse(response, request)
-            }
-        }
+            alertHostWindow: &state.alertHostWindow,
+            completion: { response, hostWindow in
+                Task { @MainActor in
+                    self.clearActivePairingAlert(state: state, hostWindow: hostWindow)
+                    await onResponse(response, request)
+                }
+            })
     }
 
     static func clearActivePairingAlert(
@@ -231,12 +205,12 @@ enum PairingAlertSupport {
             hostWindow: hostWindow)
     }
 
-    static func stopPairingPrompter<Request>(
+    static func stopPairingPrompter(
         isStopping: inout Bool,
         activeAlert: inout NSAlert?,
         activeRequestId: inout String?,
         task: inout Task<Void, Never>?,
-        queue: inout [Request],
+        queue: inout [some Any],
         isPresenting: inout Bool,
         alertHostWindow: inout NSWindow?)
     {
@@ -252,10 +226,10 @@ enum PairingAlertSupport {
         alertHostWindow = nil
     }
 
-    static func stopPairingPrompter<Request>(
+    static func stopPairingPrompter(
         isStopping: inout Bool,
         task: inout Task<Void, Never>?,
-        queue: inout [Request],
+        queue: inout [some Any],
         isPresenting: inout Bool,
         state: PairingAlertState)
     {

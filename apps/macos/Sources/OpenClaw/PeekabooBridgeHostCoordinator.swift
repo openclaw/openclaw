@@ -36,6 +36,7 @@ final class PeekabooBridgeHostCoordinator {
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         return Self.legacySocketDirectoryNames.map { Self.makeSocketPath(for: $0, in: base) }
     }
+
     func setEnabled(_ enabled: Bool) async {
         if enabled {
             await self.startIfNeeded()
@@ -85,7 +86,7 @@ final class PeekabooBridgeHostCoordinator {
     }
 
     private func ensureLegacySocketSymlinks() {
-        Self.legacySocketPaths.forEach { legacyPath in
+        for legacyPath in Self.legacySocketPaths {
             self.ensureLegacySocketSymlink(at: legacyPath)
         }
     }
@@ -116,7 +117,9 @@ final class PeekabooBridgeHostCoordinator {
             }
             try fileManager.createSymbolicLink(atPath: legacyPath, withDestinationPath: Self.openclawSocketPath)
         } catch {
-            self.logger.debug("Failed to create legacy PeekabooBridge socket symlink: \(error.localizedDescription, privacy: .public)")
+            let message = "Failed to create legacy PeekabooBridge socket symlink: \(error.localizedDescription)"
+            self.logger
+                .debug("\(message, privacy: .public)")
         }
     }
 
