@@ -736,8 +736,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         const details = validated.warnings
           .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
           .join("\n");
-        if (!loggedConfigWarnings.has(details)) {
-          loggedConfigWarnings.add(details);
+        const warnKey = `${configPath}:${details}`;
+        if (!loggedConfigWarnings.has(warnKey)) {
+          loggedConfigWarnings.add(warnKey);
           deps.logger.warn(`Config warnings:\\n${details}`);
         }
       }
@@ -1087,8 +1088,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const details = validated.warnings
         .map((warning) => `- ${warning.path}: ${warning.message}`)
         .join("\n");
-      if (!loggedConfigWarnings.has(details)) {
-        loggedConfigWarnings.add(details);
+      const warnKey = `${configPath}:${details}`;
+      if (!loggedConfigWarnings.has(warnKey)) {
+        loggedConfigWarnings.add(warnKey);
         deps.logger.warn(`Config warnings:\n${details}`);
       }
     }
