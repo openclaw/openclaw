@@ -78,6 +78,21 @@ describe("pw-tools-core", () => {
     };
   }
 
+  async function expectAtomicDownloadSave(params: {
+    saveAs: ReturnType<typeof vi.fn>;
+    targetPath: string;
+    tempDir: string;
+    content: string;
+  }) {
+    const savedPath = params.saveAs.mock.calls[0]?.[0];
+    expect(typeof savedPath).toBe("string");
+    expect(savedPath).not.toBe(params.targetPath);
+    expect(path.dirname(String(savedPath))).toBe(params.tempDir);
+    expect(path.basename(String(savedPath))).toContain(".openclaw-output-");
+    expect(path.basename(String(savedPath))).toContain(".part");
+    expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);
+  }
+
   it("waits for the next download and atomically finalizes explicit output paths", async () => {
     await withTempDir(async (tempDir) => {
       const harness = createDownloadEventHarness();
@@ -104,13 +119,7 @@ describe("pw-tools-core", () => {
       harness.trigger(download);
 
       const res = await p;
-      const savedPath = saveAs.mock.calls[0]?.[0];
-      expect(typeof savedPath).toBe("string");
-      expect(savedPath).not.toBe(targetPath);
-      expect(path.dirname(String(savedPath))).toBe(tempDir);
-      expect(path.basename(String(savedPath))).toContain(".openclaw-output-");
-      expect(path.basename(String(savedPath))).toContain(".part");
-      expect(await fs.readFile(targetPath, "utf8")).toBe("file-content");
+      await expectAtomicDownloadSave({ saveAs, targetPath, tempDir, content: "file-content" });
       expect(res.path).toBe(targetPath);
     });
   });
@@ -146,13 +155,7 @@ describe("pw-tools-core", () => {
       harness.trigger(download);
 
       const res = await p;
-      const savedPath = saveAs.mock.calls[0]?.[0];
-      expect(typeof savedPath).toBe("string");
-      expect(savedPath).not.toBe(targetPath);
-      expect(path.dirname(String(savedPath))).toBe(tempDir);
-      expect(path.basename(String(savedPath))).toContain(".openclaw-output-");
-      expect(path.basename(String(savedPath))).toContain(".part");
-      expect(await fs.readFile(targetPath, "utf8")).toBe("report-content");
+      await expectAtomicDownloadSave({ saveAs, targetPath, tempDir, content: "report-content" });
       expect(res.path).toBe(targetPath);
     });
   });
@@ -200,11 +203,8 @@ describe("pw-tools-core", () => {
       suggestedFilename: "file.bin",
     });
     expect(typeof outPath).toBe("string");
-    const expectedRootedDownloadsDir = path.join(
-      path.sep,
-      "tmp",
-      "openclaw-preferred",
-      "downloads",
+    const expectedRootedDownloadsDir = path.resolve(
+      path.join(path.sep, "tmp", "openclaw-preferred", "downloads"),
     );
     const expectedDownloadsTail = `${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`;
     expect(path.dirname(String(outPath))).toBe(expectedRootedDownloadsDir);
@@ -221,7 +221,7 @@ describe("pw-tools-core", () => {
     });
     expect(typeof outPath).toBe("string");
     expect(path.dirname(String(outPath))).toBe(
-      path.join(path.sep, "tmp", "openclaw-preferred", "downloads"),
+      path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),
     );
     expect(path.basename(String(outPath))).toMatch(/-passwd$/);
     expect(path.normalize(res.path)).toContain(

@@ -23,6 +23,7 @@ import {
   resolveSpawnFailure,
   type SpawnCommandCache,
   type SpawnCommandOptions,
+  type SpawnResolutionEvent,
   spawnAndCollect,
   spawnWithResolvedCommand,
   waitForExit,
@@ -98,6 +99,7 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly queueOwnerTtlSeconds: number;
   private readonly spawnCommandCache: SpawnCommandCache = {};
   private readonly spawnCommandOptions: SpawnCommandOptions;
+  private readonly loggedSpawnResolutions = new Set<string>();
 
   constructor(
     private readonly config: ResolvedAcpxPluginConfig,
@@ -117,11 +119,25 @@ export class AcpxRuntime implements AcpRuntime {
     this.spawnCommandOptions = {
       strictWindowsCmdWrapper: this.config.strictWindowsCmdWrapper,
       cache: this.spawnCommandCache,
+      onResolved: (event) => {
+        this.logSpawnResolution(event);
+      },
     };
   }
 
   isHealthy(): boolean {
     return this.healthy;
+  }
+
+  private logSpawnResolution(event: SpawnResolutionEvent): void {
+    const key = `${event.command}::${event.strictWindowsCmdWrapper ? "strict" : "compat"}::${event.resolution}`;
+    if (event.cacheHit || this.loggedSpawnResolutions.has(key)) {
+      return;
+    }
+    this.loggedSpawnResolutions.add(key);
+    this.logger?.debug?.(
+      `acpx spawn resolver: command=${event.command} mode=${event.strictWindowsCmdWrapper ? "strict" : "compat"} resolution=${event.resolution}`,
+    );
   }
 
   async probeAvailability(): Promise<void> {

@@ -1,4 +1,8 @@
-import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "openclaw/plugin-sdk";
+import {
+  applyWindowsSpawnProgramPolicy,
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgramCandidate,
+} from "openclaw/plugin-sdk";
 
 type SpawnTarget = {
   command: string;
@@ -11,10 +15,13 @@ export function resolveWindowsLobsterSpawn(
   argv: string[],
   env: NodeJS.ProcessEnv,
 ): SpawnTarget {
-  const program = resolveWindowsSpawnProgram({
+  const candidate = resolveWindowsSpawnProgramCandidate({
     command: execPath,
     env,
     packageName: "lobster",
+  });
+  const program = applyWindowsSpawnProgramPolicy({
+    candidate,
     allowShellFallback: false,
   });
   const resolved = materializeWindowsSpawnProgram(program, argv);

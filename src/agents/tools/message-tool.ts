@@ -242,14 +242,14 @@ function buildReactionSchema() {
     messageId: Type.Optional(
       Type.String({
         description:
-          "Target message id for reaction. For Telegram, if omitted, defaults to the current inbound message id when available.",
+          "Target message id for reaction. If omitted, defaults to the current inbound message id when available.",
       }),
     ),
     message_id: Type.Optional(
       Type.String({
         // Intentional duplicate alias for tool-schema discoverability in LLMs.
         description:
-          "snake_case alias of messageId. For Telegram, if omitted, defaults to the current inbound message id when available.",
+          "snake_case alias of messageId. If omitted, defaults to the current inbound message id when available.",
       }),
     ),
     emoji: Type.Optional(Type.String()),
@@ -312,6 +312,7 @@ function buildThreadSchema() {
   return {
     threadName: Type.Optional(Type.String()),
     autoArchiveMin: Type.Optional(Type.Number()),
+    appliedTags: Type.Optional(Type.Array(Type.String())),
   };
 }
 

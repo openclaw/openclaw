@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 
 describe("readPostCompactionContext", () => {
@@ -165,5 +166,64 @@ Never do Y.
     expect(result).toContain("Rule 1");
     expect(result).toContain("Rule 2");
     expect(result).not.toContain("Other Section");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "returns null when AGENTS.md is a symlink escaping workspace",
+    async () => {
+      const outside = path.join(tmpDir, "outside-secret.txt");
+      fs.writeFileSync(outside, "secret");
+      fs.symlinkSync(outside, path.join(tmpDir, "AGENTS.md"));
+
+      const result = await readPostCompactionContext(tmpDir);
+      expect(result).toBeNull();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "returns null when AGENTS.md is a hardlink alias",
+    async () => {
+      const outside = path.join(tmpDir, "outside-secret.txt");
+      fs.writeFileSync(outside, "secret");
+      fs.linkSync(outside, path.join(tmpDir, "AGENTS.md"));
+
+      const result = await readPostCompactionContext(tmpDir);
+      expect(result).toBeNull();
+    },
+  );
+
+  it("substitutes YYYY-MM-DD with the actual date in extracted sections", async () => {
+    const content = `## Session Startup
+
+Read memory/YYYY-MM-DD.md and memory/yesterday.md.
+
+## Red Lines
+
+Never modify memory/YYYY-MM-DD.md destructively.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const cfg = {
+      agents: { defaults: { userTimezone: "America/New_York" } },
+    } as OpenClawConfig;
+    // 2026-03-03 14:00 UTC = 2026-03-03 09:00 EST
+    const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
+    const result = await readPostCompactionContext(tmpDir, cfg, nowMs);
+    expect(result).not.toBeNull();
+    expect(result).toContain("memory/2026-03-03.md");
+    expect(result).not.toContain("memory/YYYY-MM-DD.md");
+    expect(result).toContain("Current time:");
+    expect(result).toContain("America/New_York");
+  });
+
+  it("appends current time line even when no YYYY-MM-DD placeholder is present", async () => {
+    const content = `## Session Startup
+
+Read WORKFLOW.md on startup.
+`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
+    const result = await readPostCompactionContext(tmpDir, undefined, nowMs);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Current time:");
   });
 });

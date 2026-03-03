@@ -2,6 +2,7 @@ import Foundation
 import OpenClawKit
 import UIKit
 
+@MainActor
 final class DeviceStatusService: DeviceStatusServicing {
     private let networkStatus: NetworkStatusService
 
