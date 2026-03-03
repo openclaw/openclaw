@@ -607,6 +607,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         ...base,
         tokenSource: account.tokenSource,
         mode: "webhook",
+        connectionModel: runtime?.connectionModel ?? "stateless",
       };
     },
   },
