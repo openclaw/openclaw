@@ -3,6 +3,7 @@ import { createFinalizableDraftLifecycle } from "../channels/draft-stream-contro
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
+const RTL_MARK = "\u200F"; // Unicode Right-to-Left Mark
 const DEFAULT_THROTTLE_MS = 1000;
 const TELEGRAM_DRAFT_ID_MAX = 2_147_483_647;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
