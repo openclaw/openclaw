@@ -995,11 +995,10 @@ export async function handleFeishuMessage(params: {
 
     if (requireMention && !ctx.mentionedBot) {
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
-      // Record to pending history for non-broadcast groups only. For broadcast groups,
-      // the mentioned handler's broadcast dispatch writes the turn directly into all
-      // agent sessions — buffering here would cause duplicate replay when this account
-      // later becomes active via buildPendingHistoryContextFromMap.
-      if (!broadcastAgents && chatHistories && groupHistoryKey) {
+      // Buffer to pending history so context is available when the bot is eventually
+      // @mentioned. This applies to both broadcast and non-broadcast groups — losing
+      // context is worse than minor prompt duplication in multi-account setups.
+      if (chatHistories && groupHistoryKey) {
         recordPendingHistoryEntryIfEnabled({
           historyMap: chatHistories,
           historyKey: groupHistoryKey,
@@ -1286,9 +1285,13 @@ export async function handleFeishuMessage(params: {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
       // event to every bot account in the group. Only one account should handle
       // broadcast dispatch to avoid duplicate agent sessions and race conditions.
-      // Uses a shared "broadcast" namespace (not per-account) so the first handler
-      // to reach this point claims the message; subsequent accounts skip.
-      if (!(await tryRecordMessagePersistent(ctx.messageId, "broadcast", log))) {
+      // Mentioned handlers always proceed (explicit @mention takes priority);
+      // non-mentioned handlers use a shared "broadcast" namespace so only the
+      // first to arrive claims the message.
+      if (
+        !ctx.mentionedBot &&
+        !(await tryRecordMessagePersistent(ctx.messageId, "broadcast", log))
+      ) {
         log(
           `feishu[${account.accountId}]: broadcast already claimed by another account for message ${ctx.messageId}; skipping`,
         );
