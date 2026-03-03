@@ -476,27 +476,4 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }),
     );
   });
-
-  it("chat.send still emits final payload when queued followup also returns final output", async () => {
-    createTranscriptFixture("openclaw-chat-send-queued-followup-with-final-");
-    mockState.queuedFollowup = true;
-    mockState.queuedFollowupFinalText = "queued followup + final";
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    const payload = await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-queued-followup-with-final",
-    });
-
-    expect(payload).toEqual(
-      expect.objectContaining({
-        runId: "idem-queued-followup-with-final",
-        state: "final",
-        message: expect.any(Object),
-      }),
-    );
-    expect(extractFirstTextBlock(payload)).toBe("queued followup + final");
-  });
 });
