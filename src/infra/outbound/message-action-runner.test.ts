@@ -269,6 +269,131 @@ describe("runMessageAction context isolation", () => {
     });
   });
 
+  it("requires an exact group member set when mapping multi-target send", async () => {
+    await withSandbox(async (workspaceDir) => {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "routing-targets.json"),
+        JSON.stringify({
+          groups: {
+            oversized_group: {
+              member_handles: ["+14155592088", "+14255320947", "+14155550123"],
+              channels: {
+                imessage: "chat_id:3",
+              },
+            },
+          },
+        }),
+      );
+
+      const cfg = {
+        channels: {
+          imessage: { enabled: true },
+        },
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } as OpenClawConfig;
+
+      await expect(
+        runDrySend({
+          cfg,
+          actionParams: {
+            channel: "imessage",
+            targets: ["+14155592088", "+14255320947"],
+            message: "hi",
+          },
+        }),
+      ).rejects.toThrow(/single destination/i);
+    });
+  });
+
+  it("does not reroute to bluebubbles when explicit channel hint has no mapped group target", async () => {
+    await withSandbox(async (workspaceDir) => {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "routing-targets.json"),
+        JSON.stringify({
+          groups: {
+            kevin_fernanda: {
+              member_handles: ["+14155592088", "+14255320947"],
+              channels: {
+                bluebubbles: "chat_guid:iMessage;-;abc123",
+              },
+            },
+          },
+        }),
+      );
+
+      const cfg = {
+        channels: {
+          imessage: { enabled: true },
+          bluebubbles: { enabled: true },
+        },
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } as OpenClawConfig;
+
+      await expect(
+        runDrySend({
+          cfg,
+          actionParams: {
+            channel: "imessage",
+            targets: ["+14155592088", "+14255320947"],
+            message: "hi",
+          },
+        }),
+      ).rejects.toThrow(/single destination/i);
+    });
+  });
+
+  it("rejects mixed target and targets before attempting known-group remap", async () => {
+    await withSandbox(async (workspaceDir) => {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "routing-targets.json"),
+        JSON.stringify({
+          groups: {
+            kevin_fernanda: {
+              member_handles: ["+14155592088", "+14255320947"],
+              channels: {
+                imessage: "chat_id:3",
+              },
+            },
+          },
+        }),
+      );
+
+      const cfg = {
+        channels: {
+          imessage: { enabled: true },
+        },
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } as OpenClawConfig;
+
+      await expect(
+        runDrySend({
+          cfg,
+          actionParams: {
+            channel: "imessage",
+            target: "imessage:+14155590000",
+            targets: ["+14155592088", "+14255320947"],
+            message: "hi",
+          },
+        }),
+      ).rejects.toThrow(/Conflicting destinations provided/i);
+    });
+  });
+
   it("defaults to current channel when target is omitted", async () => {
     const result = await runDrySend({
       cfg: slackConfig,

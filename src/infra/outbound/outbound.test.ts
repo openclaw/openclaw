@@ -258,6 +258,50 @@ describe("delivery-queue", () => {
         payloads: [{ text: "legacy payload" }],
       });
       expect(entries[0].enqueuedAt).toBeGreaterThan(0);
+
+      const persisted = JSON.parse(
+        fs.readFileSync(path.join(queueDir, "legacy-replayable.json"), "utf-8"),
+      );
+      expect(persisted.retryCount).toBe(2);
+      expect(persisted.payloads).toEqual([{ text: "legacy payload" }]);
+    });
+
+    it("persists canonical replayable legacy entries before retry accounting updates", async () => {
+      const queueDir = path.join(tmpDir, "delivery-queue");
+      fs.mkdirSync(queueDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(queueDir, "legacy-attempt-zero.json"),
+        JSON.stringify({
+          id: "legacy-attempt-zero",
+          channel: "bluebubbles",
+          target: "+15551239999",
+          payload: { text: "legacy payload" },
+          attempt: 0,
+          createdAt: "2026-02-28T00:00:00.000Z",
+        }),
+        "utf-8",
+      );
+
+      const entries = await loadPendingDeliveries(tmpDir);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        id: "legacy-attempt-zero",
+        retryCount: 0,
+      });
+
+      const persistedAfterLoad = JSON.parse(
+        fs.readFileSync(path.join(queueDir, "legacy-attempt-zero.json"), "utf-8"),
+      );
+      expect(persistedAfterLoad.retryCount).toBe(0);
+      expect(persistedAfterLoad.payloads).toEqual([{ text: "legacy payload" }]);
+
+      await failDelivery("legacy-attempt-zero", "send failed", tmpDir);
+
+      const persistedAfterFail = JSON.parse(
+        fs.readFileSync(path.join(queueDir, "legacy-attempt-zero.json"), "utf-8"),
+      );
+      expect(persistedAfterFail.retryCount).toBe(1);
+      expect(persistedAfterFail.retryCount).not.toBeNull();
     });
   });
 

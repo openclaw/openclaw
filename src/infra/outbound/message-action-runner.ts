@@ -250,8 +250,11 @@ function resolveKnownGroupTargetFromRoutingMap(params: {
     if (memberHandles.size === 0) {
       continue;
     }
-    const matchesAllTargets = Array.from(requested).every((handle) => memberHandles.has(handle));
-    if (!matchesAllTargets) {
+    if (memberHandles.size !== requested.size) {
+      continue;
+    }
+    const matchesExactTargets = Array.from(requested).every((handle) => memberHandles.has(handle));
+    if (!matchesExactTargets) {
       continue;
     }
     const channels =
@@ -263,6 +266,11 @@ function resolveKnownGroupTargetFromRoutingMap(params: {
       channelHint && typeof channels[channelHint] === "string" ? channels[channelHint].trim() : "";
     if (hintedTarget) {
       return { channel: channelHint!, target: hintedTarget };
+    }
+    if (channelHint) {
+      // Preserve explicit channel intent. If the mapped group lacks this channel,
+      // keep searching for another exact group match instead of silently rerouting.
+      continue;
     }
     const bluebubblesTarget =
       typeof channels.bluebubbles === "string" ? channels.bluebubbles.trim() : "";
@@ -301,6 +309,11 @@ function normalizeTargetsParamForAction(params: {
     typeof params.args.channelId === "string" ? params.args.channelId.trim() : "";
   const primaryTarget = explicitTarget || legacyTo || legacyChannelId;
   if (targets.length > 1) {
+    if (primaryTarget) {
+      throw new Error(
+        `Conflicting destinations provided for ${params.action}. Use either targets or a single target destination.`,
+      );
+    }
     const channelHint =
       typeof params.args.channel === "string"
         ? (normalizeMessageChannel(params.args.channel) ?? params.args.channel.trim().toLowerCase())
