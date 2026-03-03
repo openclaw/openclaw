@@ -8,6 +8,7 @@ import type {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
 import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
+import type { TelegramInlineButtons } from "../telegram/button-types.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -22,6 +23,10 @@ import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 
 const log = createSubsystemLogger("gateway/exec-approvals");
+
+// Telegram limits callback_data to 64 bytes; buttons are omitted when the ID would exceed this.
+const TELEGRAM_CALLBACK_DATA_MAX_BYTES = 64;
+
 export type { ExecApprovalRequest, ExecApprovalResolved };
 
 type ForwardTarget = ExecApprovalForwardTarget & { source: "session" | "target" };
@@ -159,7 +164,10 @@ function formatApprovalCommand(command: string): { inline: boolean; text: string
   return { inline: false, text: `${fence}\n${command}\n${fence}` };
 }
 
-function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
+function buildRequestMessage(
+  request: ExecApprovalRequest,
+  nowMs: number,
+): { text: string; buttons: TelegramInlineButtons } {
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
   const command = formatApprovalCommand(request.request.command);
   if (command.inline) {
@@ -192,7 +200,21 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMs) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);
   lines.push("Reply with: /approve <id> allow-once|allow-always|deny");
-  return lines.join("\n");
+  // Build inline buttons only when every callback_data fits within Telegram's 64-byte limit.
+  // The longest value is "/approve <id> allow-always"; fall back to text-only when an
+  // unusually long ID would exceed the limit.
+  const longestCallbackData = `/approve ${request.id} allow-always`;
+  const buttons: TelegramInlineButtons =
+    Buffer.byteLength(longestCallbackData, "utf8") <= TELEGRAM_CALLBACK_DATA_MAX_BYTES
+      ? [
+          [
+            { text: "Allow once", callback_data: `/approve ${request.id} allow-once` },
+            { text: "Always allow", callback_data: `/approve ${request.id} allow-always` },
+            { text: "Deny", callback_data: `/approve ${request.id} deny` },
+          ],
+        ]
+      : [];
+  return { text: lines.join("\n"), buttons };
 }
 
 function decisionLabel(decision: ExecApprovalDecision): string {
@@ -262,6 +284,7 @@ async function deliverToTargets(params: {
   cfg: OpenClawConfig;
   targets: ForwardTarget[];
   text: string;
+  buttons?: TelegramInlineButtons;
   deliver: typeof deliverOutboundPayloads;
   shouldSend?: () => boolean;
 }) {
@@ -280,7 +303,15 @@ async function deliverToTargets(params: {
         to: target.to,
         accountId: target.accountId,
         threadId: target.threadId,
-        payloads: [{ text: params.text }],
+        payloads: [
+          {
+            text: params.text,
+            channelData:
+              params.buttons?.length && channel === "telegram"
+                ? { telegram: { buttons: params.buttons } }
+                : undefined,
+          },
+        ],
       });
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
@@ -378,11 +409,12 @@ export function createExecApprovalForwarder(
       return false;
     }
 
-    const text = buildRequestMessage(request, nowMs());
+    const { text, buttons } = buildRequestMessage(request, nowMs());
     void deliverToTargets({
       cfg,
       targets: filteredTargets,
       text,
+      buttons,
       deliver,
       shouldSend: () => pending.get(request.id) === pendingEntry,
     }).catch((err) => {

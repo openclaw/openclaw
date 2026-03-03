@@ -1085,6 +1085,64 @@ export const registerTelegramHandlers = ({
         return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
       };
 
+      // Resolve chat properties + sender authorization for a callback query.
+      // Shared by the exec-approval handler and the general inline-buttons handler
+      // so both stay in sync when auth logic changes.
+      const resolveCallbackSenderAuth = async (buttonsScope: string) => {
+        const cbChatId = callbackMessage.chat.id;
+        const cbIsGroup =
+          callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
+        const cbMessageThreadId = callbackMessage.message_thread_id;
+        const cbIsForum = callbackMessage.chat.is_forum === true;
+        const authContext = await resolveTelegramEventAuthorizationContext({
+          chatId: cbChatId,
+          isGroup: cbIsGroup,
+          isForum: cbIsForum,
+          messageThreadId: cbMessageThreadId,
+        });
+        const senderAuth = authorizeTelegramEventSender({
+          chatId: cbChatId,
+          chatTitle: callbackMessage.chat.title,
+          isGroup: cbIsGroup,
+          senderId: callback.from?.id ? String(callback.from.id) : "",
+          senderUsername: callback.from?.username ?? "",
+          mode: buttonsScope === "allowlist" ? "callback-allowlist" : "callback-scope",
+          context: authContext,
+        });
+        return {
+          chatId: cbChatId,
+          isGroup: cbIsGroup,
+          isForum: cbIsForum,
+          messageThreadId: cbMessageThreadId,
+          authContext,
+          senderAuth,
+        };
+      };
+
+      // Exec approval buttons bypass the general inlineButtonsScope gate —
+      // they are always routed regardless of the model-selection buttons setting.
+      // Auth mode mirrors the regular callback handler: use callback-allowlist when the
+      // account is configured for allowlist-only inline buttons so DM policy is enforced,
+      // otherwise use callback-scope (message visibility implies authorization).
+      if (data.startsWith("/approve ")) {
+        const buttonsScope = resolveTelegramInlineButtonsScope({ cfg, accountId });
+        const { authContext, senderAuth } = await resolveCallbackSenderAuth(buttonsScope);
+        if (senderAuth.allowed) {
+          const syntheticMessage = buildSyntheticTextMessage({
+            base: callbackMessage,
+            from: callback.from,
+            text: data,
+          });
+          await processMessage(
+            buildSyntheticContext(ctx, syntheticMessage),
+            [],
+            authContext.storeAllowFrom,
+            { forceWasMentioned: true, messageIdOverride: callback.id },
+          );
+        }
+        return;
+      }
+
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
         accountId,
@@ -1093,24 +1151,20 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      const chatId = callbackMessage.chat.id;
-      const isGroup =
-        callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
+      const {
+        chatId,
+        isGroup,
+        isForum,
+        messageThreadId,
+        authContext: eventAuthContext,
+        senderAuth: senderAuthorization,
+      } = await resolveCallbackSenderAuth(inlineButtonsScope);
       if (inlineButtonsScope === "dm" && isGroup) {
         return;
       }
       if (inlineButtonsScope === "group" && !isGroup) {
         return;
       }
-
-      const messageThreadId = callbackMessage.message_thread_id;
-      const isForum = callbackMessage.chat.is_forum === true;
-      const eventAuthContext = await resolveTelegramEventAuthorizationContext({
-        chatId,
-        isGroup,
-        isForum,
-        messageThreadId,
-      });
       const { resolvedThreadId, dmThreadId, storeAllowFrom, groupConfig } = eventAuthContext;
       const requireTopic = (groupConfig as { requireTopic?: boolean } | undefined)?.requireTopic;
       if (!isGroup && requireTopic === true && dmThreadId == null) {
@@ -1119,19 +1173,6 @@ export const registerTelegramHandlers = ({
         );
         return;
       }
-      const senderId = callback.from?.id ? String(callback.from.id) : "";
-      const senderUsername = callback.from?.username ?? "";
-      const authorizationMode: TelegramEventAuthorizationMode =
-        inlineButtonsScope === "allowlist" ? "callback-allowlist" : "callback-scope";
-      const senderAuthorization = authorizeTelegramEventSender({
-        chatId,
-        chatTitle: callbackMessage.chat.title,
-        isGroup,
-        senderId,
-        senderUsername,
-        mode: authorizationMode,
-        context: eventAuthContext,
-      });
       if (!senderAuthorization.allowed) {
         return;
       }

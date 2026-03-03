@@ -467,6 +467,182 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-2");
   });
 
+  it("routes /approve callback_data as a message even when inlineButtonsScope is off", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            capabilities: { inlineButtons: "off" },
+          },
+        },
+      },
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    const approvalUuid = "12345678-1234-1234-1234-123456789abc";
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-approve-1",
+        data: `/approve ${approvalUuid} allow-once`,
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 50,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    // replySpy = getReplyFromConfig mock; it fires for synthesised messages routed through processMessage
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const [msgCtx] = replySpy.mock.calls[0] ?? [];
+    // MsgContext.Body contains the envelope + command text
+    expect((msgCtx as { Body?: string })?.Body).toContain(`/approve ${approvalUuid} allow-once`);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-1");
+  });
+
+  it("blocks /approve callback from unauthorized sender when inlineButtons is allowlist", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    readChannelAllowFromStore.mockResolvedValue([]);
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            allowFrom: [],
+            capabilities: { inlineButtons: "allowlist" },
+          },
+        },
+      },
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    const approvalUuid = "12345678-1234-1234-1234-123456789abc";
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-approve-unauth",
+        data: `/approve ${approvalUuid} allow-once`,
+        from: { id: 999, first_name: "Eve", username: "eve_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 51,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-unauth");
+  });
+
+  it("routes /approve callback from authorized sender when inlineButtons is allowlist", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    readChannelAllowFromStore.mockResolvedValue(["9"]);
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            allowFrom: ["9"],
+            capabilities: { inlineButtons: "allowlist" },
+          },
+        },
+      },
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    const approvalUuid = "12345678-1234-1234-1234-123456789abc";
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-approve-auth",
+        data: `/approve ${approvalUuid} allow-once`,
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 52,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-auth");
+  });
+
+  it("routes /approve callback in a group even when inlineButtons is dm-only", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            capabilities: { inlineButtons: "dm" },
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      },
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    const approvalUuid = "12345678-1234-1234-1234-123456789abc";
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-approve-group",
+        data: `/approve ${approvalUuid} deny`,
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: -100999, type: "supergroup", title: "Ops Group" },
+          date: 1736380800,
+          message_id: 52,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    // Normal callbacks in a group are blocked when inlineButtons is "dm";
+    // approval callbacks must bypass that gate and reach processMessage.
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const [msgCtx] = replySpy.mock.calls[0] ?? [];
+    expect((msgCtx as { Body?: string })?.Body).toContain(`/approve ${approvalUuid} deny`);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-group");
+  });
+
   it("includes sender identity in group envelope headers", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
