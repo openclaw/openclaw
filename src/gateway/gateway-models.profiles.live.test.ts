@@ -28,7 +28,12 @@ import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
-import { hasExpectedToolNonce, shouldRetryToolReadProbe } from "./live-tool-probe-utils.js";
+import {
+  hasExpectedSingleNonce,
+  hasExpectedToolNonce,
+  shouldRetryExecReadProbe,
+  shouldRetryToolReadProbe,
+} from "./live-tool-probe-utils.js";
 import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
@@ -862,41 +867,77 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: tool-exec`);
             const nonceC = randomUUID();
             const toolWritePath = path.join(tempDir, `write-${runIdTool}.txt`);
-
-            const execReadProbe = await client.request<AgentFinalPayload>(
-              "agent",
-              {
-                sessionKey,
-                idempotencyKey: `idem-${runIdTool}-exec-read`,
-                message:
-                  "OpenClaw live tool probe (local, safe): " +
-                  "use the tool named `exec` (or `Exec`) to run this command: " +
-                  `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
-                  `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
-                  "Finally reply including the nonce text you read back.",
-                thinking: params.thinkingLevel,
-                deliver: false,
-              },
-              { expectFinal: true },
-            );
-            if (execReadProbe?.status !== "ok") {
-              throw new Error(`exec+read probe failed: status=${String(execReadProbe?.status)}`);
-            }
-            const execReadText = extractPayloadText(execReadProbe?.result);
-            if (
-              isEmptyStreamText(execReadText) &&
-              (model.provider === "minimax" || model.provider === "openai-codex")
+            const maxExecReadAttempts = 3;
+            let execReadText = "";
+            for (
+              let execReadAttempt = 0;
+              execReadAttempt < maxExecReadAttempts;
+              execReadAttempt += 1
             ) {
-              logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
-              break;
+              const strictReply = execReadAttempt > 0;
+              const execReadProbe = await client.request<AgentFinalPayload>(
+                "agent",
+                {
+                  sessionKey,
+                  idempotencyKey: `idem-${runIdTool}-exec-read-${execReadAttempt + 1}`,
+                  message: strictReply
+                    ? "OpenClaw live tool probe (local, safe): " +
+                      "use the tool named `exec` (or `Exec`) to run this command: " +
+                      `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
+                      `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
+                      `Then reply with exactly: ${nonceC}. No extra text.`
+                    : "OpenClaw live tool probe (local, safe): " +
+                      "use the tool named `exec` (or `Exec`) to run this command: " +
+                      `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
+                      `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
+                      "Finally reply including the nonce text you read back.",
+                  thinking: params.thinkingLevel,
+                  deliver: false,
+                },
+                { expectFinal: true },
+              );
+              if (execReadProbe?.status !== "ok") {
+                if (execReadAttempt + 1 < maxExecReadAttempts) {
+                  logProgress(
+                    `${progressLabel}: tool-exec retry (${execReadAttempt + 2}/${maxExecReadAttempts}) status=${String(execReadProbe?.status)}`,
+                  );
+                  continue;
+                }
+                throw new Error(`exec+read probe failed: status=${String(execReadProbe?.status)}`);
+              }
+              execReadText = extractPayloadText(execReadProbe?.result);
+              if (
+                isEmptyStreamText(execReadText) &&
+                (model.provider === "minimax" || model.provider === "openai-codex")
+              ) {
+                logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
+                break;
+              }
+              assertNoReasoningTags({
+                text: execReadText,
+                model: modelKey,
+                phase: "tool-exec",
+                label: params.label,
+              });
+              if (hasExpectedSingleNonce(execReadText, nonceC)) {
+                break;
+              }
+              if (
+                shouldRetryExecReadProbe({
+                  text: execReadText,
+                  nonce: nonceC,
+                  attempt: execReadAttempt,
+                  maxAttempts: maxExecReadAttempts,
+                })
+              ) {
+                logProgress(
+                  `${progressLabel}: tool-exec retry (${execReadAttempt + 2}/${maxExecReadAttempts}) malformed tool output`,
+                );
+                continue;
+              }
+              throw new Error(`exec+read probe missing nonce: ${execReadText}`);
             }
-            assertNoReasoningTags({
-              text: execReadText,
-              model: modelKey,
-              phase: "tool-exec",
-              label: params.label,
-            });
-            if (!execReadText.includes(nonceC)) {
+            if (!hasExpectedSingleNonce(execReadText, nonceC)) {
               throw new Error(`exec+read probe missing nonce: ${execReadText}`);
             }
 
