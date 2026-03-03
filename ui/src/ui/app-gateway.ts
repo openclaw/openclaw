@@ -16,7 +16,11 @@ import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
 import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
-import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
+import {
+  clearInFlightChatRun,
+  handleChatEvent,
+  type ChatEventPayload,
+} from "./controllers/chat.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
@@ -179,16 +183,28 @@ export function connectGateway(host: GatewayHost) {
         return;
       }
       host.connected = false;
+      const hadActiveChatRun = clearInFlightChatRun(
+        host as unknown as {
+          chatRunId: string | null;
+          chatStream: string | null;
+          chatStreamStartedAt: number | null;
+        },
+      );
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =
         resolveGatewayErrorDetailCode(error) ??
         (typeof error?.code === "string" ? error.code : null);
       if (code !== 1012) {
         if (error?.message) {
-          host.lastError = error.message;
+          host.lastError = hadActiveChatRun
+            ? `Connection lost while waiting for the response. ${error.message}`
+            : error.message;
           return;
         }
-        host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
+        const disconnectText = `disconnected (${code}): ${reason || "no reason"}`;
+        host.lastError = hadActiveChatRun
+          ? `Connection lost while waiting for the response. ${disconnectText}`
+          : disconnectText;
       } else {
         host.lastError = null;
         host.lastErrorCode = null;
