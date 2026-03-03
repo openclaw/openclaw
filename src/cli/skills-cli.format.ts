@@ -2,6 +2,7 @@ import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-statu
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import { formatCliCommand } from "./command-format.js";
 
 export type SkillsListOptions = {
@@ -67,16 +68,14 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
   const skills = opts.eligible ? report.skills.filter((s) => s.eligible) : report.skills;
 
   if (opts.json) {
-    // eslint-disable-next-line no-control-regex
-    const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
     const jsonReport = {
       workspaceDir: report.workspaceDir,
       managedSkillsDir: report.managedSkillsDir,
       skills: skills.map((s) => ({
         name: s.name,
         description: s.description,
-        // Strip ANSI codes from emoji for JSON output
-        emoji: s.emoji ? s.emoji.replace(ANSI_PATTERN, "") : null,
+        // Strip ANSI codes from emoji for JSON output (preserves undefined for omitted keys)
+        emoji: s.emoji != null ? stripAnsi(s.emoji) : s.emoji,
         eligible: s.eligible,
         disabled: s.disabled,
         blockedByAllowlist: s.blockedByAllowlist,
