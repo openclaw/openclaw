@@ -35,6 +35,7 @@ describe("config plugin validation", () => {
   let fixtureRoot = "";
   let suiteHome = "";
   let badPluginDir = "";
+  let enumPluginDir = "";
   let bluebubblesPluginDir = "";
   const envSnapshot = {
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
@@ -48,6 +49,7 @@ describe("config plugin validation", () => {
     suiteHome = path.join(fixtureRoot, "home");
     await fs.mkdir(suiteHome, { recursive: true });
     badPluginDir = path.join(suiteHome, "bad-plugin");
+    enumPluginDir = path.join(suiteHome, "enum-plugin");
     bluebubblesPluginDir = path.join(suiteHome, "bluebubbles-plugin");
     await writePluginFixture({
       dir: badPluginDir,
@@ -59,6 +61,20 @@ describe("config plugin validation", () => {
           value: { type: "boolean" },
         },
         required: ["value"],
+      },
+    });
+    await writePluginFixture({
+      dir: enumPluginDir,
+      id: "enum-plugin",
+      schema: {
+        type: "object",
+        properties: {
+          fileFormat: {
+            type: "string",
+            enum: ["markdown", "html"],
+          },
+        },
+        required: ["fileFormat"],
       },
     });
     await writePluginFixture({
@@ -185,10 +201,31 @@ describe("config plugin validation", () => {
     if (!res.ok) {
       const hasIssue = res.issues.some(
         (issue) =>
-          issue.path === "plugins.entries.bad-plugin.config" &&
+          issue.path.startsWith("plugins.entries.bad-plugin.config") &&
           issue.message.includes("invalid config"),
       );
       expect(hasIssue).toBe(true);
+    }
+  });
+
+  it("surfaces allowed enum values for plugin config diagnostics", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [enumPluginDir] },
+        entries: { "enum-plugin": { config: { fileFormat: "txt" } } },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      const issue = res.issues.find(
+        (entry) => entry.path === "plugins.entries.enum-plugin.config.fileFormat",
+      );
+      expect(issue).toBeDefined();
+      expect(issue?.message).toContain('allowed: "markdown", "html"');
+      expect(issue?.allowedValues).toEqual(["markdown", "html"]);
+      expect(issue?.allowedValuesHiddenCount).toBe(0);
     }
   });
 
