@@ -47,6 +47,7 @@ type CacheRetention = "none" | "short" | "long";
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
   openaiWsWarmup?: boolean;
+  toolChoice?: unknown;
 };
 
 /**
@@ -127,6 +128,9 @@ function createStreamFnWithExtraParams(
   }
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
+  }
+  if (extraParams.toolChoice !== undefined) {
+    streamParams.toolChoice = extraParams.toolChoice;
   }
   const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
@@ -307,6 +311,33 @@ function createOpenAIResponsesContextManagementWrapper(
               },
             ];
           }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+/**
+ * Work around upstream pi-ai hardcoding `tool_choice: "auto"` in the
+ * openai-codex-responses provider. `buildBaseOptions()` drops `toolChoice`
+ * from stream options, and `buildRequestBody()` hardcodes it to `"auto"`.
+ * This wrapper intercepts the request payload via `onPayload` and overrides
+ * `tool_choice` with the caller-supplied value.
+ */
+function createCodexToolChoiceWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const toolChoice = (options as CacheRetentionStreamOptions | undefined)?.toolChoice;
+    if (toolChoice === undefined) {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          (payload as Record<string, unknown>).tool_choice = toolChoice;
         }
         originalOnPayload?.(payload);
       },
@@ -876,6 +907,9 @@ export function applyExtraParamsToAgent(
   if (provider === "openai-codex") {
     // Default Codex to WebSocket-first when nothing else specifies transport.
     agent.streamFn = createCodexDefaultTransportWrapper(agent.streamFn);
+    // Forward toolChoice via onPayload since pi-ai's buildBaseOptions drops it
+    // and buildRequestBody hardcodes tool_choice: "auto".
+    agent.streamFn = createCodexToolChoiceWrapper(agent.streamFn);
   } else if (provider === "openai") {
     // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
     agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
