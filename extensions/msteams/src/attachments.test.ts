@@ -1,5 +1,6 @@
 import type { PluginRuntime, SsrFPolicy } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsGraphMessageUrls,
@@ -106,19 +107,17 @@ const fetchRemoteMediaMock = vi.fn(async (params: RemoteMediaFetchParams) => {
   throw new Error("too many redirects");
 });
 
-const runtimeStub = {
+const runtimeStub: PluginRuntime = createPluginRuntimeMock({
   media: {
-    detectMime: detectMimeMock as unknown as PluginRuntime["media"]["detectMime"],
+    detectMime: detectMimeMock,
   },
   channel: {
     media: {
-      fetchRemoteMedia:
-        fetchRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
-      saveMediaBuffer:
-        saveMediaBufferMock as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
+      fetchRemoteMedia: fetchRemoteMediaMock,
+      saveMediaBuffer: saveMediaBufferMock,
     },
   },
-} as unknown as PluginRuntime;
+});
 
 type DownloadAttachmentsParams = Parameters<typeof downloadMSTeamsAttachments>[0];
 type DownloadGraphMediaParams = Parameters<typeof downloadMSTeamsGraphMedia>[0];
