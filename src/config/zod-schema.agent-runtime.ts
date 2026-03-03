@@ -676,6 +676,15 @@ export const MemorySearchSchema = z
   })
   .strict()
   .optional();
+
+const AgentMcpSchema = z
+  .object({
+    // Keep server entries permissive for compatibility with MCP ecosystem
+    // differences (stdio/http transports and server-specific fields).
+    servers: z.array(z.record(z.string(), z.unknown())).optional(),
+  })
+  .strict()
+  .optional();
 export { AgentModelSchema };
 export const AgentEntrySchema = z
   .object({
@@ -709,6 +718,7 @@ export const AgentEntrySchema = z
       })
       .strict()
       .optional(),
+    mcp: AgentMcpSchema,
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
   })

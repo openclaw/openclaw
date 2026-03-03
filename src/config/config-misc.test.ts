@@ -31,6 +31,55 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
+describe("agents.list[].mcp config", () => {
+  it("accepts MCP server configuration on agents", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            mcp: {
+              servers: [
+                {
+                  name: "minimax",
+                  command: "uvx",
+                  args: ["minimax-coding-plan-mcp", "-y"],
+                  env: {
+                    MINIMAX_API_KEY: "test-key",
+                    MINIMAX_API_HOST: "https://api.minimax.io",
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects non-array agents.list[].mcp.servers values", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            mcp: {
+              servers: { name: "bad-shape" },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "agents.list.0.mcp.servers")).toBe(true);
+    }
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });

@@ -27,6 +27,11 @@ export type AgentConfig = {
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
   };
+  mcp?: {
+    // Keep config surface permissive so MCP transport/server-specific fields
+    // can pass through config validation unchanged.
+    servers?: Array<Record<string, unknown>>;
+  };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
