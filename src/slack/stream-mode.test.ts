@@ -115,6 +115,41 @@ describe("applyAppendOnlyStreamUpdate", () => {
       changed: true,
     });
   });
+
+  it("ignores incoming chunks that are empty after trimEnd", () => {
+    const next = applyAppendOnlyStreamUpdate({
+      incoming: "   \n\t  ",
+      rendered: "hello",
+      source: "hello",
+    });
+    expect(next).toEqual({ rendered: "hello", source: "hello", changed: false });
+  });
+
+  it("uses rendered prefix when incoming extends rendered text", () => {
+    const next = applyAppendOnlyStreamUpdate({
+      incoming: "hello world!!!",
+      rendered: "hello world",
+      source: "hello",
+    });
+    expect(next).toEqual({
+      rendered: "hello world!!!",
+      source: "hello world!!!",
+      changed: true,
+    });
+  });
+
+  it("does not insert extra newline when rendered already ends with newline", () => {
+    const next = applyAppendOnlyStreamUpdate({
+      incoming: "second line",
+      rendered: "first line\n",
+      source: "first line",
+    });
+    expect(next).toEqual({
+      rendered: "first line\nsecond line",
+      source: "second line",
+      changed: true,
+    });
+  });
 });
 
 describe("buildStatusFinalPreviewText", () => {
@@ -122,5 +157,14 @@ describe("buildStatusFinalPreviewText", () => {
     expect(buildStatusFinalPreviewText(1)).toBe("Status: thinking..");
     expect(buildStatusFinalPreviewText(2)).toBe("Status: thinking...");
     expect(buildStatusFinalPreviewText(3)).toBe("Status: thinking.");
+  });
+
+  it("handles zero and large update counts consistently", () => {
+    // 0 is clamped to 1
+    expect(buildStatusFinalPreviewText(0)).toBe("Status: thinking..");
+    // 4 -> 4 % 3 = 1 -> two dots
+    expect(buildStatusFinalPreviewText(4)).toBe("Status: thinking..");
+    // 5 -> 5 % 3 = 2 -> three dots
+    expect(buildStatusFinalPreviewText(5)).toBe("Status: thinking...");
   });
 });
