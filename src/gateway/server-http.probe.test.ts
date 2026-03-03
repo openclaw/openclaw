@@ -185,4 +185,29 @@ describe("gateway probe endpoints — /ready with readiness checker", () => {
       },
     });
   });
+
+  it("/ready is not shadowed by Control UI when controlUiEnabled=true with root basePath", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      ready: false,
+      failing: ["discord"],
+      uptimeMs: 200_000,
+    });
+
+    await withGatewayServer({
+      prefix: "probe-control-ui-shadow",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        getReadiness,
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+      },
+      run: async (server) => {
+        const req = createRequest({ path: "/ready" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+        expect(res.statusCode).toBe(503);
+        expect(JSON.parse(getBody())).toMatchObject({ ready: false, failing: ["discord"] });
+      },
+    });
+  });
 });

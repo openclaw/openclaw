@@ -590,6 +590,11 @@ export function createGatewayHttpServer(opts: {
         ? resolvePluginRoutePathContext(requestPath)
         : null;
       const requestStages: GatewayHttpRequestStage[] = [
+        // Probes run first — unauthenticated, must never be shadowed by SPA catch-alls.
+        {
+          name: "gateway-probes",
+          run: () => handleGatewayProbeRequest(req, res, requestPath, getReadiness),
+        },
         {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
@@ -705,11 +710,6 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-
-      requestStages.push({
-        name: "gateway-probes",
-        run: () => handleGatewayProbeRequest(req, res, requestPath, getReadiness),
-      });
 
       if (await runGatewayHttpRequestStages(requestStages)) {
         return;
