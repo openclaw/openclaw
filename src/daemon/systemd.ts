@@ -252,14 +252,9 @@ export async function installSystemdService({
     throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
   }
 
-  const enable = await execSystemctl(["--user", "enable", unitName]);
+  const enable = await execSystemctl(["--user", "enable", "--now", unitName]);
   if (enable.code !== 0) {
-    throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
-  }
-
-  const restart = await execSystemctl(["--user", "restart", unitName]);
-  if (restart.code !== 0) {
-    throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
+    throw new Error(`systemctl enable --now failed: ${enable.stderr || enable.stdout}`.trim());
   }
 
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
@@ -326,10 +321,24 @@ export async function restartSystemdService({
 export async function isSystemdServiceEnabled(args: {
   env?: Record<string, string | undefined>;
 }): Promise<boolean> {
-  await assertSystemdAvailable();
   const serviceName = resolveSystemdServiceName(args.env ?? {});
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
+  if (res.code === 4) {
+    return false;
+  }
+  if (res.code !== 0) {
+    const detail = `${res.stderr} ${res.stdout}`.toLowerCase();
+    if (
+      detail.includes("failed to connect") ||
+      detail.includes("not been booted") ||
+      detail.includes("not supported") ||
+      detail.includes("no such file or directory") ||
+      detail.includes("spawn systemctl")
+    ) {
+      throw new Error(`systemctl --user unavailable: ${res.stderr || res.stdout || "unknown error"}`);
+    }
+  }
   return res.code === 0;
 }
 

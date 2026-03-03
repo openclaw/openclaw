@@ -6,7 +6,7 @@ vi.mock("node:child_process", () => ({
   execFile: execFileMock,
 }));
 
-import { isSystemdUserServiceAvailable } from "./systemd.js";
+import { isSystemdServiceEnabled, isSystemdUserServiceAvailable } from "./systemd.js";
 
 describe("systemd availability", () => {
   beforeEach(() => {
@@ -31,5 +31,18 @@ describe("systemd availability", () => {
       cb(err, "", "");
     });
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(false);
+  });
+
+  it("treats is-enabled exit code 4 as not installed (not unavailable)", async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
+      const err = new Error("Unit openclaw-gateway.service not found") as Error & {
+        stderr?: string;
+        code?: number;
+      };
+      err.stderr = "Unit openclaw-gateway.service not found";
+      err.code = 4;
+      cb(err, "", "");
+    });
+    await expect(isSystemdServiceEnabled({ env: {} })).resolves.toBe(false);
   });
 });
