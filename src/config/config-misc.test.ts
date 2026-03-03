@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   getConfigValueAtPath,
@@ -8,7 +6,7 @@ import {
   unsetConfigValueAtPath,
 } from "./config-paths.js";
 import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
-import { buildWebSearchProviderConfig, withTempHome } from "./test-helpers.js";
+import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("$schema key in config (#14998)", () => {
@@ -171,6 +169,54 @@ describe("gateway.channelHealthCheckMinutes", () => {
   });
 });
 
+describe("gateway.channelHealthTiming", () => {
+  it("accepts valid timing config", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthTiming: {
+          startupGraceMinutes: 2,
+          connectGraceMinutes: 5,
+          staleEventThresholdMinutes: 60,
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts partial timing config", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthTiming: {
+          connectGraceMinutes: 10,
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects negative values", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthTiming: {
+          staleEventThresholdMinutes: -1,
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects unknown keys", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthTiming: {
+          unknownKey: 5,
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+});
+
 describe("cron webhook schema", () => {
   it("accepts cron.webhookToken and legacy cron.webhook", () => {
     const res = OpenClawSchema.safeParse({
@@ -178,6 +224,21 @@ describe("cron webhook schema", () => {
         enabled: true,
         webhook: "https://example.invalid/legacy-cron-webhook",
         webhookToken: "secret-token",
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts cron.webhookToken SecretRef values", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        webhook: "https://example.invalid/legacy-cron-webhook",
+        webhookToken: {
+          source: "env",
+          provider: "default",
+          id: "CRON_WEBHOOK_TOKEN",
+        },
       },
     });
 
@@ -304,16 +365,10 @@ describe("config strict validation", () => {
 
   it("flags legacy config entries without auto-migrating", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(
-        path.join(configDir, "openclaw.json"),
-        JSON.stringify({
-          agents: { list: [{ id: "pi" }] },
-          routing: { allowFrom: ["+15555550123"] },
-        }),
-        "utf-8",
-      );
+      await writeOpenClawConfig(home, {
+        agents: { list: [{ id: "pi" }] },
+        routing: { allowFrom: ["+15555550123"] },
+      });
 
       const snap = await readConfigFileSnapshot();
 
@@ -324,15 +379,9 @@ describe("config strict validation", () => {
 
   it("does not mark resolved-only gateway.bind aliases as auto-migratable legacy", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(
-        path.join(configDir, "openclaw.json"),
-        JSON.stringify({
-          gateway: { bind: "${OPENCLAW_BIND}" },
-        }),
-        "utf-8",
-      );
+      await writeOpenClawConfig(home, {
+        gateway: { bind: "${OPENCLAW_BIND}" },
+      });
 
       const prev = process.env.OPENCLAW_BIND;
       process.env.OPENCLAW_BIND = "0.0.0.0";
@@ -353,15 +402,9 @@ describe("config strict validation", () => {
 
   it("still marks literal gateway.bind host aliases as legacy", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(
-        path.join(configDir, "openclaw.json"),
-        JSON.stringify({
-          gateway: { bind: "0.0.0.0" },
-        }),
-        "utf-8",
-      );
+      await writeOpenClawConfig(home, {
+        gateway: { bind: "0.0.0.0" },
+      });
 
       const snap = await readConfigFileSnapshot();
       expect(snap.valid).toBe(false);

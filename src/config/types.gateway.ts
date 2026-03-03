@@ -1,3 +1,5 @@
+import type { SecretInput } from "./types.secrets.js";
+
 export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
 
 export type GatewayTlsConfig = {
@@ -56,7 +58,7 @@ export type TalkProviderConfig = {
   /** Default provider output format (for example pcm_44100). */
   outputFormat?: string;
   /** Provider API key (optional; provider-specific env fallback may apply). */
-  apiKey?: string;
+  apiKey?: SecretInput;
   /** Provider-specific extensions. */
   [key: string]: unknown;
 };
@@ -77,7 +79,7 @@ export type TalkConfig = {
   voiceAliases?: Record<string, string>;
   modelId?: string;
   outputFormat?: string;
-  apiKey?: string;
+  apiKey?: SecretInput;
 };
 
 export type GatewayControlUiConfig = {
@@ -137,7 +139,7 @@ export type GatewayAuthConfig = {
   /** Shared token for token mode (stored locally for CLI auth). */
   token?: string;
   /** Shared password for password mode (consider env instead). */
-  password?: string;
+  password?: SecretInput;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
   /** Rate-limit configuration for failed authentication attempts. */
@@ -175,9 +177,9 @@ export type GatewayRemoteConfig = {
   /** Transport for macOS remote connections (ssh tunnel or direct WS). */
   transport?: "ssh" | "direct";
   /** Token for remote auth (when the gateway requires token auth). */
-  token?: string;
+  token?: SecretInput;
   /** Password for remote auth (when the gateway requires password auth). */
-  password?: string;
+  password?: SecretInput;
   /** Expected TLS certificate fingerprint (sha256) for remote gateways. */
   tlsFingerprint?: string;
   /** SSH target for tunneling remote Gateway (user@host). */
@@ -315,6 +317,18 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type ChannelHealthTimingConfig = {
+  /** Grace period in minutes after the monitor starts before health checks begin. Default: 1. */
+  startupGraceMinutes?: number;
+  /** Grace period in minutes for a channel to connect after starting. Default: 2. */
+  connectGraceMinutes?: number;
+  /**
+   * A connected channel with no events for this many minutes triggers a stale-socket restart.
+   * Increase this if long-running AI responses cause spurious restarts. Default: 30.
+   */
+  staleEventThresholdMinutes?: number;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -362,4 +376,10 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Timing thresholds for the channel health monitor.
+   * Tune these to reduce spurious restarts caused by slow AI message processing
+   * or transient WebSocket disconnects.
+   */
+  channelHealthTiming?: ChannelHealthTimingConfig;
 };
