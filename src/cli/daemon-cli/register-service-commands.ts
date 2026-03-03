@@ -17,11 +17,13 @@ function resolveInstallOptions(
   const parentForce = inheritOptionFromParent<boolean>(command, "force");
   const parentPort = inheritOptionFromParent<string>(command, "port");
   const parentToken = inheritOptionFromParent<string>(command, "token");
+  const parentScope = inheritOptionFromParent<string>(command, "scope");
   return {
     ...cmdOpts,
     force: Boolean(cmdOpts.force || parentForce),
     port: cmdOpts.port ?? parentPort,
     token: cmdOpts.token ?? parentToken,
+    scope: cmdOpts.scope ?? parentScope,
   };
 }
 
@@ -39,6 +41,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("status")
     .description(opts?.statusDescription ?? "Show gateway service status + probe the Gateway")
+    .option("--scope <scope>", "Service scope on macOS launchd: agent|daemon|auto", "auto")
     .option("--url <url>", "Gateway WebSocket URL (defaults to config/remote/local)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
@@ -52,12 +55,14 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
         probe: Boolean(cmdOpts.probe),
         deep: Boolean(cmdOpts.deep),
         json: Boolean(cmdOpts.json),
+        scope: cmdOpts.scope,
       });
     });
 
   parent
     .command("install")
     .description("Install the Gateway service (launchd/systemd/schtasks)")
+    .option("--scope <scope>", "Service scope on macOS launchd: agent|daemon", "agent")
     .option("--port <port>", "Gateway port")
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--token <token>", "Gateway token (token auth)")
@@ -70,6 +75,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("uninstall")
     .description("Uninstall the Gateway service (launchd/systemd/schtasks)")
+    .option("--scope <scope>", "Service scope on macOS launchd: agent|daemon|auto", "auto")
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
       await runDaemonUninstall(cmdOpts);
@@ -78,6 +84,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("start")
     .description("Start the Gateway service (launchd/systemd/schtasks)")
+    .option("--scope <scope>", "Service scope on macOS launchd: agent|daemon|auto", "auto")
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
       await runDaemonStart(cmdOpts);
@@ -86,6 +93,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("stop")
     .description("Stop the Gateway service (launchd/systemd/schtasks)")
+    .option("--scope <scope>", "Service scope on macOS launchd: agent|daemon|auto", "auto")
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
       await runDaemonStop(cmdOpts);
@@ -94,6 +102,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
+    .option("--scope <scope>", "Service scope on macOS launchd: agent|daemon|auto", "auto")
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
       await runDaemonRestart(cmdOpts);

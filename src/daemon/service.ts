@@ -1,11 +1,18 @@
 import {
   installLaunchAgent,
+  installLaunchDaemon,
   isLaunchAgentLoaded,
+  isLaunchDaemonLoaded,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
+  readLaunchDaemonProgramArguments,
+  readLaunchDaemonRuntime,
   restartLaunchAgent,
+  restartLaunchDaemon,
   stopLaunchAgent,
+  stopLaunchDaemon,
   uninstallLaunchAgent,
+  uninstallLaunchDaemon,
 } from "./launchd.js";
 import {
   installScheduledTask,
@@ -51,6 +58,8 @@ function ignoreInstallResult(
   };
 }
 
+export type GatewayServiceScope = "agent" | "daemon" | "auto";
+
 export type GatewayService = {
   label: string;
   loadedText: string;
@@ -64,9 +73,16 @@ export type GatewayService = {
   readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime>;
 };
 
-export function resolveGatewayService(): GatewayService {
+export function resolveGatewayService(opts?: {
+  scope?: GatewayServiceScope;
+  env?: Record<string, string | undefined>;
+}): GatewayService {
   if (process.platform === "darwin") {
-    return {
+    const env = opts?.env ?? (process.env as Record<string, string | undefined>);
+    const scope =
+      opts?.scope ?? (env.OPENCLAW_LAUNCHD_SCOPE as GatewayServiceScope | undefined) ?? "auto";
+
+    const launchAgentService: GatewayService = {
       label: "LaunchAgent",
       loadedText: "loaded",
       notLoadedText: "not loaded",
@@ -77,6 +93,57 @@ export function resolveGatewayService(): GatewayService {
       isLoaded: isLaunchAgentLoaded,
       readCommand: readLaunchAgentProgramArguments,
       readRuntime: readLaunchAgentRuntime,
+    };
+
+    const launchDaemonService: GatewayService = {
+      label: "LaunchDaemon",
+      loadedText: "loaded",
+      notLoadedText: "not loaded",
+      install: ignoreInstallResult(installLaunchDaemon),
+      uninstall: uninstallLaunchDaemon,
+      stop: stopLaunchDaemon,
+      restart: restartLaunchDaemon,
+      isLoaded: isLaunchDaemonLoaded,
+      readCommand: readLaunchDaemonProgramArguments,
+      readRuntime: readLaunchDaemonRuntime,
+    };
+
+    if (scope === "daemon") {
+      return launchDaemonService;
+    }
+    if (scope === "agent") {
+      return launchAgentService;
+    }
+
+    // auto: prefer daemon if it appears to be running/listed; otherwise use agent
+    // (This prevents misleading "not installed" errors in headless daemon deployments.)
+    return {
+      ...launchAgentService,
+      isLoaded: async (args) => {
+        const daemonLoaded = await launchDaemonService
+          .isLoaded({ env: args.env ?? env })
+          .catch(() => false);
+        if (daemonLoaded) {
+          return true;
+        }
+        return await launchAgentService.isLoaded(args).catch(() => false);
+      },
+      readRuntime: async (e) => {
+        const daemonRuntime = await launchDaemonService
+          .readRuntime(e)
+          .catch(() => ({ status: "unknown" }));
+        if (daemonRuntime?.status && daemonRuntime.status !== "unknown") {
+          return daemonRuntime;
+        }
+        return await launchAgentService.readRuntime(e);
+      },
+      readCommand: async (e) => {
+        const daemonCmd = await launchDaemonService.readCommand(e).catch(() => null);
+        if (daemonCmd) {
+          return daemonCmd;
+        }
+        return await launchAgentService.readCommand(e);
+      },
     };
   }
 

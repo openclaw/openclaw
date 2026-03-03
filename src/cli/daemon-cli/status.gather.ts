@@ -168,7 +168,7 @@ export async function gatherDaemonStatus(
     deep?: boolean;
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
-  const service = resolveGatewayService();
+  const service = resolveGatewayService({ scope: opts.scope ?? "auto", env: process.env });
   const [loaded, command, runtime] = await Promise.all([
     service.isLoaded({ env: process.env }).catch(() => false),
     service.readCommand(process.env).catch(() => null),
