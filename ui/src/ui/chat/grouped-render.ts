@@ -40,6 +40,12 @@ function extractImages(message: unknown): ImageBlock[] {
           // If data is already a data URL, use it directly
           const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
           images.push({ url });
+        } else if (typeof b.data === "string") {
+          // Handle tool-result image blocks serialized as { type: "image", data, mimeType }
+          const data = b.data;
+          const mediaType = (b.mimeType as string) || "image/png";
+          const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
+          images.push({ url });
         } else if (typeof b.url === "string") {
           images.push({ url: b.url });
         }
