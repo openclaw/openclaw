@@ -100,6 +100,42 @@ describe("auditGatewayServiceConfig", () => {
       audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
     ).toBe(false);
   });
+
+  it("does not flag gateway token mismatch when service token is double-quoted", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "linux",
+      expectedGatewayToken: "new-token",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: {
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+          OPENCLAW_GATEWAY_TOKEN: '"new-token"',
+        },
+      },
+    });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
+    ).toBe(false);
+  });
+
+  it("does not flag gateway token mismatch when service token is single-quoted", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "linux",
+      expectedGatewayToken: "new-token",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: {
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+          OPENCLAW_GATEWAY_TOKEN: "'new-token'",
+        },
+      },
+    });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
+    ).toBe(false);
+  });
 });
 
 describe("checkTokenDrift", () => {
@@ -115,6 +151,22 @@ describe("checkTokenDrift", () => {
 
   it("returns null when tokens match", () => {
     const result = checkTokenDrift({ serviceToken: "same-token", configToken: "same-token" });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when service token is wrapped in quotes", () => {
+    const result = checkTokenDrift({
+      serviceToken: '"same-token"',
+      configToken: "same-token",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when tokens only differ by surrounding whitespace", () => {
+    const result = checkTokenDrift({
+      serviceToken: " same-token ",
+      configToken: "same-token",
+    });
     expect(result).toBeNull();
   });
 

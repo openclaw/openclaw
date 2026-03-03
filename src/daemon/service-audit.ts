@@ -47,6 +47,24 @@ export const SERVICE_AUDIT_CODES = {
   systemdWantsNetworkOnline: "systemd-wants-network-online",
 } as const;
 
+function normalizeGatewayToken(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    const inner = trimmed.slice(1, -1).trim();
+    return inner || undefined;
+  }
+  return trimmed;
+}
+
 export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean {
   return issues.some(
     (issue) =>
@@ -208,11 +226,11 @@ function auditGatewayToken(
   issues: ServiceConfigIssue[],
   expectedGatewayToken?: string,
 ) {
-  const expectedToken = expectedGatewayToken?.trim();
+  const expectedToken = normalizeGatewayToken(expectedGatewayToken);
   if (!expectedToken) {
     return;
   }
-  const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim();
+  const serviceToken = normalizeGatewayToken(command?.environment?.OPENCLAW_GATEWAY_TOKEN);
   if (serviceToken === expectedToken) {
     return;
   }
@@ -360,7 +378,8 @@ export function checkTokenDrift(params: {
   serviceToken: string | undefined;
   configToken: string | undefined;
 }): ServiceConfigIssue | null {
-  const { serviceToken, configToken } = params;
+  const serviceToken = normalizeGatewayToken(params.serviceToken);
+  const configToken = normalizeGatewayToken(params.configToken);
 
   // No drift if both are undefined/empty
   if (!serviceToken && !configToken) {

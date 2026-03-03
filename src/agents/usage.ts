@@ -73,6 +73,9 @@ const asFiniteNumber = (value: unknown): number | undefined => {
   if (!Number.isFinite(value)) {
     return undefined;
   }
+  if (value < 0) {
+    return undefined;
+  }
   return value;
 };
 
