@@ -1,3 +1,5 @@
+import * as os from "node:os";
+import * as path from "node:path";
 import type {
   OpenClawPluginDefinition,
   OpenClawPluginApi,
@@ -12,8 +14,11 @@ import { AuditLogger } from "./audit.js";
 import { BUILTIN_RULES } from "./builtin-rules.js";
 import { ChainDetector, DEFAULT_CHAIN_RULES } from "./chain-detector.js";
 import { CircuitBreaker } from "./circuit-breaker.js";
+import { ConfirmationSender } from "./confirmation-sender.js";
 import { RulesEngine } from "./engine.js";
 import { scanOutboundMessage } from "./message-guard.js";
+import { NonceChallenge } from "./nonce.js";
+import { PendingActionStore } from "./pending-actions.js";
 import { RateLimiter, DEFAULT_RATE_LIMITS } from "./rate-limiter.js";
 import type { HarnessMode, HarnessTier } from "./types.js";
 import { classifyVerb } from "./verb-classifier.js";
@@ -36,6 +41,18 @@ export const safetyHarnessPlugin: OpenClawPluginDefinition = {
     const rateLimiter = new RateLimiter(DEFAULT_RATE_LIMITS);
     const chainDetector = new ChainDetector(DEFAULT_CHAIN_RULES);
     const circuitBreaker = new CircuitBreaker();
+    const pendingStore = new PendingActionStore(
+      process.env.HARNESS_PENDING_PATH ||
+        path.join(os.homedir(), ".fridaclaw", "pending-actions.json"),
+    );
+    const confirmationSender = new ConfirmationSender(async (params) => {
+      try {
+        return await api.invokeTool("send_channel_message", params);
+      } catch (err) {
+        api.logger.warn(`[safety-harness] send_channel_message failed: ${err}`);
+        throw err;
+      }
+    });
 
     // Track the most recent effective tier and chain flags per toolName so after_tool_call
     // can audit correctly. Last-call-wins is acceptable for Phase 1 (sequential tool calls).
@@ -48,7 +65,7 @@ export const safetyHarnessPlugin: OpenClawPluginDefinition = {
       "before_tool_call",
       async (
         event: PluginHookBeforeToolCallEvent,
-        _ctx: PluginHookToolContext,
+        ctx: PluginHookToolContext,
       ): Promise<PluginHookBeforeToolCallResult | void> => {
         try {
           const { toolName, params } = event;
@@ -114,7 +131,35 @@ export const safetyHarnessPlugin: OpenClawPluginDefinition = {
             };
           }
 
-          // "confirm" tier: for Phase 1, treat as allow (confirmation flow is Phase 3)
+          // "confirm" tier: pause and send confirmation request
+          if (effectiveTier === "confirm") {
+            const actionId = `action-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            const challenge = new NonceChallenge(toolName, params, 300_000);
+
+            pendingStore.add({
+              id: actionId,
+              tool: toolName,
+              params,
+              nonce: challenge.nonce,
+              createdAt: Date.now(),
+              expiresAt: Date.now() + 300_000,
+              status: "pending",
+              sessionId: ctx.sessionKey,
+            });
+
+            const sent = await confirmationSender.send(challenge, ctx.sessionKey || "");
+
+            if (!sent) {
+              api.logger.warn(`[safety-harness] could not send confirmation for ${toolName}`);
+            }
+
+            return {
+              pending: true,
+              pendingReason: `Awaiting client confirmation. ${challenge.getPrompt()}`,
+              actionId,
+            };
+          }
+
           return undefined;
         } catch (err) {
           circuitBreaker.recordFailure();
