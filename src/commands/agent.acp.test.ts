@@ -31,7 +31,7 @@ function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig
     acp: {
       enabled: true,
       backend: "acpx",
-      allowedAgents: ["codex"],
+      allowedAgents: ["codex", "kimi"],
       dispatch: { enabled: true },
     },
     agents: {
@@ -62,19 +62,20 @@ function mockConfigWithAcpOverrides(
   loadConfigSpy.mockReturnValue(cfg);
 }
 
-function writeAcpSessionStore(storePath: string) {
+function writeAcpSessionStore(storePath: string, agent = "codex") {
+  const sessionKey = `agent:${agent}:acp:test`;
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(
     storePath,
     JSON.stringify(
       {
-        "agent:codex:acp:test": {
+        [sessionKey]: {
           sessionId: "acp-session-1",
           updatedAt: Date.now(),
           acp: {
             backend: "acpx",
-            agent: "codex",
-            runtimeSessionName: "agent:codex:acp:test",
+            agent,
+            runtimeSessionName: sessionKey,
             mode: "oneshot",
             state: "idle",
             lastActivityAt: Date.now(),
@@ -275,6 +276,32 @@ describe("agentCommand ACP runtime routing", () => {
         message: expect.stringContaining("not allowed by policy"),
       });
       expect(runTurn).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows ACP turns for kimi when policy allowlists kimi", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      writeAcpSessionStore(storePath, "kimi");
+      mockConfigWithAcpOverrides(home, storePath, {
+        allowedAgents: ["kimi"],
+      });
+
+      const runTurn = vi.fn(async (_params: unknown) => {});
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+        resolveSession: ({ sessionKey }) => resolveReadySession(sessionKey, "kimi"),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "agent:kimi:acp:test" }, runtime);
+
+      expect(runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:kimi:acp:test",
+          text: "ping",
+        }),
+      );
       expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
     });
   });
