@@ -566,3 +566,71 @@ describe("loadChatHistory", () => {
     expect(state.lastError).toBeNull();
   });
 });
+
+describe("handleChatEvent response duration", () => {
+  it("computes responseDurationMs on final event with message", () => {
+    const now = Date.now();
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Hello",
+      chatStreamStartedAt: now - 5000,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello world" }],
+      },
+    };
+    handleChatEvent(state, payload);
+    expect(state.chatMessages).toHaveLength(1);
+    const msg = state.chatMessages[0] as Record<string, unknown>;
+    expect(typeof msg.responseDurationMs).toBe("number");
+    expect(msg.responseDurationMs).toBeGreaterThanOrEqual(5000);
+  });
+
+  it("computes responseDurationMs on final event with stream fallback", () => {
+    const now = Date.now();
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Hello world",
+      chatStreamStartedAt: now - 3000,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+    handleChatEvent(state, payload);
+    expect(state.chatMessages).toHaveLength(1);
+    const msg = state.chatMessages[0] as Record<string, unknown>;
+    expect(typeof msg.responseDurationMs).toBe("number");
+    expect(msg.responseDurationMs).toBeGreaterThanOrEqual(3000);
+  });
+
+  it("does not attach responseDurationMs when chatStreamStartedAt is null", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Hello world",
+      chatStreamStartedAt: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello world" }],
+      },
+    };
+    handleChatEvent(state, payload);
+    expect(state.chatMessages).toHaveLength(1);
+    const msg = state.chatMessages[0] as Record<string, unknown>;
+    expect(msg.responseDurationMs).toBeUndefined();
+  });
+});

@@ -273,7 +273,13 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
+    const responseDurationMs = state.chatStreamStartedAt
+      ? Date.now() - state.chatStreamStartedAt
+      : undefined;
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
+      if (responseDurationMs !== undefined) {
+        finalMessage.responseDurationMs = responseDurationMs;
+      }
       state.chatMessages = [...state.chatMessages, finalMessage];
     } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
       state.chatMessages = [
@@ -282,6 +288,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           role: "assistant",
           content: [{ type: "text", text: state.chatStream }],
           timestamp: Date.now(),
+          ...(responseDurationMs !== undefined ? { responseDurationMs } : {}),
         },
       ];
     }
