@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -388,10 +389,10 @@ describe("installSessionToolResultGuard", () => {
           return undefined;
         }
         return {
-          message: {
+          message: castAgentMessage({
             ...(message as unknown as Record<string, unknown>),
             content: [{ type: "text", text: "rewritten by hook" }],
-          } as unknown as AgentMessage,
+          }),
         };
       },
     });
@@ -425,10 +426,10 @@ describe("installSessionToolResultGuard", () => {
     installSessionToolResultGuard(sm, {
       transformMessageForPersistence: (message) =>
         (message as { role?: string }).role === "user"
-          ? ({
+          ? castAgentMessage({
               ...(message as unknown as Record<string, unknown>),
               provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-            } as unknown as AgentMessage)
+            })
           : message,
     });
 
