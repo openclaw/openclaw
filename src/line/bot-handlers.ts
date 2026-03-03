@@ -71,14 +71,14 @@ const LINE_WEBHOOK_REPLAY_MAX_ENTRIES = 4096;
 const LINE_WEBHOOK_REPLAY_PRUNE_INTERVAL_MS = 1000;
 export type LineWebhookReplayCache = {
   seenEvents: Map<string, number>;
-  inFlightEvents: Set<string>;
+  inFlightEvents: Map<string, Promise<void>>;
   lastPruneAtMs: number;
 };
 
 export function createLineWebhookReplayCache(): LineWebhookReplayCache {
   return {
     seenEvents: new Map<string, number>(),
-    inFlightEvents: new Set<string>(),
+    inFlightEvents: new Map<string, Promise<void>>(),
     lastPruneAtMs: 0,
   };
 }
@@ -143,6 +143,12 @@ type LineReplayCandidate = {
   cache: LineWebhookReplayCache;
 };
 
+type LineInFlightReplayResult = {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (err: unknown) => void;
+};
+
 function getLineReplayCandidate(
   event: WebhookEvent,
   context: LineHandlerContext,
@@ -164,20 +170,33 @@ function getLineReplayCandidate(
   return { key: replay.key, eventId: replay.eventId, seenAtMs: nowMs, cache };
 }
 
-function shouldSkipLineReplayEvent(candidate: LineReplayCandidate): boolean {
-  if (candidate.cache.inFlightEvents.has(candidate.key)) {
+function shouldSkipLineReplayEvent(
+  candidate: LineReplayCandidate,
+): { skip: true; inFlightResult?: Promise<void> } | { skip: false } {
+  const inFlightResult = candidate.cache.inFlightEvents.get(candidate.key);
+  if (inFlightResult) {
     logVerbose(`line: skipped in-flight replayed webhook event ${candidate.eventId}`);
-    return true;
+    return { skip: true, inFlightResult };
   }
   if (candidate.cache.seenEvents.has(candidate.key)) {
     logVerbose(`line: skipped replayed webhook event ${candidate.eventId}`);
-    return true;
+    return { skip: true };
   }
-  return false;
+  return { skip: false };
 }
 
-function markLineReplayEventInFlight(candidate: LineReplayCandidate): void {
-  candidate.cache.inFlightEvents.add(candidate.key);
+function markLineReplayEventInFlight(candidate: LineReplayCandidate): LineInFlightReplayResult {
+  let resolve!: () => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  // Prevent unhandled rejection warnings when no concurrent duplicate awaits
+  // this in-flight reservation.
+  void promise.catch(() => {});
+  candidate.cache.inFlightEvents.set(candidate.key, promise);
+  return { promise, resolve, reject };
 }
 
 function clearLineReplayEventInFlight(candidate: LineReplayCandidate): void {
@@ -498,12 +517,21 @@ export async function handleLineWebhookEvents(
   let firstError: unknown;
   for (const event of events) {
     const replayCandidate = getLineReplayCandidate(event, context);
-    if (replayCandidate && shouldSkipLineReplayEvent(replayCandidate)) {
+    const replaySkip = replayCandidate ? shouldSkipLineReplayEvent(replayCandidate) : null;
+    if (replaySkip?.skip) {
+      if (replaySkip.inFlightResult) {
+        try {
+          await replaySkip.inFlightResult;
+        } catch (err) {
+          context.runtime.error?.(danger(`line: replayed in-flight event failed: ${String(err)}`));
+          firstError ??= err;
+        }
+      }
       continue;
     }
-    if (replayCandidate) {
-      markLineReplayEventInFlight(replayCandidate);
-    }
+    const inFlightReservation = replayCandidate
+      ? markLineReplayEventInFlight(replayCandidate)
+      : null;
     try {
       switch (event.type) {
         case "message":
@@ -529,10 +557,12 @@ export async function handleLineWebhookEvents(
       }
       if (replayCandidate) {
         rememberLineReplayEvent(replayCandidate);
+        inFlightReservation?.resolve();
         clearLineReplayEventInFlight(replayCandidate);
       }
     } catch (err) {
       if (replayCandidate) {
+        inFlightReservation?.reject(err);
         clearLineReplayEventInFlight(replayCandidate);
       }
       context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));

@@ -456,6 +456,51 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("mirrors in-flight replay failures so concurrent duplicates also fail", async () => {
+    let rejectFirst: ((err: Error) => void) | undefined;
+    const firstDone = new Promise<void>((_, reject) => {
+      rejectFirst = reject;
+    });
+    const processMessage = vi.fn(async () => {
+      await firstDone;
+    });
+    const event = {
+      type: "message",
+      message: { id: "m-inflight-fail", type: "text", text: "hello" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-inflight", userId: "user-inflight" },
+      mode: "active",
+      webhookEventId: "evt-inflight-fail-1",
+      deliveryContext: { isRedelivery: true },
+    } as MessageEvent;
+
+    const context: Parameters<typeof handleLineWebhookEvents>[1] = {
+      cfg: { channels: { line: { groupPolicy: "open" } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open" },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+      replayCache: createLineWebhookReplayCache(),
+    };
+
+    const firstRun = handleLineWebhookEvents([event], context);
+    await Promise.resolve();
+    const secondRun = handleLineWebhookEvents([event], context);
+    rejectFirst?.(new Error("transient inflight failure"));
+
+    await expect(firstRun).rejects.toThrow("transient inflight failure");
+    await expect(secondRun).rejects.toThrow("transient inflight failure");
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("deduplicates redeliveries by LINE message id when webhookEventId changes", async () => {
     const processMessage = vi.fn();
     const event = {
