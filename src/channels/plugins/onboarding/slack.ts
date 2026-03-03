@@ -108,12 +108,13 @@ async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Pr
       "5) App Home → enable the Messages tab for DMs",
       "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
       `Docs: ${formatDocsLink("/slack", "slack")}`,
-      "",
-      "Manifest (JSON):",
-      manifest,
     ].join("\n"),
     "Slack socket mode tokens",
   );
+  // Print the manifest JSON directly (without box framing) so it can be copied cleanly.
+  console.log("\nManifest (JSON):\n");
+  console.log(manifest);
+  console.log();
 }
 
 function setSlackChannelAllowlist(
