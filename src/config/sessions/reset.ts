@@ -19,6 +19,14 @@ export type SessionFreshness = {
 
 export const DEFAULT_RESET_MODE: SessionResetMode = "daily";
 export const DEFAULT_RESET_AT_HOUR = 4;
+export const DEFAULT_GROUP_IDLE_MINUTES = 10080; // 7 days
+
+function resolveDefaultResetMode(resetType: SessionResetType): SessionResetMode {
+  if (resetType === "group" || resetType === "thread") {
+    return "idle";
+  }
+  return DEFAULT_RESET_MODE;
+}
 
 const THREAD_SESSION_MARKERS = [":thread:", ":topic:"];
 const GROUP_SESSION_MARKERS = [":group:", ":channel:"];
@@ -97,10 +105,11 @@ export function resolveSessionResetPolicy(params: {
         : undefined));
   const hasExplicitReset = Boolean(baseReset || sessionCfg?.resetByType);
   const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
+  const defaultMode = resolveDefaultResetMode(params.resetType);
   const mode =
     typeReset?.mode ??
     baseReset?.mode ??
-    (!hasExplicitReset && legacyIdleMinutes != null ? "idle" : DEFAULT_RESET_MODE);
+    (!hasExplicitReset && legacyIdleMinutes != null ? "idle" : defaultMode);
   const atHour = normalizeResetAtHour(
     typeReset?.atHour ?? baseReset?.atHour ?? DEFAULT_RESET_AT_HOUR,
   );
@@ -113,7 +122,8 @@ export function resolveSessionResetPolicy(params: {
       idleMinutes = Math.max(normalized, 1);
     }
   } else if (mode === "idle") {
-    idleMinutes = DEFAULT_IDLE_MINUTES;
+    const isGroupLike = params.resetType === "group" || params.resetType === "thread";
+    idleMinutes = isGroupLike ? DEFAULT_GROUP_IDLE_MINUTES : DEFAULT_IDLE_MINUTES;
   }
 
   return { mode, atHour, idleMinutes };

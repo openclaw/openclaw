@@ -141,7 +141,62 @@ describe("resolveSessionResetPolicy", () => {
         resetType: "group",
       });
 
-      expect(groupPolicy.mode).toBe("daily");
+      // dm config does not leak to group; group uses its own default (idle)
+      expect(groupPolicy.mode).toBe("idle");
+      expect(groupPolicy.idleMinutes).not.toBe(45);
+    });
+  });
+
+  describe("group/thread sessions default to idle (#32109)", () => {
+    it("group defaults to idle with 7-day timeout when unconfigured", () => {
+      const policy = resolveSessionResetPolicy({ resetType: "group" });
+      expect(policy.mode).toBe("idle");
+      expect(policy.idleMinutes).toBe(10080);
+    });
+
+    it("thread defaults to idle with 7-day timeout when unconfigured", () => {
+      const policy = resolveSessionResetPolicy({ resetType: "thread" });
+      expect(policy.mode).toBe("idle");
+      expect(policy.idleMinutes).toBe(10080);
+    });
+
+    it("direct sessions still default to daily", () => {
+      const policy = resolveSessionResetPolicy({ resetType: "direct" });
+      expect(policy.mode).toBe("daily");
+      expect(policy.idleMinutes).toBeUndefined();
+    });
+
+    it("explicit daily override for group is honored", () => {
+      const sessionCfg = {
+        resetByType: {
+          group: { mode: "daily" as const, atHour: 6 },
+        },
+      } as unknown as SessionConfig;
+
+      const policy = resolveSessionResetPolicy({ sessionCfg, resetType: "group" });
+      expect(policy.mode).toBe("daily");
+      expect(policy.atHour).toBe(6);
+    });
+
+    it("explicit base reset.mode overrides group default", () => {
+      const sessionCfg = {
+        reset: { mode: "daily" as const },
+      } as unknown as SessionConfig;
+
+      const policy = resolveSessionResetPolicy({ sessionCfg, resetType: "group" });
+      expect(policy.mode).toBe("daily");
+    });
+
+    it("group respects custom idleMinutes when explicitly set", () => {
+      const sessionCfg = {
+        resetByType: {
+          group: { mode: "idle" as const, idleMinutes: 1440 },
+        },
+      } as unknown as SessionConfig;
+
+      const policy = resolveSessionResetPolicy({ sessionCfg, resetType: "group" });
+      expect(policy.mode).toBe("idle");
+      expect(policy.idleMinutes).toBe(1440);
     });
   });
 });
