@@ -73,6 +73,34 @@ function resolveBindingPersona(binding: DiscordThreadBindingLookupRecord | undef
   return { username, avatarUrl };
 }
 
+const RETRY_ATTEMPTS = 2;
+const RETRY_BASE_DELAY_MS = 1000;
+
+async function sendWithRetry(fn: () => Promise<unknown>): Promise<void> {
+  for (let attempt = 0; attempt <= RETRY_ATTEMPTS; attempt++) {
+    try {
+      await fn();
+      return;
+    } catch (err: unknown) {
+      const isLast = attempt === RETRY_ATTEMPTS;
+      if (isLast) {
+        throw err;
+      }
+      const status =
+        (err as { status?: number }).status ?? (err as { statusCode?: number }).statusCode;
+      if (status === 429 || (status !== undefined && status >= 500)) {
+        const retryAfterMs =
+          Number((err as { headers?: Record<string, string> }).headers?.["retry-after"]) * 1000 ||
+          0;
+        const delayMs = Math.max(retryAfterMs, RETRY_BASE_DELAY_MS * (attempt + 1));
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function sendDiscordChunkWithFallback(params: {
   target: string;
   text: string;
@@ -105,12 +133,14 @@ async function sendDiscordChunkWithFallback(params: {
       // Fall through to the standard bot sender path.
     }
   }
-  await sendMessageDiscord(params.target, text, {
-    token: params.token,
-    rest: params.rest,
-    accountId: params.accountId,
-    replyTo: params.replyTo,
-  });
+  await sendWithRetry(() =>
+    sendMessageDiscord(params.target, text, {
+      token: params.token,
+      rest: params.rest,
+      accountId: params.accountId,
+      replyTo: params.replyTo,
+    }),
+  );
 }
 
 async function sendAdditionalDiscordMedia(params: {
