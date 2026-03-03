@@ -16,6 +16,7 @@ const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
+const peekSystemEventEntriesMock = vi.fn().mockReturnValue([]);
 const spawnSubagentDirectMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
 
@@ -86,6 +87,7 @@ vi.mock("../../infra/system-events.js", async () => {
   return {
     ...actual,
     enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+    peekSystemEventEntries: (...args: unknown[]) => peekSystemEventEntriesMock(...args),
   };
 });
 
@@ -112,6 +114,8 @@ beforeEach(() => {
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
   enqueueSystemEventMock.mockClear();
+  peekSystemEventEntriesMock.mockClear();
+  peekSystemEventEntriesMock.mockReturnValue([]);
   spawnSubagentDirectMock.mockClear();
   requestHeartbeatNowMock.mockClear();
   loadCronStoreMock.mockClear();
@@ -1704,6 +1708,8 @@ describe("runReplyAgent continuation signal handling", () => {
     followupRun: FollowupRun;
     sessionKey: string;
     sessionEntry: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+    isHeartbeat?: boolean;
   }) {
     const typing = createMockTypingController();
     const sessionCtx = {
@@ -1713,6 +1719,7 @@ describe("runReplyAgent continuation signal handling", () => {
       AccountId: "primary",
     } as unknown as TemplateContext;
     const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const store = params.sessionStore ?? { [params.sessionKey]: params.sessionEntry };
 
     return runReplyAgent({
       commandBody: params.commandBody,
@@ -1727,7 +1734,7 @@ describe("runReplyAgent continuation signal handling", () => {
       sessionCtx,
       sessionKey: params.sessionKey,
       sessionEntry: params.sessionEntry,
-      sessionStore: { [params.sessionKey]: params.sessionEntry },
+      sessionStore: store,
       defaultModel: "anthropic/claude-opus-4-5",
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -1735,6 +1742,7 @@ describe("runReplyAgent continuation signal handling", () => {
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      opts: params.isHeartbeat ? { isHeartbeat: true } : undefined,
     });
   }
 
@@ -1831,13 +1839,20 @@ describe("runReplyAgent continuation signal handling", () => {
       },
     });
 
+    // First turn: heartbeat continuation that schedules a WORK timer
+    peekSystemEventEntriesMock.mockReturnValue([
+      { text: "[continuation] Turn 1/10. The agent elected to continue working." },
+    ]);
     await runTurn({
-      commandBody: "[continuation] Turn 1/10",
+      commandBody: "heartbeat",
       followupRun,
       sessionKey,
       sessionEntry,
+      isHeartbeat: true,
     });
 
+    // Second turn: external message — should cancel the timer
+    peekSystemEventEntriesMock.mockReturnValue([]);
     await runTurn({
       commandBody: "Actually, new input from user",
       followupRun,
@@ -1926,7 +1941,7 @@ describe("runReplyAgent continuation signal handling", () => {
     expect(spawnParams.attachments).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: "continuation-context.md",
+          name: "delegation-context.md",
           content: delegateContext,
         }),
       ]),
@@ -2017,5 +2032,138 @@ describe("runReplyAgent continuation signal handling", () => {
 
     // The spawn should have been called instead
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("DELEGATE: persists chain count so maxChainLength is enforced", async () => {
+    const maxChainLength = 2;
+
+    spawnSubagentDirectMock.mockResolvedValue({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:delegate-chain",
+      runId: "run-delegate-chain",
+    });
+
+    const sessionKey = "agent:main:telegram:dm:delegate-chain";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      continuationChainCount: 0,
+    } as SessionEntry;
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const followupRun = buildFollowupRun({
+      sessionKey,
+      continuation: {
+        enabled: true,
+        maxChainLength,
+        minDelayMs: 0,
+        maxDelayMs: 10_000,
+      },
+    });
+
+    // First DELEGATE — simulate heartbeat with continuation system event
+    peekSystemEventEntriesMock.mockReturnValue([
+      { text: "[continuation] Turn 1/2. The agent elected to continue working." },
+    ]);
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Delegating step 1.\nCONTINUE_DELEGATE:do step 1" }],
+      meta: {},
+    });
+
+    await runTurn({
+      commandBody: "heartbeat",
+      followupRun,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      isHeartbeat: true,
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    // Chain count should now be 1
+    expect(sessionEntry.continuationChainCount).toBe(1);
+
+    // Second DELEGATE — count goes to 2 = maxChainLength
+    peekSystemEventEntriesMock.mockReturnValue([
+      { text: "[continuation] Turn 2/2. The agent elected to continue working." },
+    ]);
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Delegating step 2.\nCONTINUE_DELEGATE:do step 2" }],
+      meta: {},
+    });
+
+    await runTurn({
+      commandBody: "heartbeat",
+      followupRun,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      isHeartbeat: true,
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    expect(sessionEntry.continuationChainCount).toBe(2);
+
+    // Third DELEGATE — should be CAPPED (count >= maxChainLength)
+    peekSystemEventEntriesMock.mockReturnValue([
+      { text: "[continuation] Turn 3/2. The agent elected to continue working." },
+    ]);
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Trying step 3.\nCONTINUE_DELEGATE:do step 3" }],
+      meta: {},
+    });
+
+    await runTurn({
+      commandBody: "heartbeat",
+      followupRun,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      isHeartbeat: true,
+    });
+
+    // Spawn should NOT have been called a third time — capped
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not treat user message starting with [continuation] as continuation event", async () => {
+    vi.useFakeTimers();
+
+    // Set up a session with an active continuation chain
+    const sessionKey = "agent:main:telegram:dm:spoof";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      continuationChainCount: 3,
+      continuationChainStartedAt: Date.now(),
+      continuationChainTokens: 5000,
+    } as SessionEntry;
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Got your message." }],
+      meta: {},
+    });
+
+    const followupRun = buildFollowupRun({
+      sessionKey,
+      continuation: {
+        enabled: true,
+        minDelayMs: 0,
+        maxDelayMs: 10_000,
+      },
+    });
+
+    // User sends a message that starts with "[continuation]" — should still reset chain
+    await runTurn({
+      commandBody: "[continuation] hey I'm just a user typing this",
+      followupRun,
+      sessionKey,
+      sessionEntry,
+    });
+
+    // Chain state should be reset because this is NOT a heartbeat with system events
+    expect(sessionEntry.continuationChainCount).toBe(0);
+    expect(sessionEntry.continuationChainStartedAt).toBeUndefined();
+    expect(sessionEntry.continuationChainTokens).toBeUndefined();
   });
 });

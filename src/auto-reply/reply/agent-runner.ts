@@ -146,12 +146,12 @@ export async function runReplyAgent(params: {
   const isHeartbeat = opts?.isHeartbeat === true;
 
   // Detect whether this turn is a continuation wake or an external message.
-  // Continuation turns arrive as system events prefixed with "[continuation]".
-  // On external messages, reset the chain state and cancel any pending timer.
+  // Continuation turns arrive as system events enqueued by our own timer callback.
+  // We ONLY check the out-of-band system event queue — never raw commandBody, which
+  // is user-supplied and could be spoofed to bypass preemption.
   const isContinuationEvent =
-    commandBody.startsWith("[continuation]") ||
-    (isHeartbeat &&
-      peekSystemEventEntries(sessionKey ?? "")?.some((e) => e.text?.startsWith("[continuation]")));
+    isHeartbeat &&
+    peekSystemEventEntries(sessionKey ?? "")?.some((e) => e.text?.startsWith("[continuation]"));
 
   if (!isContinuationEvent && sessionKey) {
     // External message — reset chain tracking
@@ -793,8 +793,19 @@ export async function runReplyAgent(params: {
           } else if (continuationSignal.kind === "delegate") {
             // DELEGATE: spawn sub-agent with the task
             const nextChainCount = currentChainCount + 1;
+            const chainStartedAt = activeSessionEntry?.continuationChainStartedAt ?? Date.now();
             if (activeSessionEntry) {
+              activeSessionEntry.continuationChainCount = nextChainCount;
+              activeSessionEntry.continuationChainStartedAt = chainStartedAt;
               activeSessionEntry.continuationChainTokens = accumulatedChainTokens;
+            }
+            if (activeSessionStore) {
+              activeSessionStore[sessionKey] = {
+                ...(activeSessionStore[sessionKey] ?? activeSessionEntry!),
+                continuationChainCount: nextChainCount,
+                continuationChainStartedAt: chainStartedAt,
+                continuationChainTokens: accumulatedChainTokens,
+              };
             }
 
             const delegateTask = continuationSignal.task;
@@ -802,7 +813,7 @@ export async function runReplyAgent(params: {
             const attachments = delegateContext
               ? [
                   {
-                    name: "continuation-context.md",
+                    name: "delegation-context.md",
                     content: delegateContext,
                     mimeType: "text/markdown",
                   },
