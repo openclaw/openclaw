@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../infra/home-dir.js";
-import type { OpenClawConfig } from "./types.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 /**
  * Nix mode detection: When OPENCLAW_NIX_MODE=1, the gateway is running under Nix.
@@ -19,7 +19,7 @@ export const isNixMode = resolveIsNixMode();
 
 // Support historical (and occasionally misspelled) legacy state dirs.
 const LEGACY_STATE_DIRNAMES = [".clawdbot", ".moldbot", ".moltbot"] as const;
-const NEW_STATE_DIRNAME = ".openclaw";
+const NEW_STATE_DIRNAME = ".openclaw-ironclaw";
 const CONFIG_FILENAME = "openclaw.json";
 const LEGACY_CONFIG_FILENAMES = ["clawdbot.json", "moldbot.json", "moltbot.json"] as const;
 
@@ -54,35 +54,14 @@ export function resolveNewStateDir(homedir: () => string = resolveDefaultHomeDir
 
 /**
  * State directory for mutable data (sessions, logs, caches).
- * Can be overridden via OPENCLAW_STATE_DIR.
- * Default: ~/.openclaw
+ * Ironclaw always pins this to ~/.openclaw-ironclaw.
  */
 export function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
 ): string {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
-  if (override) {
-    return resolveUserPath(override, env, effectiveHomedir);
-  }
-  const newDir = newStateDir(effectiveHomedir);
-  const legacyDirs = legacyStateDirs(effectiveHomedir);
-  const hasNew = fs.existsSync(newDir);
-  if (hasNew) {
-    return newDir;
-  }
-  const existingLegacy = legacyDirs.find((dir) => {
-    try {
-      return fs.existsSync(dir);
-    } catch {
-      return false;
-    }
-  });
-  if (existingLegacy) {
-    return existingLegacy;
-  }
-  return newDir;
+  return newStateDir(effectiveHomedir);
 }
 
 function resolveUserPath(
