@@ -81,7 +81,10 @@ async function openVerifiedLocalFile(
   try {
     const preStat = await fs.lstat(filePath);
     if (preStat.isDirectory()) {
-      throw new SafeOpenError("not-file", "not a file");
+      throw new SafeOpenError(
+        "not-file",
+        `Cannot read directory '${path.basename(filePath)}' as a file. Use a directory listing tool or specify individual files within the directory.`,
+      );
     }
   } catch (err) {
     if (err instanceof SafeOpenError) {
@@ -102,7 +105,10 @@ async function openVerifiedLocalFile(
     }
     // Defensive: if open still throws EISDIR (e.g. race), sanitize so it never leaks.
     if (hasNodeErrorCode(err, "EISDIR")) {
-      throw new SafeOpenError("not-file", "not a file");
+      throw new SafeOpenError(
+        "not-file",
+        `Cannot read directory as a file. Use a directory listing tool or specify individual files.`,
+      );
     }
     throw err;
   }
@@ -113,7 +119,10 @@ async function openVerifiedLocalFile(
       throw new SafeOpenError("symlink", "symlink not allowed");
     }
     if (!stat.isFile()) {
-      throw new SafeOpenError("not-file", "not a file");
+      throw new SafeOpenError(
+        "not-file",
+        "Path is not a regular file (may be a directory, socket, or other special file type)",
+      );
     }
     if (options?.rejectHardlinks && stat.nlink > 1) {
       throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
