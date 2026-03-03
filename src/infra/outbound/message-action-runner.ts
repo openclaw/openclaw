@@ -336,7 +336,7 @@ async function handleBroadcastAction(
   }
   const targetChannels =
     channelHint && channelHint.trim().toLowerCase() !== "all"
-      ? [await resolveChannel(input.cfg, { channel: channelHint })]
+      ? [await resolveChannel(input.cfg, { channel: channelHint }, input.toolContext)]
       : configured;
   const results: Array<{
     channel: ChannelId;
