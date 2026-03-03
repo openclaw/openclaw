@@ -1,21 +1,28 @@
 import { join, parse } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
+const mockFetchWithSsrFGuard = vi.hoisted(() =>
+  vi.fn(
+    async (params: {
+      url: string;
+      init?: RequestInit;
+      policy?: { allowedHostnames?: string[] };
+      fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    }) => {
+      const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+      const response = await fetchImpl(params.url, params.init);
+      return {
+        response,
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    },
+  ),
+);
+
 vi.mock("openclaw/plugin-sdk/google-gemini-cli-auth", () => ({
   isWSL2Sync: () => false,
-  fetchWithSsrFGuard: async (params: {
-    url: string;
-    init?: RequestInit;
-    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  }) => {
-    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
-    const response = await fetchImpl(params.url, params.init);
-    return {
-      response,
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  },
+  fetchWithSsrFGuard: mockFetchWithSsrFGuard,
 }));
 
 // Mock fs module before importing the module under test
@@ -306,6 +313,7 @@ describe("loginGeminiCliOAuth", () => {
 
   let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
   beforeEach(() => {
+    mockFetchWithSsrFGuard.mockClear();
     envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
     process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_ID = "test-client-id.apps.googleusercontent.com";
     process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET = "GOCSPX-test-client-secret";
@@ -419,5 +427,51 @@ describe("loginGeminiCliOAuth", () => {
     expect(result.projectId).toBe("env-project");
     expect(requests.filter((url) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
     expect(requests.some((url) => url.includes("v1internal:onboardUser"))).toBe(false);
+  });
+
+  it("passes explicit trusted Google hostnames to SSRF guard for OAuth requests", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = getRequestUrl(input);
+      if (url === TOKEN_URL) {
+        return responseJson({
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expires_in: 3600,
+        });
+      }
+      if (url === USERINFO_URL) {
+        return responseJson({ email: "lobster@openclaw.ai" });
+      }
+      if (url === LOAD_PROD) {
+        return responseJson({
+          currentTier: { id: "standard-tier" },
+          cloudaicompanionProject: { id: "prod-project" },
+        });
+      }
+      if ([LOAD_DAILY, LOAD_AUTOPUSH].includes(url)) {
+        return responseJson({ error: { message: "unused fallback" } }, 503);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    const tokenCall = mockFetchWithSsrFGuard.mock.calls.find(
+      (call) => call[0]?.url === TOKEN_URL,
+    )?.[0];
+    expect(tokenCall).toBeDefined();
+    const allowedHostnames = tokenCall?.policy?.allowedHostnames as string[] | undefined;
+    expect(allowedHostnames).toEqual(
+      expect.arrayContaining([
+        "accounts.google.com",
+        "oauth2.googleapis.com",
+        "www.googleapis.com",
+        "cloudcode-pa.googleapis.com",
+        "daily-cloudcode-pa.sandbox.googleapis.com",
+        "autopush-cloudcode-pa.sandbox.googleapis.com",
+      ]),
+    );
   });
 });

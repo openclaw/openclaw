@@ -27,6 +27,14 @@ const SCOPES = [
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
 ];
+const GEMINI_OAUTH_ALLOWED_HOSTNAMES = Array.from(
+  new Set(
+    [AUTH_URL, TOKEN_URL, USERINFO_URL, ...LOAD_CODE_ASSIST_ENDPOINTS].map((url) => {
+      const parsed = new URL(url);
+      return parsed.hostname;
+    }),
+  ),
+);
 
 const TIER_FREE = "free-tier";
 const TIER_LEGACY = "legacy-tier";
@@ -245,6 +253,12 @@ async function fetchWithTimeout(
     url,
     init,
     timeoutMs,
+    policy: {
+      // Explicitly trust fixed Google OAuth/Code Assist hostnames used by this plugin.
+      // This prevents false-positive private-IP blocks on misconfigured DNS while
+      // keeping the trust boundary narrow to known endpoints.
+      allowedHostnames: GEMINI_OAUTH_ALLOWED_HOSTNAMES,
+    },
   });
   try {
     const body = await response.arrayBuffer();
