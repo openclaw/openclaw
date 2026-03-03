@@ -1212,6 +1212,7 @@ export function applyExtraParamsToAgent(
     const skipReasoningInjection = modelId === "auto" || isOpenRouterReasoningUnsupported(modelId);
     const falThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, falThinkingLevel);
+    agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
   }
 
   // fal OpenRouter requires `Authorization: Key <fal_key>` instead of Bearer.
