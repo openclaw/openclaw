@@ -8,6 +8,12 @@ import { getFeishuRuntime } from "./runtime.js";
 // Full list: https://github.com/go-lark/lark/blob/main/emoji.go
 const TYPING_EMOJI = "Typing"; // Typing indicator emoji
 
+/** Cache for typing indicators to avoid repeated API calls.
+ * Key: messageId, Value: { reactionId, addedAt } */
+const typingIndicatorCache = new Map<string, { reactionId: string; addedAt: number }>();
+const TYPING_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_CACHE_SIZE = 100;
+
 /**
  * Feishu API error codes that indicate the caller should back off.
  * These must propagate to the typing circuit breaker so the keepalive loop
@@ -112,6 +118,15 @@ export async function addTypingIndicator(params: {
     return { messageId, reactionId: null };
   }
 
+  // Compose cache key from accountId and messageId to avoid conflicts in multi-tenant setups
+  const cacheKey = accountId ? `${accountId}:${messageId}` : messageId;
+
+  // Check cache to avoid repeated API calls
+  const cached = typingIndicatorCache.get(cacheKey);
+  if (cached && Date.now() - cached.addedAt < TYPING_CACHE_TTL_MS) {
+    return { messageId, reactionId: cached.reactionId };
+  }
+
   const client = createFeishuClient(account);
 
   try {
@@ -136,6 +151,19 @@ export async function addTypingIndicator(params: {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
     const reactionId = (response as any)?.data?.reaction_id ?? null;
+    
+    // Cache successful results using the composed cache key
+    if (reactionId) {
+      typingIndicatorCache.set(cacheKey, { reactionId, addedAt: Date.now() });
+      // Evict oldest entry if cache exceeds max size
+      if (typingIndicatorCache.size > MAX_CACHE_SIZE) {
+        const oldest = typingIndicatorCache.keys().next().value;
+        if (oldest !== undefined) {
+          typingIndicatorCache.delete(oldest);
+        }
+      }
+    }
+    
     return { messageId, reactionId };
   } catch (err) {
     if (isFeishuBackoffError(err)) {
@@ -172,6 +200,10 @@ export async function removeTypingIndicator(params: {
   if (!account.configured) {
     return;
   }
+
+  // Evict from cache so a future addTypingIndicator call re-adds the reaction
+  const cacheKey = accountId ? `${accountId}:${state.messageId}` : state.messageId;
+  typingIndicatorCache.delete(cacheKey);
 
   const client = createFeishuClient(account);
 
