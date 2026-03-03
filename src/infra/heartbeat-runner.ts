@@ -33,6 +33,7 @@ import {
   resolveStorePath,
   saveSessionStore,
   updateSessionStore,
+  type SessionEntry,
 } from "../config/sessions.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -588,6 +589,32 @@ function resolveHeartbeatRunPrompt(params: {
   return { prompt, hasExecCompletion, hasCronEvents };
 }
 
+/**
+ * For cron events with no explicit delivery target, find the most recently
+ * active session that has a real outbound channel (e.g. Discord), skipping
+ * the current cron/heartbeat session and other cron-only sessions.
+ */
+function resolveBestCronDeliveryEntry(
+  store: Record<string, SessionEntry>,
+  currentSessionKey: string,
+): SessionEntry | undefined {
+  let best: SessionEntry | undefined;
+  let bestUpdatedAt = 0;
+  for (const [key, e] of Object.entries(store)) {
+    if (!e.lastChannel || e.lastChannel === "none") {
+      continue;
+    }
+    if (key === currentSessionKey || key.includes(":cron:")) {
+      continue;
+    }
+    if ((e.updatedAt ?? 0) > bestUpdatedAt) {
+      bestUpdatedAt = e.updatedAt ?? 0;
+      best = e;
+    }
+  }
+  return best;
+}
+
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -614,7 +641,13 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "quiet-hours" };
   }
 
-  const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
+  // For exec-event wakes targeting a specific session, only gate on that
+  // session's own lane being busy. Unrelated channel activity (other users,
+  // rate-limit retries) should not delay exec-result delivery.
+  const execEventSessionKey =
+    resolveHeartbeatReasonKind(opts.reason) === "exec-event" ? opts.sessionKey : undefined;
+  const queueLane = execEventSessionKey ?? CommandLane.Main;
+  const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(queueLane);
   if (queueSize > 0) {
     return { status: "skipped", reason: "requests-in-flight" };
   }
@@ -635,9 +668,36 @@ export async function runHeartbeatOnce(opts: {
     });
     return { status: "skipped", reason: preflight.skipReason };
   }
-  const { entry, sessionKey, storePath } = preflight.session;
+  const { entry, sessionKey, storePath, store } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
-  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
+  // For exec-completion events: fall back to "last" when no explicit target or target is "none",
+  // since the user who approved an exec expects the result even if they haven't configured
+  // heartbeat delivery. Requires a sessionKey so we target the right session.
+  // For cron events: fall back to best channel session when target is unconfigured or "last"
+  // (the cron runner passes target:"last" but the main session has no channel context, so we
+  // need to find the most recently active channel session). Respects explicit opt-out ("none")
+  // and explicit channel targets ("discord", "telegram", etc.).
+  const execFallback =
+    preflight.isExecEventReason &&
+    Boolean(opts.sessionKey) &&
+    (!heartbeat?.target || heartbeat.target === "none");
+  const cronFallback =
+    preflight.isCronEventReason && (!heartbeat?.target || heartbeat.target === "last");
+  const shouldFallbackToLast = execFallback || cronFallback;
+  const eventHeartbeat = shouldFallbackToLast
+    ? { ...heartbeat, target: "last" as const }
+    : heartbeat;
+  // Cron sessions have no channel context; look for the most recently active
+  // real-channel session in the store so we can route the reminder there.
+  const cronEntry = cronFallback
+    ? (resolveBestCronDeliveryEntry(store, sessionKey) ?? entry)
+    : entry;
+  const deliveryEntry = preflight.isCronEventReason ? cronEntry : entry;
+  const delivery = resolveHeartbeatDeliveryTarget({
+    cfg,
+    entry: deliveryEntry,
+    heartbeat: eventHeartbeat,
+  });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {

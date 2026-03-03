@@ -1087,10 +1087,24 @@ function buildAnnounceReplyInstruction(params: {
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
+  // After delivering to the user, check the project plan and continue or gate.
+  const continuationInstruction =
+    ` After delivering, check if your active project workspace contains a PROJECT-PLAN.md.` +
+    ` If it does, read the Active Workstreams section to identify the next step.` +
+    ` If the next step is marked [GATE]: append a gate entry to GATE_CHECKPOINTS.md, tell the user you are waiting for their go-ahead before proceeding, and stop.` +
+    ` If the next step has no [GATE] marker: tell the user you are proceeding to it and start it now.` +
+    ` If there is no PROJECT-PLAN.md or no clear next action in Active Workstreams: stop normally.` +
+    ` When a milestone stage changes, update WORKBOARD.md.`;
   if (params.expectsCompletionMessage) {
-    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
+    return (
+      `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).` +
+      continuationInstruction
+    );
   }
-  return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
+  return (
+    `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.` +
+    continuationInstruction
+  );
 }
 
 function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {

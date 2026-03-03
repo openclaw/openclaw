@@ -265,7 +265,7 @@ export function emitExecSystemEvent(
     return;
   }
   enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
-  requestHeartbeatNow({ reason: "exec-event" });
+  requestHeartbeatNow({ reason: "exec-event", sessionKey });
 }
 
 export async function runExecProcess(opts: {

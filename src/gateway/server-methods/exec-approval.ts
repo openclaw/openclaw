@@ -3,6 +3,7 @@ import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
@@ -282,6 +283,11 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
         return;
       }
+      // Wake the session that's awaiting this approval decision.
+      requestHeartbeatNow({
+        reason: "exec-approval:resolve",
+        sessionKey: snapshot?.request?.sessionKey ?? undefined,
+      });
       context.broadcast(
         "exec.approval.resolved",
         { id: p.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
