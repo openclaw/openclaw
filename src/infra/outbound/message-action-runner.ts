@@ -301,7 +301,8 @@ function resolveKnownGroupTargetFromRoutingMap(params: {
   return undefined;
 }
 
-function normalizeTargetsParamForAction(params: {
+async function normalizeTargetsParamForAction(params: {
+  cfg: OpenClawConfig;
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
@@ -334,8 +335,18 @@ function normalizeTargetsParamForAction(params: {
       typeof params.args.channel === "string"
         ? (normalizeMessageChannel(params.args.channel) ?? params.args.channel.trim().toLowerCase())
         : undefined;
-    const channelHint =
+    let channelHint =
       explicitChannelHint ?? normalizeMessageChannel(params.toolContext?.currentChannelProvider);
+    if (!channelHint) {
+      const inferred = await resolveMessageChannelSelection({
+        cfg: params.cfg,
+        fallbackChannel: params.toolContext?.currentChannelProvider,
+      });
+      channelHint = inferred.channel;
+      if (inferred.source === "tool-context-fallback") {
+        params.args.channel = inferred.channel;
+      }
+    }
     const mappedGroup = resolveKnownGroupTargetFromRoutingMap({
       workspace: params.routingWorkspace,
       channelHint,
@@ -920,7 +931,8 @@ export async function runMessageAction(
     cfg,
     resolvedAgentId ?? resolveDefaultAgentId(cfg),
   );
-  normalizeTargetsParamForAction({
+  await normalizeTargetsParamForAction({
+    cfg,
     action,
     args: params,
     toolContext: input.toolContext,

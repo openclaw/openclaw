@@ -276,6 +276,69 @@ describe("runMessageAction context isolation", () => {
     });
   });
 
+  it("infers single configured channel before remapping multi-target send", async () => {
+    await withSandbox(async (workspaceDir) => {
+      const imessagePlugin = createIMessageTestPlugin();
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "imessage",
+            source: "test",
+            plugin: {
+              ...imessagePlugin,
+              config: {
+                ...imessagePlugin.config,
+                listAccountIds: () => ["default"],
+                resolveAccount: () => ({ enabled: true }),
+                isConfigured: () => true,
+              },
+            },
+          },
+        ]),
+      );
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "routing-targets.json"),
+        JSON.stringify({
+          groups: {
+            kevin_fernanda: {
+              member_handles: ["+14155592088", "+14255320947"],
+              channels: {
+                imessage: "chat_id:3",
+              },
+            },
+          },
+        }),
+      );
+
+      const cfg = {
+        channels: {
+          imessage: { enabled: true },
+        },
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await runDrySend({
+        cfg,
+        actionParams: {
+          targets: ["+14155592088", "+14255320947"],
+          message: "hi",
+        },
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.channel).toBe("imessage");
+      expect(result.to).toBe("chat_id:3");
+    });
+  });
+
   it("uses active agent workspace routing map for non-default agent sessions", async () => {
     await withSandbox(async (sandboxDir) => {
       const defaultWorkspace = path.join(sandboxDir, "workspace-main");
@@ -561,6 +624,74 @@ describe("runMessageAction context isolation", () => {
           },
         }),
       ).rejects.toThrow(/single destination/i);
+    });
+  });
+
+  it("does not implicitly pick bluebubbles mapping when channel selection is ambiguous", async () => {
+    await withSandbox(async (workspaceDir) => {
+      const imessagePlugin = createIMessageTestPlugin();
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "imessage",
+            source: "test",
+            plugin: {
+              ...imessagePlugin,
+              config: {
+                ...imessagePlugin.config,
+                listAccountIds: () => ["default"],
+                resolveAccount: () => ({ enabled: true }),
+                isConfigured: () => true,
+              },
+            },
+          },
+          {
+            pluginId: "bluebubbles",
+            source: "test",
+            plugin: bluebubblesPlugin,
+          },
+        ]),
+      );
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "routing-targets.json"),
+        JSON.stringify({
+          groups: {
+            kevin_fernanda: {
+              member_handles: ["+14155592088", "+14255320947"],
+              channels: {
+                bluebubbles: "chat_guid:iMessage;-;abc123",
+              },
+            },
+          },
+        }),
+      );
+
+      const cfg = {
+        channels: {
+          imessage: { enabled: true },
+          bluebubbles: {
+            enabled: true,
+            serverUrl: "http://localhost:1234",
+            password: "test-password",
+          },
+        },
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } as OpenClawConfig;
+
+      await expect(
+        runDrySend({
+          cfg,
+          actionParams: {
+            targets: ["+14155592088", "+14255320947"],
+            message: "hi",
+          },
+        }),
+      ).rejects.toThrow(/Channel is required when multiple channels are configured/i);
     });
   });
 
