@@ -543,6 +543,36 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("allows iMessage attachment-root images for iMessage sessions", async () => {
+    const fetch = stubMinimaxOkFetch();
+    await withTempAgentDir(async (agentDir) => {
+      const attachmentRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imsg-attachments-"));
+      const imagePath = path.join(attachmentRoot, "img.png");
+      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      const cfg: OpenClawConfig = {
+        ...createMinimaxImageConfig(),
+        channels: {
+          imessage: {
+            attachmentRoots: [attachmentRoot],
+          },
+        },
+      };
+      try {
+        const tools = createOpenClawCodingTools({
+          config: cfg,
+          agentDir,
+          messageProvider: "imessage",
+          agentAccountId: "default",
+        });
+        const tool = requireImageTool(tools.find((candidate) => candidate.name === "image"));
+        await expectImageToolExecOk(tool, imagePath);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(attachmentRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("sandboxes image paths like the read tool", async () => {
     await withTempSandboxState(async ({ agentDir, sandboxRoot }) => {
       await fs.writeFile(path.join(sandboxRoot, "img.png"), "fake", "utf8");

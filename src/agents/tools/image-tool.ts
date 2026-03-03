@@ -1,6 +1,7 @@
 import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getChannelScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMedia } from "../../web/media.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
@@ -271,6 +272,8 @@ export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  messageProvider?: string;
+  agentAccountId?: string;
   sandbox?: ImageSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
@@ -300,6 +303,11 @@ export function createImageTool(options?: {
 
   const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
     workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+    extraRoots: getChannelScopedMediaLocalRoots({
+      cfg: options?.config,
+      channel: options?.messageProvider,
+      accountId: options?.agentAccountId,
+    }),
   });
 
   return {

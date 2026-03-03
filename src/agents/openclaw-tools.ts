@@ -79,6 +79,8 @@ export function createOpenClawTools(options?: {
         config: options?.config,
         agentDir: options.agentDir,
         workspaceDir,
+        messageProvider: options?.agentChannel,
+        agentAccountId: options?.agentAccountId,
         sandbox:
           options?.sandboxRoot && options?.sandboxFsBridge
             ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }

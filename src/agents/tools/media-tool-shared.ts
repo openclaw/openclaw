@@ -38,17 +38,20 @@ export function applyImageModelConfigDefaults(
 
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
-  options?: { workspaceOnly?: boolean },
+  options?: { workspaceOnly?: boolean; extraRoots?: readonly string[] },
 ): string[] {
+  const extraRoots = options?.extraRoots?.filter(
+    (root): root is string => typeof root === "string" && root.trim().length > 0,
+  );
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
   if (options?.workspaceOnly) {
-    return workspaceDir ? [workspaceDir] : [];
+    return Array.from(new Set([workspaceDir, ...(extraRoots ?? [])].filter(Boolean)));
   }
   const roots = getDefaultLocalRoots();
-  if (!workspaceDir) {
+  if (!workspaceDir && (!extraRoots || extraRoots.length === 0)) {
     return [...roots];
   }
-  return Array.from(new Set([...roots, workspaceDir]));
+  return Array.from(new Set([...roots, workspaceDir, ...(extraRoots ?? [])].filter(Boolean)));
 }
 
 export function resolvePromptAndModelOverride(
