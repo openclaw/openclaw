@@ -532,6 +532,7 @@ Rules:
 ```
 
 SecretRef details (including `secrets.providers` for `env`/`file`/`exec`) are in [Secrets Management](/gateway/secrets).
+Supported credential paths are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 </Accordion>
 
 See [Environment](/help/environment) for full precedence and sources.

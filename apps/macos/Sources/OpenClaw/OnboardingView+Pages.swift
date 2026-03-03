@@ -134,10 +134,10 @@ extension OnboardingView {
             if self.gatewayDiscovery.gateways.isEmpty {
                 ProgressView().controlSize(.small)
                 Button("Refresh") {
-                    self.gatewayDiscovery.refreshWideAreaFallbackNow(timeoutSeconds: 5.0)
+                    self.gatewayDiscovery.refreshRemoteFallbackNow(timeoutSeconds: 5.0)
                 }
                 .buttonStyle(.link)
-                .help("Retry Tailscale discovery (DNS-SD).")
+                .help("Retry remote discovery (Tailscale DNS-SD + Serve probe).")
             }
             Spacer(minLength: 0)
         }
@@ -311,7 +311,7 @@ extension OnboardingView {
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                        .truncationMode(.middle)
+                            .truncationMode(.middle)
                     }
                 }
                 Spacer(minLength: 0)

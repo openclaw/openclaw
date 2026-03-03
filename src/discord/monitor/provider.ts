@@ -11,9 +11,15 @@ import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
 import { Routes } from "discord-api-types/v10";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import type { NativeCommandSpec } from "../../auto-reply/commands-registry.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
+import {
+  resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingMaxAgeMs,
+  resolveThreadBindingsEnabled,
+} from "../../channels/thread-bindings-policy.js";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -32,6 +38,7 @@ import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getPluginCommandSpecs } from "../../plugins/commands.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { fetchDiscordApplicationId } from "../probe.js";
@@ -49,6 +56,7 @@ import {
   createDiscordComponentStringSelect,
   createDiscordComponentUserSelect,
 } from "./agent-components.js";
+import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { attachEarlyGatewayErrorGuard } from "./gateway-error-guard.js";
@@ -58,6 +66,7 @@ import {
   DiscordPresenceListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
+  DiscordThreadUpdateListener,
   registerDiscordListener,
 } from "./listeners.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
@@ -110,59 +119,6 @@ function summarizeGuilds(entries?: Record<string, unknown>) {
   return `${sample.join(", ")}${suffix}`;
 }
 
-const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
-const DEFAULT_THREAD_BINDING_MAX_AGE_HOURS = 0;
-
-function normalizeThreadBindingHours(raw: unknown): number | undefined {
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return undefined;
-  }
-  if (raw < 0) {
-    return undefined;
-  }
-  return raw;
-}
-
-function resolveThreadBindingIdleTimeoutMs(params: {
-  channelIdleHoursRaw: unknown;
-  sessionIdleHoursRaw: unknown;
-}): number {
-  const idleHours =
-    normalizeThreadBindingHours(params.channelIdleHoursRaw) ??
-    normalizeThreadBindingHours(params.sessionIdleHoursRaw) ??
-    DEFAULT_THREAD_BINDING_IDLE_HOURS;
-  return Math.floor(idleHours * 60 * 60 * 1000);
-}
-
-function resolveThreadBindingMaxAgeMs(params: {
-  channelMaxAgeHoursRaw: unknown;
-  sessionMaxAgeHoursRaw: unknown;
-}): number {
-  const maxAgeHours =
-    normalizeThreadBindingHours(params.channelMaxAgeHoursRaw) ??
-    normalizeThreadBindingHours(params.sessionMaxAgeHoursRaw) ??
-    DEFAULT_THREAD_BINDING_MAX_AGE_HOURS;
-  return Math.floor(maxAgeHours * 60 * 60 * 1000);
-}
-
-function normalizeThreadBindingsEnabled(raw: unknown): boolean | undefined {
-  if (typeof raw !== "boolean") {
-    return undefined;
-  }
-  return raw;
-}
-
-function resolveThreadBindingsEnabled(params: {
-  channelEnabledRaw: unknown;
-  sessionEnabledRaw: unknown;
-}): boolean {
-  return (
-    normalizeThreadBindingsEnabled(params.channelEnabledRaw) ??
-    normalizeThreadBindingsEnabled(params.sessionEnabledRaw) ??
-    true
-  );
-}
-
 function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
   const label = formatThreadBindingDurationLabel(durationMs);
   return label === "disabled" ? "off" : label;
@@ -186,6 +142,37 @@ function dedupeSkillCommandsForDiscord(
     deduped.push(command);
   }
   return deduped;
+}
+
+function appendPluginCommandSpecs(params: {
+  commandSpecs: NativeCommandSpec[];
+  runtime: RuntimeEnv;
+}): NativeCommandSpec[] {
+  const merged = [...params.commandSpecs];
+  const existingNames = new Set(
+    merged.map((spec) => spec.name.trim().toLowerCase()).filter(Boolean),
+  );
+  for (const pluginCommand of getPluginCommandSpecs()) {
+    const normalizedName = pluginCommand.name.trim().toLowerCase();
+    if (!normalizedName) {
+      continue;
+    }
+    if (existingNames.has(normalizedName)) {
+      params.runtime.error?.(
+        danger(
+          `discord: plugin command "/${normalizedName}" duplicates an existing native command. Skipping.`,
+        ),
+      );
+      continue;
+    }
+    existingNames.add(normalizedName);
+    merged.push({
+      name: pluginCommand.name,
+      description: pluginCommand.description,
+      acceptsArgs: pluginCommand.acceptsArgs,
+    });
+  }
+  return merged;
 }
 
 async function deployDiscordCommands(params: {
@@ -254,7 +241,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     cfg,
     accountId: opts.accountId,
   });
-  const token = normalizeDiscordToken(opts.token ?? undefined) ?? account.token;
+  const token =
+    normalizeDiscordToken(opts.token ?? undefined, "channels.discord.token") ?? account.token;
   if (!token) {
     throw new Error(
       `Discord bot token missing for account "${account.accountId}" (set discord.accounts.${account.accountId}.token or DISCORD_BOT_TOKEN for default).`,
@@ -363,10 +351,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let commandSpecs = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "discord" })
     : [];
+  if (nativeEnabled) {
+    commandSpecs = appendPluginCommandSpecs({ commandSpecs, runtime });
+  }
   const initialCommandCount = commandSpecs.length;
   if (nativeEnabled && nativeSkillsEnabled && commandSpecs.length > maxDiscordCommands) {
     skillCommands = [];
     commandSpecs = listNativeCommandSpecsForConfig(cfg, { skillCommands: [], provider: "discord" });
+    commandSpecs = appendPluginCommandSpecs({ commandSpecs, runtime });
     runtime.log?.(
       warn(
         `discord: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,
@@ -403,6 +395,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
   let lifecycleStarted = false;
   let releaseEarlyGatewayErrorGuard = () => {};
+  let autoPresenceController: ReturnType<typeof createDiscordAutoPresenceController> | null = null;
   try {
     const commands: BaseCommand[] = commandSpecs.map((spec) =>
       createDiscordNativeCommand({
@@ -497,6 +490,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     class DiscordStatusReadyListener extends ReadyListener {
       async handle(_data: unknown, client: Client) {
+        if (autoPresenceController?.enabled) {
+          autoPresenceController.refresh();
+          return;
+        }
+
         const gateway = client.getPlugin<GatewayPlugin>("gateway");
         if (!gateway) {
           return;
@@ -543,6 +541,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     );
     const earlyGatewayErrorGuard = attachEarlyGatewayErrorGuard(client);
     releaseEarlyGatewayErrorGuard = earlyGatewayErrorGuard.release;
+
+    const lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
+    if (lifecycleGateway) {
+      autoPresenceController = createDiscordAutoPresenceController({
+        accountId: account.accountId,
+        discordConfig: discordCfg,
+        gateway: lifecycleGateway,
+        log: (message) => runtime.log?.(message),
+      });
+      autoPresenceController.start();
+    }
 
     await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
 
@@ -612,43 +621,31 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       client.listeners,
       new DiscordMessageListener(messageHandler, logger, trackInboundEvent),
     );
+    const reactionListenerOptions = {
+      cfg,
+      accountId: account.accountId,
+      runtime,
+      botUserId,
+      dmEnabled,
+      groupDmEnabled,
+      groupDmChannels: groupDmChannels ?? [],
+      dmPolicy,
+      allowFrom: allowFrom ?? [],
+      groupPolicy,
+      allowNameMatching: isDangerousNameMatchingEnabled(discordCfg),
+      guildEntries,
+      logger,
+      onEvent: trackInboundEvent,
+    };
+    registerDiscordListener(client.listeners, new DiscordReactionListener(reactionListenerOptions));
     registerDiscordListener(
       client.listeners,
-      new DiscordReactionListener({
-        cfg,
-        accountId: account.accountId,
-        runtime,
-        botUserId,
-        dmEnabled,
-        groupDmEnabled,
-        groupDmChannels: groupDmChannels ?? [],
-        dmPolicy,
-        allowFrom: allowFrom ?? [],
-        groupPolicy,
-        allowNameMatching: isDangerousNameMatchingEnabled(discordCfg),
-        guildEntries,
-        logger,
-        onEvent: trackInboundEvent,
-      }),
+      new DiscordReactionRemoveListener(reactionListenerOptions),
     );
+
     registerDiscordListener(
       client.listeners,
-      new DiscordReactionRemoveListener({
-        cfg,
-        accountId: account.accountId,
-        runtime,
-        botUserId,
-        dmEnabled,
-        groupDmEnabled,
-        groupDmChannels: groupDmChannels ?? [],
-        dmPolicy,
-        allowFrom: allowFrom ?? [],
-        groupPolicy,
-        allowNameMatching: isDangerousNameMatchingEnabled(discordCfg),
-        guildEntries,
-        logger,
-        onEvent: trackInboundEvent,
-      }),
+      new DiscordThreadUpdateListener(cfg, account.accountId, logger),
     );
 
     if (discordCfg.intents?.presence) {
@@ -662,6 +659,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const botIdentity =
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
     runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
+    if (lifecycleGateway?.isConnected) {
+      opts.setStatus?.({ connected: true });
+    }
 
     lifecycleStarted = true;
     await runDiscordGatewayLifecycle({
@@ -679,6 +679,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       releaseEarlyGatewayErrorGuard,
     });
   } finally {
+    autoPresenceController?.stop();
+    opts.setStatus?.({ connected: false });
     releaseEarlyGatewayErrorGuard();
     if (!lifecycleStarted) {
       threadBindings.stop();

@@ -4,18 +4,24 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
+const baseGitEnv = {
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_TERMINAL_PROMPT: "0",
+};
+const baseRunEnv: NodeJS.ProcessEnv = { ...process.env, ...baseGitEnv };
+
 const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.ProcessEnv) => {
   return execFileSync(cmd, args, {
     cwd,
     encoding: "utf8",
-    env: env ? { ...process.env, ...env } : process.env,
+    env: env ? { ...baseRunEnv, ...env } : baseRunEnv,
   }).trim();
 };
 
 describe("git-hooks/pre-commit (integration)", () => {
   it("does not treat staged filenames as git-add flags (e.g. --all)", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-pre-commit-"));
-    run(dir, "git", ["init", "-q"]);
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
 
     // Use the real hook script and lightweight helper stubs.
     mkdirSync(path.join(dir, "git-hooks"), { recursive: true });

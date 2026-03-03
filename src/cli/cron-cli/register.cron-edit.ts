@@ -7,6 +7,7 @@ import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import {
   getCronChannelOptions,
   parseAt,
+  parseCronStaggerMs,
   parseDurationMs,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
@@ -98,19 +99,7 @@ export function registerCronEditCommand(cron: Command) {
           if (staggerRaw && useExact) {
             throw new Error("Choose either --stagger or --exact, not both");
           }
-          const requestedStaggerMs = (() => {
-            if (useExact) {
-              return 0;
-            }
-            if (!staggerRaw) {
-              return undefined;
-            }
-            const parsed = parseDurationMs(staggerRaw);
-            if (!parsed) {
-              throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
-            }
-            return parsed;
-          })();
+          const requestedStaggerMs = parseCronStaggerMs({ staggerRaw, useExact });
 
           const patch: Record<string, unknown> = {};
           if (typeof opts.name === "string") {

@@ -3,7 +3,11 @@ import type { Logger as TsLogger } from "tslog";
 import { isVerbose } from "../globals.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
-import { getConsoleSettings, shouldLogSubsystemToConsole } from "./console.js";
+import {
+  formatConsoleTimestamp,
+  getConsoleSettings,
+  shouldLogSubsystemToConsole,
+} from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
 import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
 import { loggingState } from "./state.js";
@@ -197,7 +201,7 @@ function formatConsoleLine(opts: {
     opts.style === "json" ? opts.subsystem : formatSubsystemForConsole(opts.subsystem);
   if (opts.style === "json") {
     return JSON.stringify({
-      time: new Date().toISOString(),
+      time: formatConsoleTimestamp("json"),
       level: opts.level,
       subsystem: displaySubsystem,
       message: opts.message,
@@ -218,10 +222,10 @@ function formatConsoleLine(opts: {
   const displayMessage = stripRedundantSubsystemPrefixForConsole(opts.message, displaySubsystem);
   const time = (() => {
     if (opts.style === "pretty") {
-      return color.gray(new Date().toISOString().slice(11, 19));
+      return color.gray(formatConsoleTimestamp("pretty"));
     }
     if (loggingState.consoleTimestampPrefix) {
-      return color.gray(new Date().toISOString());
+      return color.gray(formatConsoleTimestamp(opts.style));
     }
     return "";
   })();
@@ -279,6 +283,13 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   };
   const emit = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
+    const consoleEnabled =
+      shouldLogToConsole(level, { level: consoleSettings.level }) &&
+      shouldLogSubsystemToConsole(subsystem);
+    const fileEnabled = isFileLogLevelEnabled(level);
+    if (!consoleEnabled && !fileEnabled) {
+      return;
+    }
     let consoleMessageOverride: string | undefined;
     let fileMeta = meta;
     if (meta && Object.keys(meta).length > 0) {
@@ -290,11 +301,10 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       }
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
-    logToFile(getFileLogger(), level, message, fileMeta);
-    if (!shouldLogToConsole(level, { level: consoleSettings.level })) {
-      return;
+    if (fileEnabled) {
+      logToFile(getFileLogger(), level, message, fileMeta);
     }
-    if (!shouldLogSubsystemToConsole(subsystem)) {
+    if (!consoleEnabled) {
       return;
     }
     const consoleMessage = consoleMessageOverride ?? message;
@@ -341,8 +351,10 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     error: (message, meta) => emit("error", message, meta),
     fatal: (message, meta) => emit("fatal", message, meta),
     raw: (message) => {
-      logToFile(getFileLogger(), "info", message, { raw: true });
-      if (shouldLogSubsystemToConsole(subsystem)) {
+      if (isFileEnabled("info")) {
+        logToFile(getFileLogger(), "info", message, { raw: true });
+      }
+      if (isConsoleEnabled("info")) {
         if (
           !isVerbose() &&
           subsystem === "agent/embedded" &&

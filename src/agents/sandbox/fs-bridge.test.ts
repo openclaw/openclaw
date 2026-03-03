@@ -106,6 +106,36 @@ async function createHostEscapeFixture(stateDir: string) {
   return { workspaceDir, outsideFile };
 }
 
+async function expectMkdirpAllowsExistingDirectory(params?: { forceBoundaryIoFallback?: boolean }) {
+  await withTempDir("openclaw-fs-bridge-mkdirp-", async (stateDir) => {
+    const workspaceDir = path.join(stateDir, "workspace");
+    const nestedDir = path.join(workspaceDir, "memory", "kemik");
+    await fs.mkdir(nestedDir, { recursive: true });
+
+    if (params?.forceBoundaryIoFallback) {
+      mockedOpenBoundaryFile.mockImplementationOnce(async () => ({
+        ok: false,
+        reason: "io",
+        error: Object.assign(new Error("EISDIR"), { code: "EISDIR" }),
+      }));
+    }
+
+    const bridge = createSandboxFsBridge({
+      sandbox: createSandbox({
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+      }),
+    });
+
+    await expect(bridge.mkdirp({ filePath: "memory/kemik" })).resolves.toBeUndefined();
+
+    const mkdirCall = findCallByScriptFragment('mkdir -p -- "$1"');
+    expect(mkdirCall).toBeDefined();
+    const mkdirPath = mkdirCall ? getDockerPathArg(mkdirCall[0]) : "";
+    expect(mkdirPath).toBe("/workspace/memory/kemik");
+  });
+}
+
 describe("sandbox fs bridge shell compatibility", () => {
   beforeEach(() => {
     mockedExecDockerRaw.mockClear();
@@ -235,53 +265,11 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("allows mkdirp for existing in-boundary subdirectories", async () => {
-    await withTempDir("openclaw-fs-bridge-mkdirp-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      const nestedDir = path.join(workspaceDir, "memory", "kemik");
-      await fs.mkdir(nestedDir, { recursive: true });
-
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-      });
-
-      await expect(bridge.mkdirp({ filePath: "memory/kemik" })).resolves.toBeUndefined();
-
-      const mkdirCall = findCallByScriptFragment('mkdir -p -- "$1"');
-      expect(mkdirCall).toBeDefined();
-      const mkdirPath = mkdirCall ? getDockerPathArg(mkdirCall[0]) : "";
-      expect(mkdirPath).toBe("/workspace/memory/kemik");
-    });
+    await expectMkdirpAllowsExistingDirectory();
   });
 
   it("allows mkdirp when boundary open reports io for an existing directory", async () => {
-    await withTempDir("openclaw-fs-bridge-mkdirp-io-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      const nestedDir = path.join(workspaceDir, "memory", "kemik");
-      await fs.mkdir(nestedDir, { recursive: true });
-
-      mockedOpenBoundaryFile.mockImplementationOnce(async () => ({
-        ok: false,
-        reason: "io",
-        error: Object.assign(new Error("EISDIR"), { code: "EISDIR" }),
-      }));
-
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-      });
-
-      await expect(bridge.mkdirp({ filePath: "memory/kemik" })).resolves.toBeUndefined();
-
-      const mkdirCall = findCallByScriptFragment('mkdir -p -- "$1"');
-      expect(mkdirCall).toBeDefined();
-      const mkdirPath = mkdirCall ? getDockerPathArg(mkdirCall[0]) : "";
-      expect(mkdirPath).toBe("/workspace/memory/kemik");
-    });
+    await expectMkdirpAllowsExistingDirectory({ forceBoundaryIoFallback: true });
   });
 
   it("rejects mkdirp when target exists as a file", async () => {
