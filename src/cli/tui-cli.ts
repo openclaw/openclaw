@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -24,6 +25,7 @@ export function registerTuiCli(program: Command) {
     )
     .action(async (opts) => {
       try {
+        const config = loadConfig();
         const timeoutMs = parseTimeoutMs(opts.timeoutMs);
         if (opts.timeoutMs !== undefined && timeoutMs === undefined) {
           defaultRuntime.error(
@@ -31,12 +33,15 @@ export function registerTuiCli(program: Command) {
           );
         }
         const historyLimit = Number.parseInt(String(opts.historyLimit ?? "200"), 10);
+        // Use config default if --deliver flag not explicitly provided
+        const deliver =
+          opts.deliver !== undefined ? Boolean(opts.deliver) : (config.cli?.tui?.deliver ?? false);
         await runTui({
           url: opts.url as string | undefined,
           token: opts.token as string | undefined,
           password: opts.password as string | undefined,
           session: opts.session as string | undefined,
-          deliver: Boolean(opts.deliver),
+          deliver,
           thinking: opts.thinking as string | undefined,
           message: opts.message as string | undefined,
           timeoutMs,

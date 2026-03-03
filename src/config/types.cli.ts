@@ -10,4 +10,12 @@ export type CliConfig = {
      */
     taglineMode?: CliBannerTaglineMode;
   };
+  tui?: {
+    /**
+     * Default value for --deliver flag in TUI command.
+     * When true, assistant replies are delivered to stdout by default.
+     * Can be overridden with --deliver flag at runtime.
+     */
+    deliver?: boolean;
+  };
 };
