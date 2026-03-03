@@ -47,6 +47,8 @@ import {
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -332,7 +334,15 @@ async function agentCommandInternal(
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
 
-  const cfg = loadConfig();
+  const loadedRaw = loadConfig();
+  const { resolvedConfig: cfg, diagnostics } = await resolveCommandSecretRefsViaGateway({
+    config: loadedRaw,
+    commandName: "agent",
+    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+  });
+  for (const entry of diagnostics) {
+    runtime.log(`[secrets] ${entry}`);
+  }
   const agentIdOverrideRaw = opts.agentId?.trim();
   const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
   if (agentIdOverride) {
