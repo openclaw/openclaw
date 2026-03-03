@@ -217,7 +217,10 @@ ${tail}`;
   return { ...msg, content: [asText(trimmed + note)] };
 }
 
-const FILE_BLOCK_RE = /<file\s+name="([^"]*)"(?:\s+mime="([^"]*)")?\s*>([\s\S]*?)<\/file>/g;
+const FILE_BLOCK_RE = /<file\b([^>]*)>([\s\S]*?)<\/file>/g;
+
+const FILE_NAME_ATTR_RE = /\bname="([^"]*)"/;
+const FILE_MIME_ATTR_RE = /\bmime="([^"]*)"/;
 
 export function softTrimFileBlocksInText(
   text: string,
@@ -227,7 +230,7 @@ export function softTrimFileBlocksInText(
   let trimmedChars = 0;
   const result = text.replace(
     FILE_BLOCK_RE,
-    (match, name: string, mime: string | undefined, body: string) => {
+    (match, attrs: string, body: string) => {
       if (body.length <= maxChars) {
         return match;
       }
@@ -236,6 +239,17 @@ export function softTrimFileBlocksInText(
       if (h + t >= body.length) {
         return match;
       }
+      
+      const nameMatch = attrs.match(FILE_NAME_ATTR_RE);
+      const mimeMatch = attrs.match(FILE_MIME_ATTR_RE);
+      
+      if (!nameMatch) {
+        return match;
+      }
+      
+      const name = nameMatch[1];
+      const mime = mimeMatch ? mimeMatch[1] : undefined;
+      
       const head = body.slice(0, h);
       const tail = body.slice(body.length - t);
       trimmedChars += body.length - h - t;
