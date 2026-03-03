@@ -139,6 +139,37 @@ describe("FeishuConfigSchema optimization flags", () => {
   });
 });
 
+describe("FeishuConfigSchema cardFormat", () => {
+  it("defaults cardFormat to undefined when not set", () => {
+    const result = FeishuConfigSchema.parse({});
+    expect(result.cardFormat).toBeUndefined();
+  });
+
+  it("accepts cardFormat streaming", () => {
+    const result = FeishuConfigSchema.parse({ cardFormat: "streaming" });
+    expect(result.cardFormat).toBe("streaming");
+  });
+
+  it("accepts cardFormat legacy", () => {
+    const result = FeishuConfigSchema.parse({ cardFormat: "legacy" });
+    expect(result.cardFormat).toBe("legacy");
+  });
+
+  it("rejects invalid cardFormat value", () => {
+    const result = FeishuConfigSchema.safeParse({ cardFormat: "invalid" });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts cardFormat in account config", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: { cardFormat: "legacy" },
+      },
+    });
+    expect(result.accounts?.main?.cardFormat).toBe("legacy");
+  });
+});
+
 describe("FeishuConfigSchema defaultAccount", () => {
   it("accepts defaultAccount when it matches an account key", () => {
     const result = FeishuConfigSchema.safeParse({

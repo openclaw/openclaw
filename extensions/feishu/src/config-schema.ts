@@ -41,6 +41,11 @@ const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 // for incremental text display with a "Thinking..." placeholder
 const StreamingModeSchema = z.boolean().optional();
 
+// Card format: "streaming" uses Cardkit streaming cards (real-time UX but opaque to
+// im.message.get); "legacy" sends completed responses as old-format interactive cards
+// (no streaming, but fully readable/forwardable/quotable by other bots).
+const CardFormatSchema = z.enum(["streaming", "legacy"]).optional();
+
 const BlockStreamingCoalesceSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -164,6 +169,7 @@ const FeishuSharedConfigShape = {
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
   streaming: StreamingModeSchema,
+  cardFormat: CardFormatSchema,
   tools: FeishuToolsConfigSchema,
   replyInThread: ReplyInThreadSchema,
   reactionNotifications: ReactionNotificationModeSchema,
