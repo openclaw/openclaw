@@ -148,20 +148,6 @@ export async function resolveDeliveryTarget(
     };
   }
 
-  if (!toCandidate) {
-    return {
-      ok: false,
-      channel,
-      to: undefined,
-      accountId,
-      threadId,
-      mode,
-      error:
-        channelResolutionError ??
-        new Error(`No delivery target resolved for channel "${channel}". Set delivery.to.`),
-    };
-  }
-
   let allowFromOverride: string[] | undefined;
   if (channel === "whatsapp") {
     const resolvedAccountId = normalizeAccountId(accountId);
@@ -177,7 +163,7 @@ export async function resolveDeliveryTarget(
       .filter((entry): entry is string => Boolean(entry));
     allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
 
-    if (mode === "implicit" && allowFromOverride.length > 0) {
+    if (toCandidate && mode === "implicit" && allowFromOverride.length > 0) {
       const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
       if (!normalizedCurrentTarget || !allowFromOverride.includes(normalizedCurrentTarget)) {
         toCandidate = allowFromOverride[0];
