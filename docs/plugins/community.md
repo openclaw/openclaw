@@ -54,3 +54,8 @@ Use this format when adding entries:
   npm: `cognitive-dual-engine`
   repo: `https://github.com/tonyhu2006/cognitive-dual-engine`
   install: `openclaw plugins install cognitive-dual-engine`
+
+- **SimpleX** — Connect OpenClaw to SimpleX messaging network. Enables messaging through SimpleX chat protocol.
+  npm: `@dangoldbj/openclaw-simplex`
+  repo: `https://github.com/dangoldbj/openclaw-simplex`
+  install: `openclaw plugins install @dangoldbj/openclaw-simplex`
