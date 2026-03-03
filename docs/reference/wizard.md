@@ -20,6 +20,8 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - If `~/.openclaw/openclaw.json` exists, choose **Keep / Modify / Reset**.
     - Re-running the wizard does **not** wipe anything unless you explicitly choose **Reset**
       (or pass `--reset`).
+    - CLI `--reset` defaults to `config+creds+sessions`; use `--reset-scope full`
+      to also remove workspace.
     - If the config is invalid or contains legacy keys, the wizard stops and asks
       you to run `openclaw doctor` before continuing.
     - Reset uses `trash` (never `rm`) and offers scopes:
@@ -28,7 +30,7 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
       - Full reset (also removes workspace)
   </Step>
   <Step title="Model/Auth">
-    - **Anthropic API key (recommended)**: uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
+    - **Anthropic API key**: uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
     - **Anthropic OAuth (Claude Code CLI)**: on macOS the wizard checks Keychain item "Claude Code-credentials" (choose "Always Allow" so launchd starts don't block); on Linux/Windows it reuses `~/.claude/.credentials.json` if present.
     - **Anthropic token (paste setup-token)**: run `claude setup-token` on any machine, then paste the token (you can name it; blank = default).
     - **OpenAI Code (Codex) subscription (Codex CLI)**: if `~/.codex/auth.json` exists, the wizard can reuse it.
@@ -42,7 +44,7 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - More detail: [Vercel AI Gateway](/providers/vercel-ai-gateway)
     - **Cloudflare AI Gateway**: prompts for Account ID, Gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     - More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
-    - **MiniMax M2.1**: config is auto-written.
+    - **MiniMax M2.5**: config is auto-written.
     - More detail: [MiniMax](/providers/minimax)
     - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
     - More detail: [Synthetic](/providers/synthetic)
@@ -50,7 +52,7 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - **Kimi Coding**: config is auto-written.
     - More detail: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
     - **Skip**: no auth configured yet.
-    - Pick a default model from detected options (or enter provider/model manually).
+    - Pick a default model from detected options (or enter provider/model manually). For best quality and lower prompt-injection risk, choose the strongest latest-generation model available in your provider stack.
     - Wizard runs a model check and warns if the configured model is unknown or missing auth.
     - API key storage mode defaults to plaintext auth-profile values. Use `--secret-input-mode ref` to store env-backed refs instead (for example `keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" }`).
     - OAuth credentials live in `~/.openclaw/credentials/oauth.json`; auth profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (API keys + OAuth).
@@ -243,6 +245,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 
 - `agents.defaults.workspace`
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
+- `tools.profile` (local onboarding defaults to `"messaging"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
 - `session.dmScope` (behavior details: [CLI Onboarding Reference](/start/wizard-cli-reference#outputs-and-internals))
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.signal.*`, `channels.imessage.*`
