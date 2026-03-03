@@ -42,6 +42,7 @@ async function pollFirecrawlAuthStatus(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: sessionId, code_verifier: codeVerifier }),
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) {
     return null;
