@@ -1,3 +1,4 @@
+import type { GatewayBonjourAdvertiser } from "../infra/bonjour.js";
 import { startGatewayBonjourAdvertiser } from "../infra/bonjour.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
@@ -6,6 +7,11 @@ import {
   resolveBonjourCliPath,
   resolveTailnetDnsHint,
 } from "./server-discovery.js";
+
+// Cache the Bonjour advertiser across in-process restarts so the mDNS service
+// identity stays stable. Destroying and re-creating the service in quick
+// succession races with the OS mDNS cache, causing name-conflict loops (#33609).
+let cachedBonjour: GatewayBonjourAdvertiser | null = null;
 
 export async function startGatewayDiscovery(params: {
   machineDisplayName: string;
@@ -39,21 +45,30 @@ export async function startGatewayDiscovery(params: {
   const cliPath = mdnsMinimal ? undefined : resolveBonjourCliPath();
 
   if (bonjourEnabled) {
-    try {
-      const bonjour = await startGatewayBonjourAdvertiser({
-        instanceName: formatBonjourInstanceName(params.machineDisplayName),
-        gatewayPort: params.port,
-        gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
-        gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
-        canvasPort: params.canvasPort,
-        sshPort,
-        tailnetDns,
-        cliPath,
-        minimal: mdnsMinimal,
-      });
-      bonjourStop = bonjour.stop;
-    } catch (err) {
-      params.logDiscovery.warn(`bonjour advertising failed: ${String(err)}`);
+    if (cachedBonjour) {
+      // Reuse existing Bonjour advertiser across in-process restarts.
+      bonjourStop = cachedBonjour.stop;
+    } else {
+      try {
+        const bonjour = await startGatewayBonjourAdvertiser({
+          instanceName: formatBonjourInstanceName(params.machineDisplayName),
+          gatewayPort: params.port,
+          gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
+          gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
+          canvasPort: params.canvasPort,
+          sshPort,
+          tailnetDns,
+          cliPath,
+          minimal: mdnsMinimal,
+        });
+        cachedBonjour = bonjour;
+        bonjourStop = () => {
+          cachedBonjour = null;
+          return bonjour.stop();
+        };
+      } catch (err) {
+        params.logDiscovery.warn(`bonjour advertising failed: ${String(err)}`);
+      }
     }
   }
 
