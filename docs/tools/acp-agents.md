@@ -75,7 +75,7 @@ Thread binding support is adapter-specific. If the active channel adapter does n
 Required feature flags for thread-bound ACP:
 
 - `acp.enabled=true`
-- `acp.dispatch.enabled=true`
+- `acp.dispatch.enabled` is on by default (set `false` to pause ACP dispatch)
 - Channel-adapter ACP thread-spawn flag enabled (adapter-specific)
   - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
 
@@ -249,6 +249,7 @@ Core ACP baseline:
 {
   acp: {
     enabled: true,
+    // Optional. Default is true; set false to pause ACP dispatch while keeping /acp controls.
     dispatch: { enabled: true },
     backend: "acpx",
     defaultAgent: "codex",
