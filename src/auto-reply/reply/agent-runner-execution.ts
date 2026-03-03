@@ -602,6 +602,14 @@ export async function runAgentTurnWithFallback(params: {
     };
   }
 
+  // Refresh model selection from run metadata so responsePrefix templates use
+  // the actual provider/model that produced this response.
+  params.opts?.onModelSelected?.({
+    provider: runResult.meta?.agentMeta?.provider ?? fallbackProvider,
+    model: runResult.meta?.agentMeta?.model ?? fallbackModel,
+    thinkLevel: params.followupRun.run.thinkLevel,
+  });
+
   return {
     kind: "success",
     runId,
