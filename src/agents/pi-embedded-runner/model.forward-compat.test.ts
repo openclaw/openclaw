@@ -14,6 +14,8 @@ import {
   mockGoogleGeminiCliFlashTemplateModel,
   mockGoogleGeminiCliProTemplateModel,
   mockOpenAICodexTemplateModel,
+  mockOpenAICodexV51TemplateModel,
+  OPENAI_CODEX_V51_TEMPLATE_MODEL,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
 
@@ -47,6 +49,18 @@ describe("pi embedded model e2e smoke", () => {
     const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"));
+  });
+
+  it("uses gpt-5.1-codex as template fallback for gpt-5.3-codex when gpt-5.2-codex is absent", () => {
+    mockOpenAICodexV51TemplateModel();
+
+    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...OPENAI_CODEX_V51_TEMPLATE_MODEL,
+      id: "gpt-5.3-codex",
+      name: "gpt-5.3-codex",
+    });
   });
 
   it("keeps unknown-model errors for non-forward-compat IDs", () => {

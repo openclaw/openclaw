@@ -33,6 +33,27 @@ export function mockOpenAICodexTemplateModel(): void {
   });
 }
 
+export const OPENAI_CODEX_V51_TEMPLATE_MODEL = {
+  id: "gpt-5.1-codex",
+  name: "GPT-5.1 Codex",
+  provider: "openai-codex",
+  api: "openai-codex-responses",
+  baseUrl: "https://chatgpt.com/backend-api",
+  reasoning: true,
+  input: ["text", "image"] as const,
+  cost: { input: 1.5, output: 12, cacheRead: 0.15, cacheWrite: 0 },
+  contextWindow: 200000,
+  maxTokens: 100000,
+};
+
+export function mockOpenAICodexV51TemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "openai-codex",
+    modelId: "gpt-5.1-codex",
+    templateModel: OPENAI_CODEX_V51_TEMPLATE_MODEL,
+  });
+}
+
 export function buildOpenAICodexForwardCompatExpectation(
   id: string = "gpt-5.3-codex",
 ): Partial<typeof OPENAI_CODEX_TEMPLATE_MODEL> & { provider: string; id: string } {
