@@ -398,6 +398,52 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("checks plugin handlers before canvas host request handling", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (req.method === "POST" && pathname === "/googlechat") {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ ok: true, route: "plugin-webhook" }));
+        return true;
+      }
+      return false;
+    });
+    const canvasHandleHttpRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method && req.method !== "GET" && req.method !== "HEAD") {
+        res.statusCode = 405;
+        res.end("Method Not Allowed");
+        return true;
+      }
+      return false;
+    });
+    const canvasHost = {
+      handleHttpRequest: canvasHandleHttpRequest,
+      handleUpgrade: vi.fn(() => false),
+      close: vi.fn(async () => {}),
+    };
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-canvas-order-test-",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        handlePluginRequest,
+        canvasHost: canvasHost as never,
+      },
+      run: async (server) => {
+        const response = await sendRequest(server, {
+          path: "/googlechat",
+          method: "POST",
+        });
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toContain('"route":"plugin-webhook"');
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+        expect(canvasHandleHttpRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
   test("serves plugin routes before control ui spa fallback", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
