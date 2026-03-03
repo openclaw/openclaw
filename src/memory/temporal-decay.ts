@@ -14,7 +14,7 @@ export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Matches a YYYY-MM-DD date anywhere in a filename (basename), covering patterns
 // like memory/2026-02-28-blog.md, memory/archive/2026-02-27.md, etc.
-const DATED_FILENAME_RE = /(\d{4})-(\d{2})-(\d{2})/;
+const DATED_FILENAME_RE = /(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)/;
 
 export function toDecayLambda(halfLifeDays: number): number {
   if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0) {

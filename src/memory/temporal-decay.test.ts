@@ -216,6 +216,20 @@ describe("temporal decay", () => {
     expect(decayed[2]?.score).toBeCloseTo(1);
   });
 
+  it("does not extract a false date from long digit sequences", async () => {
+    // "92025-06-15" — without digit-boundary guards the regex would match
+    // "2025-06-15" (a past date ~240 days ago), causing noticeable decay.
+    // With guards, "2025" is preceded by "9" (digit) so the match is rejected,
+    // the file is treated as evergreen, and score stays at 1.
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [{ path: "memory/ticket-92025-06-15.md", score: 1, source: "memory" }],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    expect(decayed[0]?.score).toBeCloseTo(1);
+  });
+
   it("uses file mtime fallback for non-memory sources", async () => {
     const dir = await makeTempDir();
     const sessionPath = path.join(dir, "sessions", "thread.jsonl");
