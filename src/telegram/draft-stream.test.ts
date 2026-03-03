@@ -270,6 +270,37 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
+  it("does not count superseded DM draft sends as delivered preview revisions", async () => {
+    let resolveFirstDraft: ((value: boolean) => void) | undefined;
+    const firstDraftSend = new Promise<boolean>((resolve) => {
+      resolveFirstDraft = resolve;
+    });
+    const api = {
+      sendMessageDraft: vi.fn().mockReturnValueOnce(firstDraftSend).mockResolvedValueOnce(true),
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 17 }),
+      editMessageText: vi.fn().mockResolvedValue(true),
+      deleteMessage: vi.fn().mockResolvedValue(true),
+    };
+    const stream = createThreadedDraftStream(
+      api as unknown as ReturnType<typeof createMockDraftApi>,
+      { id: 42, scope: "dm" },
+    );
+
+    stream.update("Message A");
+    await vi.waitFor(() => expect(api.sendMessageDraft).toHaveBeenCalledTimes(1));
+
+    const beforeRotationRevision = stream.previewRevision?.() ?? 0;
+    stream.forceNewMessage();
+    stream.update("Message B");
+
+    resolveFirstDraft?.(true);
+    await stream.flush();
+
+    const afterFlushRevision = stream.previewRevision?.() ?? 0;
+    expect(afterFlushRevision - beforeRotationRevision).toBe(1);
+    expect(stream.lastDeliveredText?.()).toBe("Message B");
+  });
+
   it("creates new message after forceNewMessage is called", async () => {
     const { api, stream } = createForceNewMessageHarness();
 
