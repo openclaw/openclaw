@@ -55,8 +55,8 @@ importers:
         specifier: 0.55.3
         version: 0.55.3(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-ai':
-        specifier: 0.55.3
-        version: 0.55.3(ws@8.19.0)(zod@4.3.6)
+        specifier: 0.55.4
+        version: 0.55.4(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent':
         specifier: 0.55.3
         version: 0.55.3(ws@8.19.0)(zod@4.3.6)
@@ -115,8 +115,8 @@ importers:
         specifier: ^21.3.0
         version: 21.3.0
       gaxios:
-        specifier: 7.1.3
-        version: 7.1.3
+        specifier: 7.1.4
+        version: 7.1.4
       grammy:
         specifier: ^1.41.0
         version: 1.41.0
@@ -1509,6 +1509,11 @@ packages:
 
   '@mariozechner/pi-ai@0.55.3':
     resolution: {integrity: sha512-f9jWoDzJR9Wy/H8JPMbjoM4WvVUeFZ65QdYA9UHIfoOopDfwWE8F8JHQOj5mmmILMacXuzsqA3J7MYqNWZRvvQ==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
+
+  '@mariozechner/pi-ai@0.55.4':
+    resolution: {integrity: sha512-q6fWN66N5wpYl/ri54v2Q3QBEz04+nBY67LmatM0xK3TKVgmeGPyQ1YXmRlyb5KhHxMDhNMxChkcHBABzfTi6g==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
@@ -4113,6 +4118,10 @@ packages:
 
   gaxios@7.1.3:
     resolution: {integrity: sha512-YGGyuEdVIjqxkxVH1pUTMY/XtmmsApXrCVv5EU25iX6inEPbV+VakJfLealkBtJN69AQmh1eGOdCl9Sm1UP6XQ==}
+    engines: {node: '>=18'}
+
+  gaxios@7.1.4:
+    resolution: {integrity: sha512-bTIgTsM2bWn3XklZISBTQX7ZSddGW+IO3bMdGaemHZ3tbqExMENHLx6kKZ/KlejgrMtj8q7wBItt51yegqalrA==}
     engines: {node: '>=18'}
 
   gcp-metadata@8.1.2:
@@ -7473,11 +7482,35 @@ snapshots:
       - ws
       - zod
 
+  '@mariozechner/pi-ai@0.55.4(ws@8.19.0)(zod@4.3.6)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.73.0(zod@4.3.6)
+      '@aws-sdk/client-bedrock-runtime': 3.1000.0
+      '@google/genai': 1.43.0
+      '@mistralai/mistralai': 1.10.0
+      '@sinclair/typebox': 0.34.48
+      ajv: 8.18.0
+      ajv-formats: 3.0.1(ajv@8.18.0)
+      chalk: 5.6.2
+      openai: 6.10.0(ws@8.19.0)(zod@4.3.6)
+      partial-json: 0.1.7
+      proxy-agent: 6.5.0
+      undici: 7.22.0
+      zod-to-json-schema: 3.25.1(zod@4.3.6)
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - aws-crt
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
   '@mariozechner/pi-coding-agent@0.55.3(ws@8.19.0)(zod@4.3.6)':
     dependencies:
       '@mariozechner/jiti': 2.6.5
       '@mariozechner/pi-agent-core': 0.55.3(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.55.3(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.55.4(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui': 0.55.3
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
@@ -10249,9 +10282,17 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  gaxios@7.1.4:
+    dependencies:
+      extend: 3.0.2
+      https-proxy-agent: 7.0.6
+      node-fetch: 3.3.2
+    transitivePeerDependencies:
+      - supports-color
+
   gcp-metadata@8.1.2:
     dependencies:
-      gaxios: 7.1.3
+      gaxios: 7.1.4
       google-logging-utils: 1.1.3
       json-bigint: 1.0.0
     transitivePeerDependencies:
