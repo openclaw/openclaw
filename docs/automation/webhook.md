@@ -159,7 +159,7 @@ Mapping options (summary):
 ## Responses
 
 - `200` for `/hooks/wake`
-- `202` for `/hooks/agent` (async run started)
+- `200` for `/hooks/agent` (async run accepted)
 - `401` on auth failure
 - `429` after repeated auth failures from the same client (check `Retry-After`)
 - `400` on invalid payload
