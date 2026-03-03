@@ -527,7 +527,7 @@ class NodeRuntime(context: Context) {
   }
 
   private fun onNetworkChanged(reason: String) {
-    if (connectedEndpoint == null) {
+    ensureRecoveryEndpoint(reason = "network_$reason") ?: run {
       Log.d("OpenClawNode", "network changed ($reason): no cached endpoint, skip")
       return
     }
@@ -545,7 +545,7 @@ class NodeRuntime(context: Context) {
 
     scope.launch(Dispatchers.IO) {
       delay(1_500)
-      if (connectedEndpoint == null) return@launch
+      ensureRecoveryEndpoint(reason = "network_settle_$reason") ?: return@launch
       if (operatorConnected && _nodeConnected.value) {
         Log.d("OpenClawNode", "network changed ($reason): already healthy after settle, skip")
         return@launch
@@ -579,12 +579,43 @@ class NodeRuntime(context: Context) {
     }.getOrDefault(true)
   }
 
-  fun hasCachedEndpointForRecovery(): Boolean = connectedEndpoint != null
+  private fun recoverEndpointFromPrefs(): GatewayEndpoint? {
+    connectedEndpoint?.let { return it }
+
+    if (manualEnabled.value) {
+      val host = manualHost.value.trim()
+      val port = manualPort.value
+      if (host.isNotEmpty() && port in 1..65535 && manualTls.value) {
+        val endpoint = GatewayEndpoint.manual(host = host, port = port)
+        val storedFingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim().orEmpty()
+        if (storedFingerprint.isNotEmpty()) {
+          return endpoint
+        }
+      }
+    }
+
+    val targetStableId = lastDiscoveredStableId.value.trim()
+    if (targetStableId.isEmpty()) return null
+    val discoveredTarget = gateways.value.firstOrNull { it.stableId == targetStableId } ?: return null
+    val storedFingerprint = prefs.loadGatewayTlsFingerprint(discoveredTarget.stableId)?.trim().orEmpty()
+    if (storedFingerprint.isEmpty()) return null
+    return discoveredTarget
+  }
+
+  private fun ensureRecoveryEndpoint(reason: String): GatewayEndpoint? {
+    connectedEndpoint?.let { return it }
+    val recovered = recoverEndpointFromPrefs() ?: return null
+    connectedEndpoint = recovered
+    Log.i("OpenClawNode", "recovered endpoint for $reason: ${recovered.stableId}")
+    return recovered
+  }
+
+  fun hasCachedEndpointForRecovery(): Boolean = ensureRecoveryEndpoint(reason = "service_recovery_check") != null
 
   fun hasUsableNetworkForRecovery(): Boolean = hasUsableNetwork()
 
   suspend fun serviceHeartbeatProbeHealthy(reason: String = "fgs_probe"): Boolean {
-    if (connectedEndpoint == null) return false
+    ensureRecoveryEndpoint(reason = "service_probe_$reason") ?: return false
     if (!hasUsableNetwork()) return false
 
     val operatorOk =
@@ -615,7 +646,7 @@ class NodeRuntime(context: Context) {
   }
 
   fun requestServiceHeartbeatReconnect(reason: String = "fgs_heartbeat") {
-    if (connectedEndpoint == null) return
+    ensureRecoveryEndpoint(reason = "service_reconnect_$reason") ?: return
     Log.i(
       "OpenClawNode",
       "service heartbeat reconnect ($reason): opConnected=$operatorConnected nodeConnected=${_nodeConnected.value}",
@@ -624,7 +655,7 @@ class NodeRuntime(context: Context) {
   }
 
   private suspend fun repairNodeSessionIfNeeded() {
-    val endpoint = connectedEndpoint ?: return
+    val endpoint = ensureRecoveryEndpoint(reason = "repair_loop") ?: return
     if (!hasUsableNetwork()) return
 
     val now = System.currentTimeMillis()
@@ -906,7 +937,7 @@ class NodeRuntime(context: Context) {
   fun setForeground(value: Boolean) {
     _isForeground.value = value
     if (!value) return
-    if (connectedEndpoint == null) return
+    ensureRecoveryEndpoint(reason = "foreground_resume") ?: return
     if (operatorConnected && _nodeConnected.value) return
     Log.i(
       "OpenClawNode",
@@ -1012,7 +1043,7 @@ class NodeRuntime(context: Context) {
 
   fun refreshGatewayConnection() {
     val endpoint =
-      connectedEndpoint ?: run {
+      ensureRecoveryEndpoint(reason = "refresh_gateway") ?: run {
         _statusText.value = "Failed: no cached gateway endpoint"
         _lastGatewayError.value = "Failed: no cached gateway endpoint"
         return
