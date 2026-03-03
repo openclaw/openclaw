@@ -174,7 +174,6 @@ describe("sendDiscordVoiceMessage", () => {
       );
 
     const originalFetch = globalThis.fetch;
-    // @ts-expect-error test override
     globalThis.fetch = fetchMock;
 
     try {
@@ -208,7 +207,6 @@ describe("sendDiscordVoiceMessage", () => {
       .mockResolvedValueOnce(new Response(null, { status: 500 }));
 
     const originalFetch = globalThis.fetch;
-    // @ts-expect-error test override
     globalThis.fetch = fetchMock;
 
     try {
