@@ -1750,7 +1750,7 @@ describe("runReplyAgent continuation signal handling", () => {
 
   function hasContinuationEnqueueCall(): boolean {
     return enqueueSystemEventMock.mock.calls.some((call) =>
-      String(call[0] ?? "").includes("[continuation] Turn"),
+      String(call[0] ?? "").includes("[continuation:wake] Turn"),
     );
   }
 

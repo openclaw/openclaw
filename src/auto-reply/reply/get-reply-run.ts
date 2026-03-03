@@ -336,7 +336,7 @@ export async function runPreparedReply(
   // Peek system events BEFORE buildQueuedSystemPrompt drains them.
   // This detects continuation wakes so runReplyAgent can skip chain-state reset.
   const hasContinuationSystemEvent = peekSystemEventEntries(sessionKey)?.some((e) =>
-    e.text?.startsWith("[continuation]"),
+    e.text?.startsWith("[continuation:wake]"),
   );
 
   const queuedSystemPrompt = await buildQueuedSystemPrompt({

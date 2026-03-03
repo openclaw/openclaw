@@ -81,6 +81,10 @@ function bumpContinuationGeneration(sessionKey: string): number {
   return next;
 }
 
+function clearContinuationGeneration(sessionKey: string): void {
+  continuationGenerations.delete(sessionKey);
+}
+
 export async function runReplyAgent(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -161,7 +165,9 @@ export async function runReplyAgent(params: {
       activeSessionEntry.continuationChainStartedAt = undefined;
       activeSessionEntry.continuationChainTokens = undefined;
     }
-    // Cancel any pending continuation timer by bumping the generation counter
+    // Cancel any pending continuation timer by bumping the generation counter.
+    // We don't clear the map entry yet — the timer callback needs the bumped value
+    // to detect invalidation. Cleanup happens when chains cap out or complete below.
     bumpContinuationGeneration(sessionKey);
     if (activeSessionStore && activeSessionEntry) {
       activeSessionStore[sessionKey] = {
@@ -778,6 +784,7 @@ export async function runReplyAgent(params: {
           defaultRuntime.log(
             `Continuation chain capped at ${maxChainLength} for session ${sessionKey}`,
           );
+          clearContinuationGeneration(sessionKey);
         } else {
           // Accumulate token usage for cost cap
           const usage = runResult.meta?.agentMeta?.usage;
@@ -793,6 +800,7 @@ export async function runReplyAgent(params: {
             defaultRuntime.log(
               `Continuation cost cap exceeded (${accumulatedChainTokens} > ${costCapTokens}) for session ${sessionKey}`,
             );
+            clearContinuationGeneration(sessionKey);
           } else {
             // Persist chain state for both DELEGATE and WORK paths
             const nextChainCount = currentChainCount + 1;
@@ -874,7 +882,7 @@ export async function runReplyAgent(params: {
                   return; // External message arrived — cancel
                 }
                 enqueueSystemEvent(
-                  `[continuation] Turn ${nextChainCount + 1}/${maxChainLength}. ` +
+                  `[continuation:wake] Turn ${nextChainCount + 1}/${maxChainLength}. ` +
                     `Chain started at ${new Date(chainStartedAt).toISOString()}. ` +
                     `Accumulated tokens: ${accumulatedChainTokens}. ` +
                     `The agent elected to continue working.`,
