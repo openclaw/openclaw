@@ -30,6 +30,10 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
   return normalizeMessageChannel(head);
 }
 
+function isMainSessionKey(sessionKey?: string): boolean {
+  return parseAgentSessionKey(sessionKey)?.rest?.trim().toLowerCase() === "main";
+}
+
 function isExternalRoutingChannel(channel?: string): channel is string {
   return Boolean(
     channel && channel !== INTERNAL_MESSAGE_CHANNEL && isDeliverableMessageChannel(channel),
@@ -42,6 +46,9 @@ export function resolveLastChannelRaw(params: {
   sessionKey?: string;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL && isMainSessionKey(params.sessionKey)) {
+    return params.originatingChannelRaw || params.persistedLastChannel;
+  }
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   let resolved = params.originatingChannelRaw || params.persistedLastChannel;
@@ -66,6 +73,9 @@ export function resolveLastToRaw(params: {
   sessionKey?: string;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL && isMainSessionKey(params.sessionKey)) {
+    return params.originatingToRaw || params.toRaw || params.persistedLastTo;
+  }
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
 
