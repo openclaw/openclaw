@@ -252,7 +252,7 @@ describe("web monitor inbox", () => {
     });
   });
 
-  it("handles append messages by marking them read but skipping auto-reply", async () => {
+  it("skips stale append messages after marking them read", async () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
 
     const upsert = {
@@ -265,7 +265,7 @@ describe("web monitor inbox", () => {
             remoteJid: "999@s.whatsapp.net",
           },
           message: { conversation: "old message" },
-          messageTimestamp: nowSeconds(),
+          messageTimestamp: nowSeconds(-5 * 60_000),
           pushName: "History Sender",
         },
       ],
@@ -286,6 +286,47 @@ describe("web monitor inbox", () => {
 
     // Verify it WAS NOT passed to onMessage
     expect(onMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
+  it("processes recent append messages after marking them read", async () => {
+    const { onMessage, listener, sock } = await openInboxMonitor();
+
+    const upsert = {
+      type: "append",
+      messages: [
+        {
+          key: {
+            id: "append-recent-1",
+            fromMe: false,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: { conversation: "recent append message" },
+          messageTimestamp: nowSeconds(),
+          pushName: "Recent Sender",
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(sock.readMessages).toHaveBeenCalledWith([
+      {
+        remoteJid: "999@s.whatsapp.net",
+        id: "append-recent-1",
+        participant: undefined,
+        fromMe: false,
+      },
+    ]);
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "recent append message",
+        from: "+999",
+      }),
+    );
 
     await listener.close();
   });

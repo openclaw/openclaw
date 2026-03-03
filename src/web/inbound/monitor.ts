@@ -42,6 +42,7 @@ export async function monitorWebInbox(options: {
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
+  const APPEND_RECENT_GRACE_MS = 60_000;
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -411,9 +412,14 @@ export async function monitorWebInbox(options: {
 
       await maybeMarkInboundAsRead(inbound);
 
-      // If this is history/offline catch-up, mark read above but skip auto-reply.
+      // Baileys can emit fresh post-reconnect messages as "append".
+      // Keep suppressing old history sync while allowing recent append events through.
       if (upsert.type === "append") {
-        continue;
+        const messageTimestampMs =
+          typeof inbound.messageTimestampMs === "number" ? inbound.messageTimestampMs : 0;
+        if (messageTimestampMs < connectedAtMs - APPEND_RECENT_GRACE_MS) {
+          continue;
+        }
       }
 
       const enriched = await enrichInboundMessage(msg);
