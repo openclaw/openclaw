@@ -1254,8 +1254,10 @@ async function runWebSearch(params: {
   kimiModel?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
-    params.provider === "brave" || params.provider === "serper"
-      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
+    params.provider === "serper"
+      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}`
+      : params.provider === "brave"
+        ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
         : params.provider === "kimi"
