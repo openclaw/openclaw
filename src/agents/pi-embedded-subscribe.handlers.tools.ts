@@ -358,9 +358,10 @@ export async function handleToolExecutionEnd(
     ctx.state.pendingMessagingTexts.delete(toolCallId);
     if (!isToolError) {
       ctx.state.messagingToolSentTexts.push(pendingText);
-      ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(pendingText));
+      const normalizedPendingText = normalizeTextForComparison(pendingText);
+      ctx.state.messagingToolSentTextsNormalized.push(normalizedPendingText);
       if (!pendingTarget) {
-        ctx.state.messagingToolSentWithoutTargetCount += 1;
+        ctx.state.messagingToolSentWithoutTargetTextsNormalized.add(normalizedPendingText);
       }
       ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
       ctx.trimMessagingToolSent();

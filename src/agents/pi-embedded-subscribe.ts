@@ -74,7 +74,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
-    messagingToolSentWithoutTargetCount: 0,
+    messagingToolSentWithoutTargetTextsNormalized: new Set(),
     messagingToolSentMediaUrls: [],
     pendingMessagingTexts: new Map(),
     pendingMessagingTargets: new Map(),
@@ -201,7 +201,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const MAX_MESSAGING_SENT_TEXTS = 200;
   const MAX_MESSAGING_SENT_TARGETS = 200;
   const MAX_MESSAGING_SENT_MEDIA_URLS = 200;
-  const shouldSuppressMessagingToolBlockReply = () => {
+  const shouldSuppressMessagingToolBlockReply = (normalizedText: string) => {
     const hasRoutingScope =
       typeof params.messageProvider === "string" &&
       params.messageProvider.trim().length > 0 &&
@@ -216,17 +216,19 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       // and don't include explicit to/target, so no send target is recorded.
       return true;
     }
-    if (state.messagingToolSentWithoutTargetCount > 0) {
-      // Mixed runs can include both explicit off-target sends and inferred sends with no target
-      // metadata. Preserve legacy suppression for inferred sends in that case.
+    if (
+      shouldSuppressMessagingToolReplies({
+        messageProvider: params.messageProvider,
+        messagingToolSentTargets,
+        originatingTo: params.originatingTo,
+        accountId: params.accountId,
+      })
+    ) {
       return true;
     }
-    return shouldSuppressMessagingToolReplies({
-      messageProvider: params.messageProvider,
-      messagingToolSentTargets,
-      originatingTo: params.originatingTo,
-      accountId: params.accountId,
-    });
+    // Mixed runs may include explicit off-target sends and inferred sends without target metadata.
+    // Keep fallback suppression only for texts that were actually sent via targetless sends.
+    return state.messagingToolSentWithoutTargetTextsNormalized.has(normalizedText);
   };
   const trimMessagingToolSent = () => {
     if (messagingToolSentTexts.length > MAX_MESSAGING_SENT_TEXTS) {
@@ -243,7 +245,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       messagingToolSentMediaUrls.splice(0, overflow);
     }
   };
-
   const ensureCompactionPromise = () => {
     if (!state.compactionRetryPromise) {
       // Create a single promise that resolves when ALL pending compactions complete
@@ -509,7 +510,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // is risky because if the tool fails after suppression, the user gets no response
     const normalizedChunk = normalizeTextForComparison(chunk);
     if (
-      shouldSuppressMessagingToolBlockReply() &&
+      shouldSuppressMessagingToolBlockReply(normalizedChunk) &&
       isMessagingToolDuplicateNormalized(normalizedChunk, messagingToolSentTextsNormalized)
     ) {
       log.debug(`Skipping block reply - already sent via messaging tool: ${chunk.slice(0, 50)}...`);
@@ -613,7 +614,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
-    state.messagingToolSentWithoutTargetCount = 0;
+    state.messagingToolSentWithoutTargetTextsNormalized.clear();
     messagingToolSentMediaUrls.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();

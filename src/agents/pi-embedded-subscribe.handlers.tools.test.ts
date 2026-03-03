@@ -42,7 +42,7 @@ function createTestContext(): {
       pendingMessagingMediaUrls: new Map<string, string[]>(),
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
-      messagingToolSentWithoutTargetCount: 0,
+      messagingToolSentWithoutTargetTextsNormalized: new Set<string>(),
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
@@ -194,7 +194,9 @@ describe("messaging tool media URL tracking", () => {
       result: { details: { status: "ok" } },
     });
 
-    expect(ctx.state.messagingToolSentWithoutTargetCount).toBe(1);
+    expect(
+      ctx.state.messagingToolSentWithoutTargetTextsNormalized.has("sent via inferred route"),
+    ).toBe(true);
   });
 
   it("does not count targetless sends when the tool errors", async () => {
@@ -214,7 +216,7 @@ describe("messaging tool media URL tracking", () => {
       result: { details: { status: "error" } },
     });
 
-    expect(ctx.state.messagingToolSentWithoutTargetCount).toBe(0);
+    expect(ctx.state.messagingToolSentWithoutTargetTextsNormalized.size).toBe(0);
   });
 
   it("tracks media arg from messaging tool as pending", async () => {
