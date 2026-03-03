@@ -743,6 +743,14 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back on unhandled stop reason error responses", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: new Error("Unhandled stop reason: error"),
+    });
+  });
+
   it("falls back when message says aborted but error is a timeout", async () => {
     await expectFallsBackToHaiku({
       provider: "openai",
