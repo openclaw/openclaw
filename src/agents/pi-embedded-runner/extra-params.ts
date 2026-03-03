@@ -524,6 +524,24 @@ function mapThinkingLevelToOpenRouterReasoningEffort(
   return thinkingLevel;
 }
 
+function isGroqModel(model: { provider?: unknown; baseUrl?: unknown }): boolean {
+  if (typeof model.provider === "string" && model.provider.toLowerCase() === "groq") {
+    return true;
+  }
+  if (typeof model.baseUrl === "string") {
+    const baseUrl = model.baseUrl.toLowerCase();
+    return baseUrl.includes("groq.com") || baseUrl.includes("api.groq");
+  }
+  return false;
+}
+
+function mapThinkingLevelToGroqReasoningEffort(thinkingLevel: ThinkLevel): "none" | "default" {
+  if (thinkingLevel === "off") {
+    return "none";
+  }
+  return "default";
+}
+
 function shouldApplySiliconFlowThinkingOffCompat(params: {
   provider: string;
   modelId: string;
@@ -819,6 +837,41 @@ function createGoogleThinkingPayloadWrapper(
   };
 }
 
+function createGroqReasoningWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!isGroqModel(model)) {
+      return underlying(model, context, options);
+    }
+
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if ("reasoning_effort" in payloadObj) {
+            const currentValue = payloadObj.reasoning_effort;
+            if (currentValue !== "none" && currentValue !== "default") {
+              const normalized = thinkingLevel
+                ? mapThinkingLevelToGroqReasoningEffort(thinkingLevel)
+                : "default";
+              payloadObj.reasoning_effort = normalized;
+              log.debug(
+                `normalized Groq reasoning_effort from "${currentValue}" to "${normalized}" (${model.id})`,
+              );
+            }
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Create a streamFn wrapper that injects tool_stream=true for Z.AI providers.
  *
@@ -959,6 +1012,10 @@ export function applyExtraParamsToAgent(
   // Guard Google payloads against invalid negative thinking budgets emitted by
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
+  // Normalize reasoning_effort for Groq models to "none" or "default".
+  // See: openclaw/openclaw#32638
+  agent.streamFn = createGroqReasoningWrapper(agent.streamFn, thinkingLevel);
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI Responses models and auto-enable

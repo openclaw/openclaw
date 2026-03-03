@@ -349,6 +349,103 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
   });
 
+  it("normalizes reasoning_effort to 'default' for Groq models with non-standard values (#32638)", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { reasoning_effort: "high" };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "groq", "llama-3.3-70b-versatile", undefined, "high");
+
+    const model = {
+      api: "openai-completions",
+      provider: "groq",
+      id: "llama-3.3-70b-versatile",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.reasoning_effort).toBe("default");
+  });
+
+  it("normalizes reasoning_effort to 'none' for Groq models when thinkingLevel is 'off' (#32638)", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { reasoning_effort: "low" };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "groq", "llama-3.3-70b-versatile", undefined, "off");
+
+    const model = {
+      api: "openai-completions",
+      provider: "groq",
+      id: "llama-3.3-70b-versatile",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.reasoning_effort).toBe("none");
+  });
+
+  it("preserves valid reasoning_effort values for Groq models (#32638)", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { reasoning_effort: "default" };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "groq", "llama-3.3-70b-versatile", undefined, "medium");
+
+    const model = {
+      api: "openai-completions",
+      provider: "groq",
+      id: "llama-3.3-70b-versatile",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.reasoning_effort).toBe("default");
+  });
+
+  it("detects Groq models via baseUrl containing groq.com (#32638)", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { reasoning_effort: "high" };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "custom", "llama-3.3-70b", undefined, "high");
+
+    const model = {
+      api: "openai-completions",
+      provider: "custom",
+      id: "llama-3.3-70b",
+      baseUrl: "https://api.groq.com/openai/v1",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.reasoning_effort).toBe("default");
+  });
+
   it("normalizes thinking=off to null for SiliconFlow Pro models", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
