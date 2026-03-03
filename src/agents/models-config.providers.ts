@@ -970,7 +970,7 @@ function buildTogetherProvider(): ProviderConfig {
   };
 }
 
-export function buildFalOpenrouterProvider(): ProviderConfig {
+function buildFalOpenrouterProvider(): ProviderConfig {
   return {
     baseUrl: FAL_OPENROUTER_BASE_URL,
     api: "openai-completions",

@@ -558,7 +558,11 @@ function createFalOpenrouterAuthWrapper(baseStreamFn: StreamFn | undefined): Str
 }
 
 function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
-  return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
+  const normalizedProvider = provider.toLowerCase();
+  return (
+    (normalizedProvider === "openrouter" || normalizedProvider === "fal-openrouter") &&
+    modelId.toLowerCase().startsWith("anthropic/")
+  );
 }
 
 type PayloadMessage = {
@@ -1200,6 +1204,14 @@ export function applyExtraParamsToAgent(
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
     log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
     agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
+  }
+
+  // fal routes to OpenRouter — apply the same reasoning-format transformation
+  // that regular OpenRouter uses to avoid flat reasoning_effort rejection.
+  if (provider === "fal-openrouter") {
+    const skipReasoningInjection = modelId === "auto" || isOpenRouterReasoningUnsupported(modelId);
+    const falThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
+    agent.streamFn = createOpenRouterWrapper(agent.streamFn, falThinkingLevel);
   }
 
   // fal OpenRouter requires `Authorization: Key <fal_key>` instead of Bearer.
