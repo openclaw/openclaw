@@ -15,7 +15,7 @@ Add a new response token `CONTINUE_WORK` (alongside existing `NO_REPLY` and `HEA
 ```
 CONTINUE_WORK              → schedule another turn (same session, default delay)
 CONTINUE_WORK:30           → schedule another turn after 30 seconds
-CONTINUE_DELEGATE:<task>   → spawn sub-agent with task, result wakes parent
+[[CONTINUE_DELEGATE: <task>]]   → spawn sub-agent with task, result wakes parent
 DONE                       → (default) session goes inert until external event
 ```
 
@@ -26,7 +26,7 @@ DONE                       → (default) session goes inert until external event
    - Strip the token from the displayed response (like `NO_REPLY`)
    - Schedule an internal "continuation" event for the session after `delay` ms
    - The continuation event delivers a system message like: `[continuation] You elected to continue. Resume your work.`
-3. If `CONTINUE_DELEGATE:<task>` is detected:
+3. If `[[CONTINUE_DELEGATE: <task>]]` is detected:
    - Strip the token
    - Spawn a sub-agent with the specified task
    - Sub-agent completion naturally wakes the parent session
@@ -115,12 +115,12 @@ This is the **lich pattern** made intentional. Instead of a single emergency phy
 
 ### CONTINUE_DELEGATE as Gateway-Native Mechanism
 
-`CONTINUE_DELEGATE:<task>` (defined in the Token Variants section above) is the gateway-native mechanism that enables temporal self-sharding without requiring the agent to make explicit `sessions_spawn` calls:
+`[[CONTINUE_DELEGATE: <task>]]` (defined in the Token Variants section above) is the gateway-native mechanism that enables temporal self-sharding without requiring the agent to make explicit `sessions_spawn` calls:
 
 ```
-CONTINUE_DELEGATE:review PR #347 with focus on error handling
-CONTINUE_DELEGATE:check CI status and report back in 10 minutes
-CONTINUE_DELEGATE:synthesize findings from shards A and B
+[[CONTINUE_DELEGATE: review PR #347 with focus on error handling]]
+[[CONTINUE_DELEGATE: check CI status and report back in 10 minutes]]
+[[CONTINUE_DELEGATE: synthesize findings from shards A and B]]
 ```
 
 The gateway handles sub-agent lifecycle, result routing, and parent wake-up. The agent expresses _intent_; the gateway handles _mechanics_. This separation is critical — the agent shouldn't need to know about session IDs, polling, or process management.

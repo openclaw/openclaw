@@ -95,16 +95,20 @@ export function isSilentReplyPrefixText(
 
 export type ContinuationSignal =
   | { kind: "work"; delayMs?: number }
-  | { kind: "delegate"; task: string; context?: string };
+  | { kind: "delegate"; task: string };
 
 /**
  * Checks if the agent response ends with a continuation signal.
  * Returns the parsed signal or null if no continuation is requested.
  *
  * Formats:
- *   CONTINUE_WORK          → continue with default delay
- *   CONTINUE_WORK:30       → continue after 30 seconds
- *   CONTINUE_DELEGATE:task → spawn sub-agent with task
+ *   CONTINUE_WORK              → continue with default delay
+ *   CONTINUE_WORK:30           → continue after 30 seconds
+ *   [[CONTINUE_DELEGATE: task]] → spawn sub-agent with task (bracket syntax, multiline-safe)
+ *
+ * DELEGATE uses bracket syntax ([[...]]) following the repo convention for tokens
+ * that carry body content (see reply_to, tts, line directives). Brackets naturally
+ * delimit the boundary, so multiline tasks work without ambiguity.
  */
 export function parseContinuationSignal(text: string | undefined): ContinuationSignal | null {
   if (!text) {
@@ -113,29 +117,12 @@ export function parseContinuationSignal(text: string | undefined): ContinuationS
 
   const trimmed = text.trim();
 
-  // Check for CONTINUE_DELEGATE:<task> at end of response, on its own line.
-  // Must be preceded by newline or start-of-string to avoid matching mid-sentence.
-  // The task is single-line (no `s` flag) — multiline content goes in the optional
-  // ---CONTEXT--- block. This prevents a mid-response instructional line like
-  // "CONTINUE_DELEGATE:example\nMore text" from being misread as a real signal.
-  const delegateWithContext = trimmed.match(
-    /(?:^|\n)CONTINUE_DELEGATE:([^\n]+)\n---CONTEXT---(?:\n([\s\S]*))?$/,
-  );
-  if (delegateWithContext) {
-    const task = delegateWithContext[1].trim();
-    const contextText = (delegateWithContext[2] ?? "").trim();
-    if (task) {
-      return {
-        kind: "delegate",
-        task,
-        context: contextText || undefined,
-      };
-    }
-  }
-  // No context block — single-line task at end of string
-  const delegateSimple = trimmed.match(/(?:^|\n)CONTINUE_DELEGATE:([^\n]+)$/);
-  if (delegateSimple) {
-    const task = delegateSimple[1].trim();
+  // Check for [[CONTINUE_DELEGATE: task]] at end of response.
+  // The bracket pair [[ ... ]] delimits the body, so multiline tasks are safe.
+  // The `s` flag lets the body span newlines within the brackets.
+  const delegateMatch = trimmed.match(/\[\[\s*CONTINUE_DELEGATE:\s*([\s\S]+?)\s*\]\]\s*$/);
+  if (delegateMatch) {
+    const task = delegateMatch[1].trim();
     if (task) {
       return { kind: "delegate", task };
     }
@@ -169,12 +156,9 @@ export function stripContinuationSignal(text: string): {
 
   let stripped: string;
   if (signal.kind === "delegate") {
-    // Strip the full DELEGATE signal: single-line task + optional ---CONTEXT--- block.
+    // Strip the [[CONTINUE_DELEGATE: ...]] bracket directive.
     // Mirrors the parser grammar exactly.
-    stripped = text.replace(
-      /(?:^|\n)CONTINUE_DELEGATE:[^\n]+(?:\n---CONTEXT---(?:\n[\s\S]*)?)?\s*$/,
-      "",
-    );
+    stripped = text.replace(/\[\[\s*CONTINUE_DELEGATE:\s*[\s\S]+?\s*\]\]\s*$/, "");
   } else {
     // Only strip CONTINUE_WORK when it's the signal type parsed
     stripped = text.replace(/\bCONTINUE_WORK(?::\d+)?\s*$/, "");

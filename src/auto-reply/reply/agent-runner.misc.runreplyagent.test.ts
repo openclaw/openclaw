@@ -1895,9 +1895,8 @@ describe("runReplyAgent continuation signal handling", () => {
     expect(hasContinuationEnqueueCall()).toBe(true);
   });
 
-  it("DELEGATE: spawns sub-agent with correct task and attachment", async () => {
-    const delegateTask = "Build the flux capacitor";
-    const delegateContext = "The capacitor needs 1.21 gigawatts of power.";
+  it("DELEGATE: spawns sub-agent with correct task (multiline bracket body)", async () => {
+    const delegateTask = "Build the flux capacitor\nThe capacitor needs 1.21 gigawatts of power.";
 
     spawnSubagentDirectMock.mockResolvedValueOnce({
       status: "accepted",
@@ -1908,7 +1907,7 @@ describe("runReplyAgent continuation signal handling", () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [
         {
-          text: `Starting delegation.\nCONTINUE_DELEGATE:${delegateTask}\n---CONTEXT---\n${delegateContext}`,
+          text: `Starting delegation.\n[[CONTINUE_DELEGATE: ${delegateTask}]]`,
         },
       ],
       meta: {},
@@ -1933,19 +1932,12 @@ describe("runReplyAgent continuation signal handling", () => {
 
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
 
-    // Verify the spawn params contain the task and attachments
+    // Verify the spawn params contain the full multiline task
     const spawnParams = spawnSubagentDirectMock.mock.calls[0][0];
     const spawnCtx = spawnSubagentDirectMock.mock.calls[0][1];
-    expect(spawnParams.task).toContain(delegateTask);
+    expect(spawnParams.task).toContain("Build the flux capacitor");
+    expect(spawnParams.task).toContain("1.21 gigawatts");
     expect(spawnCtx.agentSessionKey).toBe(sessionKey);
-    expect(spawnParams.attachments).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: "delegation-context.md",
-          content: delegateContext,
-        }),
-      ]),
-    );
 
     // Should NOT enqueue a continuation system event (no timer-based continuation)
     expect(hasContinuationEnqueueCall()).toBe(false);
@@ -1957,7 +1949,7 @@ describe("runReplyAgent continuation signal handling", () => {
     spawnSubagentDirectMock.mockRejectedValueOnce(new Error("Agent not available"));
 
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: `Delegating now.\nCONTINUE_DELEGATE:${delegateTask}` }],
+      payloads: [{ text: `Delegating now.\n[[CONTINUE_DELEGATE: ${delegateTask}]]` }],
       meta: {},
     });
 
@@ -2003,7 +1995,7 @@ describe("runReplyAgent continuation signal handling", () => {
     });
 
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: `Handing off.\nCONTINUE_DELEGATE:${delegateTask}` }],
+      payloads: [{ text: `Handing off.\n[[CONTINUE_DELEGATE: ${delegateTask}]]` }],
       meta: {},
     });
 
@@ -2066,7 +2058,7 @@ describe("runReplyAgent continuation signal handling", () => {
       { text: "[continuation] Turn 1/2. The agent elected to continue working." },
     ]);
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Delegating step 1.\nCONTINUE_DELEGATE:do step 1" }],
+      payloads: [{ text: "Delegating step 1.\n[[CONTINUE_DELEGATE: do step 1]]" }],
       meta: {},
     });
 
@@ -2088,7 +2080,7 @@ describe("runReplyAgent continuation signal handling", () => {
       { text: "[continuation] Turn 2/2. The agent elected to continue working." },
     ]);
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Delegating step 2.\nCONTINUE_DELEGATE:do step 2" }],
+      payloads: [{ text: "Delegating step 2.\n[[CONTINUE_DELEGATE: do step 2]]" }],
       meta: {},
     });
 
@@ -2109,7 +2101,7 @@ describe("runReplyAgent continuation signal handling", () => {
       { text: "[continuation] Turn 3/2. The agent elected to continue working." },
     ]);
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Trying step 3.\nCONTINUE_DELEGATE:do step 3" }],
+      payloads: [{ text: "Trying step 3.\n[[CONTINUE_DELEGATE: do step 3]]" }],
       meta: {},
     });
 

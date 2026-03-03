@@ -809,22 +809,11 @@ export async function runReplyAgent(params: {
             }
 
             const delegateTask = continuationSignal.task;
-            const delegateContext = continuationSignal.context;
-            const attachments = delegateContext
-              ? [
-                  {
-                    name: "delegation-context.md",
-                    content: delegateContext,
-                    mimeType: "text/markdown",
-                  },
-                ]
-              : undefined;
 
             try {
               const spawnResult = await spawnSubagentDirect(
                 {
                   task: `[continuation] Delegated task (turn ${nextChainCount}/${maxChainLength}): ${delegateTask}`,
-                  attachments,
                 },
                 {
                   agentSessionKey: sessionKey,

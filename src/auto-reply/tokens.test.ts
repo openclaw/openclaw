@@ -74,16 +74,16 @@ describe("parseContinuationSignal", () => {
     expect(result).toEqual({ kind: "work", delayMs: 5_000 });
   });
 
-  // --- CONTINUE_DELEGATE ---
+  // --- [[CONTINUE_DELEGATE: task]] (bracket syntax) ---
 
-  it("parses CONTINUE_DELEGATE with simple task", () => {
-    const result = parseContinuationSignal("CONTINUE_DELEGATE:run the tests");
+  it("parses [[CONTINUE_DELEGATE: task]] with simple task", () => {
+    const result = parseContinuationSignal("[[CONTINUE_DELEGATE: run the tests]]");
     expect(result).toEqual({ kind: "delegate", task: "run the tests" });
   });
 
-  it("parses CONTINUE_DELEGATE after response text", () => {
+  it("parses [[CONTINUE_DELEGATE: task]] after response text", () => {
     const result = parseContinuationSignal(
-      "I'll hand this off.\nCONTINUE_DELEGATE:review PR #42 and leave comments",
+      "I'll hand this off.\n[[CONTINUE_DELEGATE: review PR #42 and leave comments]]",
     );
     expect(result).toEqual({
       kind: "delegate",
@@ -91,98 +91,64 @@ describe("parseContinuationSignal", () => {
     });
   });
 
-  it("does not parse CONTINUE_DELEGATE with trailing text on subsequent lines", () => {
-    // Multiline content after CONTINUE_DELEGATE: without ---CONTEXT--- separator
-    // should NOT match — prevents mid-response instructional text from misfiring.
-    const result = parseContinuationSignal("CONTINUE_DELEGATE:first do X\nthen do Y\nfinally Z");
-    expect(result).toBeNull();
-  });
-
-  it("parses CONTINUE_DELEGATE with multiline content in ---CONTEXT--- block", () => {
+  it("parses [[CONTINUE_DELEGATE: multiline task]] naturally", () => {
     const result = parseContinuationSignal(
-      "CONTINUE_DELEGATE:do the thing\n---CONTEXT---\nfirst do X\nthen do Y\nfinally Z",
+      "[[CONTINUE_DELEGATE: first do X\nthen do Y\nfinally Z]]",
     );
     expect(result).toEqual({
       kind: "delegate",
-      task: "do the thing",
-      context: "first do X\nthen do Y\nfinally Z",
+      task: "first do X\nthen do Y\nfinally Z",
     });
   });
 
   it("trims whitespace from delegate task", () => {
-    const result = parseContinuationSignal("CONTINUE_DELEGATE:  check the logs  ");
+    const result = parseContinuationSignal("[[CONTINUE_DELEGATE:   check the logs   ]]");
     expect(result).toEqual({ kind: "delegate", task: "check the logs" });
   });
 
   it("rejects empty delegate task (whitespace only)", () => {
-    const result = parseContinuationSignal("CONTINUE_DELEGATE:   ");
+    const result = parseContinuationSignal("[[CONTINUE_DELEGATE:    ]]");
     expect(result).toBeNull();
   });
 
-  it("does not match CONTINUE_DELEGATE mid-text", () => {
+  it("does not match bare CONTINUE_DELEGATE: without brackets", () => {
+    const result = parseContinuationSignal("CONTINUE_DELEGATE:run the tests");
+    expect(result).toBeNull();
+  });
+
+  it("does not match unclosed bracket", () => {
+    const result = parseContinuationSignal("[[CONTINUE_DELEGATE: run the tests");
+    expect(result).toBeNull();
+  });
+
+  it("does not match mid-text bracket directive followed by more content", () => {
     const result = parseContinuationSignal(
-      "You can use CONTINUE_DELEGATE:task to continue your work in a sub-agent.",
+      "Use [[CONTINUE_DELEGATE: example]] to delegate.\nMore text here.",
     );
     expect(result).toBeNull();
   });
 
-  it("matches CONTINUE_DELEGATE on its own line after text", () => {
+  it("matches bracket directive at end after text", () => {
     const result = parseContinuationSignal(
-      "I've finished the analysis.\nCONTINUE_DELEGATE:review the results",
+      "I've finished the analysis.\n[[CONTINUE_DELEGATE: review the results]]",
     );
     expect(result).toEqual({ kind: "delegate", task: "review the results" });
   });
 
-  it("does not misfire on instructional CONTINUE_DELEGATE mid-response", () => {
-    // An agent explaining the signal in its reply should not trigger delegation
-    const result = parseContinuationSignal(
-      "Here is how you use it:\nCONTINUE_DELEGATE:example task\nAnd then the agent handles it.",
-    );
-    expect(result).toBeNull();
+  it("handles extra whitespace inside brackets", () => {
+    const result = parseContinuationSignal("[[  CONTINUE_DELEGATE:  do the thing  ]]");
+    expect(result).toEqual({ kind: "delegate", task: "do the thing" });
   });
 
-  it("treats empty context after separator as no context", () => {
-    const result = parseContinuationSignal("CONTINUE_DELEGATE:review task\n---CONTEXT---\n");
-    expect(result).not.toBeNull();
-    expect(result?.kind).toBe("delegate");
-    if (result?.kind === "delegate") {
-      expect(result.task).toBe("review task");
-      expect(result.context).toBeUndefined();
-    }
-  });
-
-  it("treats whitespace-only context as no context", () => {
-    const result = parseContinuationSignal("CONTINUE_DELEGATE:review task\n---CONTEXT---\n   \n  ");
-    expect(result).not.toBeNull();
-    expect(result?.kind).toBe("delegate");
-    if (result?.kind === "delegate") {
-      expect(result.task).toBe("review task");
-      expect(result.context).toBeUndefined();
-    }
-  });
-
-  it("parses CONTINUE_DELEGATE with context block", () => {
-    const result = parseContinuationSignal(
-      "CONTINUE_DELEGATE:review the spectral analysis\n---CONTEXT---\nTrack: kitchen-at-midnight\nIssue: 98.7% energy below 320Hz",
-    );
-    expect(result).toEqual({
-      kind: "delegate",
-      task: "review the spectral analysis",
-      context: "Track: kitchen-at-midnight\nIssue: 98.7% energy below 320Hz",
-    });
-  });
-
-  it("parses CONTINUE_DELEGATE without context as before", () => {
-    const result = parseContinuationSignal("CONTINUE_DELEGATE:simple task no context");
-    expect(result).toEqual({ kind: "delegate", task: "simple task no context" });
-    expect(result).not.toHaveProperty("context");
+  it("handles trailing whitespace after closing bracket", () => {
+    const result = parseContinuationSignal("[[CONTINUE_DELEGATE: task]]   ");
+    expect(result).toEqual({ kind: "delegate", task: "task" });
   });
 
   // --- Precedence ---
 
-  it("prefers CONTINUE_DELEGATE over CONTINUE_WORK when both present", () => {
-    // DELEGATE match is checked first in the function
-    const result = parseContinuationSignal("CONTINUE_WORK\nCONTINUE_DELEGATE:do something");
+  it("prefers [[CONTINUE_DELEGATE:]] over CONTINUE_WORK when both present", () => {
+    const result = parseContinuationSignal("CONTINUE_WORK\n[[CONTINUE_DELEGATE: do something]]");
     expect(result).toEqual({ kind: "delegate", task: "do something" });
   });
 });
@@ -215,14 +181,25 @@ describe("stripContinuationSignal", () => {
     expect(result.signal).toEqual({ kind: "work", delayMs: 60_000 });
   });
 
-  it("strips CONTINUE_DELEGATE and preserves preceding text", () => {
+  it("strips [[CONTINUE_DELEGATE:]] and preserves preceding text", () => {
     const result = stripContinuationSignal(
-      "I'll delegate this.\nCONTINUE_DELEGATE:run tests on PR #7",
+      "I'll delegate this.\n[[CONTINUE_DELEGATE: run tests on PR #7]]",
     );
     expect(result.text).toBe("I'll delegate this.");
     expect(result.signal).toEqual({
       kind: "delegate",
       task: "run tests on PR #7",
+    });
+  });
+
+  it("strips [[CONTINUE_DELEGATE:]] with multiline task", () => {
+    const result = stripContinuationSignal(
+      "Handing off.\n[[CONTINUE_DELEGATE: check CI\nreview the PR\nrun lint]]",
+    );
+    expect(result.text).toBe("Handing off.");
+    expect(result.signal).toEqual({
+      kind: "delegate",
+      task: "check CI\nreview the PR\nrun lint",
     });
   });
 

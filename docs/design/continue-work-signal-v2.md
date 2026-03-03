@@ -24,7 +24,7 @@ The mechanism is **volitional** — the agent elects to continue at every turn b
 ```
 CONTINUE_WORK              → schedule another turn (same session, default delay)
 CONTINUE_WORK:30           → schedule another turn after 30 seconds
-CONTINUE_DELEGATE:<task>   → spawn sub-agent with task, result wakes parent
+[[CONTINUE_DELEGATE: <task>]]   → spawn sub-agent with task, result wakes parent
 DONE                       → (default) session goes inert until external event
 ```
 
@@ -35,7 +35,7 @@ DONE                       → (default) session goes inert until external event
    - Strip the token from the displayed response (like `NO_REPLY`)
    - Schedule an internal "continuation" event for the session after `delay` ms
    - The continuation event delivers a system message: `[continuation] Turn N/M. You elected to continue. Resume your work.`
-3. If `CONTINUE_DELEGATE:<task>` is detected:
+3. If `[[CONTINUE_DELEGATE: <task>]]` is detected:
    - Strip the token
    - Spawn a sub-agent with the specified task
    - Sub-agent completion naturally wakes the parent session
