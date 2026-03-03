@@ -6,6 +6,7 @@ import {
   __testing,
   assertActorCanSendMessage,
   assertPermissionContractsReadyForActor,
+  mapRuntimeToolToPermission,
   resolveActorWebBridgeRoute,
 } from "./tool-permission-contracts.js";
 
@@ -101,5 +102,9 @@ executive_orchestrator:
       baseUrl: "http://127.0.0.1:9867",
       token: "test-token-123",
     });
+  });
+
+  it("maps sessions_spawn to subagents permission namespace", () => {
+    expect(mapRuntimeToolToPermission("sessions_spawn")).toBe("subagents");
   });
 });

@@ -6,6 +6,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { resolveAgentConfig } from "../agent-scope.js";
+import { aliasesForCanonicalAgentId } from "../subagent-aliases.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
@@ -16,6 +17,7 @@ type AgentListEntry = {
   id: string;
   name?: string;
   configured: boolean;
+  aliases?: string[];
 };
 
 export function createAgentsListTool(opts?: {
@@ -86,6 +88,7 @@ export function createAgentsListTool(opts?: {
         id,
         name: configuredNameMap.get(id),
         configured: configuredIds.includes(id),
+        aliases: aliasesForCanonicalAgentId(id),
       }));
 
       return jsonResult({

@@ -98,14 +98,71 @@ function withBaseUrl(baseUrl: string | undefined, path: string): string {
   return `${trimmed.replace(/\/$/, "")}${path}`;
 }
 
+function isNotFoundError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b404\b/i.test(msg) || /not found/i.test(msg);
+}
+
+function coerceBrowserTabLike(payload: unknown): BrowserTab | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  const targetId =
+    typeof record.targetId === "string"
+      ? record.targetId
+      : typeof record.id === "string"
+        ? record.id
+        : "pinchtab-tab";
+  const title = typeof record.title === "string" ? record.title : "";
+  const url = typeof record.url === "string" ? record.url : "";
+  if (!url) {
+    return undefined;
+  }
+  return { targetId, title, url };
+}
+
 export async function browserStatus(
   baseUrl?: string,
   opts?: { profile?: string },
 ): Promise<BrowserStatus> {
   const q = buildProfileQuery(opts?.profile);
-  return await fetchBrowserJson<BrowserStatus>(withBaseUrl(baseUrl, `/${q}`), {
-    timeoutMs: 1500,
-  });
+  try {
+    return await fetchBrowserJson<BrowserStatus>(withBaseUrl(baseUrl, `/${q}`), {
+      timeoutMs: 1500,
+    });
+  } catch (err) {
+    if (!isNotFoundError(err)) {
+      throw err;
+    }
+    const health = await fetchBrowserJson<{ status?: string; tabs?: unknown[] }>(
+      withBaseUrl(baseUrl, `/health`),
+      {
+        timeoutMs: 1500,
+      },
+    );
+    const tabsCount = Array.isArray(health.tabs) ? health.tabs.length : 0;
+    return {
+      enabled: true,
+      profile: opts?.profile,
+      running: true,
+      cdpReady: true,
+      cdpHttp: true,
+      pid: null,
+      cdpPort: 0,
+      userDataDir: null,
+      color: "#888888",
+      headless: true,
+      chosenBrowser: "pinchtab",
+      attachOnly: false,
+      detectError: health.status && health.status !== "ok" ? health.status : undefined,
+      executablePath: null,
+      noSandbox: false,
+      detectedBrowser: "pinchtab",
+      detectedExecutablePath: null,
+      cdpUrl: "",
+    };
+  }
 }
 
 export async function browserProfiles(baseUrl?: string): Promise<ProfileStatus[]> {
@@ -120,10 +177,17 @@ export async function browserProfiles(baseUrl?: string): Promise<ProfileStatus[]
 
 export async function browserStart(baseUrl?: string, opts?: { profile?: string }): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
-  await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
-    method: "POST",
-    timeoutMs: 15000,
-  });
+  try {
+    await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
+      method: "POST",
+      timeoutMs: 15000,
+    });
+  } catch (err) {
+    if (!isNotFoundError(err)) {
+      throw err;
+    }
+    // Pinchtab runs continuously and may not expose /start.
+  }
 }
 
 export async function browserStop(baseUrl?: string, opts?: { profile?: string }): Promise<void> {
@@ -219,12 +283,34 @@ export async function browserOpenTab(
   opts?: { profile?: string },
 ): Promise<BrowserTab> {
   const q = buildProfileQuery(opts?.profile);
-  return await fetchBrowserJson<BrowserTab>(withBaseUrl(baseUrl, `/tabs/open${q}`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-    timeoutMs: 15000,
-  });
+  const body = JSON.stringify({ url });
+  const tryRoutes = [`/tabs/open${q}`, `/tabs/new${q}`, `/navigate${q}`, `/nav${q}`];
+  let lastErr: unknown;
+  for (const route of tryRoutes) {
+    try {
+      const res = await fetchBrowserJson<unknown>(withBaseUrl(baseUrl, route), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        timeoutMs: 15000,
+      });
+      const tabLike = coerceBrowserTabLike(res);
+      if (tabLike) {
+        return tabLike;
+      }
+      const tabs = await browserTabs(baseUrl, opts);
+      if (tabs.length > 0) {
+        return tabs[tabs.length - 1];
+      }
+      return { targetId: "pinchtab-tab", title: "", url };
+    } catch (err) {
+      lastErr = err;
+      if (!isNotFoundError(err)) {
+        throw err;
+      }
+    }
+  }
+  throw (lastErr ?? new Error("failed to open tab"));
 }
 
 export async function browserFocusTab(

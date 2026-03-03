@@ -17,6 +17,7 @@ import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { resolveSubagentAgentAlias } from "./subagent-aliases.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
@@ -107,6 +108,10 @@ export type SpawnSubagentResult = {
     relDir: string;
   };
 };
+
+function resolveSpawnAgentIdAlias(agentId: string): string {
+  return resolveSubagentAgentAlias(agentId);
+}
 
 export function splitModelRef(ref?: string) {
   if (!ref) {
@@ -342,7 +347,9 @@ export async function spawnSubagentDirect(
   const requesterAgentId = normalizeAgentId(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
-  const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  const targetAgentId = requestedAgentId
+    ? resolveSpawnAgentIdAlias(requestedAgentId)
+    : requesterAgentId;
   if (targetAgentId !== requesterAgentId) {
     const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
     const allowAny = allowAgents.some((value) => value.trim() === "*");

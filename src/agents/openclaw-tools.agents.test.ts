@@ -126,4 +126,35 @@ describe("agents_list", () => {
     const research = agents?.find((agent) => agent.id === "research");
     expect(research?.configured).toBe(false);
   });
+
+  it("includes canonical alias mapping for known subagents", async () => {
+    setConfigWithAgentList([
+      {
+        id: "main",
+        subagents: {
+          allowAgents: ["catering_pipeline_builder", "cost_controller", "capacity_controller"],
+        },
+      },
+      { id: "catering_pipeline_builder" },
+      { id: "cost_controller" },
+      { id: "capacity_controller" },
+    ]);
+
+    const tool = requireAgentsListTool();
+    const result = await tool.execute("call5", {});
+    const agents = readAgentList(result) as Array<{
+      id: string;
+      aliases?: string[];
+    }>;
+
+    expect(agents.find((agent) => agent.id === "catering_pipeline_builder")?.aliases).toEqual([
+      "kissinger",
+    ]);
+    expect(agents.find((agent) => agent.id === "cost_controller")?.aliases).toEqual([
+      "friedman",
+    ]);
+    expect(agents.find((agent) => agent.id === "capacity_controller")?.aliases).toEqual([
+      "olivetti",
+    ]);
+  });
 });

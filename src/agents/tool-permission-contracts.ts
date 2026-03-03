@@ -331,6 +331,8 @@ export function mapRuntimeToolToPermission(toolName: string): string {
   switch (toolName) {
     case "browser":
       return "web_browsing";
+    case "sessions_spawn":
+      return "subagents";
     case "message":
     case "sessions_send":
       return "send_message";

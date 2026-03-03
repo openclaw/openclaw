@@ -291,4 +291,39 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     // Must pass: "research" is in allowAgents even though not in agents.list
     expect(details.status).toBe("accepted");
   });
+
+  it("sessions_spawn resolves kissinger alias to catering_pipeline_builder", async () => {
+    setAllowAgents(["catering_pipeline_builder"]);
+    const getChildSessionKey = mockAcceptedSpawn(5300);
+    const result = await executeSpawn("call11", "kissinger");
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith("agent:catering_pipeline_builder:subagent:")).toBe(
+      true,
+    );
+  });
+
+  it("sessions_spawn resolves friedman alias to cost_controller", async () => {
+    setAllowAgents(["cost_controller"]);
+    const getChildSessionKey = mockAcceptedSpawn(5400);
+    const result = await executeSpawn("call12", "friedman");
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith("agent:cost_controller:subagent:")).toBe(true);
+  });
+
+  it("sessions_spawn resolves olivetti alias to capacity_controller", async () => {
+    setAllowAgents(["capacity_controller"]);
+    const getChildSessionKey = mockAcceptedSpawn(5500);
+    const result = await executeSpawn("call13", "olivetti");
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith("agent:capacity_controller:subagent:")).toBe(true);
+  });
 });

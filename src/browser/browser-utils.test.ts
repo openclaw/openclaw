@@ -208,6 +208,21 @@ describe("fetchBrowserJson loopback auth (bridge auth registry)", () => {
     expect(headers.get("authorization")).toBe("Bearer registry-token");
     expect(getBridgeAuthForPort).toHaveBeenCalledWith(port);
   });
+
+  it("prefers per-port bridge auth over config token for loopback bridge URLs", async () => {
+    const port = 18766;
+    const getBridgeAuthForPort = vi.fn((candidate: number) =>
+      candidate === port ? { token: "pinchtab-token" } : undefined,
+    );
+    const init = __test.withLoopbackBrowserAuth(`http://127.0.0.1:${port}/`, undefined, {
+      loadConfig: () => ({ gateway: { auth: { token: "openclaw-browser-token" } } }),
+      resolveBrowserControlAuth: () => ({ token: "openclaw-browser-token" }),
+      getBridgeAuthForPort,
+    });
+    const headers = new Headers(init.headers ?? {});
+    expect(headers.get("authorization")).toBe("Bearer pinchtab-token");
+    expect(getBridgeAuthForPort).toHaveBeenCalledWith(port);
+  });
 });
 
 describe("browser server-context listKnownProfileNames", () => {

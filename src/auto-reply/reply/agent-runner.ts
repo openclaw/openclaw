@@ -58,6 +58,44 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+async function emitRuntimeReplyTelemetry(params: {
+  runId?: string;
+  runSessionId?: string;
+  replyToChannel?: OriginatingChannelType;
+  runStartedAt: number;
+  usage?: { input?: number; output?: number };
+  promptTokens?: number;
+  lastCallOutputTokens?: number;
+  ttftMs?: number;
+}) {
+  const inputTokens = Math.max(0, params.usage?.input ?? params.promptTokens ?? 0);
+  const outputTokens = Math.max(0, params.usage?.output ?? params.lastCallOutputTokens ?? 0);
+  const row = {
+    timestamp_utc: new Date().toISOString(),
+    source: "runtime-reply",
+    message_id: String(params.runId ?? params.runSessionId ?? Date.now()),
+    channel: params.replyToChannel ?? "unknown",
+    openai_called: Boolean(hasNonzeroUsage(params.usage) || inputTokens > 0 || outputTokens > 0),
+    telegram_sent: params.replyToChannel === "telegram",
+    retrieval_ms: 0,
+    prompt_build_ms: 0,
+    ttft_ms: Math.max(0, params.ttftMs ?? 0),
+    completion_ms: Math.max(0, Date.now() - params.runStartedAt),
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+  };
+  try {
+    await fs.promises.mkdir("/opt/openclaw/logs/runtime-metrics", { recursive: true });
+    await fs.promises.appendFile(
+      "/opt/openclaw/logs/runtime-metrics/stage-telemetry.runtime.jsonl",
+      `${JSON.stringify(row)}\n`,
+      "utf8",
+    );
+    console.log(`[stage-telemetry-runtime] ${JSON.stringify(row)}`);
+  } catch {
+    // best-effort telemetry only
+  }
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -688,6 +726,22 @@ export async function runReplyAgent(params: {
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
+    const agentMetaLoose = (runResult.meta?.agentMeta ?? {}) as Record<string, unknown>;
+    const replyTtftMsRaw = agentMetaLoose["ttftMs"] ?? agentMetaLoose["ttft_ms"];
+    const replyTtftMs =
+      typeof replyTtftMsRaw === "number" && Number.isFinite(replyTtftMsRaw)
+        ? Math.max(0, replyTtftMsRaw)
+        : 0;
+    await emitRuntimeReplyTelemetry({
+      runId,
+      runSessionId: followupRun.run.sessionId,
+      replyToChannel,
+      runStartedAt,
+      usage: usage ? { input: usage.input, output: usage.output } : undefined,
+      promptTokens,
+      lastCallOutputTokens: runResult.meta?.agentMeta?.lastCallUsage?.output,
+      ttftMs: replyTtftMs,
+    });
 
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,

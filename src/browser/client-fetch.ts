@@ -49,6 +49,37 @@ function withLoopbackBrowserAuthImpl(
     return { ...init, headers };
   }
 
+  let loopbackPort: number | undefined;
+  try {
+    const parsed = new URL(url);
+    loopbackPort =
+      parsed.port && Number.parseInt(parsed.port, 10) > 0
+        ? Number.parseInt(parsed.port, 10)
+        : parsed.protocol === "https:"
+          ? 443
+          : 80;
+  } catch {
+    // ignore parse failures and continue with config auth lookup
+  }
+
+  // Prefer per-port bridge auth for loopback bridge URLs (e.g. Pinchtab instances).
+  // This avoids accidentally sending the global browser token to a different bridge.
+  if (typeof loopbackPort === "number" && Number.isFinite(loopbackPort) && loopbackPort > 0) {
+    try {
+      const bridgeAuth = deps.getBridgeAuthForPort(loopbackPort);
+      if (bridgeAuth?.token) {
+        headers.set("Authorization", `Bearer ${bridgeAuth.token}`);
+        return { ...init, headers };
+      }
+      if (bridgeAuth?.password) {
+        headers.set("x-openclaw-password", bridgeAuth.password);
+        return { ...init, headers };
+      }
+    } catch {
+      // ignore registry lookup failures and continue with config auth lookup
+    }
+  }
+
   try {
     const cfg = deps.loadConfig();
     const auth = deps.resolveBrowserControlAuth(cfg);
@@ -62,26 +93,6 @@ function withLoopbackBrowserAuthImpl(
     }
   } catch {
     // ignore config/auth lookup failures and continue without auth headers
-  }
-
-  // Sandbox bridge servers can run with per-process ephemeral auth on dynamic ports.
-  // Fall back to the in-memory registry if config auth is not available.
-  try {
-    const parsed = new URL(url);
-    const port =
-      parsed.port && Number.parseInt(parsed.port, 10) > 0
-        ? Number.parseInt(parsed.port, 10)
-        : parsed.protocol === "https:"
-          ? 443
-          : 80;
-    const bridgeAuth = deps.getBridgeAuthForPort(port);
-    if (bridgeAuth?.token) {
-      headers.set("Authorization", `Bearer ${bridgeAuth.token}`);
-    } else if (bridgeAuth?.password) {
-      headers.set("x-openclaw-password", bridgeAuth.password);
-    }
-  } catch {
-    // ignore
   }
 
   return { ...init, headers };
