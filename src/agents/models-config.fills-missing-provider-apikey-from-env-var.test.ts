@@ -207,7 +207,7 @@ describe("models-config", () => {
     });
   });
 
-  it("preserves non-empty agent apiKey/baseUrl for matching providers in merge mode", async () => {
+  it("preserves non-empty agent apiKey for matching providers in merge mode", async () => {
     await withTempHome(async () => {
       const parsed = await runCustomProviderMergeTest({
         baseUrl: "https://agent.example/v1",
@@ -216,7 +216,8 @@ describe("models-config", () => {
         models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
       });
       expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
-      expect(parsed.providers.custom?.baseUrl).toBe("https://agent.example/v1");
+      // baseUrl comes from current config, not from stale models.json
+      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
     });
   });
 
@@ -230,6 +231,46 @@ describe("models-config", () => {
       });
       expect(parsed.providers.custom?.apiKey).toBe("CONFIG_KEY");
       expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    });
+  });
+
+  it("preserves moonshot CN baseUrl across ensureOpenClawModelsJson re-runs", async () => {
+    await withTempHome(async () => {
+      await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-cn-test", async () => {
+        const cnCfg: OpenClawConfig = {
+          models: {
+            providers: {
+              moonshot: {
+                baseUrl: "https://api.moonshot.cn/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        };
+
+        // First run: write models.json with CN baseUrl
+        await ensureOpenClawModelsJson(cnCfg);
+
+        // Second run: simulate stale models.json with international URL
+        await writeAgentModelsJson({
+          providers: {
+            moonshot: {
+              baseUrl: "https://api.moonshot.ai/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        });
+
+        // Re-run: CN baseUrl from config must NOT be overwritten by stale models.json
+        await ensureOpenClawModelsJson(cnCfg);
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { baseUrl?: string }>;
+        }>();
+        expect(parsed.providers.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
+      });
     });
   });
 

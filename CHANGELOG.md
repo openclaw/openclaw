@@ -11,6 +11,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/Moonshot CN endpoint: prevent stale `api.moonshot.ai` baseUrl in `models.json` from overwriting user-configured `api.moonshot.cn` URL on subsequent runs; also thread explicit `baseUrl` through implicit provider build so the CN endpoint is used consistently from first write. (#32607)
+- Agents/HuggingFace provider: fix falsy guard for undefined apiKey in `buildHuggingfaceProvider` that caused a potential TypeError via unchecked `!` assertions.
+- Agents/Ollama constants: remove redundant `OLLAMA_BASE_URL` alias that shadowed the imported `OLLAMA_NATIVE_BASE_URL` constant.
+
 - Agents/Skills runtime loading: propagate run config into embedded attempt and compaction skill-entry loading so explicitly enabled bundled companion skills are discovered consistently when skill snapshots do not already provide resolved entries. Thanks @gumadeiras.
 - Agents/Compaction continuity: expand staged-summary merge instructions to preserve active task status, batch progress, latest user request, and follow-up commitments so compaction handoffs retain in-flight work context. (#8903) thanks @joetomasone.
 - Gateway/status self version reporting: make Gateway self version in `openclaw status` prefer runtime `VERSION` (while preserving explicit `OPENCLAW_VERSION` override), preventing stale post-upgrade app version output. (#32655) thanks @liuxiaopai-ai.

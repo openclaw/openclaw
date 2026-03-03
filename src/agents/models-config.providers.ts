@@ -142,8 +142,7 @@ const QWEN_PORTAL_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-const OLLAMA_BASE_URL = OLLAMA_NATIVE_BASE_URL;
-const OLLAMA_API_BASE_URL = OLLAMA_BASE_URL;
+const OLLAMA_API_BASE_URL = OLLAMA_NATIVE_BASE_URL;
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_SHOW_MAX_MODELS = 200;
 const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -635,9 +634,9 @@ function buildMinimaxPortalProvider(): ProviderConfig {
   };
 }
 
-function buildMoonshotProvider(): ProviderConfig {
+function buildMoonshotProvider(baseUrl?: string): ProviderConfig {
   return {
-    baseUrl: MOONSHOT_BASE_URL,
+    baseUrl: baseUrl ?? MOONSHOT_BASE_URL,
     api: "openai-completions",
     models: [
       {
@@ -780,10 +779,10 @@ async function buildOllamaProvider(
 async function buildHuggingfaceProvider(apiKey?: string): Promise<ProviderConfig> {
   // Resolve env var name to value for discovery (GET /v1/models requires Bearer token).
   const resolvedSecret =
-    apiKey?.trim() !== ""
-      ? /^[A-Z][A-Z0-9_]*$/.test(apiKey!.trim())
-        ? (process.env[apiKey!.trim()] ?? "").trim()
-        : apiKey!.trim()
+    apiKey != null && apiKey.trim() !== ""
+      ? /^[A-Z][A-Z0-9_]*$/.test(apiKey.trim())
+        ? (process.env[apiKey.trim()] ?? "").trim()
+        : apiKey.trim()
       : "";
   const models =
     resolvedSecret !== ""
@@ -948,7 +947,12 @@ export async function resolveImplicitProviders(params: {
     resolveEnvApiKeyVarName("moonshot") ??
     resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
   if (moonshotKey) {
-    providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
+    const explicitBaseUrl =
+      typeof params.explicitProviders?.moonshot?.baseUrl === "string" &&
+      params.explicitProviders.moonshot.baseUrl
+        ? params.explicitProviders.moonshot.baseUrl
+        : undefined;
+    providers.moonshot = { ...buildMoonshotProvider(explicitBaseUrl), apiKey: moonshotKey };
   }
 
   const kimiCodingKey =
