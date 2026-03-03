@@ -296,14 +296,36 @@ export function createAgentEventHandler({
   clearAgentRunContext,
   toolEventRecipients,
 }: AgentEventHandlerOptions) {
+  const resolveAssistantChatUpdate = (data: Record<string, unknown>) => {
+    const fullText = typeof data.text === "string" ? data.text : undefined;
+    if (fullText !== undefined) {
+      return { fullText };
+    }
+    const deltaText = typeof data.delta === "string" ? data.delta : undefined;
+    if (deltaText !== undefined) {
+      return { deltaText };
+    }
+    return null;
+  };
+
   const emitChatDelta = (
     sessionKey: string,
     clientRunId: string,
     sourceRunId: string,
     seq: number,
-    text: string,
+    update: { fullText?: string; deltaText?: string },
   ) => {
-    const cleaned = stripInlineDirectiveTagsForDisplay(text).text;
+    const previous = chatRunState.buffers.get(clientRunId) ?? "";
+    const nextRaw =
+      update.fullText !== undefined
+        ? update.fullText
+        : update.deltaText !== undefined
+          ? `${previous}${update.deltaText}`
+          : "";
+    if (!nextRaw) {
+      return;
+    }
+    const cleaned = stripInlineDirectiveTagsForDisplay(nextRaw).text;
     if (!cleaned) {
       return;
     }
@@ -511,8 +533,10 @@ export function createAgentEventHandler({
       if (!isToolEvent || toolVerbose !== "off") {
         nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
       }
-      if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
-        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text);
+      const assistantUpdate =
+        !isAborted && evt.stream === "assistant" ? resolveAssistantChatUpdate(evt.data) : null;
+      if (assistantUpdate) {
+        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, assistantUpdate);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         const evtStopReason =
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
