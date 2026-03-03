@@ -52,7 +52,13 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  if (snapshot.lastEventAt != null || snapshot.lastStartAt != null) {
+  // Stale-socket checks only apply to channels that report an explicit
+  // long-lived connection state. Webhook channels can be quiet for long
+  // periods without being unhealthy.
+  if (
+    snapshot.connected === true &&
+    (snapshot.lastEventAt != null || snapshot.lastStartAt != null)
+  ) {
     const upSince = snapshot.lastStartAt ?? 0;
     const upDuration = policy.now - upSince;
     if (upDuration > policy.staleEventThresholdMs) {

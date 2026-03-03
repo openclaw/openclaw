@@ -399,6 +399,22 @@ describe("channel-health-monitor", () => {
   describe("stale socket detection", () => {
     const STALE_THRESHOLD = 30 * 60_000;
 
+    it("does not restart webhook-style channels that omit connection state", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        bluebubbles: {
+          default: {
+            running: true,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - STALE_THRESHOLD - 60_000,
+            lastEventAt: now - STALE_THRESHOLD - 30_000,
+          },
+        },
+      });
+      await expectNoRestart(manager);
+    });
+
     it("restarts a channel with no events past the stale threshold", async () => {
       const now = Date.now();
       const manager = createSlackSnapshotManager(
