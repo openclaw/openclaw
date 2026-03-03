@@ -311,7 +311,7 @@ extension OnboardingView {
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                        .truncationMode(.middle)
+                            .truncationMode(.middle)
                     }
                 }
                 Spacer(minLength: 0)
