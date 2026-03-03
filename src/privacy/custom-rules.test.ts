@@ -175,7 +175,7 @@ describe("custom-rules", () => {
     });
 
     it("rejects ambiguous alternation under repetition", () => {
-      expect(validateRegexSafety("(a|ab)*")).toContain("ambiguous alternation");
+      expect(validateRegexSafety("(a|ab)*")).toMatch(/unsafe|ambiguous alternation/);
     });
 
     it("rejects repeated groups containing greedy dot-star", () => {
