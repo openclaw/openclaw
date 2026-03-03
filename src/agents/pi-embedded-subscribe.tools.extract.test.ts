@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { extractMessagingToolSend } from "./pi-embedded-subscribe.tools.js";
 
 describe("extractMessagingToolSend", () => {
@@ -71,5 +71,41 @@ describe("extractMessagingToolSend", () => {
     expect(result?.provider).toBe("telegram");
     expect(result?.to).toBe("telegram:-100123");
     expect(result?.threadId).toBe("77");
+  });
+
+  it("captures explicit threadId for telegram channel-tool sends", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram" }),
+            actions: {
+              extractToolSend: ({ args }: { args: Record<string, unknown> }) => {
+                if (args.action !== "sendMessage" || typeof args.to !== "string") {
+                  return null;
+                }
+                return {
+                  to: args.to,
+                  threadId: typeof args.threadId === "string" ? args.threadId : undefined,
+                };
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+
+    const result = extractMessagingToolSend("telegram", {
+      action: "sendMessage",
+      to: "-100123",
+      threadId: "88",
+    });
+
+    expect(result?.tool).toBe("telegram");
+    expect(result?.provider).toBe("telegram");
+    expect(result?.to).toBe("-100123");
+    expect(result?.threadId).toBe("88");
   });
 });

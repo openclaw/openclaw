@@ -337,12 +337,17 @@ export function extractMessagingToolSend(
     return undefined;
   }
   const to = normalizeTargetForProvider(providerId, extracted.to);
+  const threadId =
+    typeof extracted.threadId === "string" && extracted.threadId.trim().length > 0
+      ? extracted.threadId.trim()
+      : undefined;
   return to
     ? {
         tool: toolName,
         provider: providerId,
         accountId: extracted.accountId ?? accountId,
         to,
+        ...(threadId ? { threadId } : {}),
       }
     : undefined;
 }
