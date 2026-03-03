@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { formatExecCommand } from "../infra/system-run-command.js";
 import {
   buildSystemRunApprovalPlan,
   hardenApprovedExecutionPaths,
@@ -19,6 +20,7 @@ type HardeningCase = {
   withPathToken?: boolean;
   expectedArgv: (ctx: { pathToken: PathTokenSetup | null }) => string[];
   expectedCmdText?: string;
+  checkRawCommandMatchesArgv?: boolean;
 };
 
 describe("hardenApprovedExecutionPaths", () => {
@@ -53,6 +55,14 @@ describe("hardenApprovedExecutionPaths", () => {
       withPathToken: true,
       expectedArgv: () => ["env", "poccmd", "SAFE"],
     },
+    {
+      name: "rawCommand matches hardened argv after executable path pinning",
+      mode: "build-plan",
+      argv: ["poccmd", "hello"],
+      withPathToken: true,
+      expectedArgv: ({ pathToken }) => [pathToken!.expected, "hello"],
+      checkRawCommandMatchesArgv: true,
+    },
   ];
 
   for (const testCase of cases) {
@@ -81,6 +91,9 @@ describe("hardenApprovedExecutionPaths", () => {
           expect(prepared.plan.argv).toEqual(testCase.expectedArgv({ pathToken }));
           if (testCase.expectedCmdText) {
             expect(prepared.cmdText).toBe(testCase.expectedCmdText);
+          }
+          if (testCase.checkRawCommandMatchesArgv) {
+            expect(prepared.plan.rawCommand).toBe(formatExecCommand(prepared.plan.argv));
           }
           return;
         }

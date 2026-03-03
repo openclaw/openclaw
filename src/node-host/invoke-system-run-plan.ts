@@ -3,7 +3,7 @@ import path from "node:path";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import { sameFileIdentity } from "../infra/file-identity.js";
-import { resolveSystemRunCommand } from "../infra/system-run-command.js";
+import { formatExecCommand, resolveSystemRunCommand } from "../infra/system-run-command.js";
 
 export type ApprovedCwdSnapshot = {
   cwd: string;
@@ -239,12 +239,16 @@ export function buildSystemRunApprovalPlan(params: {
   if (!hardening.ok) {
     return { ok: false, message: hardening.message };
   }
+  const rawCommand =
+    hardening.argv === command.argv
+      ? command.cmdText.trim() || null
+      : formatExecCommand(hardening.argv) || null;
   return {
     ok: true,
     plan: {
       argv: hardening.argv,
       cwd: hardening.cwd ?? null,
-      rawCommand: command.cmdText.trim() || null,
+      rawCommand,
       agentId: normalizeString(params.agentId),
       sessionKey: normalizeString(params.sessionKey),
     },
