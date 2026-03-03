@@ -210,8 +210,7 @@ export function handleMessageUpdate(
             mediaUrls: hasMedia ? mediaUrls : undefined,
           },
         });
-        // Keep message_end fallback enabled for snapshot-only updates so
-        // providers can still emit a final assistant payload at the end.
+        ctx.state.emittedAssistantUpdate = true;
         if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
           void ctx.params.onPartialReply({
             text: cleanedText,
@@ -396,13 +395,33 @@ export function handleMessageEnd(
     }
   }
 
-  if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+  const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+  let shouldEmitFinalAssistant = false;
+  let finalDeltaText = cleanedText;
+  if (cleanedText || hasMedia) {
+    if (!ctx.state.emittedAssistantUpdate || !previousCleaned) {
+      shouldEmitFinalAssistant = true;
+      finalDeltaText = cleanedText;
+    } else if (cleanedText.startsWith(previousCleaned)) {
+      finalDeltaText = cleanedText.slice(previousCleaned.length);
+      shouldEmitFinalAssistant = Boolean(finalDeltaText || hasMedia);
+    } else if (cleanedText !== previousCleaned) {
+      // When providers rewrite earlier text, emit the full reconciled text.
+      finalDeltaText = cleanedText;
+      shouldEmitFinalAssistant = true;
+    } else if (hasMedia) {
+      finalDeltaText = "";
+      shouldEmitFinalAssistant = true;
+    }
+  }
+
+  if (shouldEmitFinalAssistant) {
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "assistant",
       data: {
         text: cleanedText,
-        delta: cleanedText,
+        delta: finalDeltaText,
         mediaUrls: hasMedia ? mediaUrls : undefined,
       },
     });
@@ -410,11 +429,13 @@ export function handleMessageEnd(
       stream: "assistant",
       data: {
         text: cleanedText,
-        delta: cleanedText,
+        delta: finalDeltaText,
         mediaUrls: hasMedia ? mediaUrls : undefined,
       },
     });
     ctx.state.emittedAssistantUpdate = true;
+    ctx.state.lastStreamedAssistant = cleanedText;
+    ctx.state.lastStreamedAssistantCleaned = cleanedText;
   }
 
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
@@ -514,7 +535,7 @@ export function handleMessageEnd(
   ctx.state.blockState.thinking = false;
   ctx.state.blockState.final = false;
   ctx.state.blockState.inlineCode = createInlineCodeState();
-  ctx.state.lastStreamedAssistant = undefined;
-  ctx.state.lastStreamedAssistantCleaned = undefined;
+  // Keep last streamed assistant snapshots until the next message_start reset so
+  // duplicate/late message_end events can still be reconciled safely.
   ctx.state.reasoningStreamOpen = false;
 }

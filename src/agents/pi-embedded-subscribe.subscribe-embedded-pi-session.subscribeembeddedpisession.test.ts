@@ -389,7 +389,40 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads).toHaveLength(2);
     expect(payloads[0]?.text).toBe("Hello");
     expect(payloads[1]?.text).toBe("Hello world");
-    expect(payloads[1]?.delta).toBe("Hello world");
+    expect(payloads[1]?.delta).toBe(" world");
+  });
+
+  it("does not duplicate message_end assistant payload when snapshot already matches", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+      assistantMessageEvent: { type: "start" },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Hello");
+    expect(payloads[0]?.delta).toBe("Hello");
   });
 
   it("emits non-text partial updates when only audio_as_voice is present", () => {
