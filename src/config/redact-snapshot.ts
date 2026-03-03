@@ -1,10 +1,14 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isValidFileSecretRefId } from "../secrets/ref-contract.js";
 import { isSensitiveConfigPath, type ConfigUiHints } from "./schema.hints.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 import { isSecretRef } from "./types.secrets.js";
 
 const log = createSubsystemLogger("config/redaction");
 const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
+const ENV_SECRET_REF_ID_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
+const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
+const EXEC_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 
 function isSensitivePath(path: string): boolean {
   if (path.endsWith("[]")) {
@@ -21,6 +25,25 @@ function isEnvVarPlaceholder(value: string): boolean {
 function isWholeObjectSensitivePath(path: string): boolean {
   const lowered = path.toLowerCase();
   return lowered.endsWith("serviceaccount") || lowered.endsWith("serviceaccountref");
+}
+
+function isSchemaValidSecretRef(value: unknown): boolean {
+  if (!isSecretRef(value)) {
+    return false;
+  }
+  if (!SECRET_PROVIDER_ALIAS_PATTERN.test(value.provider)) {
+    return false;
+  }
+  switch (value.source) {
+    case "env":
+      return ENV_SECRET_REF_ID_PATTERN.test(value.id);
+    case "file":
+      return isValidFileSecretRefId(value.id);
+    case "exec":
+      return EXEC_SECRET_REF_ID_PATTERN.test(value.id);
+    default:
+      return false;
+  }
 }
 
 function collectSensitiveStrings(value: unknown, values: string[]): void {
@@ -178,7 +201,7 @@ function redactObjectWithLookup(
             if (hints[candidate]?.sensitive === true && !Array.isArray(value)) {
               // SecretRef objects only carry locator metadata (source/provider/id),
               // not secret material. Keep them visible and editable in raw mode.
-              if (isSecretRef(value)) {
+              if (isSchemaValidSecretRef(value)) {
                 result[key] = value;
               } else {
                 collectSensitiveStrings(value, values);
@@ -272,11 +295,11 @@ function redactObjectGuessing(
         value &&
         typeof value === "object" &&
         !Array.isArray(value) &&
-        !isSecretRef(value)
+        !isSchemaValidSecretRef(value)
       ) {
         collectSensitiveStrings(value, values);
         result[key] = REDACTED_SENTINEL;
-      } else if (value && typeof value === "object" && isSecretRef(value)) {
+      } else if (value && typeof value === "object" && isSchemaValidSecretRef(value)) {
         result[key] = value;
       } else if (typeof value === "object" && value !== null) {
         result[key] = redactObjectGuessing(value, dotPath, values, hints);

@@ -174,6 +174,24 @@ describe("redactConfigSnapshot", () => {
     });
   });
 
+  it("keeps env-shaped payloads redacted when the secret ref id is invalid", () => {
+    const snapshot = makeSnapshot({
+      channels: {
+        googlechat: {
+          serviceAccount: {
+            source: "env",
+            provider: "default",
+            id: '{"private_key":"inline-secret"}',
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    expect(channels.googlechat.serviceAccount).toBe(REDACTED_SENTINEL);
+  });
+
   it("does not globally over-redact raw text from secret ref metadata values", () => {
     const config = {
       models: {
