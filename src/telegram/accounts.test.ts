@@ -140,7 +140,7 @@ describe("resolveDefaultTelegramAccountId", () => {
     };
 
     resolveDefaultTelegramAccountId(cfg);
-    const warnLines = warnMock.mock.calls.map(([line]: [string]) => line);
+    const warnLines = warnMock.mock.calls.map(([line]) => String(line));
     expect(warnLines.every((line: string) => !line.includes("accounts.default is missing"))).toBe(
       true,
     );
@@ -157,7 +157,7 @@ describe("resolveDefaultTelegramAccountId", () => {
     };
 
     resolveDefaultTelegramAccountId(cfg);
-    const warnLines = warnMock.mock.calls.map(([line]: [string]) => line);
+    const warnLines = warnMock.mock.calls.map(([line]) => String(line));
     expect(warnLines.every((line: string) => !line.includes("accounts.default is missing"))).toBe(
       true,
     );
@@ -173,7 +173,7 @@ describe("resolveDefaultTelegramAccountId", () => {
     };
 
     resolveDefaultTelegramAccountId(cfg);
-    const warnLines = warnMock.mock.calls.map(([line]: [string]) => line);
+    const warnLines = warnMock.mock.calls.map(([line]) => String(line));
     expect(warnLines.every((line: string) => !line.includes("accounts.default is missing"))).toBe(
       true,
     );
@@ -193,8 +193,8 @@ describe("resolveDefaultTelegramAccountId", () => {
     resolveDefaultTelegramAccountId(cfg);
 
     const missingDefaultWarns = warnMock.mock.calls
-      .map(([line]: [string]) => line)
-      .filter((line: string) => line.includes("accounts.default is missing"));
+      .map(([line]) => String(line))
+      .filter((line) => line.includes("accounts.default is missing"));
     expect(missingDefaultWarns).toHaveLength(1);
   });
 

@@ -337,7 +337,9 @@ export function collectMissingExplicitDefaultAccountWarnings(cfg: OpenClawConfig
       continue;
     }
 
-    const preferredDefault = normalizeOptionalAccountId(channel.defaultAccount);
+    const preferredDefault = normalizeOptionalAccountId(
+      typeof channel.defaultAccount === "string" ? channel.defaultAccount : undefined,
+    );
     if (preferredDefault) {
       if (normalizedAccountIds.includes(preferredDefault)) {
         continue;
