@@ -11,6 +11,7 @@ import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
 import { Routes } from "discord-api-types/v10";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import type { NativeCommandSpec } from "../../auto-reply/commands-registry.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
@@ -37,6 +38,7 @@ import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getPluginCommandSpecs } from "../../plugins/commands.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { fetchDiscordApplicationId } from "../probe.js";
@@ -54,6 +56,7 @@ import {
   createDiscordComponentStringSelect,
   createDiscordComponentUserSelect,
 } from "./agent-components.js";
+import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { attachEarlyGatewayErrorGuard } from "./gateway-error-guard.js";
@@ -63,6 +66,7 @@ import {
   DiscordPresenceListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
+  DiscordThreadUpdateListener,
   registerDiscordListener,
 } from "./listeners.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
@@ -138,6 +142,37 @@ function dedupeSkillCommandsForDiscord(
     deduped.push(command);
   }
   return deduped;
+}
+
+function appendPluginCommandSpecs(params: {
+  commandSpecs: NativeCommandSpec[];
+  runtime: RuntimeEnv;
+}): NativeCommandSpec[] {
+  const merged = [...params.commandSpecs];
+  const existingNames = new Set(
+    merged.map((spec) => spec.name.trim().toLowerCase()).filter(Boolean),
+  );
+  for (const pluginCommand of getPluginCommandSpecs()) {
+    const normalizedName = pluginCommand.name.trim().toLowerCase();
+    if (!normalizedName) {
+      continue;
+    }
+    if (existingNames.has(normalizedName)) {
+      params.runtime.error?.(
+        danger(
+          `discord: plugin command "/${normalizedName}" duplicates an existing native command. Skipping.`,
+        ),
+      );
+      continue;
+    }
+    existingNames.add(normalizedName);
+    merged.push({
+      name: pluginCommand.name,
+      description: pluginCommand.description,
+      acceptsArgs: pluginCommand.acceptsArgs,
+    });
+  }
+  return merged;
 }
 
 async function deployDiscordCommands(params: {
@@ -316,10 +351,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let commandSpecs = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "discord" })
     : [];
+  if (nativeEnabled) {
+    commandSpecs = appendPluginCommandSpecs({ commandSpecs, runtime });
+  }
   const initialCommandCount = commandSpecs.length;
   if (nativeEnabled && nativeSkillsEnabled && commandSpecs.length > maxDiscordCommands) {
     skillCommands = [];
     commandSpecs = listNativeCommandSpecsForConfig(cfg, { skillCommands: [], provider: "discord" });
+    commandSpecs = appendPluginCommandSpecs({ commandSpecs, runtime });
     runtime.log?.(
       warn(
         `discord: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,
@@ -356,6 +395,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
   let lifecycleStarted = false;
   let releaseEarlyGatewayErrorGuard = () => {};
+  let autoPresenceController: ReturnType<typeof createDiscordAutoPresenceController> | null = null;
   try {
     const commands: BaseCommand[] = commandSpecs.map((spec) =>
       createDiscordNativeCommand({
@@ -450,6 +490,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     class DiscordStatusReadyListener extends ReadyListener {
       async handle(_data: unknown, client: Client) {
+        if (autoPresenceController?.enabled) {
+          autoPresenceController.refresh();
+          return;
+        }
+
         const gateway = client.getPlugin<GatewayPlugin>("gateway");
         if (!gateway) {
           return;
@@ -496,6 +541,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     );
     const earlyGatewayErrorGuard = attachEarlyGatewayErrorGuard(client);
     releaseEarlyGatewayErrorGuard = earlyGatewayErrorGuard.release;
+
+    const lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
+    if (lifecycleGateway) {
+      autoPresenceController = createDiscordAutoPresenceController({
+        accountId: account.accountId,
+        discordConfig: discordCfg,
+        gateway: lifecycleGateway,
+        log: (message) => runtime.log?.(message),
+      });
+      autoPresenceController.start();
+    }
 
     await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
 
@@ -587,6 +643,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       new DiscordReactionRemoveListener(reactionListenerOptions),
     );
 
+    registerDiscordListener(
+      client.listeners,
+      new DiscordThreadUpdateListener(cfg, account.accountId, logger),
+    );
+
     if (discordCfg.intents?.presence) {
       registerDiscordListener(
         client.listeners,
@@ -598,6 +659,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const botIdentity =
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
     runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
+    if (lifecycleGateway?.isConnected) {
+      opts.setStatus?.({ connected: true });
+    }
 
     lifecycleStarted = true;
     await runDiscordGatewayLifecycle({
@@ -615,6 +679,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       releaseEarlyGatewayErrorGuard,
     });
   } finally {
+    autoPresenceController?.stop();
+    opts.setStatus?.({ connected: false });
     releaseEarlyGatewayErrorGuard();
     if (!lifecycleStarted) {
       threadBindings.stop();
