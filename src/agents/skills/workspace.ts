@@ -753,6 +753,7 @@ export function buildWorkspaceSkillCommandSpecs(
       name: unique,
       skillName: rawName,
       description,
+      acceptsArgs: true,
       ...(dispatch ? { dispatch } : {}),
     });
   }

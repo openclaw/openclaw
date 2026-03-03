@@ -148,6 +148,23 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
   });
+
+  it("marks workspace skill commands as accepting args", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "cofounder"),
+      name: "cofounder",
+      description: "Run cofounder workflow",
+    });
+
+    const commands = buildWorkspaceSkillCommandSpecs(
+      workspaceDir,
+      resolveTestSkillDirs(workspaceDir),
+    );
+
+    expect(commands).toHaveLength(1);
+    expect(commands[0]?.acceptsArgs).toBe(true);
+  });
 });
 
 describe("buildWorkspaceSkillsPrompt", () => {
