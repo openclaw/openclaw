@@ -90,6 +90,7 @@ export const ZAI_DEFAULT_COST = {
 
 const MINIMAX_MODEL_CATALOG = {
   "MiniMax-M2.5": { name: "MiniMax M2.5", reasoning: true },
+  "MiniMax-M2.5-highspeed": { name: "MiniMax M2.5 Highspeed", reasoning: true },
   "MiniMax-M2.5-Lightning": { name: "MiniMax M2.5 Lightning", reasoning: true },
 } as const;
 

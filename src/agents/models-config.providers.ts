@@ -597,6 +597,11 @@ function buildMinimaxProvider(): ProviderConfig {
         reasoning: true,
       }),
       buildMinimaxTextModel({
+        id: "MiniMax-M2.5-highspeed",
+        name: "MiniMax M2.5 Highspeed",
+        reasoning: true,
+      }),
+      buildMinimaxTextModel({
         id: "MiniMax-M2.5-Lightning",
         name: "MiniMax M2.5 Lightning",
         reasoning: true,
@@ -614,6 +619,11 @@ function buildMinimaxPortalProvider(): ProviderConfig {
       buildMinimaxTextModel({
         id: MINIMAX_DEFAULT_MODEL_ID,
         name: "MiniMax M2.5",
+        reasoning: true,
+      }),
+      buildMinimaxTextModel({
+        id: "MiniMax-M2.5-highspeed",
+        name: "MiniMax M2.5 Highspeed",
         reasoning: true,
       }),
       buildMinimaxTextModel({
