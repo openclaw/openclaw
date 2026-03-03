@@ -196,7 +196,7 @@ export const CreateResponseBodySchema = z
       .optional(),
     truncation: z.enum(["auto", "disabled"]).optional(),
   })
-  .strict();
+  .strip();
 
 export type CreateResponseBody = z.infer<typeof CreateResponseBodySchema>;
 
