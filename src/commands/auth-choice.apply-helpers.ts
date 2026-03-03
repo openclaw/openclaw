@@ -1,4 +1,10 @@
-import { resolveApiKeyForProvider, resolveEnvApiKey } from "../agents/model-auth.js";
+import {
+  ensureAuthProfileStore,
+  resolveAuthProfileOrder,
+  resolveApiKeyForProvider,
+  resolveEnvApiKey,
+} from "../agents/model-auth.js";
+import { resolveApiKeyForProfile } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { type SecretInput, type SecretRef } from "../config/types.secrets.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
@@ -92,19 +98,67 @@ async function resolveExistingProviderApiKey(params: {
   config: OpenClawConfig;
   provider: string;
   agentDir?: string;
-}): Promise<{ apiKey: string; source: string } | null> {
+}): Promise<{ apiKey: string; source: string; credential: SecretInput } | null> {
   try {
     const resolved = await resolveApiKeyForProvider({
       provider: params.provider,
       cfg: params.config,
       agentDir: params.agentDir,
     });
+    if (resolved.profileId && resolved.mode !== "api-key") {
+      return null;
+    }
     if (typeof resolved.apiKey !== "string" || resolved.apiKey.trim().length === 0) {
       return null;
     }
+
+    let credential: SecretInput = resolved.apiKey;
+    let source = resolved.source;
+    const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+    if (resolved.profileId && resolved.mode === "api-key") {
+      const profile = store.profiles[resolved.profileId];
+      if (profile?.type === "api_key" && profile.keyRef) {
+        credential = profile.keyRef;
+      }
+    } else if (resolved.mode === "api-key") {
+      // If resolution fell back to env/models, preserve an existing api_key keyRef when it
+      // resolves to the same effective value to avoid silently downgrading ref storage.
+      const orderedProfiles = resolveAuthProfileOrder({
+        cfg: params.config,
+        store,
+        provider: params.provider,
+      });
+      const candidateProfileIds = new Set<string>(orderedProfiles);
+      for (const [profileId, profile] of Object.entries(store.profiles)) {
+        if (profile?.type === "api_key" && profile.provider === params.provider) {
+          candidateProfileIds.add(profileId);
+        }
+      }
+      for (const profileId of candidateProfileIds) {
+        const profile = store.profiles[profileId];
+        if (profile?.type !== "api_key" || !profile.keyRef) {
+          continue;
+        }
+        try {
+          const profileResolved = await resolveApiKeyForProfile({
+            cfg: params.config,
+            store,
+            profileId,
+            agentDir: params.agentDir,
+          });
+          if (profileResolved?.apiKey === resolved.apiKey) {
+            credential = profile.keyRef;
+            source = `profile:${profileId}`;
+            break;
+          }
+        } catch {}
+      }
+    }
+
     return {
       apiKey: resolved.apiKey,
-      source: resolved.source,
+      source,
+      credential,
     };
   } catch {
     return null;
@@ -551,7 +605,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
       initialValue: true,
     });
     if (useExisting) {
-      await params.setCredential(existingApiKey.apiKey, selectedMode);
+      await params.setCredential(existingApiKey.credential, selectedMode);
       return existingApiKey.apiKey;
     }
   }

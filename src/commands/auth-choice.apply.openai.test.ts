@@ -272,4 +272,56 @@ describe("applyAuthChoiceOpenAI", () => {
     expect(parsedSecondary.profiles?.["openai:default"]?.key).toBe("sk-openai-secondary");
     expect(parsedSecondary.profiles?.["openai:default"]?.keyRef).toBeUndefined();
   });
+
+  it("keeps keyRef credentials when reusing stored OpenAI auth profile values", async () => {
+    const agentDir = await setupTempState();
+    process.env.OPENAI_API_KEY = "sk-openai-ref";
+
+    const runtime = createExitThrowingRuntime();
+    const seedPrompter = createWizardPrompter({}, { defaultSelect: "ref" });
+    const seeded = await applyAuthChoiceOpenAI({
+      authChoice: "openai-api-key",
+      config: {},
+      prompter: seedPrompter,
+      runtime,
+      setDefaultModel: true,
+    });
+    expect(seeded).not.toBeNull();
+    const parsedSeeded = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(agentDir);
+    expect(parsedSeeded.profiles?.["openai:default"]?.key).toBeUndefined();
+    expect(parsedSeeded.profiles?.["openai:default"]?.keyRef).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
+
+    const confirm = vi.fn(async () => true);
+    const text = vi.fn(async () => "should-not-be-used");
+    const reconfigurePrompter = createWizardPrompter(
+      { confirm, text },
+      { defaultSelect: "plaintext" },
+    );
+    await applyAuthChoiceOpenAI({
+      authChoice: "openai-api-key",
+      config: seeded?.config ?? {},
+      prompter: reconfigurePrompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(confirm).toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(agentDir);
+    expect(parsed.profiles?.["openai:default"]?.key).toBeUndefined();
+    expect(parsed.profiles?.["openai:default"]?.keyRef).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
+  });
 });
