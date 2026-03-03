@@ -111,8 +111,7 @@ export async function emitSubagentEndedHookOnce(params: {
     // Bridge to internal hook system so user-authored .js hooks can observe
     // subagent lifecycle events without writing a full plugin.
     const internalAction = reasonToInternalAction(params.reason);
-    const startedAt = (params.entry as Record<string, unknown>).startedAt as number | undefined;
-    void triggerInternalHook(
+    await triggerInternalHook(
       createInternalHookEvent("subagent", internalAction, params.entry.requesterSessionKey, {
         childSessionKey: params.entry.childSessionKey,
         runId: params.entry.runId,
@@ -120,8 +119,11 @@ export async function emitSubagentEndedHookOnce(params: {
         outcome: params.outcome,
         error: params.error,
         endedAt: params.entry.endedAt,
-        startedAt,
-        runtimeMs: params.entry.endedAt && startedAt ? params.entry.endedAt - startedAt : undefined,
+        startedAt: params.entry.startedAt,
+        runtimeMs:
+          params.entry.endedAt && params.entry.startedAt
+            ? params.entry.endedAt - params.entry.startedAt
+            : undefined,
       }),
     );
 
