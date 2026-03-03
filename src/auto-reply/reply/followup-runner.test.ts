@@ -163,6 +163,70 @@ describe("createFollowupRunner compaction", () => {
   });
 });
 
+describe("createFollowupRunner bootstrap warning dedupe", () => {
+  it("passes stored warning signature history to embedded followup runs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      systemPromptReport: {
+        source: "run",
+        generatedAt: Date.now(),
+        systemPrompt: {
+          chars: 1,
+          projectContextChars: 0,
+          nonProjectContextChars: 1,
+        },
+        injectedWorkspaceFiles: [],
+        skills: {
+          promptChars: 0,
+          entries: [],
+        },
+        tools: {
+          listChars: 0,
+          schemaChars: 0,
+          entries: [],
+        },
+        bootstrapTruncation: {
+          warningMode: "once",
+          warningShown: true,
+          promptWarningSignature: "sig-b",
+          warningSignaturesSeen: ["sig-a", "sig-b"],
+          truncatedFiles: 1,
+          nearLimitFiles: 0,
+          totalNearLimit: false,
+        },
+      },
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(baseQueuedRun());
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          bootstrapPromptWarningSignaturesSeen?: string[];
+          bootstrapPromptWarningSignature?: string;
+        }
+      | undefined;
+    expect(call?.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
+    expect(call?.bootstrapPromptWarningSignature).toBe("sig-b");
+  });
+});
+
 describe("createFollowupRunner messaging tool dedupe", () => {
   function createMessagingDedupeRunner(
     onBlockReply: (payload: unknown) => Promise<void>,
