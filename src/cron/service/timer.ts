@@ -15,6 +15,7 @@ import type {
 } from "../types.js";
 import {
   computeJobNextRunAtMs,
+  isJobAtDailyLimit,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
   recordScheduleComputeError,
@@ -754,7 +755,15 @@ function isRunnableJob(params: {
     return false;
   }
   const next = job.state.nextRunAtMs;
-  return typeof next === "number" && Number.isFinite(next) && nowMs >= next;
+  if (typeof next !== "number" || !Number.isFinite(next) || nowMs < next) {
+    return false;
+  }
+  // Enforce maxRunsPerDay in the scheduler path — skip jobs that have
+  // already hit their daily limit so they aren't selected by collectRunnableJobs.
+  if (isJobAtDailyLimit(job, nowMs)) {
+    return false;
+  }
+  return true;
 }
 
 function collectRunnableJobs(
