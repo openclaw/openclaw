@@ -902,6 +902,40 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
+  test("requires pairing for gateway backend clients behind tailscale serve proxy headers", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    ws.close();
+    await writeConfigFile({
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: ["https://gateway.tailnet.ts.net"],
+        },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    const wsTailscaleBackend = await openWs(port, {
+      "x-forwarded-for": "100.64.0.1",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "gateway.tailnet.ts.net",
+      "tailscale-user-login": "peter",
+      "tailscale-user-name": "Peter",
+    });
+    try {
+      const tailscaleBackend = await connectReq(wsTailscaleBackend, {
+        token: "secret",
+        client: BACKEND_GATEWAY_CLIENT,
+      });
+      expect(tailscaleBackend.ok).toBe(false);
+      expect(tailscaleBackend.error?.message ?? "").toContain("pairing required");
+    } finally {
+      wsTailscaleBackend.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("requires pairing for gateway backend clients when connection is not local-direct", async () => {
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     ws.close();

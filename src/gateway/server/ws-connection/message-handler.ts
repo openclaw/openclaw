@@ -321,11 +321,26 @@ export function attachGatewayWsMessageHandler(params: {
   const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
   const hasUntrustedProxyHeaders = hasProxyHeaders && !remoteIsTrustedProxy;
   const hostIsLocalish = isLocalishHost(requestHost);
-  const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies, allowRealIpFallback, {
-    allowTailscaleServeShortcut: true,
-  });
+  const isStrictLocalClient = isLocalDirectRequest(
+    upgradeReq,
+    trustedProxies,
+    allowRealIpFallback,
+    {
+      allowTailscaleServeShortcut: false,
+    },
+  );
+  const isTailscaleServeShortcutLocalClient = isLocalDirectRequest(
+    upgradeReq,
+    trustedProxies,
+    allowRealIpFallback,
+    {
+      allowTailscaleServeShortcut: true,
+    },
+  );
+  const isProxyTailscaleServeShortcutOnly =
+    isTailscaleServeShortcutLocalClient && !isStrictLocalClient;
   const reportedClientIp =
-    isLocalClient || hasUntrustedProxyHeaders
+    isStrictLocalClient || hasUntrustedProxyHeaders
       ? undefined
       : clientIp && !isLoopbackAddress(clientIp)
         ? clientIp
@@ -498,6 +513,8 @@ export function attachGatewayWsMessageHandler(params: {
 
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
         const isWebchat = isWebchatConnect(connectParams);
+        const isLocalClient =
+          isStrictLocalClient || (isProxyTailscaleServeShortcutOnly && (isControlUi || isWebchat));
         if (enforceOriginCheckForAnyClient || isControlUi || isWebchat) {
           const hostHeaderOriginFallbackEnabled =
             configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;

@@ -56,6 +56,20 @@ function createTailscaleForwardedReqWithPortInHost(): never {
   } as never;
 }
 
+function createTailscaleForwardedIpv6Req(): never {
+  return {
+    socket: { remoteAddress: "::1" },
+    headers: {
+      host: "gateway.local",
+      "x-forwarded-for": "fd7a:115c:a1e0::1",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "ai-hub.bone-egret.ts.net",
+      "tailscale-user-login": "peter",
+      "tailscale-user-name": "Peter",
+    },
+  } as never;
+}
+
 function createNonTailscaleForwardedReq(): never {
   return {
     socket: { remoteAddress: "127.0.0.1" },
@@ -299,13 +313,31 @@ describe("gateway auth", () => {
   });
 
   it("treats proxied tailscale serve requests as direct when trusted proxies are configured", () => {
-    expect(isLocalDirectRequest(createTailscaleForwardedReq(), ["127.0.0.1"])).toBe(true);
+    expect(
+      isLocalDirectRequest(createTailscaleForwardedReq(), ["127.0.0.1"], false, {
+        allowTailscaleServeShortcut: true,
+      }),
+    ).toBe(true);
   });
 
   it("treats proxied tailscale serve requests with host:port as direct when trusted proxies are configured", () => {
-    expect(isLocalDirectRequest(createTailscaleForwardedReqWithPortInHost(), ["127.0.0.1"])).toBe(
-      true,
-    );
+    expect(
+      isLocalDirectRequest(createTailscaleForwardedReqWithPortInHost(), ["127.0.0.1"], false, {
+        allowTailscaleServeShortcut: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("treats proxied tailscale serve IPv6 requests as direct when trusted proxies are configured", () => {
+    expect(
+      isLocalDirectRequest(createTailscaleForwardedIpv6Req(), ["::1"], false, {
+        allowTailscaleServeShortcut: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps tailscale local-direct shortcut disabled by default", () => {
+    expect(isLocalDirectRequest(createTailscaleForwardedReq(), ["127.0.0.1"])).toBe(false);
   });
 
   it("does not apply the tailscale local-direct shortcut when explicitly disabled", () => {
@@ -321,7 +353,11 @@ describe("gateway auth", () => {
   });
 
   it("does not treat proxied .ts.net requests as direct when forwarded client IP is non-tailscale", () => {
-    expect(isLocalDirectRequest(createNonTailscaleForwardedReq(), ["127.0.0.1"])).toBe(false);
+    expect(
+      isLocalDirectRequest(createNonTailscaleForwardedReq(), ["127.0.0.1"], false, {
+        allowTailscaleServeShortcut: true,
+      }),
+    ).toBe(false);
   });
 
   it("does not treat non-tailscale proxied requests as direct when trusted proxies are configured", () => {
