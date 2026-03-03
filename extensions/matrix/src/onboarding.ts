@@ -8,7 +8,6 @@ import {
   mergeAllowFromEntries,
   normalizeNonTelegramGroupPolicy,
   promptSingleChannelSecretInput,
-  normalizeNonTelegramGroupPolicy,
   promptChannelAccessConfig,
   setTopLevelChannelGroupPolicy,
   type SecretInput,
