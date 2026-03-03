@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
   isAuthErrorMessage,
+  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isCloudflareOrHtmlErrorPage,
@@ -15,6 +16,39 @@ import {
   parseImageDimensionError,
   parseImageSizeError,
 } from "./pi-embedded-helpers.js";
+
+describe("isAuthPermanentErrorMessage", () => {
+  it("matches permanent auth failure patterns", () => {
+    const samples = [
+      "invalid_api_key",
+      "api key revoked",
+      "api key deactivated",
+      "key has been disabled",
+      "key has been revoked",
+      "account has been deactivated",
+      "could not authenticate api key",
+      "could not validate credentials",
+      "API_KEY_REVOKED",
+      "api_key_deleted",
+    ];
+    for (const sample of samples) {
+      expect(isAuthPermanentErrorMessage(sample)).toBe(true);
+    }
+  });
+  it("does not match transient auth errors", () => {
+    const samples = [
+      "unauthorized",
+      "invalid token",
+      "authentication failed",
+      "forbidden",
+      "access denied",
+      "token has expired",
+    ];
+    for (const sample of samples) {
+      expect(isAuthPermanentErrorMessage(sample)).toBe(false);
+    }
+  });
+});
 
 describe("isAuthErrorMessage", () => {
   it("matches credential validation errors", () => {
@@ -381,6 +415,7 @@ describe("isFailoverErrorMessage", () => {
       "429 rate limit exceeded",
       "Your credit balance is too low",
       "request timed out",
+      "Connection error.",
       "invalid request format",
     ];
     for (const sample of samples) {
@@ -389,7 +424,14 @@ describe("isFailoverErrorMessage", () => {
   });
 
   it("matches abort stop-reason timeout variants", () => {
-    const samples = ["Unhandled stop reason: abort", "stop reason: abort", "reason: abort"];
+    const samples = [
+      "Unhandled stop reason: abort",
+      "Unhandled stop reason: error",
+      "stop reason: abort",
+      "stop reason: error",
+      "reason: abort",
+      "reason: error",
+    ];
     for (const sample of samples) {
       expect(isTimeoutErrorMessage(sample)).toBe(true);
       expect(classifyFailoverReason(sample)).toBe("timeout");
@@ -427,6 +469,11 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("invalid api key")).toBe("auth");
     expect(classifyFailoverReason("no credentials found")).toBe("auth");
     expect(classifyFailoverReason("no api key found")).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        'No API key found for provider "openai". Auth store: /tmp/openclaw-agent-abc/auth-profiles.json (agentDir: /tmp/openclaw-agent-abc).',
+      ),
+    ).toBe("auth");
     expect(classifyFailoverReason("You have insufficient permissions for this operation.")).toBe(
       "auth",
     );
@@ -448,6 +495,13 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
+    expect(classifyFailoverReason("Connection error.")).toBe("timeout");
+    expect(classifyFailoverReason("fetch failed")).toBe("timeout");
+    expect(classifyFailoverReason("network error: ECONNREFUSED")).toBe("timeout");
+    expect(
+      classifyFailoverReason("dial tcp: lookup api.example.com: no such host (ENOTFOUND)"),
+    ).toBe("timeout");
+    expect(classifyFailoverReason("temporary dns failure EAI_AGAIN")).toBe("timeout");
     expect(
       classifyFailoverReason(
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
@@ -479,6 +533,12 @@ describe("classifyFailoverReason", () => {
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
       ),
     ).toBe("rate_limit");
+  });
+  it("classifies permanent auth errors as auth_permanent", () => {
+    expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");
+    expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
+    expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
   });
   it("classifies JSON api_error internal server failures as timeout", () => {
     expect(

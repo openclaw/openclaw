@@ -105,7 +105,9 @@ enum ChatMarkdownPreprocessor {
             outputLines.append(currentLine)
         }
 
-        return outputLines.joined(separator: "\n").replacingOccurrences(of: #"^\n+"#, with: "", options: .regularExpression)
+        return outputLines
+            .joined(separator: "\n")
+            .replacingOccurrences(of: #"^\n+"#, with: "", options: .regularExpression)
     }
 
     private static func stripPrefixedTimestamps(_ raw: String) -> String {

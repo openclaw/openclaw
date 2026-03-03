@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "./path-guards.js";
 
 export function unscopedPackageName(name: string): string {
   const trimmed = name.trim();
@@ -59,4 +61,44 @@ export function resolveSafeInstallDir(params: {
     return { ok: false, error: params.invalidNameMessage };
   }
   return { ok: true, path: targetDir };
+}
+
+export async function assertCanonicalPathWithinBase(params: {
+  baseDir: string;
+  candidatePath: string;
+  boundaryLabel: string;
+}): Promise<void> {
+  const baseDir = path.resolve(params.baseDir);
+  const candidatePath = path.resolve(params.candidatePath);
+  if (!isPathInside(baseDir, candidatePath)) {
+    throw new Error(`Invalid path: must stay within ${params.boundaryLabel}`);
+  }
+
+  const baseLstat = await fs.lstat(baseDir);
+  if (!baseLstat.isDirectory() || baseLstat.isSymbolicLink()) {
+    throw new Error(`Invalid ${params.boundaryLabel}: base directory must be a real directory`);
+  }
+  const baseRealPath = await fs.realpath(baseDir);
+
+  const validateDirectory = async (dirPath: string): Promise<void> => {
+    const dirLstat = await fs.lstat(dirPath);
+    if (!dirLstat.isDirectory() || dirLstat.isSymbolicLink()) {
+      throw new Error(`Invalid path: must stay within ${params.boundaryLabel}`);
+    }
+    const dirRealPath = await fs.realpath(dirPath);
+    if (!isPathInside(baseRealPath, dirRealPath)) {
+      throw new Error(`Invalid path: must stay within ${params.boundaryLabel}`);
+    }
+  };
+
+  try {
+    await validateDirectory(candidatePath);
+    return;
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code !== "ENOENT") {
+      throw err;
+    }
+  }
+  await validateDirectory(path.dirname(candidatePath));
 }
