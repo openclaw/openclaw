@@ -21,6 +21,7 @@ export type DashboardTemplates = {
   overview: UnifiedTemplate;
   tradingDesk: UnifiedTemplate;
   strategyLab: UnifiedTemplate;
+  strategyArena: UnifiedTemplate;
 };
 
 /** Load all dashboard templates from the given directory. Missing files are empty strings. */
@@ -63,6 +64,7 @@ export function loadDashboardTemplates(dashboardDir: string): DashboardTemplates
     overview: loadUnified("overview.html", "overview.css"),
     tradingDesk: loadUnified("trading-desk.html", "trading-desk.css"),
     strategyLab: loadUnified("strategy-lab.html", "strategy-lab.css"),
+    strategyArena: loadUnified("strategy-arena.html", "strategy-arena.css"),
   };
 }
 

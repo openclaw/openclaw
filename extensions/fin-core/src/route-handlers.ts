@@ -14,6 +14,7 @@ import {
   gatherMissionControlData,
   gatherOverviewData,
   gatherStrategyLabData,
+  gatherStrategyArenaData,
 } from "./data-gathering.js";
 import type { ExchangeHealthStore } from "./exchange-health-store.js";
 import type { RiskController } from "./risk-controller.js";
@@ -622,6 +623,29 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     },
   });
 
+  // ── Unified Dashboard: Strategy Arena ──
+  api.registerHttpRoute({
+    path: "/dashboard/strategy-arena",
+    handler: async (_req: unknown, res: HttpRes) => {
+      const data = gatherStrategyArenaData(gatherDeps);
+      const html = renderUnifiedDashboard(templates.strategyArena, data);
+      if (!html) {
+        jsonResponse(res, 200, data);
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+    },
+  });
+
+  // ── Strategy Arena JSON endpoint ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/strategy-arena",
+    handler: async (_req: unknown, res: HttpRes) => {
+      jsonResponse(res, 200, gatherStrategyArenaData(gatherDeps));
+    },
+  });
+
   // ── Unified Dashboard: Strategy Lab ──
   api.registerHttpRoute({
     path: "/dashboard/strategy-lab",
@@ -639,8 +663,10 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Legacy path redirects ──
   for (const [from, to] of [
-    ["/dashboard/evolution", "/dashboard/strategy-lab"],
+    ["/dashboard/evolution", "/dashboard/strategy-arena"],
     ["/dashboard/fund", "/dashboard/strategy-lab"],
+    ["/dashboard/strategy", "/dashboard/strategy-arena"],
+    ["/dashboard/arena", "/dashboard/strategy-arena"],
   ] as const) {
     api.registerHttpRoute({
       path: from,

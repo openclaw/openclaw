@@ -9,9 +9,16 @@ import { RiskController } from "./src/risk-controller.js";
 import { registerHttpRoutes } from "./src/route-handlers.js";
 import { registerSseRoutes } from "./src/sse-handlers.js";
 import { loadDashboardTemplates } from "./src/template-renderer.js";
+import { registerPaperTools, registerStrategyTools, registerTradingTools } from "./src/tools/index.js";
 import type { RuntimeServices } from "./src/types-http.js";
 import type { ExchangeConfig, TradingRiskConfig } from "./src/types.js";
 
+export type { AdapterOrderParams, UnifiedExchangeAdapter } from "./src/adapters/adapter-interface.js";
+export { AlpacaAdapter } from "./src/adapters/alpaca-adapter.js";
+export { CcxtAdapter } from "./src/adapters/ccxt-adapter.js";
+export { FutuAdapter } from "./src/adapters/futu-adapter.js";
+export { createAdapter } from "./src/adapters/adapter-factory.js";
+export { isMarketOpen, resolveMarket, validateLotSize, getMarketTimezone } from "./src/market-rules.js";
 export { AgentEventSqliteStore } from "./src/agent-event-sqlite-store.js";
 export { AgentEventStore } from "./src/agent-event-store.js";
 export { ExchangeHealthStore } from "./src/exchange-health-store.js";
@@ -148,6 +155,19 @@ const finCorePlugin = {
 
     registerSseRoutes(api, gatherDeps, eventStore);
 
+    // ── Register AI tools (8 tools: trading + paper + strategy) ──
+
+    const exchangeConfigs = new Map<string, ExchangeConfig>();
+    if (financialConfig?.exchanges) {
+      for (const [name, cfg] of Object.entries(financialConfig.exchanges)) {
+        exchangeConfigs.set(name, cfg as ExchangeConfig);
+      }
+    }
+
+    registerTradingTools(api, registry, riskController, exchangeConfigs);
+    registerPaperTools(api);
+    registerStrategyTools(api);
+
     // ── CLI commands for exchange management ──
 
     api.registerCli(({ program }) => {
@@ -171,14 +191,14 @@ const finCorePlugin = {
       exchange
         .command("add <name>")
         .description("Add an exchange connection")
-        .option("--exchange <type>", "Exchange type (binance, okx, bybit, hyperliquid)")
+        .option("--exchange <type>", "Exchange type (binance, okx, bybit, hyperliquid, alpaca, futu)")
         .option("--api-key <key>", "API key")
         .option("--secret <secret>", "API secret")
         .option("--passphrase <pass>", "API passphrase (OKX)")
         .option("--testnet", "Use testnet/sandbox mode")
         .action((name: string, opts: Record<string, string | boolean | undefined>) => {
           registry.addExchange(name, {
-            exchange: (opts.exchange ?? name) as "binance" | "okx" | "bybit" | "hyperliquid",
+            exchange: (opts.exchange ?? name) as ExchangeConfig["exchange"],
             apiKey: (opts.apiKey as string) ?? "",
             secret: (opts.secret as string) ?? "",
             passphrase: opts.passphrase as string | undefined,

@@ -8,7 +8,7 @@
     "properties": {
       "mode": {
         "type": "string",
-        "enum": ["stub", "live"],
+        "enum": ["stub", "live", "grok"],
         "default": "stub"
       },
       "apiKey": { "type": "string" },
@@ -17,10 +17,51 @@
         "type": "number",
         "default": 15000,
         "description": "HTTP request timeout in milliseconds"
+      },
+      "grok": {
+        "type": "object",
+        "properties": {
+          "apiKey": { "type": "string" },
+          "model": { "type": "string", "default": "grok-4-1-fast" },
+          "defaultHandles": {
+            "type": "string",
+            "description": "Comma-separated list of default X handles to monitor"
+          },
+          "scanTopic": {
+            "type": "string",
+            "description": "Focus topic for KOL analysis (e.g. 'crypto markets', 'macro economics')"
+          },
+          "scanIntervalMs": {
+            "type": "number",
+            "default": 900000,
+            "description": "Auto-scan interval in ms (default 15 minutes)"
+          },
+          "urgentThreshold": {
+            "type": "number",
+            "default": 9,
+            "description": "Score threshold for urgent push (1-10)"
+          },
+          "digestMinScore": {
+            "type": "number",
+            "default": 5,
+            "description": "Minimum score for digest inclusion"
+          },
+          "autoScan": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable automatic periodic scanning"
+          },
+          "runOnStart": {
+            "type": "boolean",
+            "default": true,
+            "description": "Run initial scan on service start"
+          }
+        }
       }
     }
   },
   "uiHints": {
-    "apiKey": { "label": "Info Feed SDK Key", "sensitive": true }
+    "apiKey": { "label": "Info Feed SDK Key", "sensitive": true },
+    "grok.apiKey": { "label": "xAI API Key", "sensitive": true }
   }
 }

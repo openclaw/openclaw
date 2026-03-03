@@ -6,7 +6,7 @@
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import type { AgentEventSqliteStore } from "./agent-event-sqlite-store.js";
 import type { DataGatheringDeps } from "./data-gathering.js";
-import { gatherFinanceConfigData, gatherTradingData } from "./data-gathering.js";
+import { gatherFinanceConfigData, gatherTradingData, gatherStrategyArenaData } from "./data-gathering.js";
 import type { HttpRes } from "./types-http.js";
 
 export function registerSseRoutes(
@@ -44,6 +44,23 @@ export function registerSseRoutes(
       const interval = setInterval(() => {
         res.write(`data: ${JSON.stringify(gatherTradingData(deps))}\n\n`);
       }, 10000);
+      req.on("close", () => clearInterval(interval));
+    },
+  });
+
+  // ── Strategy Arena SSE (15s interval) ──
+  api.registerHttpRoute({
+    path: "/api/v1/finance/arena/stream",
+    handler: async (req: { on: (event: string, cb: () => void) => void }, res: HttpRes) => {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      res.write(`data: ${JSON.stringify(gatherStrategyArenaData(deps))}\n\n`);
+      const interval = setInterval(() => {
+        res.write(`data: ${JSON.stringify(gatherStrategyArenaData(deps))}\n\n`);
+      }, 15000);
       req.on("close", () => clearInterval(interval));
     },
   });

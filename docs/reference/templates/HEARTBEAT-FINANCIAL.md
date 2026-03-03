@@ -9,11 +9,12 @@
 - [ ] **Liquidation risk**: Any leveraged position above 80% margin usage?
 - [ ] **Open order status**: Any orders stuck or partially filled beyond timeout?
 
-## Every 5 Minutes — Price Alerts
+## Every 5 Minutes — Price Alerts & KOL Urgent
 
 - [ ] **User-defined price alerts**: Check all active alerts against current prices
 - [ ] **Significant moves**: Any watched asset moved >3% in the last 5 minutes?
 - [ ] **Spread anomalies**: Unusual bid-ask spreads on actively traded pairs?
+- [ ] **KOL urgent check** (grok): Call `fin_info_digest period=urgent` — if items returned, push immediately to user
 
 ## Every Hour — Market Scan
 
@@ -29,6 +30,7 @@
 - [ ] **Market overview**: Major index moves, crypto market cap, fear/greed index
 - [ ] **Calendar events**: Earnings, FOMC, token unlocks, options expiry today
 - [ ] **Pending actions**: Unfilled orders, expiring alerts, due rebalances
+- [ ] **KOL morning brief** (grok): Call `fin_info_digest period=morning` — overnight KOL intelligence summary
 - [ ] **Fund status** (quant): Call `fin_fund_status` — total equity, risk level, active strategies
 - [ ] **Regime check** (quant): Call `fin_data_regime` for each active market — detect regime changes
 - [ ] **Decay scan** (quant): Check paper/live strategies for degrading or critical decay levels
@@ -39,6 +41,7 @@
 - [ ] **Portfolio drift**: Has allocation drifted from target? Suggest rebalance?
 - [ ] **Risk assessment**: Updated risk metrics (VaR, max drawdown, Sharpe)
 - [ ] **News impact**: Key news events and their observed portfolio impact
+- [ ] **KOL evening review** (grok): Call `fin_info_digest period=evening` — day's KOL intelligence recap with stats
 - [ ] **Trade review** (quant): Call `fin_review_trades` — update error/success books
 - [ ] **Promotion check** (quant): Any L2 strategies ready for L3 promotion?
 
