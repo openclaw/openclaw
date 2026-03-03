@@ -425,7 +425,10 @@ export async function dispatchReplyFromConfig(params: {
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
-              dispatcher.sendBlockReply(ttsPayload);
+              const queued = dispatcher.sendBlockReply(ttsPayload);
+              if (queued) {
+                await dispatcher.waitForIdle();
+              }
             }
           };
           return run();

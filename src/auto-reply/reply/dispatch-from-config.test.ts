@@ -517,6 +517,52 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("waits for block queue drain before emitting later tool updates on the same channel", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      ChatType: "direct",
+    });
+    let releaseWait: (() => void) | undefined;
+    const waitForIdleGate = new Promise<void>((resolve) => {
+      releaseWait = resolve;
+    });
+    (dispatcher.waitForIdle as ReturnType<typeof vi.fn>).mockImplementation(
+      async () => waitForIdleGate,
+    );
+
+    const run = dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver: async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await opts?.onBlockReply?.({ text: "partial block" });
+        await opts?.onToolResult?.({ text: "tool result" });
+        return { text: "done" } satisfies ReplyPayload;
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(dispatcher.sendBlockReply).toHaveBeenCalledTimes(1);
+      expect(dispatcher.waitForIdle).toHaveBeenCalledTimes(1);
+    });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+
+    releaseWait?.();
+    await run;
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "tool result" }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "done" }),
+    );
+  });
+
   it("suppresses native tool summaries but still forwards tool media", async () => {
     setNoAbort();
     const cfg = emptyConfig;
