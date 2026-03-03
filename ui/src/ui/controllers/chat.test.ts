@@ -233,6 +233,31 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe(null);
   });
 
+  it("keeps final payload when it is an intentional concise suffix", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Long draft intro\nConcise final answer",
+      chatStreamStartedAt: 100,
+    });
+    const finalMsg = {
+      role: "assistant",
+      content: [{ type: "text", text: "Concise final answer" }],
+      timestamp: 101,
+    };
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: finalMsg,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([finalMsg]);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatRunId).toBe(null);
+  });
+
   it("appends final payload message from own run before clearing stream state", () => {
     const state = createState({
       sessionKey: "main",

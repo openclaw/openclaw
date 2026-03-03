@@ -134,7 +134,20 @@ function shouldPreferStreamedText(
   if (streamed.length <= normalizedFinal.length) {
     return false;
   }
-  return streamed.endsWith(normalizedFinal);
+  if (!streamed.endsWith(normalizedFinal)) {
+    return false;
+  }
+  const suffixStart = streamed.length - normalizedFinal.length;
+  const prefix = streamed.slice(0, suffixStart);
+  if (!prefix.trim()) {
+    return false;
+  }
+  // Treat suffix-only finals as truncated only when earlier sections were already streamed.
+  const prefixLines = prefix
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  return prefixLines.length >= 2;
 }
 
 export async function sendChatMessage(
