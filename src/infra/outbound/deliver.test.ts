@@ -881,6 +881,54 @@ describe("deliverOutboundPayloads", () => {
     const firstCall = sendText.mock.calls[0]?.[0];
     expect(firstCall).toEqual(expect.objectContaining({ to: "U123", text: "caption" }));
     expect(firstCall?.mediaUrl).toBeUndefined();
+    expect(logMocks.warn).toHaveBeenCalledWith(
+      "deliverOutboundPayloads: sendMedia not configured for channel; dropping mediaUrl and falling back to caption",
+      expect.objectContaining({
+        channel: "line",
+        to: "U123",
+        mediaUrl: "https://x.test/a.jpg",
+      }),
+    );
+    expect(results).toEqual([{ channel: "line", messageId: "ln-media-1" }]);
+  });
+
+  it("does not send empty fallback text for additional media URLs on text-only plugin channels", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "line", messageId: "ln-media-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "line",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "line",
+      to: "U123",
+      payloads: [{ text: "caption", mediaUrls: ["https://x.test/a.jpg", "https://x.test/b.jpg"] }],
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "U123",
+        text: "caption",
+      }),
+    );
+    expect(logMocks.warn).toHaveBeenCalledWith(
+      "deliverOutboundPayloads: sendMedia not configured and caption empty; dropping mediaUrl without fallback",
+      expect.objectContaining({
+        channel: "line",
+        to: "U123",
+        mediaUrl: "https://x.test/b.jpg",
+      }),
+    );
     expect(results).toEqual([{ channel: "line", messageId: "ln-media-1" }]);
   });
 
