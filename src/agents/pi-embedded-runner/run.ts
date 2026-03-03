@@ -263,8 +263,6 @@ export async function runEmbeddedPiAgent(
         sessionId: params.sessionId,
         workspaceDir: resolvedWorkspace,
         messageProvider: params.messageProvider ?? undefined,
-        trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
       };
       if (hookRunner?.hasHooks("before_model_resolve")) {
         try {
@@ -551,16 +549,34 @@ export async function runEmbeddedPiAgent(
           return;
         }
         if (model.provider === "github-copilot") {
-          const { resolveCopilotApiToken } =
+          const { resolveCopilotApiToken, SDK_MANAGED_TOKEN } =
             await import("../../providers/github-copilot-token.js");
-          const copilotToken = await resolveCopilotApiToken({
-            githubToken: apiKeyInfo.apiKey,
-          });
-          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
-          if (copilotTokenState) {
-            copilotTokenState.githubToken = apiKeyInfo.apiKey;
-            copilotTokenState.expiresAt = copilotToken.expiresAt;
-            scheduleCopilotRefresh();
+          if (apiKeyInfo.apiKey === SDK_MANAGED_TOKEN) {
+            // SDK-managed auth: try env-based token exchange for pi-ai.
+            const envToken = (
+              process.env.COPILOT_GITHUB_TOKEN ??
+              process.env.GH_TOKEN ??
+              process.env.GITHUB_TOKEN ??
+              ""
+            ).trim();
+            if (envToken) {
+              const copilotToken = await resolveCopilotApiToken({ githubToken: envToken });
+              authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+            } else {
+              log.warn(
+                "SDK-managed Copilot auth has no env token (COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN) — REST API calls may fail",
+              );
+            }
+          } else {
+            const copilotToken = await resolveCopilotApiToken({
+              githubToken: apiKeyInfo.apiKey,
+            });
+            authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+            if (copilotTokenState) {
+              copilotTokenState.githubToken = apiKeyInfo.apiKey;
+              copilotTokenState.expiresAt = copilotToken.expiresAt;
+              scheduleCopilotRefresh();
+            }
           }
         } else {
           authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
@@ -717,7 +733,6 @@ export async function runEmbeddedPiAgent(
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
-            trigger: params.trigger,
             messageChannel: params.messageChannel,
             messageProvider: params.messageProvider,
             agentAccountId: params.agentAccountId,

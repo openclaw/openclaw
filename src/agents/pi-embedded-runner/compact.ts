@@ -298,11 +298,32 @@ export async function compactEmbeddedPiSessionDirect(
         );
       }
     } else if (model.provider === "github-copilot") {
-      const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
-      const copilotToken = await resolveCopilotApiToken({
-        githubToken: apiKeyInfo.apiKey,
-      });
-      authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+      const { resolveCopilotApiToken, SDK_MANAGED_TOKEN } =
+        await import("../../providers/github-copilot-token.js");
+      if (apiKeyInfo.apiKey === SDK_MANAGED_TOKEN) {
+        // SDK-managed auth: the Copilot SDK handles token lifecycle.
+        // We still need a Copilot API token for pi-ai, so exchange via
+        // the internal endpoint using the GH token from env if available.
+        const envToken = (
+          process.env.COPILOT_GITHUB_TOKEN ??
+          process.env.GH_TOKEN ??
+          process.env.GITHUB_TOKEN ??
+          ""
+        ).trim();
+        if (envToken) {
+          const copilotToken = await resolveCopilotApiToken({ githubToken: envToken });
+          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+        } else {
+          log.warn(
+            "SDK-managed Copilot auth has no env token (COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN) — REST API calls may fail",
+          );
+        }
+      } else {
+        const copilotToken = await resolveCopilotApiToken({
+          githubToken: apiKeyInfo.apiKey,
+        });
+        authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+      }
     } else {
       authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
     }
@@ -371,7 +392,6 @@ export async function compactEmbeddedPiSessionDirect(
       agentAccountId: params.agentAccountId,
       sessionKey: sandboxSessionKey,
       sessionId: params.sessionId,
-      runId: params.runId,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,

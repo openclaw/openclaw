@@ -16,6 +16,8 @@ import {
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
+  stripInvalidThinkingSignatures,
+  downgradeThinkingBlocksOnModelSwitch,
 } from "../pi-embedded-helpers.js";
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import {
@@ -359,6 +361,17 @@ function isSameModelSnapshot(a: ModelSnapshotEntry, b: ModelSnapshotEntry): bool
   );
 }
 
+// Thinking signatures are provider-level (e.g. Anthropic base64, OpenAI JSON reasoning)
+// and remain valid when switching models within the same provider/API combination.
+// Only cross-provider switches produce incompatible signatures.
+function isSignatureCompatibleSnapshot(a: ModelSnapshotEntry, b: ModelSnapshotEntry): boolean {
+  const normalize = (value?: string | null) => value ?? "";
+  return (
+    normalize(a.provider) === normalize(b.provider) &&
+    normalize(a.modelApi) === normalize(b.modelApi)
+  );
+}
+
 function hasGoogleTurnOrderingMarker(sessionManager: SessionManager): boolean {
   try {
     return sessionManager
@@ -442,7 +455,12 @@ export async function sanitizeSessionHistory(params: {
   const droppedThinking = policy.dropThinkingBlocks
     ? dropThinkingBlocks(sanitizedImages)
     : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
+  // Strip thinking blocks whose thinkingSignature is a bare field-name artifact from the
+  // openai-completions path (e.g. "reasoning_text"). These cannot be round-tripped through
+  // openai-responses (JSON.parse crash) or openai-completions → Copilot proxy → Anthropic
+  // ("Invalid signature in thinking block"). Must run before downgradeOpenAIReasoningBlocks.
+  const sanitizedThinkingSigs = stripInvalidThinkingSignatures(droppedThinking);
+  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinkingSigs, {
     allowedToolNames: params.allowedToolNames,
   });
   const repairedTools = policy.repairToolUseResultPairing
@@ -456,19 +474,34 @@ export async function sanitizeSessionHistory(params: {
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
   const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
-  const modelChanged = priorSnapshot
-    ? !isSameModelSnapshot(priorSnapshot, {
-        timestamp: 0,
-        provider: params.provider,
-        modelApi: params.modelApi,
-        modelId: params.modelId,
-      })
+  const currentSnapshot: ModelSnapshotEntry = {
+    timestamp: 0,
+    provider: params.provider,
+    modelApi: params.modelApi,
+    modelId: params.modelId,
+  };
+  const modelChanged = priorSnapshot ? !isSameModelSnapshot(priorSnapshot, currentSnapshot) : false;
+  // Thinking signatures are provider-level (Anthropic base64, OpenAI reasoning JSON) and
+  // remain valid across model switches within the same provider+API. Only cross-provider
+  // switches produce incompatible signatures (e.g. OpenAI reasoning JSON sent via Copilot
+  // to Claude → "Invalid signature in thinking block" HTTP 400).
+  const signatureIncompatible = priorSnapshot
+    ? !isSignatureCompatibleSnapshot(priorSnapshot, currentSnapshot)
     : false;
+  // Also downgrade when there's no prior snapshot but the session already has messages
+  // (legacy sessions that predate model snapshot tracking may have toxic signatures).
+  const needsThinkingDowngrade =
+    signatureIncompatible || (hasSnapshot && !priorSnapshot && sanitizedCompactionUsage.length > 0);
+  const sanitizedModelSwitch = needsThinkingDowngrade
+    ? downgradeThinkingBlocksOnModelSwitch(sanitizedCompactionUsage)
+    : sanitizedCompactionUsage;
   const sanitizedOpenAI = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
-        downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage),
+        signatureIncompatible
+          ? downgradeOpenAIReasoningBlocks(sanitizedModelSwitch)
+          : sanitizedModelSwitch,
       )
-    : sanitizedCompactionUsage;
+    : sanitizedModelSwitch;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
