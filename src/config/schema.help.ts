@@ -667,10 +667,11 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.perplexity.model":
     'Perplexity model override (default: "perplexity/sonar-pro").',
   "tools.web.search.exa.apiKey": "Exa API key (fallback: EXA_API_KEY env var).",
-  "tools.web.search.exa.numResults": "Default number of results to return from Exa (1-100).",
+  "tools.web.search.exa.numResults":
+    "Default number of results from Exa (clamped to 1-10 by the tool schema).",
   "tools.web.search.exa.type": 'Exa search type: "auto" (default), "neural", or "keyword".',
   "tools.web.search.exa.contents":
-    "Include page contents (text snippets + highlights) in results (default: true).",
+    "Include page text snippets in results (default: false). Exa charges extra per page for contents.",
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":

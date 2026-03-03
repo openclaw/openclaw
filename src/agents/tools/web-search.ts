@@ -348,8 +348,6 @@ type ExaSearchResult = {
   publishedDate?: string;
   author?: string;
   text?: string;
-  highlights?: string[];
-  summary?: string;
 };
 
 type ExaSearchResponse = {
@@ -745,7 +743,7 @@ function resolveExaSearchType(exa?: ExaConfig): string {
 }
 
 function resolveExaContents(exa?: ExaConfig): boolean {
-  return exa?.contents !== false;
+  return exa?.contents === true;
 }
 
 async function withTrustedWebSearchEndpoint<T>(
@@ -1309,8 +1307,7 @@ async function runExaSearch(params: {
     numResults: params.count,
   };
   if (params.contents) {
-    body.text = { maxCharacters: 1200 };
-    body.highlights = { maxCharacters: 300 };
+    body.text = { maxCharacters: 300 };
   }
 
   return withTrustedWebSearchEndpoint(
@@ -1335,9 +1332,7 @@ async function runExaSearch(params: {
       const results = (data.results ?? []).map((entry) => {
         const title = entry.title ?? "";
         const url = entry.url ?? "";
-        const highlights = entry.highlights?.join(" … ") ?? "";
-        const text = entry.text?.slice(0, 300) ?? "";
-        const snippet = highlights || text || "";
+        const snippet = entry.text ?? "";
         return {
           title: title ? wrapWebContent(title, "web_search") : "",
           url,
@@ -1385,7 +1380,7 @@ async function runWebSearch(params: {
         : params.provider === "kimi"
           ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
           : params.provider === "exa"
-            ? `${params.exaSearchType ?? "auto"}:${String(params.exaContents ?? true)}`
+            ? `${params.exaSearchType ?? "auto"}:${String(params.exaContents ?? false)}`
             : "";
   const cacheKey = normalizeCacheKey(
     `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
@@ -1517,7 +1512,7 @@ async function runWebSearch(params: {
       apiKey: params.apiKey,
       count: params.count,
       searchType: params.exaSearchType ?? "auto",
-      contents: params.exaContents ?? true,
+      contents: params.exaContents ?? false,
       timeoutSeconds: params.timeoutSeconds,
     });
 
@@ -1647,7 +1642,7 @@ export function createWebSearchTool(options?: {
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
             : provider === "exa"
-              ? "Search the web using Exa. Returns neural search results with titles, URLs, and content snippets."
+              ? "Search the web using Exa. Returns neural search results with titles, URLs, and optional text snippets."
               : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {

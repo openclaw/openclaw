@@ -36,7 +36,7 @@ See [Perplexity Search setup](/perplexity) and [Brave Search setup](/brave-searc
 | **Gemini**          | Google Search grounding, AI-synthesized      | Requires Gemini API key                        | `GEMINI_API_KEY`                             |
 | **Grok**            | xAI web-grounded responses                   | Requires xAI API key                           | `XAI_API_KEY`                                |
 | **Kimi**            | Moonshot web search capability               | Requires Moonshot API key                      | `KIMI_API_KEY` / `MOONSHOT_API_KEY`          |
-| **Exa**             | Neural search, content snippets              | Requires Exa API key                           | `EXA_API_KEY`                                |
+| **Exa**             | Neural search, structured results            | Contents cost extra per page                   | `EXA_API_KEY`                                |
 
 See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
 
@@ -193,8 +193,8 @@ Exa provides neural search that understands meaning, not just keywords. It retur
           apiKey: "your-exa-key",
           // Search type: "auto" (default), "neural", or "keyword"
           type: "auto",
-          // Include page content snippets (default: true)
-          contents: true,
+          // Include page text snippets (default: false; costs extra)
+          contents: false,
         },
       },
     },
@@ -208,8 +208,9 @@ For a gateway install, put it in `~/.openclaw/.env`.
 ### Notes
 
 - Exa's neural search mode understands query intent and finds semantically relevant results even without exact keyword matches.
-- When `contents` is enabled (default), results include text snippets and highlights for richer context.
 - The `type` option controls the search strategy: `"auto"` lets Exa choose, `"neural"` forces semantic search, `"keyword"` forces traditional matching.
+- **Cost:** Exa charges per search request ($7/1k requests for 1-10 results). Setting `contents: true` adds an extra per-page charge ($1/1k pages) for text snippets. Contents are off by default to keep costs predictable.
+- See [Exa pricing](https://exa.ai/pricing) for current rates and free tier details (1,000 free requests/month).
 
 ## web_search
 
