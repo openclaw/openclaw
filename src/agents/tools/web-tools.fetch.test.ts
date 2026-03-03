@@ -290,6 +290,29 @@ describe("web_fetch extraction fallbacks", () => {
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.
   // The sanitization of these fields is verified by external-content.test.ts tests.
 
+  it("returns a verification-blocked payload for WeChat verification pages", async () => {
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(
+        htmlResponse(
+          "<!doctype html><html><body><h2>环境异常</h2><a id='js_verify'>去验证</a><script>var PAGE_MID='mmbizwap:secitptpage/verify.html';</script></body></html>",
+          requestUrl(input),
+        ),
+      ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const result = await tool?.execute?.("call", { url: "https://mp.weixin.qq.com/s/abc" });
+    const details = result?.details as {
+      extractor?: string;
+      warning?: string;
+      text?: string;
+    };
+
+    expect(details.extractor).toBe("blocked-verification");
+    expect(details.warning).toContain("interactive verification page");
+    expect(details.text).toContain("Open the article in a real browser/WeChat app");
+  });
+
   it("falls back to firecrawl when readability returns no content", async () => {
     installMockFetch((input: RequestInfo | URL) => {
       const url = requestUrl(input);
