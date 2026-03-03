@@ -315,6 +315,24 @@ Then restart.`;
     expect(result.text).not.toContain("```");
   });
 
+  it("preserves markdown-like tokens inside inline code blocks", () => {
+    const text = `Here is a script:
+
+\`\`\`bash
+# Install dependencies
+npm install **my-package**
+\`\`\`
+
+Done.`;
+
+    const result = processLineMessage(text, { codeBlockDisplay: "inline" });
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain("# Install dependencies");
+    expect(result.text).toContain("**my-package**");
+    expect(result.text).not.toContain("```");
+  });
+
   it("extracts code blocks to Flex when codeBlockDisplay is 'flex'", () => {
     const text = `Code:\n\n\`\`\`js\nconsole.log("hi");\n\`\`\``;
 

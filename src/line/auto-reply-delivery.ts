@@ -9,10 +9,7 @@ export type LineAutoReplyDeps = {
   buildTemplateMessageFromPayload: (
     payload: LineTemplateMessagePayload,
   ) => messagingApi.TemplateMessage | null;
-  processLineMessage: (
-    text: string,
-    opts?: { codeBlockDisplay?: "flex" | "inline" },
-  ) => ProcessedLineMessage;
+  processLineMessage: (text: string) => ProcessedLineMessage;
   chunkMarkdownText: (text: string, limit: number) => string[];
   sendLineReplyChunks: (params: SendLineReplyChunksParams) => Promise<{ replyTokenUsed: boolean }>;
   createQuickReplyItems: (labels: string[]) => messagingApi.QuickReply;

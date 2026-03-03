@@ -398,11 +398,14 @@ export function processLineMessage(
   }
 
   // 2. Code blocks: extract to Flex bubbles (default) or keep inline as plain text
+  const inlineCodePlaceholders: string[] = [];
   if (opts?.codeBlockDisplay === "inline") {
-    // Strip fences but keep code content in the text body
-    processedText = processedText.replace(MARKDOWN_CODE_BLOCK_REGEX, (_match, _lang, code) =>
-      (code as string).trim(),
-    );
+    // Replace code blocks with placeholders to protect content from stripMarkdown
+    processedText = processedText.replace(MARKDOWN_CODE_BLOCK_REGEX, (_match, _lang, code) => {
+      const index = inlineCodePlaceholders.length;
+      inlineCodePlaceholders.push((code as string).trim());
+      return `\x00CODE_${index}\x00`;
+    });
     MARKDOWN_CODE_BLOCK_REGEX.lastIndex = 0;
   } else {
     const { codeBlocks, textWithoutCode } = extractCodeBlocks(processedText);
@@ -421,6 +424,11 @@ export function processLineMessage(
 
   // 4. Strip remaining markdown formatting
   processedText = stripMarkdown(processedText);
+
+  // 5. Restore inline code blocks after stripMarkdown
+  for (let i = 0; i < inlineCodePlaceholders.length; i++) {
+    processedText = processedText.replace(`\x00CODE_${i}\x00`, inlineCodePlaceholders[i]);
+  }
 
   return {
     text: processedText,
