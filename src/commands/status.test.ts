@@ -568,6 +568,45 @@ describe("statusCommand", () => {
     expect(joined).toContain("devices approve req-close-456");
   });
 
+  it("skips deep health probe when gateway is unreachable (guard)", async () => {
+    // Default probeGateway mock returns ok: false → gatewayReachable is false.
+    // The health probe callGateway should NOT be called at all.
+    mocks.callGateway.mockClear();
+
+    await expect(statusCommand({ deep: true }, runtime as never)).resolves.not.toThrow();
+
+    // Verify callGateway was never called with method "health"
+    const healthCalls = mocks.callGateway.mock.calls.filter(
+      (call: unknown[]) => (call[0] as { method?: string })?.method === "health",
+    );
+    expect(healthCalls).toHaveLength(0);
+  });
+
+  it("captures health probe error instead of crashing when gateway is reachable (catch)", async () => {
+    // Gateway is reachable but the health probe itself fails
+    mockProbeGatewayResult({
+      ok: true,
+      connectLatencyMs: 10,
+      error: null,
+      health: {},
+      status: {},
+      presence: [],
+    });
+    // First callGateway (channels.status from scanStatus) succeeds,
+    // second callGateway (health probe) rejects
+    mocks.callGateway
+      .mockResolvedValueOnce({}) // channels.status
+      .mockRejectedValueOnce(new Error("gateway closed (1008): unauthorized"));
+
+    // Should not throw — error should be captured gracefully
+    await expect(statusCommand({ deep: true }, runtime as never)).resolves.not.toThrow();
+
+    // Health section should show the error
+    const logs = getRuntimeLogs();
+    expect(logs.some((l) => l.includes("Health"))).toBe(true);
+    expect(logs.some((l) => l.includes("gateway closed (1008): unauthorized"))).toBe(true);
+  });
+
   it("includes sessions across agents in JSON output", async () => {
     const originalAgents = mocks.listAgentsForGateway.getMockImplementation();
     const originalResolveStorePath = mocks.resolveStorePath.getMockImplementation();
