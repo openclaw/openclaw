@@ -82,12 +82,6 @@ See [Memory](/concepts/memory).
 - **Brave Search API**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
 - **Perplexity** (via OpenRouter): `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
 
-**Brave free tier (generous):**
-
-- **2,000 requests/month**
-- **1 request/second**
-- **Credit card required** for verification (no charge unless you upgrade)
-
 See [Web tools](/tools/web).
 
 ### 5) Web fetch tool (Firecrawl)
