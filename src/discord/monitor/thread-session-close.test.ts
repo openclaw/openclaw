@@ -3,12 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const hoisted = vi.hoisted(() => {
   const updateSessionStore = vi.fn();
   const resolveStorePath = vi.fn(() => "/tmp/openclaw-sessions.json");
-  return { updateSessionStore, resolveStorePath };
+  const listAgentIds = vi.fn(() => ["main"]);
+  return { updateSessionStore, resolveStorePath, listAgentIds };
 });
 
 vi.mock("../../config/sessions.js", () => ({
   updateSessionStore: hoisted.updateSessionStore,
   resolveStorePath: hoisted.resolveStorePath,
+}));
+
+vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentIds: hoisted.listAgentIds,
 }));
 
 const { closeDiscordThreadSessions } = await import("./thread-session-close.js");
@@ -30,6 +35,8 @@ describe("closeDiscordThreadSessions", () => {
     hoisted.updateSessionStore.mockClear();
     hoisted.resolveStorePath.mockClear();
     hoisted.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions.json");
+    hoisted.listAgentIds.mockClear();
+    hoisted.listAgentIds.mockReturnValue(["main"]);
   });
 
   it("resets updatedAt to 0 for sessions whose key contains the threadId", async () => {
@@ -135,9 +142,10 @@ describe("closeDiscordThreadSessions", () => {
     expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
   });
 
-  it("resolves the store path using cfg.session.store and accountId", async () => {
+  it("resolves the store path for listed agents and accountId", async () => {
     const store = {};
     setupStore(store);
+    hoisted.listAgentIds.mockReturnValue(["main", "work"]);
 
     await closeDiscordThreadSessions({
       cfg: { session: { store: "/custom/path/sessions.json" } },
@@ -145,8 +153,35 @@ describe("closeDiscordThreadSessions", () => {
       threadId: THREAD_ID,
     });
 
+    expect(hoisted.resolveStorePath).toHaveBeenCalledTimes(3);
+    expect(hoisted.resolveStorePath).toHaveBeenCalledWith("/custom/path/sessions.json", {
+      agentId: "main",
+    });
+    expect(hoisted.resolveStorePath).toHaveBeenCalledWith("/custom/path/sessions.json", {
+      agentId: "work",
+    });
     expect(hoisted.resolveStorePath).toHaveBeenCalledWith("/custom/path/sessions.json", {
       agentId: "my-bot",
     });
+  });
+
+  it("dedupes updates when multiple agentIds resolve to the same store path", async () => {
+    const store = {
+      [MATCHED_KEY]: { updatedAt: 1_700_000_000_000 },
+    };
+    setupStore(store);
+    hoisted.listAgentIds.mockReturnValue(["main", "work"]);
+    hoisted.resolveStorePath.mockReturnValue("/tmp/shared-sessions.json");
+
+    const count = await closeDiscordThreadSessions({
+      cfg: { session: { store: "/custom/path/sessions.json" } },
+      accountId: "my-bot",
+      threadId: THREAD_ID,
+    });
+
+    expect(count).toBe(1);
+    expect(hoisted.resolveStorePath).toHaveBeenCalledTimes(3);
+    expect(hoisted.updateSessionStore).toHaveBeenCalledTimes(1);
+    expect(store[MATCHED_KEY].updatedAt).toBe(0);
   });
 });
