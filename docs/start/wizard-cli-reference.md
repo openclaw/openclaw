@@ -116,7 +116,7 @@ What you set:
 ## Auth and model options
 
 <AccordionGroup>
-  <Accordion title="Anthropic API key (recommended)">
+  <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
   </Accordion>
   <Accordion title="Anthropic OAuth (Claude Code CLI)">
@@ -163,7 +163,7 @@ What you set:
     Prompts for account ID, gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
   </Accordion>
-  <Accordion title="MiniMax M2.1">
+  <Accordion title="MiniMax M2.5">
     Config is auto-written.
     More detail: [MiniMax](/providers/minimax).
   </Accordion>
