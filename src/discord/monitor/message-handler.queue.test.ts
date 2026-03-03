@@ -92,8 +92,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
 
-    const firstRun = createDeferred<void>();
-    const secondRun = createDeferred<void>();
+    const firstRun = createDeferred();
+    const secondRun = createDeferred();
     processDiscordMessageMock
       .mockImplementationOnce(async () => {
         await firstRun.promise;
@@ -152,7 +152,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
 
-    const firstPreflight = createDeferred<void>();
+    const firstPreflight = createDeferred();
     const processedMessageIds: string[] = [];
 
     preflightDiscordMessageMock.mockImplementation(
