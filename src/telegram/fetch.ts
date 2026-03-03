@@ -13,6 +13,8 @@ import {
 let appliedAutoSelectFamily: boolean | null = null;
 let appliedDnsResultOrder: string | null = null;
 let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
+let baselineGlobalDispatcherCaptured = false;
+let baselineGlobalDispatcher: unknown;
 const log = createSubsystemLogger("telegram/network");
 function isProxyLikeDispatcher(dispatcher: unknown): boolean {
   const ctorName = (dispatcher as { constructor?: { name?: string } })?.constructor?.name;
@@ -83,6 +85,10 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
       isProxyLikeDispatcher(existingGlobalDispatcher) && !hasProxyEnvConfigured();
     if (!shouldPreserveExistingProxy) {
       try {
+        if (!baselineGlobalDispatcherCaptured) {
+          baselineGlobalDispatcherCaptured = true;
+          baselineGlobalDispatcher = existingGlobalDispatcher;
+        }
         setGlobalDispatcher(
           new EnvHttpProxyAgent({
             connect: {
@@ -114,6 +120,20 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
         // ignore if unsupported by the runtime
       }
     }
+  }
+}
+
+function restoreTelegramDispatcherForSafeRetry(): boolean {
+  if (!baselineGlobalDispatcherCaptured) {
+    return false;
+  }
+  try {
+    setGlobalDispatcher(baselineGlobalDispatcher);
+    appliedGlobalDispatcherAutoSelectFamily = null;
+    log.warn("fetch fallback: restoring original undici dispatcher for safe retry");
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -194,7 +214,17 @@ export function resolveTelegramFetch(
     } catch (err) {
       if (shouldRetryWithIpv4Fallback(err)) {
         applyTelegramIpv4Fallback();
-        return sourceFetch(input, init);
+        try {
+          return await sourceFetch(input, init);
+        } catch (ipv4FallbackErr) {
+          if (
+            shouldRetryWithIpv4Fallback(ipv4FallbackErr) &&
+            restoreTelegramDispatcherForSafeRetry()
+          ) {
+            return sourceFetch(input, init);
+          }
+          throw ipv4FallbackErr;
+        }
       }
       throw err;
     }
@@ -205,4 +235,6 @@ export function resetTelegramFetchStateForTests(): void {
   appliedAutoSelectFamily = null;
   appliedDnsResultOrder = null;
   appliedGlobalDispatcherAutoSelectFamily = null;
+  baselineGlobalDispatcherCaptured = false;
+  baselineGlobalDispatcher = undefined;
 }
