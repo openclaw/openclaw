@@ -351,6 +351,18 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (res.code === 0) {
     return true;
   }
+
+  const stdoutDetail = (res.stdout || "").trim();
+  const stderrDetail = (res.stderr || "").trim();
+  const indicatesUnavailable =
+    isSystemctlMissing(stdoutDetail) ||
+    isSystemdUnitNotEnabled(stdoutDetail) ||
+    isSystemctlMissing(stderrDetail) ||
+    isSystemdUnitNotEnabled(stderrDetail);
+  if (indicatesUnavailable) {
+    return false;
+  }
+
   const detail = readSystemctlDetail(res);
   if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
     return false;
