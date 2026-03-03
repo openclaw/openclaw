@@ -24,6 +24,7 @@ import {
   resolveSystemPromptUsage,
   writeCliImages,
 } from "./cli-runner/helpers.js";
+import { runCopilotCliAgent } from "./copilot-runner.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
@@ -51,6 +52,29 @@ export async function runCliAgent(params: {
   cliSessionId?: string;
   images?: ImageContent[];
 }): Promise<EmbeddedPiRunResult> {
+  // Copilot SDK has its own client/session lifecycle — intercept before generic CLI path.
+  if (params.provider === "copilot-cli") {
+    if (params.images && params.images.length > 0) {
+      log.warn("copilot-cli does not support image input — images will be dropped");
+    }
+    return runCopilotCliAgent({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      sessionFile: params.sessionFile,
+      workspaceDir: params.workspaceDir,
+      config: params.config,
+      prompt: params.prompt,
+      model: params.model,
+      thinkLevel: params.thinkLevel,
+      timeoutMs: params.timeoutMs,
+      runId: params.runId,
+      extraSystemPrompt: params.extraSystemPrompt,
+      ownerNumbers: params.ownerNumbers,
+      cliSessionId: params.cliSessionId,
+    });
+  }
+
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
     workspaceDir: params.workspaceDir,
