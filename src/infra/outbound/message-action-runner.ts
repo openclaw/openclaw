@@ -6,6 +6,7 @@ import {
   readStringParam,
 } from "../../agents/tools/common.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type {
   ChannelId,
@@ -523,42 +524,54 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   // Without this, only deliverOutboundPayloads() emits the hook, so plugins
   // using registerHook("message_sending", …) miss all message(action=send)
   // calls that go through the plugin dispatch path.  (#32621)
+  //
+  // IMPORTANT: We only fire the hook here when the channel's plugin will
+  // handle the send action.  Core-path sends (no plugin handler) already
+  // invoke the hook inside deliverOutboundPayloads → applyMessageSendingHook,
+  // so firing here would cause a double invocation.
   if (!dryRun) {
-    const hookRunner = getGlobalHookRunner();
-    if (hookRunner?.hasHooks("message_sending")) {
-      try {
-        const hookResult = await hookRunner.runMessageSending(
-          {
-            to,
-            content: message,
-            metadata: {
-              channel,
-              accountId: accountId ?? undefined,
-              mediaUrls: mergedMediaUrls.length > 0 ? mergedMediaUrls : undefined,
+    const plugin = getChannelPlugin(channel);
+    const pluginWillHandle =
+      !!plugin?.actions?.handleAction &&
+      (!plugin.actions.supportsAction || plugin.actions.supportsAction({ action: "send" }));
+
+    if (pluginWillHandle) {
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner?.hasHooks("message_sending")) {
+        try {
+          const hookResult = await hookRunner.runMessageSending(
+            {
+              to,
+              content: message,
+              metadata: {
+                channel,
+                accountId: accountId ?? undefined,
+                mediaUrls: mergedMediaUrls.length > 0 ? mergedMediaUrls : undefined,
+              },
             },
-          },
-          {
-            channelId: channel,
-            accountId: accountId ?? undefined,
-          },
-        );
-        if (hookResult?.cancel) {
-          return {
-            kind: "send",
-            channel,
-            action,
-            to,
-            handledBy: "hook-cancelled",
-            payload: { cancelled: true, reason: "message_sending hook" },
-            dryRun,
-          };
+            {
+              channelId: channel,
+              accountId: accountId ?? undefined,
+            },
+          );
+          if (hookResult?.cancel) {
+            return {
+              kind: "send",
+              channel,
+              action,
+              to,
+              handledBy: "hook-cancelled",
+              payload: { cancelled: true, reason: "message_sending hook" },
+              dryRun,
+            };
+          }
+          if (hookResult?.content != null) {
+            message = hookResult.content;
+            params.message = message;
+          }
+        } catch {
+          // Don't block message sends on hook failure.
         }
-        if (hookResult?.content != null) {
-          message = hookResult.content;
-          params.message = message;
-        }
-      } catch {
-        // Don't block message sends on hook failure.
       }
     }
   }
