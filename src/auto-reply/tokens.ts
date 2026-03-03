@@ -75,5 +75,15 @@ export function isSilentReplyPrefixText(
   if (/[^A-Z_]/.test(normalized)) {
     return false;
   }
-  return token.toUpperCase().startsWith(normalized);
+  const tokenUpper = token.toUpperCase();
+  if (!tokenUpper.startsWith(normalized)) {
+    return false;
+  }
+  if (normalized.includes("_")) {
+    return true;
+  }
+  // Keep underscore guard for generic tokens to avoid suppressing unrelated
+  // uppercase words (e.g. HEART/HE with HEARTBEAT_OK). Only allow bare "NO"
+  // because NO_REPLY streaming can transiently emit that fragment.
+  return tokenUpper === SILENT_REPLY_TOKEN && normalized === "NO";
 }

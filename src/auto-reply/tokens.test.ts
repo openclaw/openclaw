@@ -89,6 +89,13 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("Hello")).toBe(false);
   });
 
+  it("keeps underscore guard for non-NO_REPLY tokens", () => {
+    expect(isSilentReplyPrefixText("HE", "HEARTBEAT_OK")).toBe(false);
+    expect(isSilentReplyPrefixText("HEART", "HEARTBEAT_OK")).toBe(false);
+    expect(isSilentReplyPrefixText("HEARTBEAT", "HEARTBEAT_OK")).toBe(false);
+    expect(isSilentReplyPrefixText("HEARTBEAT_", "HEARTBEAT_OK")).toBe(true);
+  });
+
   it("rejects non-prefixes and mixed characters", () => {
     expect(isSilentReplyPrefixText("NO_X")).toBe(false);
     expect(isSilentReplyPrefixText("NO_REPLY more")).toBe(false);
