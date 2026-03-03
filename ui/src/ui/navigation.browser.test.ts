@@ -15,6 +15,15 @@ function nextFrame() {
 }
 
 describe("control UI routing", () => {
+  it("routes entrypoint to overview when token is missing", async () => {
+    const app = mountApp("/");
+    await app.updateComplete;
+
+    expect(app.settings.token).toBe("");
+    expect(app.tab).toBe("overview");
+    expect(window.location.pathname).toBe("/overview");
+  });
+
   it("hydrates the tab from the location", async () => {
     const app = mountApp("/sessions");
     await app.updateComplete;

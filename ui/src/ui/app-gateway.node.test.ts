@@ -226,4 +226,28 @@ describe("connectGateway", () => {
     expect(host.lastError).toContain("gateway token mismatch");
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
   });
+
+  it("switches from chat to overview on token-missing close when no token is configured", () => {
+    const host = createHost();
+    host.tab = "chat";
+    host.settings.token = "";
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message:
+          "unauthorized: gateway token missing (open the dashboard URL and paste the token in Control UI settings)",
+        details: { code: "INVALID_REQUEST" },
+      },
+    });
+
+    expect(host.tab).toBe("overview");
+    expect(host.lastError).toContain("gateway token missing");
+  });
 });

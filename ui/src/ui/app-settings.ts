@@ -61,6 +61,15 @@ type SettingsHost = {
   pendingGatewayUrl?: string | null;
 };
 
+function isBaseEntrypointPath(pathname: string, basePath: string): boolean {
+  const normalizedPath = normalizePath(pathname);
+  const base = normalizeBasePath(basePath);
+  if (!base) {
+    return normalizedPath === "/";
+  }
+  return normalizedPath === normalizePath(base);
+}
+
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
     ...next,
@@ -303,7 +312,11 @@ export function syncTabWithLocation(host: SettingsHost, replace: boolean) {
   if (typeof window === "undefined") {
     return;
   }
-  const resolved = tabFromPath(window.location.pathname, host.basePath) ?? "chat";
+  const hasAuth = Boolean(host.settings.token.trim() || host.password?.trim());
+  const atEntrypoint = isBaseEntrypointPath(window.location.pathname, host.basePath);
+  const resolvedFromPath = tabFromPath(window.location.pathname, host.basePath);
+  const resolved =
+    atEntrypoint && !hasAuth ? "overview" : (resolvedFromPath ?? (hasAuth ? "chat" : "overview"));
   setTabFromRoute(host, resolved);
   syncUrlWithTab(host, resolved, replace);
 }
