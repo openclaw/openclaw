@@ -212,6 +212,6 @@ is merged by default unless `models.mode` is set to `replace`.
 
 Merge mode precedence for matching provider IDs:
 
-- Non-empty `apiKey`/`baseUrl` already present in the agent `models.json` win.
-- Empty or missing agent `apiKey`/`baseUrl` fall back to config `models.providers`.
+- Non-empty `apiKey`/`baseUrl` already present in the agent `models.json` will win.
+- Empty or missing agent `apiKey`/`baseUrl` will fall back to config `models.providers`.
 - Other provider fields are refreshed from config and normalized catalog data.
