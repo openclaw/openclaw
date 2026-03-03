@@ -110,61 +110,76 @@ export async function withRouteTabContext<T>(
   try {
     const tab = await profileCtx.ensureTabAvailable(params.targetId);
 
-    // Enrich every successful tab-targeting response with the resolved tab's
-    // current page URL.  This gives downstream consumers (security plugins,
-    // audit loggers, etc.) a consistent way to know which page was targeted
-    // without issuing a separate tabs query.  Existing explicit values win;
-    // the wrapper only fills in missing fields.
+    // Enrich every successful tab-targeting response with the current page URL.
+    // This gives downstream consumers (security plugins, audit loggers, etc.)
+    // a consistent way to know which page was targeted without issuing a
+    // separate tabs query.  Existing explicit handler values win; the wrapper
+    // only fills in missing fields.
     //
-    // We attempt to resolve the *live* page URL via Playwright (which queries
-    // the actual browser page), falling back to the tab list URL if
-    // Playwright is unavailable.  This corrects stale URL caches when the
-    // user navigates in the browser without triggering a relay metadata
-    // refresh (e.g. Chrome extension relay).
-    let liveUrl: string | undefined;
-    try {
-      const pwMod = await getPwAiModuleBase({ mode: "soft" });
-      if (pwMod?.getPageForTargetId) {
-        const page = await pwMod.getPageForTargetId({
-          cdpUrl: profileCtx.profile.cdpUrl,
-          targetId: tab.targetId,
-        });
-        if (page) {
-          liveUrl = page.url();
-        }
-      }
-    } catch {
-      // Playwright not available or page not found — fall back to tab.url
-    }
-    const resolvedUrl = liveUrl || tab.url;
+    // URL resolution happens *after* the handler runs so that actions which
+    // navigate (e.g. /act, /navigate) report the post-action URL, not a stale
+    // pre-run snapshot.  We avoid a pre-run Playwright page lookup here to
+    // prevent doubling CDP connection latency — handlers that need a page
+    // already resolve one themselves.
 
+    // Capture original json so we can intercept after run() completes.
     const originalJson = params.res.json.bind(params.res);
+    let interceptedBody: unknown = undefined;
+    let jsonCalled = false;
     params.res.json = (body: unknown) => {
-      if (
-        body &&
-        typeof body === "object" &&
-        !Array.isArray(body) &&
-        (body as Record<string, unknown>).ok === true
-      ) {
-        const record = body as Record<string, unknown>;
-        if (record.targetId === undefined) {
-          record.targetId = tab.targetId;
-        }
-        if (record.url === undefined && resolvedUrl) {
-          // Only fill in url when the handler didn't already set one.
-          // Handlers like /navigate return the post-navigation URL which
-          // should not be clobbered with the pre-run tab URL.
-          record.url = resolvedUrl;
-        }
-      }
-      return originalJson(body);
+      interceptedBody = body;
+      jsonCalled = true;
+      // Don't send yet — we'll enrich and send after run().
+      return params.res;
     };
 
-    return await params.run({
+    const result = await params.run({
       profileCtx,
       tab,
       cdpUrl: profileCtx.profile.cdpUrl,
     });
+
+    // Now enrich and flush the intercepted response body.
+    if (jsonCalled) {
+      if (
+        interceptedBody &&
+        typeof interceptedBody === "object" &&
+        !Array.isArray(interceptedBody) &&
+        (interceptedBody as Record<string, unknown>).ok === true
+      ) {
+        const record = interceptedBody as Record<string, unknown>;
+        if (record.targetId === undefined) {
+          record.targetId = tab.targetId;
+        }
+        if (record.url === undefined) {
+          // Resolve live URL *after* the handler ran, so navigating actions
+          // report the post-action URL.  Try Playwright first (actual page
+          // state), fall back to tab metadata URL.
+          let postRunUrl: string | undefined;
+          try {
+            const pwMod = await getPwAiModuleBase({ mode: "soft" });
+            if (pwMod?.getPageForTargetId) {
+              const page = await pwMod.getPageForTargetId({
+                cdpUrl: profileCtx.profile.cdpUrl,
+                targetId: tab.targetId,
+              });
+              if (page) {
+                postRunUrl = page.url();
+              }
+            }
+          } catch {
+            // Playwright unavailable — fall back to tab.url
+          }
+          const resolvedUrl = postRunUrl || tab.url;
+          if (resolvedUrl) {
+            record.url = resolvedUrl;
+          }
+        }
+      }
+      originalJson(interceptedBody);
+    }
+
+    return result;
   } catch (err) {
     handleRouteError(params.ctx, params.res, err);
     return undefined;
