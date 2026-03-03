@@ -184,9 +184,9 @@ struct NodeMenuRowView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(NodeMenuEntryFormatter.primaryName(self.entry))
-                            .font(.callout.weight(NodeMenuEntryFormatter.isConnected(self.entry) ? .semibold : .regular))
-                            .foregroundStyle(self.palette.primary)
+                    Text(NodeMenuEntryFormatter.primaryName(self.entry))
+                        .font(.callout.weight(NodeMenuEntryFormatter.isConnected(self.entry) ? .semibold : .regular))
+                        .foregroundStyle(self.palette.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .layoutPriority(1)
@@ -195,9 +195,9 @@ struct NodeMenuRowView: View {
 
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         if let right = NodeMenuEntryFormatter.headlineRight(self.entry) {
-                                Text(right)
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(self.palette.secondary)
+                            Text(right)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(self.palette.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .layoutPriority(2)

@@ -172,9 +172,9 @@ actor VoicePushToTalk {
         let adoptedPrefix = self.adoptedPrefix
         let adoptedAttributed: NSAttributedString? = adoptedPrefix.isEmpty ? nil : VoiceOverlayTextFormatting
             .makeAttributed(
-            committed: adoptedPrefix,
-            volatile: "",
-            isFinal: false)
+                committed: adoptedPrefix,
+                volatile: "",
+                isFinal: false)
         self.overlayToken = await MainActor.run {
             VoiceSessionCoordinator.shared.startSession(
                 source: .pushToTalk,
@@ -406,5 +406,4 @@ actor VoicePushToTalk {
         if suffix.isEmpty { return prefix }
         return "\(prefix) \(suffix)"
     }
-
 }

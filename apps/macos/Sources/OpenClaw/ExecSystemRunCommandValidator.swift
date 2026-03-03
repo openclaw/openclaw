@@ -124,12 +124,12 @@ enum ExecSystemRunCommandValidator {
 
             let lower = token.lowercased()
             let flag = lower.split(separator: "=", maxSplits: 1).first.map(String.init) ?? lower
-                if ExecEnvOptions.flagOnly.contains(flag) {
+            if ExecEnvOptions.flagOnly.contains(flag) {
                 usesModifiers = true
                 idx += 1
                 continue
             }
-                if ExecEnvOptions.withValue.contains(flag) {
+            if ExecEnvOptions.withValue.contains(flag) {
                 usesModifiers = true
                 if !lower.contains("=") {
                     expectsOptionValue = true
