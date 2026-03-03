@@ -454,11 +454,26 @@ export async function runWithModelFallback<T>(params: {
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  let lastFailedProvider: string | null = null;
 
   const hasFallbackCandidates = candidates.length > 1;
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+
+    // Skip remaining candidates for the same provider after an overloaded error.
+    // Overloaded errors indicate the entire provider is experiencing issues,
+    // not just a specific model or auth profile. Trying other models/auth profiles
+    // on the same provider is futile and wastes time.
+    if (lastFailedProvider && candidate.provider === lastFailedProvider) {
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error: `Skipping ${candidate.provider}/${candidate.model}: provider previously returned overloaded error`,
+        reason: "overloaded",
+      });
+      continue;
+    }
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -531,6 +546,12 @@ export async function runWithModelFallback<T>(params: {
 
       lastError = isKnownFailover ? normalized : err;
       const described = describeFailoverError(normalized);
+
+      // Track overloaded errors to skip remaining candidates for this provider.
+      if (described.reason === "overloaded") {
+        lastFailedProvider = candidate.provider;
+      }
+
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
