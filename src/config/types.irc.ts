@@ -56,4 +56,6 @@ export type IrcAccountConfig = CommonChannelMessagingConfig & {
 export type IrcConfig = {
   /** Optional per-account IRC configuration (multi-account). */
   accounts?: Record<string, IrcAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & IrcAccountConfig;

@@ -11,14 +11,23 @@ const selectFirstOption = async <T>(params: { options: Array<{ value: T }> }): P
   return first.value;
 };
 
+function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
+  return {
+    intro: vi.fn(async () => {}),
+    outro: vi.fn(async () => {}),
+    note: vi.fn(async () => {}),
+    select: selectFirstOption as WizardPrompter["select"],
+    multiselect: vi.fn(async () => []),
+    text: vi.fn(async () => "") as WizardPrompter["text"],
+    confirm: vi.fn(async () => false),
+    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    ...overrides,
+  };
+}
+
 describe("irc onboarding", () => {
   it("configures host and nick via onboarding prompts", async () => {
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select: selectFirstOption as WizardPrompter["select"],
-      multiselect: vi.fn(async () => []),
+    const prompter = createPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "IRC server host") {
           return "irc.libera.chat";
@@ -52,8 +61,7 @@ describe("irc onboarding", () => {
         }
         return false;
       }),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
+    });
 
     const runtime: RuntimeEnv = {
       log: vi.fn(),
@@ -84,12 +92,7 @@ describe("irc onboarding", () => {
   });
 
   it("writes DM allowFrom to top-level config for non-default account prompts", async () => {
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select: selectFirstOption as WizardPrompter["select"],
-      multiselect: vi.fn(async () => []),
+    const prompter = createPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "IRC allowFrom (nick or nick!user@host)") {
           return "Alice, Bob!ident@example.org";
@@ -97,8 +100,7 @@ describe("irc onboarding", () => {
         throw new Error(`Unexpected prompt: ${message}`);
       }) as WizardPrompter["text"],
       confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
+    });
 
     const promptAllowFrom = ircOnboardingAdapter.dmPolicy?.promptAllowFrom;
     expect(promptAllowFrom).toBeTypeOf("function");

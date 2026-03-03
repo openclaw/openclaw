@@ -294,7 +294,7 @@ describe("downloadBlueBubblesAttachment", () => {
     expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
   });
 
-  it("does not pass ssrfPolicy when allowPrivateNetwork is not set", async () => {
+  it("auto-allowlists serverUrl hostname when allowPrivateNetwork is not set", async () => {
     const mockBuffer = new Uint8Array([1]);
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -309,7 +309,25 @@ describe("downloadBlueBubblesAttachment", () => {
     });
 
     const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
-    expect(fetchMediaArgs.ssrfPolicy).toBeUndefined();
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["localhost"] });
+  });
+
+  it("auto-allowlists private IP serverUrl hostname when allowPrivateNetwork is not set", async () => {
+    const mockBuffer = new Uint8Array([1]);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
+    });
+
+    const attachment: BlueBubblesAttachment = { guid: "att-private-ip" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "http://192.168.1.5:1234",
+      password: "test",
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["192.168.1.5"] });
   });
 });
 

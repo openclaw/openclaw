@@ -109,6 +109,8 @@ Defaults:
   6. Otherwise memory search stays disabled until configured.
 - Local mode uses node-llama-cpp and may require `pnpm approve-builds`.
 - Uses sqlite-vec (when available) to accelerate vector search inside SQLite.
+- `memorySearch.provider = "ollama"` is also supported for local/self-hosted
+  Ollama embeddings (`/api/embeddings`), but it is not auto-selected.
 
 Remote embeddings **require** an API key for the embedding provider. OpenClaw
 resolves keys from auth profiles, `models.providers.*.apiKey`, or environment
@@ -116,7 +118,9 @@ variables. Codex OAuth only covers chat/completions and does **not** satisfy
 embeddings for memory search. For Gemini, use `GEMINI_API_KEY` or
 `models.providers.google.apiKey`. For Voyage, use `VOYAGE_API_KEY` or
 `models.providers.voyage.apiKey`. For Mistral, use `MISTRAL_API_KEY` or
-`models.providers.mistral.apiKey`.
+`models.providers.mistral.apiKey`. Ollama typically does not require a real API
+key (a placeholder like `OLLAMA_API_KEY=ollama-local` is enough when needed by
+local policy).
 When using a custom OpenAI-compatible endpoint,
 set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
@@ -331,7 +335,7 @@ If you don't want to set an API key, use `memorySearch.provider = "local"` or se
 
 Fallbacks:
 
-- `memorySearch.fallback` can be `openai`, `gemini`, `voyage`, `mistral`, `local`, or `none`.
+- `memorySearch.fallback` can be `openai`, `gemini`, `voyage`, `mistral`, `ollama`, `local`, or `none`.
 - The fallback provider is only used when the primary embedding provider fails.
 
 Batch indexing (OpenAI + Gemini + Voyage):

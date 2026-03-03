@@ -14,9 +14,19 @@ type ReadChannelAllowFromStore =
   typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
 type UpsertChannelPairingRequest =
   typeof import("../../pairing/pairing-store.js").upsertChannelPairingRequest;
+type ReadChannelAllowFromStoreForAccount = (params: {
+  channel: Parameters<ReadChannelAllowFromStore>[0];
+  accountId: string;
+  env?: Parameters<ReadChannelAllowFromStore>[1];
+}) => ReturnType<ReadChannelAllowFromStore>;
+type UpsertChannelPairingRequestForAccount = (
+  params: Omit<Parameters<UpsertChannelPairingRequest>[0], "accountId"> & { accountId: string },
+) => ReturnType<UpsertChannelPairingRequest>;
 type FetchRemoteMedia = typeof import("../../media/fetch.js").fetchRemoteMedia;
 type SaveMediaBuffer = typeof import("../../media/store.js").saveMediaBuffer;
 type TextToSpeechTelephony = typeof import("../../tts/tts.js").textToSpeechTelephony;
+type TranscribeAudioFile =
+  typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;
 type BuildMentionRegexes = typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;
 type MatchesMentionPatterns =
   typeof import("../../auto-reply/reply/mentions.js").matchesMentionPatterns;
@@ -55,6 +65,7 @@ type ShouldHandleTextCommands =
   typeof import("../../auto-reply/commands-registry.js").shouldHandleTextCommands;
 type DispatchReplyFromConfig =
   typeof import("../../auto-reply/reply/dispatch-from-config.js").dispatchReplyFromConfig;
+type WithReplyDispatcher = typeof import("../../auto-reply/dispatch.js").withReplyDispatcher;
 type FinalizeInboundContext =
   typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
 type FormatAgentEnvelope = typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
@@ -73,6 +84,7 @@ type WriteConfigFile = typeof import("../../config/config.js").writeConfigFile;
 type RecordChannelActivity = typeof import("../../infra/channel-activity.js").recordChannelActivity;
 type GetChannelActivity = typeof import("../../infra/channel-activity.js").getChannelActivity;
 type EnqueueSystemEvent = typeof import("../../infra/system-events.js").enqueueSystemEvent;
+type RequestHeartbeatNow = typeof import("../../infra/heartbeat-wake.js").requestHeartbeatNow;
 type RunCommandWithTimeout = typeof import("../../process/exec.js").runCommandWithTimeout;
 type FormatNativeDependencyHint = typeof import("./native-deps.js").formatNativeDependencyHint;
 type LoadWebMedia = typeof import("../../web/media.js").loadWebMedia;
@@ -81,6 +93,9 @@ type MediaKindFromMime = typeof import("../../media/constants.js").mediaKindFrom
 type IsVoiceCompatibleAudio = typeof import("../../media/audio.js").isVoiceCompatibleAudio;
 type GetImageMetadata = typeof import("../../media/image-ops.js").getImageMetadata;
 type ResizeToJpeg = typeof import("../../media/image-ops.js").resizeToJpeg;
+type OnAgentEvent = typeof import("../../infra/agent-events.js").onAgentEvent;
+type OnSessionTranscriptUpdate =
+  typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 type CreateMemoryGetTool = typeof import("../../agents/tools/memory-tool.js").createMemoryGetTool;
 type CreateMemorySearchTool =
   typeof import("../../agents/tools/memory-tool.js").createMemorySearchTool;
@@ -184,6 +199,7 @@ export type PluginRuntime = {
   };
   system: {
     enqueueSystemEvent: EnqueueSystemEvent;
+    requestHeartbeatNow: RequestHeartbeatNow;
     runCommandWithTimeout: RunCommandWithTimeout;
     formatNativeDependencyHint: FormatNativeDependencyHint;
   };
@@ -197,6 +213,9 @@ export type PluginRuntime = {
   };
   tts: {
     textToSpeechTelephony: TextToSpeechTelephony;
+  };
+  stt: {
+    transcribeAudioFile: TranscribeAudioFile;
   };
   tools: {
     createMemoryGetTool: CreateMemoryGetTool;
@@ -222,6 +241,7 @@ export type PluginRuntime = {
       resolveEffectiveMessagesConfig: ResolveEffectiveMessagesConfig;
       resolveHumanDelayConfig: ResolveHumanDelayConfig;
       dispatchReplyFromConfig: DispatchReplyFromConfig;
+      withReplyDispatcher: WithReplyDispatcher;
       finalizeInboundContext: FinalizeInboundContext;
       formatAgentEnvelope: FormatAgentEnvelope;
       /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
@@ -233,8 +253,8 @@ export type PluginRuntime = {
     };
     pairing: {
       buildPairingReply: BuildPairingReply;
-      readAllowFromStore: ReadChannelAllowFromStore;
-      upsertPairingRequest: UpsertChannelPairingRequest;
+      readAllowFromStore: ReadChannelAllowFromStoreForAccount;
+      upsertPairingRequest: UpsertChannelPairingRequestForAccount;
     };
     media: {
       fetchRemoteMedia: FetchRemoteMedia;
@@ -350,6 +370,10 @@ export type PluginRuntime = {
       buildTemplateMessageFromPayload: BuildTemplateMessageFromPayload;
       monitorLineProvider: MonitorLineProvider;
     };
+  };
+  events: {
+    onAgentEvent: OnAgentEvent;
+    onSessionTranscriptUpdate: OnSessionTranscriptUpdate;
   };
   logging: {
     shouldLogVerbose: ShouldLogVerbose;
