@@ -67,6 +67,7 @@ import {
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
+import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import {
@@ -471,9 +472,18 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
   // Reply-chain detection: replying to a bot message acts like an implicit mention.
+  // Exclude forum-topic service messages (auto-generated "Topic created" etc. messages
+  // by the bot) so that every message inside a bot-created topic does not incorrectly
+  // bypass requireMention (#32256).
+  // We detect service messages by the presence of Telegram's forum_topic_* fields
+  // rather than by the absence of text/caption, because legitimate bot media messages
+  // (stickers, voice notes, captionless photos) also lack text/caption.
   const botId = primaryCtx.me?.id;
   const replyFromId = msg.reply_to_message?.from?.id;
-  const implicitMention = botId != null && replyFromId === botId;
+  const replyToBotMessage = botId != null && replyFromId === botId;
+  const isReplyToServiceMessage =
+    replyToBotMessage && isTelegramForumServiceMessage(msg.reply_to_message);
+  const implicitMention = replyToBotMessage && !isReplyToServiceMessage;
   const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
   const mentionGate = resolveMentionGatingWithBypass({
     isGroup,

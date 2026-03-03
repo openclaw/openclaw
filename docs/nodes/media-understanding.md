@@ -199,24 +199,13 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 | Audio      | OpenAI, Groq, Deepgram, Google, Mistral          | Provider transcription (Whisper/Deepgram/Gemini/Voxtral). |
 | Video      | Google (Gemini API)                              | Provider video understanding.                             |
 
-## Recommended providers
+## Model selection guidance
 
-**Image**
-
-- Prefer your active model if it supports images.
-- Good defaults: `openai/gpt-5.2`, `anthropic/claude-opus-4-6`, `google/gemini-3-pro-preview`.
-
-**Audio**
-
-- `openai/gpt-4o-mini-transcribe`, `groq/whisper-large-v3-turbo`, `deepgram/nova-3`, or `mistral/voxtral-mini-latest`.
-- CLI fallback: `whisper-cli` (whisper-cpp) or `whisper`.
+- Prefer the strongest latest-generation model available for each media capability when quality and safety matter.
+- For tool-enabled agents handling untrusted inputs, avoid older/weaker media models.
+- Keep at least one fallback per capability for availability (quality model + faster/cheaper model).
+- CLI fallbacks (`whisper-cli`, `whisper`, `gemini`) are useful when provider APIs are unavailable.
 - `parakeet-mlx` note: with `--output-dir`, OpenClaw reads `<output-dir>/<media-basename>.txt` when output format is `txt` (or unspecified); non-`txt` formats fall back to stdout.
-- Deepgram setup: [Deepgram (audio transcription)](/providers/deepgram).
-
-**Video**
-
-- `google/gemini-3-flash-preview` (fast), `google/gemini-3-pro-preview` (richer).
-- CLI fallback: `gemini` CLI (supports `read_file` on video/audio).
 
 ## Attachment policy
 

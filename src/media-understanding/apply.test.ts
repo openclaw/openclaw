@@ -307,6 +307,7 @@ describe("applyMediaUnderstanding", () => {
     const ctx = await createAudioCtx({
       body: "<media:audio> /capture status",
     });
+    ctx.CommandAuthorized = false;
     const result = await applyMediaUnderstanding({
       ctx,
       cfg: createGroqAudioConfig(),
@@ -320,6 +321,7 @@ describe("applyMediaUnderstanding", () => {
       body: "[Audio]\nUser text:\n/capture status\nTranscript:\ntranscribed text",
       commandBody: "/capture status",
     });
+    expect(ctx.CommandAuthorized).toBe(false);
   });
 
   it("handles URL-only attachments for audio transcription", async () => {
@@ -359,6 +361,40 @@ describe("applyMediaUnderstanding", () => {
     expect(result.appliedAudio).toBe(true);
     expect(ctx.Transcript).toBe("remote transcript");
     expect(ctx.Body).toBe("[Audio]\nTranscript:\nremote transcript");
+  });
+
+  it("transcribes WhatsApp audio with parameterized MIME despite casing/whitespace", async () => {
+    const ctx = await createAudioCtx({
+      fileName: "voice-note",
+      mediaType: " Audio/Ogg; codecs=opus ",
+    });
+    ctx.Surface = "whatsapp";
+
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            maxBytes: 1024 * 1024,
+            scope: {
+              default: "deny",
+              rules: [{ action: "allow", match: { channel: "whatsapp" } }],
+            },
+            models: [{ provider: "groq" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      providers: createGroqProviders("whatsapp transcript"),
+    });
+
+    expect(result.appliedAudio).toBe(true);
+    expect(ctx.Transcript).toBe("whatsapp transcript");
+    expect(ctx.Body).toBe("[Audio]\nTranscript:\nwhatsapp transcript");
   });
 
   it("skips URL-only audio when remote file is too small", async () => {

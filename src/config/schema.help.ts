@@ -46,6 +46,11 @@ export const FIELD_HELP: Record<string, string> = {
     'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
   "logging.redactPatterns":
     "Additional custom redact regex patterns applied to log output before emission/storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+  cli: "CLI presentation controls for local command output behavior such as banner and tagline style. Use this section to keep startup output aligned with operator preference without changing runtime behavior.",
+  "cli.banner":
+    "CLI startup banner controls for title/version line and tagline style behavior. Keep banner enabled for fast version/context checks, then tune tagline mode to your preferred noise level.",
+  "cli.banner.taglineMode":
+    'Controls tagline style in the CLI startup banner: "random" (default) picks from the rotating tagline pool, "default" always shows the neutral default tagline, and "off" hides tagline text while keeping the banner version line.',
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
@@ -158,7 +163,7 @@ export const FIELD_HELP: Record<string, string> = {
   "acp.enabled":
     "Global ACP feature gate. Keep disabled unless ACP runtime + policy are configured.",
   "acp.dispatch.enabled":
-    "Independent dispatch gate for ACP session turns. Disable to keep ACP commands available while blocking ACP turn execution.",
+    "Independent dispatch gate for ACP session turns (default: true). Set false to keep ACP commands available while blocking ACP turn execution.",
   "acp.backend":
     "Default ACP runtime backend id (for example: acpx). Must match a registered ACP runtime plugin backend.",
   "acp.defaultAgent":
@@ -719,7 +724,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Indexes session transcripts into memory search so responses can reference prior chat turns. Keep this off unless transcript recall is needed, because indexing cost and storage usage both increase.",
   "agents.defaults.memorySearch.provider":
-    'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+    'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
   "agents.defaults.memorySearch.model":
     "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
   "agents.defaults.memorySearch.remote.baseUrl":
@@ -741,7 +746,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.local.modelPath":
     "Specifies the local embedding model source for local memory search, such as a GGUF file path or `hf:` URI. Use this only when provider is `local`, and verify model compatibility before large index rebuilds.",
   "agents.defaults.memorySearch.fallback":
-    'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
+    'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
   "agents.defaults.memorySearch.store.path":
     "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.openclaw/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
   "agents.defaults.memorySearch.store.vector.enabled":
@@ -1370,7 +1375,7 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
   "channels.telegram.streaming":
-    'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
+    'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streaming":
     'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streamMode":
@@ -1450,6 +1455,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional PluralKit token for resolving private systems or members.",
   "channels.discord.activity": "Discord presence activity text (defaults to custom status).",
   "channels.discord.status": "Discord presence status (online, dnd, idle, invisible).",
+  "channels.discord.autoPresence.enabled":
+    "Enable automatic Discord bot presence updates based on runtime/model availability signals. When enabled: healthy=>online, degraded/unknown=>idle, exhausted/unavailable=>dnd.",
+  "channels.discord.autoPresence.intervalMs":
+    "How often to evaluate Discord auto-presence state in milliseconds (default: 30000).",
+  "channels.discord.autoPresence.minUpdateIntervalMs":
+    "Minimum time between actual Discord presence update calls in milliseconds (default: 15000). Prevents status spam on noisy state changes.",
+  "channels.discord.autoPresence.healthyText":
+    "Optional custom status text while runtime is healthy (online). If omitted, falls back to static channels.discord.activity when set.",
+  "channels.discord.autoPresence.degradedText":
+    "Optional custom status text while runtime/model availability is degraded or unknown (idle).",
+  "channels.discord.autoPresence.exhaustedText":
+    "Optional custom status text while runtime detects exhausted/unavailable model quota (dnd). Supports {reason} template placeholder.",
   "channels.discord.activityType":
     "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",
   "channels.discord.activityUrl": "Discord presence streaming URL (required for activityType=1).",

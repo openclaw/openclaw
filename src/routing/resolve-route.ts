@@ -204,6 +204,16 @@ type EvaluatedBindingsCache = {
 
 const evaluatedBindingsCacheByCfg = new WeakMap<OpenClawConfig, EvaluatedBindingsCache>();
 const MAX_EVALUATED_BINDINGS_CACHE_KEYS = 2000;
+const resolvedRouteCacheByCfg = new WeakMap<
+  OpenClawConfig,
+  {
+    bindingsRef: OpenClawConfig["bindings"];
+    agentsRef: OpenClawConfig["agents"];
+    sessionRef: OpenClawConfig["session"];
+    byKey: Map<string, ResolvedAgentRoute>;
+  }
+>();
+const MAX_RESOLVED_ROUTE_CACHE_KEYS = 4000;
 
 type EvaluatedBindingsIndex = {
   byPeer: Map<string, EvaluatedBinding[]>;
@@ -411,6 +421,62 @@ function normalizeBindingMatch(
   };
 }
 
+function resolveRouteCacheForConfig(cfg: OpenClawConfig): Map<string, ResolvedAgentRoute> {
+  const existing = resolvedRouteCacheByCfg.get(cfg);
+  if (
+    existing &&
+    existing.bindingsRef === cfg.bindings &&
+    existing.agentsRef === cfg.agents &&
+    existing.sessionRef === cfg.session
+  ) {
+    return existing.byKey;
+  }
+  const byKey = new Map<string, ResolvedAgentRoute>();
+  resolvedRouteCacheByCfg.set(cfg, {
+    bindingsRef: cfg.bindings,
+    agentsRef: cfg.agents,
+    sessionRef: cfg.session,
+    byKey,
+  });
+  return byKey;
+}
+
+function formatRouteCachePeer(peer: RoutePeer | null): string {
+  if (!peer || !peer.id) {
+    return "-";
+  }
+  return `${peer.kind}:${peer.id}`;
+}
+
+function formatRoleIdsCacheKey(roleIds: string[]): string {
+  const count = roleIds.length;
+  if (count === 0) {
+    return "-";
+  }
+  if (count === 1) {
+    return roleIds[0] ?? "-";
+  }
+  if (count === 2) {
+    const first = roleIds[0] ?? "";
+    const second = roleIds[1] ?? "";
+    return first <= second ? `${first},${second}` : `${second},${first}`;
+  }
+  return roleIds.toSorted().join(",");
+}
+
+function buildResolvedRouteCacheKey(params: {
+  channel: string;
+  accountId: string;
+  peer: RoutePeer | null;
+  parentPeer: RoutePeer | null;
+  guildId: string;
+  teamId: string;
+  memberRoleIds: string[];
+  dmScope: string;
+}): string {
+  return `${params.channel}\t${params.accountId}\t${formatRouteCachePeer(params.peer)}\t${formatRouteCachePeer(params.parentPeer)}\t${params.guildId || "-"}\t${params.teamId || "-"}\t${formatRoleIdsCacheKey(params.memberRoleIds)}\t${params.dmScope}`;
+}
+
 function hasGuildConstraint(match: NormalizedBindingMatch): boolean {
   return Boolean(match.guildId);
 }
@@ -474,12 +540,39 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const teamId = normalizeId(input.teamId);
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
+  const dmScope = input.cfg.session?.dmScope ?? "main";
+  const identityLinks = input.cfg.session?.identityLinks;
+  const shouldLogDebug = shouldLogVerbose();
+  const parentPeer = input.parentPeer
+    ? {
+        kind: normalizeChatType(input.parentPeer.kind) ?? input.parentPeer.kind,
+        id: normalizeId(input.parentPeer.id),
+      }
+    : null;
+
+  const routeCache =
+    !shouldLogDebug && !identityLinks ? resolveRouteCacheForConfig(input.cfg) : null;
+  const routeCacheKey = routeCache
+    ? buildResolvedRouteCacheKey({
+        channel,
+        accountId,
+        peer,
+        parentPeer,
+        guildId,
+        teamId,
+        memberRoleIds,
+        dmScope,
+      })
+    : "";
+  if (routeCache && routeCacheKey) {
+    const cachedRoute = routeCache.get(routeCacheKey);
+    if (cachedRoute) {
+      return { ...cachedRoute };
+    }
+  }
 
   const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
   const bindingsIndex = getEvaluatedBindingIndexForChannelAccount(input.cfg, channel, accountId);
-
-  const dmScope = input.cfg.session?.dmScope ?? "main";
-  const identityLinks = input.cfg.session?.identityLinks;
 
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
@@ -495,7 +588,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       agentId: resolvedAgentId,
       mainKey: DEFAULT_MAIN_KEY,
     }).toLowerCase();
-    return {
+    const route = {
       agentId: resolvedAgentId,
       channel,
       accountId,
@@ -503,9 +596,16 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       mainSessionKey,
       matchedBy,
     };
+    if (routeCache && routeCacheKey) {
+      routeCache.set(routeCacheKey, route);
+      if (routeCache.size > MAX_RESOLVED_ROUTE_CACHE_KEYS) {
+        routeCache.clear();
+        routeCache.set(routeCacheKey, route);
+      }
+    }
+    return route;
   };
 
-  const shouldLogDebug = shouldLogVerbose();
   const formatPeer = (value?: RoutePeer | null) =>
     value?.kind && value?.id ? `${value.kind}:${value.id}` : "none";
   const formatNormalizedPeer = (value: NormalizedPeerConstraint) => {
@@ -529,12 +629,6 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     }
   }
   // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding
-  const parentPeer = input.parentPeer
-    ? {
-        kind: normalizeChatType(input.parentPeer.kind) ?? input.parentPeer.kind,
-        id: normalizeId(input.parentPeer.id),
-      }
-    : null;
   const baseScope = {
     guildId,
     teamId,

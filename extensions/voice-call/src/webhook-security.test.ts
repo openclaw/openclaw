@@ -605,7 +605,6 @@ describe("verifyTwilioWebhook", () => {
     expect(result.ok).toBe(false);
     expect(result.verificationUrl).toBe("https://legitimate.example.com/voice/webhook");
   });
-
   it("returns a stable request key when verification is skipped", () => {
     const ctx = {
       headers: {},
@@ -620,5 +619,33 @@ describe("verifyTwilioWebhook", () => {
     expect(first.verifiedRequestKey).toMatch(/^twilio:skip:/);
     expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
     expect(second.isReplay).toBe(true);
+  });
+
+  it("succeeds when Twilio signs URL without port but server URL has port", () => {
+    const authToken = "test-auth-token";
+    const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";
+    // Twilio signs using URL without port.
+    const urlWithPort = "https://example.com:8443/voice/webhook";
+    const signedUrl = "https://example.com/voice/webhook";
+
+    const signature = twilioSignature({ authToken, url: signedUrl, postBody });
+
+    const result = verifyTwilioWebhook(
+      {
+        headers: {
+          host: "example.com:8443",
+          "x-twilio-signature": signature,
+        },
+        rawBody: postBody,
+        url: urlWithPort,
+        method: "POST",
+      },
+      authToken,
+      { publicUrl: urlWithPort },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.verificationUrl).toBe(signedUrl);
+    expect(result.verifiedRequestKey).toMatch(/^twilio:req:/);
   });
 });

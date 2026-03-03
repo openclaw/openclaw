@@ -246,6 +246,60 @@ describe("fs-safe", () => {
     await expect(fs.readFile(path.join(root, "nested", "out.txt"), "utf8")).resolves.toBe("hello");
   });
 
+  it("does not truncate existing target when atomic rename fails", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const targetPath = path.join(root, "nested", "out.txt");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "existing-content");
+    const renameSpy = vi
+      .spyOn(fs, "rename")
+      .mockRejectedValue(Object.assign(new Error("rename blocked"), { code: "EACCES" }));
+    try {
+      await expect(
+        writeFileWithinRoot({
+          rootDir: root,
+          relativePath: "nested/out.txt",
+          data: "new-content",
+        }),
+      ).rejects.toMatchObject({ code: "EACCES" });
+    } finally {
+      renameSpy.mockRestore();
+    }
+    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("existing-content");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects when a hardlink appears after atomic write rename",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const targetPath = path.join(root, "nested", "out.txt");
+      const aliasPath = path.join(root, "nested", "alias.txt");
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(targetPath, "existing-content");
+      const realRename = fs.rename.bind(fs);
+      let linked = false;
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+        await realRename(...args);
+        if (!linked) {
+          linked = true;
+          await fs.link(String(args[1]), aliasPath);
+        }
+      });
+      try {
+        await expect(
+          writeFileWithinRoot({
+            rootDir: root,
+            relativePath: "nested/out.txt",
+            data: "new-content",
+          }),
+        ).rejects.toMatchObject({ code: "invalid-path" });
+      } finally {
+        renameSpy.mockRestore();
+      }
+      await expect(fs.readFile(aliasPath, "utf8")).resolves.toBe("new-content");
+    },
+  );
+
   it("copies a file within root safely", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const sourceDir = await tempDirs.make("openclaw-fs-safe-source-");
@@ -422,12 +476,11 @@ describe("tilde expansion in file tools", () => {
   it("expandHomePrefix respects process.env.HOME changes", async () => {
     const { expandHomePrefix } = await import("./home-dir.js");
     const originalHome = process.env.HOME;
-    const fakeHome = "/tmp/fake-home-test";
+    const fakeHome = path.resolve(path.sep, "tmp", "fake-home-test");
     process.env.HOME = fakeHome;
     try {
       const result = expandHomePrefix("~/file.txt");
-      // path.resolve normalizes the HOME value (adds drive letter on Windows)
-      expect(result).toBe(`${path.resolve(fakeHome)}/file.txt`);
+      expect(path.normalize(result)).toBe(path.join(fakeHome, "file.txt"));
     } finally {
       process.env.HOME = originalHome;
     }

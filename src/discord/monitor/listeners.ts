@@ -5,8 +5,10 @@ import {
   MessageReactionAddListener,
   MessageReactionRemoveListener,
   PresenceUpdateListener,
+  ThreadUpdateListener,
   type User,
 } from "@buape/carbon";
+import type { OpenClawConfig } from "../../config/config.js";
 import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -30,6 +32,8 @@ import {
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import { setPresence } from "./presence-cache.js";
+import { isThreadArchived } from "./thread-bindings.discord-api.js";
+import { closeDiscordThreadSessions } from "./thread-session-close.js";
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
@@ -43,8 +47,13 @@ type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
 type DiscordReactionListenerParams = {
   cfg: LoadedConfig;
-  accountId: string;
   runtime: RuntimeEnv;
+  logger: Logger;
+  onEvent?: () => void;
+} & DiscordReactionRoutingParams;
+
+type DiscordReactionRoutingParams = {
+  accountId: string;
   botUserId?: string;
   dmEnabled: boolean;
   groupDmEnabled: boolean;
@@ -54,8 +63,6 @@ type DiscordReactionListenerParams = {
   groupPolicy: "open" | "allowlist" | "disabled";
   allowNameMatching: boolean;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
-  logger: Logger;
-  onEvent?: () => void;
 };
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
@@ -315,23 +322,15 @@ async function authorizeDiscordReactionIngress(
   return { allowed: true };
 }
 
-async function handleDiscordReactionEvent(params: {
-  data: DiscordReactionEvent;
-  client: Client;
-  action: "added" | "removed";
-  cfg: LoadedConfig;
-  accountId: string;
-  botUserId?: string;
-  dmEnabled: boolean;
-  groupDmEnabled: boolean;
-  groupDmChannels: string[];
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  allowFrom: string[];
-  groupPolicy: "open" | "allowlist" | "disabled";
-  allowNameMatching: boolean;
-  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
-  logger: Logger;
-}) {
+async function handleDiscordReactionEvent(
+  params: {
+    data: DiscordReactionEvent;
+    client: Client;
+    action: "added" | "removed";
+    cfg: LoadedConfig;
+    logger: Logger;
+  } & DiscordReactionRoutingParams,
+) {
   try {
     const { data, client, action, botUserId, guildEntries } = params;
     if (!("user" in data)) {
@@ -626,5 +625,51 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       const logger = this.logger ?? discordEventQueueLog;
       logger.error(danger(`discord presence handler failed: ${String(err)}`));
     }
+  }
+}
+
+type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
+
+export class DiscordThreadUpdateListener extends ThreadUpdateListener {
+  constructor(
+    private cfg: OpenClawConfig,
+    private accountId: string,
+    private logger?: Logger,
+  ) {
+    super();
+  }
+
+  async handle(data: ThreadUpdateEvent) {
+    await runDiscordListenerWithSlowLog({
+      logger: this.logger,
+      listener: this.constructor.name,
+      event: this.type,
+      run: async () => {
+        // Discord only fires THREAD_UPDATE when a field actually changes, so
+        // `thread_metadata.archived === true` in this payload means the thread
+        // just transitioned to the archived state.
+        if (!isThreadArchived(data)) {
+          return;
+        }
+        const threadId = "id" in data && typeof data.id === "string" ? data.id : undefined;
+        if (!threadId) {
+          return;
+        }
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.info("Discord thread archived — resetting session", { threadId });
+        const count = await closeDiscordThreadSessions({
+          cfg: this.cfg,
+          accountId: this.accountId,
+          threadId,
+        });
+        if (count > 0) {
+          logger.info("Discord thread sessions reset after archival", { threadId, count });
+        }
+      },
+      onError: (err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord thread-update handler failed: ${String(err)}`));
+      },
+    });
   }
 }
