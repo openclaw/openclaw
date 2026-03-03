@@ -215,11 +215,15 @@ function createPluginSdkAliasFixture() {
   const root = makeTempDir();
   const srcFile = path.join(root, "src", "plugin-sdk", "index.ts");
   const distFile = path.join(root, "dist", "plugin-sdk", "index.js");
+  const srcKeyedAsyncQueueFile = path.join(root, "src", "plugin-sdk", "keyed-async-queue.ts");
+  const distKeyedAsyncQueueFile = path.join(root, "dist", "plugin-sdk", "keyed-async-queue.js");
   fs.mkdirSync(path.dirname(srcFile), { recursive: true });
   fs.mkdirSync(path.dirname(distFile), { recursive: true });
   fs.writeFileSync(srcFile, "export {};\n", "utf-8");
   fs.writeFileSync(distFile, "export {};\n", "utf-8");
-  return { root, srcFile, distFile };
+  fs.writeFileSync(srcKeyedAsyncQueueFile, "export {};\n", "utf-8");
+  fs.writeFileSync(distKeyedAsyncQueueFile, "export {};\n", "utf-8");
+  return { root, srcFile, distFile, srcKeyedAsyncQueueFile, distKeyedAsyncQueueFile };
 }
 
 afterEach(() => {
@@ -996,5 +1000,29 @@ describe("loadOpenClawPlugins", () => {
       }),
     );
     expect(resolved).toBe(srcFile);
+  });
+
+  it("resolves plugin-sdk keyed queue subpath alias to dist when loader runs from dist", () => {
+    const { root, distKeyedAsyncQueueFile } = createPluginSdkAliasFixture();
+
+    const resolved = __testing.resolvePluginSdkAliasFile({
+      srcFile: "keyed-async-queue.ts",
+      distFile: "keyed-async-queue.js",
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    expect(resolved).toBe(distKeyedAsyncQueueFile);
+  });
+
+  it("resolves plugin-sdk keyed queue subpath alias to src in non-production", () => {
+    const { root, srcKeyedAsyncQueueFile } = createPluginSdkAliasFixture();
+
+    const resolved = withEnv({ NODE_ENV: undefined }, () =>
+      __testing.resolvePluginSdkAliasFile({
+        srcFile: "keyed-async-queue.ts",
+        distFile: "keyed-async-queue.js",
+        modulePath: path.join(root, "src", "plugins", "loader.ts"),
+      }),
+    );
+    expect(resolved).toBe(srcKeyedAsyncQueueFile);
   });
 });

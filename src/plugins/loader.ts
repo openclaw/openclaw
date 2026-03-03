@@ -91,6 +91,13 @@ const resolvePluginSdkAccountIdAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
 };
 
+const resolvePluginSdkKeyedAsyncQueueAlias = (): string | null => {
+  return resolvePluginSdkAliasFile({
+    srcFile: "keyed-async-queue.ts",
+    distFile: "keyed-async-queue.js",
+  });
+};
+
 export const __testing = {
   resolvePluginSdkAliasFile,
 };
@@ -435,15 +442,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
     const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
+    const pluginSdkKeyedAsyncQueueAlias = resolvePluginSdkKeyedAsyncQueueAlias();
     jitiLoader = createJiti(import.meta.url, {
       interopDefault: true,
       extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-      ...(pluginSdkAlias || pluginSdkAccountIdAlias
+      ...(pluginSdkAlias || pluginSdkAccountIdAlias || pluginSdkKeyedAsyncQueueAlias
         ? {
             alias: {
               ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
               ...(pluginSdkAccountIdAlias
                 ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
+                : {}),
+              ...(pluginSdkKeyedAsyncQueueAlias
+                ? { "openclaw/plugin-sdk/keyed-async-queue": pluginSdkKeyedAsyncQueueAlias }
                 : {}),
             },
           }
