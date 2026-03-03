@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_EMOJIS } from "../../channels/status-reactions.js";
 import {
   createBaseDiscordMessageContext,
   createDiscordDirectMessageContextOverrides,

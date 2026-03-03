@@ -365,11 +365,12 @@ describe("createStatusReactionController", () => {
   };
 
   for (const testCase of stallCases) {
-    it(`should trigger ${testCase.name}`, async () => {
+    it(`should NOT trigger ${testCase.name} (stall disabled)`, async () => {
       const { calls } = await createControllerAfterThinking();
       await vi.advanceTimersByTimeAsync(testCase.delayMs);
 
-      expect(calls).toContainEqual({ method: "set", emoji: testCase.expected });
+      // Stall warnings are disabled - should not appear
+      expect(calls).not.toContainEqual({ method: "set", emoji: testCase.expected });
     });
   }
 
@@ -391,17 +392,16 @@ describe("createStatusReactionController", () => {
   ] as const;
 
   for (const testCase of stallResetCases) {
-    it(`should reset stall timers on ${testCase.name}`, async () => {
+    it(`should handle ${testCase.name} without stall (stall disabled)`, async () => {
       const { calls, controller } = await createControllerAfterThinking();
 
-      // Advance halfway to soft stall.
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallSoftMs / 2);
-
+      // Run the update action
       await testCase.runUpdate(controller);
 
-      // Advance another halfway - should not trigger stall yet.
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallSoftMs / 2);
+      // Advance time past when stall would have triggered
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallSoftMs);
 
+      // Stall warnings are disabled - should never appear
       const stallCalls = calls.filter((c) => c.emoji === DEFAULT_EMOJIS.stallSoft);
       expect(stallCalls).toHaveLength(0);
     });
