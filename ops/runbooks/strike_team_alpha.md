@@ -55,3 +55,7 @@ KEEP_TMP=1 bash ops/scripts/gate.sh
 
 - `ops/scripts/gate_archive.sh` archives receipts **only on full PASS** (`health PASS+PIN_OK` and `alpha_smoke PASS 5/5`).
 - Any FAIL path exits non-zero and writes **no** ledger archive files.
+
+## Next Mission
+
+- Mission 002 (Anthropic hardening): https://github.com/THESPRYGUY/openclaw-CyborgClaw/issues/4
