@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
+import { fileURLToPath } from "url";
 import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -435,11 +436,26 @@ export async function sendMediaFeishu(params: {
 
   let buffer: Buffer;
   let name: string;
+  // For local paths, we can probe duration before loading into memory.
+  // Feishu's audio API requires duration in ms; without it the client
+  // defaults to 0ms and truncates playback.
+  let localSourcePath: string | undefined;
 
   if (mediaBuffer) {
     buffer = mediaBuffer;
     name = fileName ?? "file";
   } else if (mediaUrl) {
+    // Detect local file paths: bare absolute paths and file:// URLs.
+    // file:// is a valid mediaUrl form across the codebase (loadWebMedia supports it).
+    if (/^\//.test(mediaUrl) || /^[A-Za-z]:[/\\]/.test(mediaUrl)) {
+      localSourcePath = mediaUrl;
+    } else if (mediaUrl.startsWith("file://")) {
+      try {
+        localSourcePath = fileURLToPath(mediaUrl);
+      } catch {
+        // Malformed file:// URL; duration probing skipped, upload still proceeds.
+      }
+    }
     const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
       maxBytes: mediaMaxBytes,
       optimizeImages: false,
@@ -460,11 +476,20 @@ export async function sendMediaFeishu(params: {
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
   } else {
     const fileType = detectFileType(name);
+
+    // Feishu requires duration (ms) for audio/video uploads; without it the
+    // client displays 0:00 and stops playback after only a few words.
+    let durationMs: number | undefined;
+    if ((fileType === "opus" || fileType === "mp4") && localSourcePath) {
+      durationMs = await getFeishuRuntime().media.getAudioDurationMs(localSourcePath);
+    }
+
     const { fileKey } = await uploadFileFeishu({
       cfg,
       file: buffer,
       fileName: name,
       fileType,
+      duration: durationMs,
       accountId,
     });
     // Feishu API: opus -> "audio", everything else (including video) -> "file"

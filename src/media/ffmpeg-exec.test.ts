@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseFfprobeCodecAndSampleRate, parseFfprobeCsvFields } from "./ffmpeg-exec.js";
+import {
+  parseFfprobeCodecAndSampleRate,
+  parseFfprobeCsvFields,
+  parseFfprobeDurationSecs,
+} from "./ffmpeg-exec.js";
 
 describe("parseFfprobeCsvFields", () => {
   it("splits ffprobe csv output across commas and newlines", () => {
@@ -20,5 +24,23 @@ describe("parseFfprobeCodecAndSampleRate", () => {
       codec: "opus",
       sampleRateHz: null,
     });
+  });
+});
+
+describe("parseFfprobeDurationSecs", () => {
+  it("parses a plain decimal string", () => {
+    expect(parseFfprobeDurationSecs("3.456\n")).toBe(3.456);
+  });
+
+  it("returns undefined for N/A", () => {
+    expect(parseFfprobeDurationSecs("N/A\n")).toBeUndefined();
+  });
+
+  it("returns undefined for empty string", () => {
+    expect(parseFfprobeDurationSecs("")).toBeUndefined();
+  });
+
+  it("returns undefined for negative value", () => {
+    expect(parseFfprobeDurationSecs("-1.0")).toBeUndefined();
   });
 });

@@ -26,6 +26,7 @@ export type PluginRuntimeCore = {
     isVoiceCompatibleAudio: typeof import("../../media/audio.js").isVoiceCompatibleAudio;
     getImageMetadata: typeof import("../../media/image-ops.js").getImageMetadata;
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
+    getAudioDurationMs: typeof import("../../media/ffmpeg-exec.js").getAudioDurationMs;
   };
   tts: {
     textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
