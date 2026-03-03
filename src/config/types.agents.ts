@@ -5,6 +5,17 @@ import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
+export type AgentMcpServerConfig = {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+};
+
+export type AgentMcpConfig = {
+  servers?: AgentMcpServerConfig[];
+};
+
 export type AgentConfig = {
   id: string;
   default?: boolean;
@@ -21,14 +32,7 @@ export type AgentConfig = {
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
-  mcp?: {
-    servers?: Array<{
-      name: string;
-      command: string;
-      args?: string[];
-      env?: Record<string, string>;
-    }>;
-  };
+  mcp?: AgentMcpConfig;
   subagents?: {
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];
