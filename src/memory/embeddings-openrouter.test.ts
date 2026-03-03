@@ -150,5 +150,9 @@ describe("openrouter embedding provider", () => {
       "openai/text-embedding-3-large",
     );
     expect(normalizeOpenrouterModel("")).toBe("openai/text-embedding-3-small"); // Default
+    // Strips provider prefix
+    expect(normalizeOpenrouterModel("openrouter/openai/text-embedding-3-small")).toBe(
+      "openai/text-embedding-3-small",
+    );
   });
 });

@@ -18,6 +18,9 @@ export function normalizeOpenrouterModel(model: string): string {
   if (!trimmed) {
     return DEFAULT_OPENROUTER_EMBEDDING_MODEL;
   }
+  if (trimmed.startsWith("openrouter/")) {
+    return trimmed.slice("openrouter/".length);
+  }
   return trimmed;
 }
 
