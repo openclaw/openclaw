@@ -86,6 +86,15 @@ USER.md
 .tgz
 .idea
 
+# Local secret scratch files (never commit)
+.env.github
+.env.github.*
+betterstack.txt
+claude.txt
+github-app.txt
+grafana.txt
+slack.txt
+
 # local tooling
 .serena/
 
