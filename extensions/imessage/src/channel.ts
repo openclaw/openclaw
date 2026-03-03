@@ -54,6 +54,7 @@ async function sendIMessageOutbound(params: {
   to: string;
   text: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   accountId?: string;
   deps?: { sendIMessage?: IMessageSendFn };
   replyToId?: string;
@@ -69,6 +70,7 @@ async function sendIMessageOutbound(params: {
   });
   return await send(params.to, params.text, {
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     maxBytes,
     accountId: params.accountId ?? undefined,
     replyToId: params.replyToId ?? undefined,
@@ -239,12 +241,13 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       });
       return { channel: "imessage", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps, replyToId }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) => {
       const result = await sendIMessageOutbound({
         cfg,
         to,
         text,
         mediaUrl,
+        mediaLocalRoots,
         accountId: accountId ?? undefined,
         deps,
         replyToId: replyToId ?? undefined,
