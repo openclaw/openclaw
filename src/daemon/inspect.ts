@@ -88,24 +88,6 @@ function hasGatewayServiceMarker(content: string): boolean {
   );
 }
 
-function isOpenClawGatewayLaunchdService(
-  label: string,
-  contents: string,
-  profile?: string,
-): boolean {
-  if (label !== resolveGatewayLaunchAgentLabel(profile)) {
-    return false;
-  }
-  if (hasGatewayServiceMarker(contents)) {
-    return true;
-  }
-  const lowerContents = contents.toLowerCase();
-  if (!lowerContents.includes("gateway")) {
-    return false;
-  }
-  return true;
-}
-
 function isOpenClawGatewaySystemdService(name: string, contents: string): boolean {
   if (hasGatewayServiceMarker(contents)) {
     return true;
@@ -263,9 +245,6 @@ async function scanLaunchdDir(params: {
       continue;
     }
     if (isGatewayLaunchdLabel(label, params.profile)) {
-      continue;
-    }
-    if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents, params.profile)) {
       continue;
     }
     if (marker === "openclaw" && isIgnoredNonGatewayLaunchdService(label, contents)) {
