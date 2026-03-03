@@ -158,3 +158,84 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 });
+
+describe("selfChatMode: outbound DMs to third parties (#32632)", () => {
+  it("should block outbound DMs to a third party even when selfChatMode is true", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          selfChatMode: true,
+          allowFrom: ["+15550009999"],
+        },
+      },
+    });
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550009999",
+      selfE164: "+15550009999",
+      senderE164: "+15550009999",
+      group: false,
+      pushName: "Me",
+      isFromMe: true,
+      sock: { sendMessage: sendMessageMock },
+      // Remote JID is a DIFFERENT number (third party)
+      remoteJid: "15551112222@s.whatsapp.net",
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.isSelfChat).toBe(false);
+  });
+
+  it("should allow true self-chat (sender == recipient == self)", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          selfChatMode: true,
+          allowFrom: ["+15550009999"],
+        },
+      },
+    });
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550009999",
+      selfE164: "+15550009999",
+      senderE164: "+15550009999",
+      group: false,
+      pushName: "Me",
+      isFromMe: true,
+      sock: { sendMessage: sendMessageMock },
+      // Remote JID is the SAME number (true self-chat)
+      remoteJid: "15550009999@s.whatsapp.net",
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.isSelfChat).toBe(true);
+  });
+
+  it("should allow inbound DMs from allowlisted third parties", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          selfChatMode: true,
+          allowFrom: ["+15550009999", "+15551112222"],
+        },
+      },
+    });
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15551112222",
+      selfE164: "+15550009999",
+      senderE164: "+15551112222",
+      group: false,
+      pushName: "Dylan",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15551112222@s.whatsapp.net",
+    });
+    expect(result.allowed).toBe(true);
+  });
+});

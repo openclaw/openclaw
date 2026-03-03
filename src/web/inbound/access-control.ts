@@ -11,7 +11,7 @@ import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
 } from "../../security/dm-policy-shared.js";
-import { isSelfChatMode, normalizeE164 } from "../../utils.js";
+import { isSelfChatMode, jidToE164, normalizeE164 } from "../../utils.js";
 import { resolveWhatsAppAccount } from "../accounts.js";
 
 export type InboundAccessControlResult = {
@@ -73,6 +73,11 @@ export async function checkInboundAccessControl(params: {
   const groupAllowFrom =
     account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
   const isSamePhone = params.from === params.selfE164;
+  // True self-chat: both sender AND recipient are the user's own number.
+  // Without this, outbound DMs to third parties are misidentified as self-chat
+  // when selfChatMode is enabled (see #32632).
+  const remoteE164 = jidToE164(params.remoteJid);
+  const isTrueSelfChat = isSamePhone && (!remoteE164 || remoteE164 === params.selfE164);
   const isSelfChat = account.selfChatMode ?? isSelfChatMode(params.selfE164, configuredAllowFrom);
   const pairingGraceMs =
     typeof params.pairingGraceMs === "number" && params.pairingGraceMs > 0
@@ -120,7 +125,7 @@ export async function checkInboundAccessControl(params: {
           .map((entry) => normalizeE164(String(entry)))
           .filter((entry): entry is string => Boolean(entry)),
       );
-      if (!params.group && isSamePhone) {
+      if (!params.group && isTrueSelfChat) {
         return true;
       }
       return params.group
@@ -148,12 +153,12 @@ export async function checkInboundAccessControl(params: {
 
   // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled".
   if (!params.group) {
-    if (params.isFromMe && !isSamePhone) {
-      logVerbose("Skipping outbound DM (fromMe); no pairing reply needed.");
+    if (params.isFromMe && !isTrueSelfChat) {
+      logVerbose("Skipping outbound DM (fromMe to third party); not a self-chat.");
       return {
         allowed: false,
         shouldMarkRead: false,
-        isSelfChat,
+        isSelfChat: false,
         resolvedAccountId: account.accountId,
       };
     }
