@@ -184,4 +184,32 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts agents.defaults.subagents.completionDelivery", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          subagents: {
+            completionDelivery: "internal",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid agents.defaults.subagents.completionDelivery value", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          subagents: {
+            completionDelivery: "always" as unknown,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
 });
