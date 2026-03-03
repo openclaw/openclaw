@@ -143,8 +143,7 @@ export function createTelegramDraftStream(params: {
   }: PreviewSendParams): Promise<boolean> => {
     if (typeof streamMessageId === "number") {
       if (renderedParseMode) {
-        const textWithRTLM = isRTL(renderedText) ? "\u200F" + renderedText : renderedText;
-      await params.api.editMessageText(chatId, streamMessageId, textWithRTLM, {
+        await params.api.editMessageText(chatId, streamMessageId, renderedText, {
           parse_mode: renderedParseMode,
         });
       } else {
@@ -211,11 +210,10 @@ export function createTelegramDraftStream(params: {
         : {}),
       ...(renderedParseMode ? { parse_mode: renderedParseMode } : {}),
     };
-    const textWithRTLM = isRTL(renderedText) ? "\u200F" + renderedText : renderedText;
     await resolvedDraftApi!(
       chatId,
       draftId,
-      textWithRTLM,
+      renderedText,
       Object.keys(draftParams).length > 0 ? draftParams : undefined,
     );
     return true;
