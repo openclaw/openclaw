@@ -21,12 +21,18 @@ function MintPage() {
   const MAX_PER_WALLET = 5;
 
   async function handleMint() {
-    if (!isConnected) { open(); return; }
-    
+    if (!isConnected) {
+      open();
+      return;
+    }
+
     setStatus("minting");
     try {
-      const wallet = addresses.find(a => a.addressType === "solana")?.address;
-      if (!wallet) { setStatus("error"); return; }
+      const wallet = addresses.find((a) => a.addressType === "solana")?.address;
+      if (!wallet) {
+        setStatus("error");
+        return;
+      }
 
       // Get transaction from backend
       const res = await fetch("/api/mint", {
@@ -35,7 +41,7 @@ function MintPage() {
         body: JSON.stringify({ wallet, quantity }),
       });
       const { transaction } = await res.json();
-      
+
       // Sign and send
       const tx = VersionedTransaction.deserialize(Buffer.from(transaction, "base64"));
       const { hash } = await solana.signAndSendTransaction(tx);
@@ -50,19 +56,19 @@ function MintPage() {
     <div>
       <h1>Mint NFT</h1>
       <p>Price: {PRICE} SOL each</p>
-      
+
       <div>
-        <button onClick={() => setQuantity(q => Math.max(1, q - 1))}>-</button>
+        <button onClick={() => setQuantity((q) => Math.max(1, q - 1))}>-</button>
         <span>{quantity}</span>
-        <button onClick={() => setQuantity(q => Math.min(MAX_PER_WALLET, q + 1))}>+</button>
+        <button onClick={() => setQuantity((q) => Math.min(MAX_PER_WALLET, q + 1))}>+</button>
       </div>
-      
+
       <p>Total: {(PRICE * quantity).toFixed(2)} SOL</p>
-      
+
       <button onClick={handleMint} disabled={status === "minting"}>
         {!isConnected ? "Connect Wallet" : status === "minting" ? "Minting..." : "Mint"}
       </button>
-      
+
       {status === "success" && <p>Successfully minted!</p>}
     </div>
   );
@@ -74,15 +80,20 @@ function MintPage() {
 ```ts
 // /api/mint.ts
 import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
-import { createNft, mplCore } from "@metaplex-foundation/mpl-core";
-import { generateSigner, publicKey, keypairIdentity, createKeypairFromSecretKey } from "@metaplex-foundation/umi";
+import { create, mplCore } from "@metaplex-foundation/mpl-core";
+import {
+  generateSigner,
+  publicKey,
+  keypairIdentity,
+  createKeypairFromSecretKey,
+} from "@metaplex-foundation/umi";
 
 export async function POST(req: Request) {
   const { wallet, quantity } = await req.json();
 
   // Load mint authority from environment (never hardcode)
   const authorityKeypair = createKeypairFromSecretKey(
-    Uint8Array.from(JSON.parse(process.env.MINT_AUTHORITY_SECRET_KEY!))
+    Uint8Array.from(JSON.parse(process.env.MINT_AUTHORITY_SECRET_KEY!)),
   );
 
   const umi = createUmi("https://api.mainnet-beta.solana.com")
@@ -90,8 +101,8 @@ export async function POST(req: Request) {
     .use(keypairIdentity(authorityKeypair));
 
   const asset = generateSigner(umi);
-  
-  const tx = createNft(umi, {
+
+  const tx = create(umi, {
     asset,
     name: "NFT #1",
     uri: "https://arweave.net/metadata.json",
@@ -100,7 +111,7 @@ export async function POST(req: Request) {
 
   const built = await tx.build(umi);
   const serialized = Buffer.from(umi.transactions.serialize(built)).toString("base64");
-  
+
   return Response.json({ transaction: serialized });
 }
 ```
@@ -113,13 +124,13 @@ async function allowlistMint(solana: any, wallet: string, qty: number) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ wallet, quantity: qty }),
-  }).then(r => r.json());
-  
+  }).then((r) => r.json());
+
   if (!proof) throw new Error("Not on allowlist");
 
   const tx = VersionedTransaction.deserialize(Buffer.from(transaction, "base64"));
   const { hash } = await solana.signAndSendTransaction(tx);
-  
+
   return hash;
 }
 ```
@@ -132,9 +143,7 @@ async function allowlistMint(solana: any, wallet: string, qty: number) {
   "symbol": "COLL",
   "description": "Description",
   "image": "https://arweave.net/image.png",
-  "attributes": [
-    { "trait_type": "Background", "value": "Blue" }
-  ],
+  "attributes": [{ "trait_type": "Background", "value": "Blue" }],
   "properties": {
     "files": [{ "uri": "https://arweave.net/image.png", "type": "image/png" }]
   }
@@ -152,7 +161,7 @@ import { createTree, mintV1 } from "@metaplex-foundation/mpl-bubblegum";
 const tree = generateSigner(umi);
 await createTree(umi, {
   merkleTree: tree,
-  maxDepth: 14,     // Up to 16,384 NFTs
+  maxDepth: 14, // Up to 16,384 NFTs
   maxBufferSize: 64,
 }).sendAndConfirm(umi);
 

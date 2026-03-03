@@ -41,7 +41,7 @@ const sdk = new BrowserSDK({
   addressTypes: [AddressType.solana],
   authOptions: {
     authUrl: "https://connect.phantom.app/login", // optional
-    redirectUrl: "https://yourapp.com/callback",  // required for OAuth
+    redirectUrl: "https://yourapp.com/callback", // required for OAuth
   },
   autoConnect: true,
 });
@@ -87,7 +87,7 @@ await sdk.disconnect();
 // Sign message
 const { signature, rawSignature } = await sdk.solana.signMessage("Hello Solana!");
 
-// Sign transaction (without sending)
+// Sign transaction — INJECTED PROVIDER ONLY (not supported for embedded/Google/Apple wallets)
 const signedTx = await sdk.solana.signTransaction(transaction);
 
 // Sign and send transaction
@@ -109,7 +109,7 @@ import { NetworkId } from "@phantom/browser-sdk";
 
 // Enable for specific chains
 await sdk.enableAutoConfirm({
-  chains: [NetworkId.SOLANA_MAINNET]
+  chains: [NetworkId.SOLANA_MAINNET],
 });
 
 // Enable for all supported chains
@@ -239,17 +239,17 @@ sdk.configureDebug({
 
 ## AddressType Values
 
-| AddressType | Chains |
-|-------------|--------|
+| AddressType          | Chains                   |
+| -------------------- | ------------------------ |
 | `AddressType.solana` | Mainnet, Devnet, Testnet |
 
 ## Supported Solana Networks
 
-| Network | Cluster |
-|---------|---------|
+| Network | Cluster      |
+| ------- | ------------ |
 | Mainnet | mainnet-beta |
-| Devnet | devnet |
-| Testnet | testnet |
+| Devnet  | devnet       |
+| Testnet | testnet      |
 
 ## Complete Example
 

@@ -7,7 +7,14 @@ Accept cryptocurrency payments in your applications.
 ```tsx
 import { useState } from "react";
 import { useSolana, useAccounts } from "@phantom/react-sdk";
-import { Connection, PublicKey, SystemProgram, VersionedTransaction, TransactionMessage, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import {
+  Connection,
+  PublicKey,
+  SystemProgram,
+  VersionedTransaction,
+  TransactionMessage,
+  LAMPORTS_PER_SOL,
+} from "@solana/web3.js";
 
 function PayButton({ recipient, amountSol }: { recipient: string; amountSol: number }) {
   const { solana } = useSolana();
@@ -52,7 +59,12 @@ function PayButton({ recipient, amountSol }: { recipient: string; amountSol: num
 ## SPL Token Payment (USDC)
 
 ```tsx
-import { getAssociatedTokenAddress, createTransferInstruction, createAssociatedTokenAccountInstruction, getAccount } from "@solana/spl-token";
+import {
+  getAssociatedTokenAddress,
+  createTransferInstruction,
+  createAssociatedTokenAccountInstruction,
+  getAccount,
+} from "@solana/spl-token";
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
@@ -102,7 +114,7 @@ async function checkout(orderId: string, solana: any) {
   const { paymentId, transaction } = await fetch("/api/payments/create", {
     method: "POST",
     body: JSON.stringify({ orderId }),
-  }).then(r => r.json());
+  }).then((r) => r.json());
 
   // 2. Deserialize and sign
   const tx = VersionedTransaction.deserialize(Buffer.from(transaction, "base64"));
@@ -112,7 +124,7 @@ async function checkout(orderId: string, solana: any) {
   const { success } = await fetch("/api/payments/confirm", {
     method: "POST",
     body: JSON.stringify({ paymentId, txHash: hash }),
-  }).then(r => r.json());
+  }).then((r) => r.json());
 
   return success;
 }
@@ -124,36 +136,36 @@ async function checkout(orderId: string, solana: any) {
 // /api/payments/create.ts
 export async function POST(req: Request) {
   const { orderId } = await req.json();
-  
+
   // Get order, calculate amount
   const order = await db.orders.findUnique({ where: { id: orderId } });
-  const solAmount = order.total / await getSolPrice();
-  
+  const solAmount = order.total / (await getSolPrice());
+
   // Create payment record
   const payment = await db.payments.create({
-    data: { orderId, solAmount, status: "pending" }
+    data: { orderId, solAmount, status: "pending" },
   });
 
   // Build transaction (partial - user will sign)
   // Return serialized transaction
-  
+
   return Response.json({ paymentId: payment.id, transaction: "..." });
 }
 
 // /api/payments/confirm.ts
 export async function POST(req: Request) {
   const { paymentId, txHash } = await req.json();
-  
+
   // Verify transaction on-chain
   const connection = new Connection("https://api.mainnet-beta.solana.com");
   const tx = await connection.getTransaction(txHash, { commitment: "confirmed" });
-  
+
   if (!tx) return Response.json({ success: false });
-  
+
   // Verify amount and recipient match
   // Update payment status
   // Fulfill order
-  
+
   return Response.json({ success: true });
 }
 ```
@@ -168,7 +180,9 @@ function PriceDisplay({ usdAmount }: { usdAmount: number }) {
 
   useEffect(() => {
     async function fetchPrice() {
-      const res = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd");
+      const res = await fetch(
+        "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd",
+      );
       const data = await res.json();
       setSolPrice(data.solana.usd);
     }

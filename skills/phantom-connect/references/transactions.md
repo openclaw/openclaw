@@ -26,7 +26,7 @@ import {
 async function transferSol(solana, recipient: string, lamports: number) {
   const connection = new Connection("https://api.mainnet-beta.solana.com");
   const { blockhash } = await connection.getLatestBlockhash();
-  
+
   const fromAddress = await solana.getPublicKey();
 
   const message = new TransactionMessage({
@@ -43,7 +43,7 @@ async function transferSol(solana, recipient: string, lamports: number) {
 
   const transaction = new VersionedTransaction(message);
   const result = await solana.signAndSendTransaction(transaction);
-  
+
   return result.hash;
 }
 
@@ -82,7 +82,7 @@ async function transferSolKit(solana, recipient: string, amountLamports: bigint)
     createTransactionMessage({ version: 0 }),
     (tx) => setTransactionMessageFeePayer(address(userPublicKey), tx),
     (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx),
-    (tx) => appendTransactionMessageInstruction(transferIx, tx)
+    (tx) => appendTransactionMessageInstruction(transferIx, tx),
   );
 
   const transaction = compileTransaction(transactionMessage);
@@ -95,27 +95,19 @@ async function transferSolKit(solana, recipient: string, amountLamports: bigint)
 ### SPL Token Transfer
 
 ```ts
-import {
-  Connection,
-  PublicKey,
-  VersionedTransaction,
-  TransactionMessage,
-} from "@solana/web3.js";
-import {
-  getAssociatedTokenAddress,
-  createTransferInstruction,
-} from "@solana/spl-token";
+import { Connection, PublicKey, VersionedTransaction, TransactionMessage } from "@solana/web3.js";
+import { getAssociatedTokenAddress, createTransferInstruction } from "@solana/spl-token";
 
 async function transferToken(
   solana,
   mint: string,
   recipient: string,
   amount: number,
-  decimals: number
+  decimals: number,
 ) {
   const connection = new Connection("https://api.mainnet-beta.solana.com");
   const { blockhash } = await connection.getLatestBlockhash();
-  
+
   const fromAddress = await solana.getPublicKey();
   const fromPubkey = new PublicKey(fromAddress);
   const mintPubkey = new PublicKey(mint);
@@ -129,9 +121,7 @@ async function transferToken(
   const message = new TransactionMessage({
     payerKey: fromPubkey,
     recentBlockhash: blockhash,
-    instructions: [
-      createTransferInstruction(fromAta, toAta, fromPubkey, transferAmount),
-    ],
+    instructions: [createTransferInstruction(fromAta, toAta, fromPubkey, transferAmount)],
   }).compileToV0Message();
 
   const transaction = new VersionedTransaction(message);
@@ -141,8 +131,11 @@ async function transferToken(
 
 ### Sign Without Sending
 
+> **Warning:** `signTransaction` only works with the injected (extension) provider. It is NOT supported for embedded wallets (Google/Apple login). For embedded wallets, always use `signAndSendTransaction`.
+
 ```ts
-// Sign only (for offline signing, multi-sig, etc.)
+// Sign only — INJECTED PROVIDER ONLY (not supported for embedded/Google/Apple wallets)
+// For embedded wallets, always use signAndSendTransaction instead
 const signedTx = await solana.signTransaction(transaction);
 
 // Then send later

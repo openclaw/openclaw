@@ -30,23 +30,23 @@ import { AddressType } from "@phantom/browser-sdk";
   appName="Your App Name"
 >
   <App />
-</PhantomProvider>
+</PhantomProvider>;
 ```
 
 ## Available Hooks
 
-| Hook | Purpose | Returns |
-|------|---------|---------|
-| `useModal` | Control connection modal | `{ open, close, isOpened }` |
-| `usePhantom` | Access wallet/user state | `{ isConnected, isLoading, user, wallet }` |
-| `useConnect` | Connect to wallet | `{ connect, isConnecting, isLoading, error }` |
-| `useAccounts` | Get wallet addresses | `{ addresses, isConnected, walletId }` |
-| `useDisconnect` | Disconnect wallet | `{ disconnect, isDisconnecting }` |
-| `useSolana` | Solana operations | `{ solana, isAvailable }` |
-| `useAutoConfirm` | Auto-confirm (injected only) | `{ enable, disable, status }` |
-| `useDiscoveredWallets` | List injected wallets | `{ wallets, isLoading, error, refetch }` |
-| `useIsExtensionInstalled` | Check extension | `{ isLoading, isInstalled }` |
-| `useTheme` | Access current theme | `PhantomTheme` |
+| Hook                      | Purpose                      | Returns                                       |
+| ------------------------- | ---------------------------- | --------------------------------------------- |
+| `useModal`                | Control connection modal     | `{ open, close, isOpened }`                   |
+| `usePhantom`              | Access wallet/user state     | `{ isConnected, isLoading, user, wallet }`    |
+| `useConnect`              | Connect to wallet            | `{ connect, isConnecting, isLoading, error }` |
+| `useAccounts`             | Get wallet addresses         | `{ addresses, isConnected, walletId }`        |
+| `useDisconnect`           | Disconnect wallet            | `{ disconnect, isDisconnecting }`             |
+| `useSolana`               | Solana operations            | `{ solana, isAvailable }`                     |
+| `useAutoConfirm`          | Auto-confirm (injected only) | `{ enable, disable, status }`                 |
+| `useDiscoveredWallets`    | List injected wallets        | `{ wallets, isLoading, error, refetch }`      |
+| `useIsExtensionInstalled` | Check extension              | `{ isLoading, isInstalled }`                  |
+| `useTheme`                | Access current theme         | `PhantomTheme`                                |
 
 ## Hook Examples
 
@@ -99,7 +99,9 @@ function WalletInfo() {
     <div>
       <p>Wallet ID: {walletId}</p>
       {addresses?.map((addr, i) => (
-        <p key={i}>{addr.addressType}: {addr.address}</p>
+        <p key={i}>
+          {addr.addressType}: {addr.address}
+        </p>
       ))}
     </div>
   );
@@ -199,7 +201,7 @@ import { darkTheme, lightTheme } from "@phantom/react-sdk";
 const customTheme = {
   background: "#1a1a1a",
   text: "#ffffff",
-  secondary: "#98979C",  // Must be hex for opacity derivation
+  secondary: "#98979C", // Must be hex for opacity derivation
   brand: "#ab9ff2",
   error: "#ff4444",
   success: "#00ff00",
@@ -207,7 +209,7 @@ const customTheme = {
   overlay: "rgba(0, 0, 0, 0.8)",
 };
 
-<PhantomProvider theme={customTheme}>...</PhantomProvider>
+<PhantomProvider theme={customTheme}>...</PhantomProvider>;
 ```
 
 ## Debug Configuration
@@ -224,13 +226,13 @@ import { PhantomProvider, DebugLevel } from "@phantom/react-sdk";
   }}
 >
   ...
-</PhantomProvider>
+</PhantomProvider>;
 ```
 
 ## Supported Solana Networks
 
-| Network | Cluster |
-|---------|---------|
+| Network | Cluster      |
+| ------- | ------------ |
 | Mainnet | mainnet-beta |
-| Devnet | devnet |
-| Testnet | testnet |
+| Devnet  | devnet       |
+| Testnet | testnet      |

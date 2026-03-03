@@ -37,12 +37,7 @@ import { PhantomProvider } from "@phantom/react-native-sdk";
     "name": "My Wallet App",
     "slug": "my-wallet-app",
     "scheme": "mywalletapp",
-    "plugins": [
-      "expo-router",
-      "expo-secure-store",
-      "expo-web-browser",
-      "expo-auth-session"
-    ]
+    "plugins": ["expo-router", "expo-secure-store", "expo-web-browser", "expo-auth-session"]
   }
 }
 ```
@@ -77,14 +72,14 @@ export default function App() {
 
 ## Available Hooks
 
-| Hook | Purpose | Returns |
-|------|---------|---------|
-| `useModal` | Control connection modal | `{ open, close, isOpened }` |
-| `usePhantom` | Access wallet/user state | `{ isConnected, isLoading }` |
-| `useConnect` | Connect to wallet | `{ connect, isConnecting, error }` |
-| `useAccounts` | Get wallet addresses | `{ addresses, isConnected, walletId }` |
-| `useDisconnect` | Disconnect wallet | `{ disconnect, isDisconnecting }` |
-| `useSolana` | Solana operations | `{ solana, isAvailable }` |
+| Hook            | Purpose                  | Returns                                |
+| --------------- | ------------------------ | -------------------------------------- |
+| `useModal`      | Control connection modal | `{ open, close, isOpened }`            |
+| `usePhantom`    | Access wallet/user state | `{ isConnected, isLoading }`           |
+| `useConnect`    | Connect to wallet        | `{ connect, isConnecting, error }`     |
+| `useAccounts`   | Get wallet addresses     | `{ addresses, isConnected, walletId }` |
+| `useDisconnect` | Disconnect wallet        | `{ disconnect, isDisconnecting }`      |
+| `useSolana`     | Solana operations        | `{ solana, isAvailable }`              |
 
 ## Hook Examples
 
@@ -110,7 +105,9 @@ export function WalletScreen() {
     <View style={{ padding: 20 }}>
       <Text>Connected!</Text>
       {addresses.map((addr, i) => (
-        <Text key={i}>{addr.addressType}: {addr.address}</Text>
+        <Text key={i}>
+          {addr.addressType}: {addr.address}
+        </Text>
       ))}
       <Button title="Manage Wallet" onPress={open} />
     </View>
@@ -154,7 +151,9 @@ export function WalletScreen() {
   return (
     <View>
       {addresses.map((addr, i) => (
-        <Text key={i}>{addr.addressType}: {addr.address}</Text>
+        <Text key={i}>
+          {addr.addressType}: {addr.address}
+        </Text>
       ))}
       <Button title="Disconnect" onPress={disconnect} />
     </View>
@@ -251,21 +250,24 @@ function SolanaActions() {
 
 ## Supported Solana Networks
 
-| Network | Cluster |
-|---------|---------|
+| Network | Cluster      |
+| ------- | ------------ |
 | Mainnet | mainnet-beta |
-| Devnet | devnet |
-| Testnet | testnet |
+| Devnet  | devnet       |
+| Testnet | testnet      |
 
 ## Common Issues
 
 ### App crashes on startup
+
 Ensure `react-native-get-random-values` is imported FIRST, before any other imports.
 
 ### Auth redirect not working
+
 1. Verify `scheme` in app.json matches config
 2. Ensure all Expo plugins are configured
 3. Run `npx expo prebuild` after changes
 
 ### "appId required" error
+
 Add your appId from Phantom Portal when using google/apple providers.

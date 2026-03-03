@@ -31,20 +31,23 @@ function TokenGatedContent() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!isConnected) { setLoading(false); return; }
+    if (!isConnected) {
+      setLoading(false);
+      return;
+    }
     checkBalance();
   }, [isConnected, addresses]);
 
   async function checkBalance() {
-    const wallet = addresses.find(a => a.addressType === "solana")?.address;
-    if (!wallet) { setLoading(false); return; }
+    const wallet = addresses.find((a) => a.addressType === "solana")?.address;
+    if (!wallet) {
+      setLoading(false);
+      return;
+    }
 
     const connection = new Connection("https://api.mainnet-beta.solana.com");
     try {
-      const ata = await getAssociatedTokenAddress(
-        new PublicKey(TOKEN_MINT),
-        new PublicKey(wallet)
-      );
+      const ata = await getAssociatedTokenAddress(new PublicKey(TOKEN_MINT), new PublicKey(wallet));
       const account = await getAccount(connection, ata);
       setHasAccess(Number(account.amount) >= REQUIRED_AMOUNT);
     } catch {
@@ -75,15 +78,15 @@ async function verifyAccess() {
   const address = await solana.getPublicKey();
   const timestamp = Date.now();
   const message = `Verify ownership\nAddress: ${address}\nTimestamp: ${timestamp}`;
-  
+
   const { signature } = await solana.signMessage(message);
-  
+
   const res = await fetch("/api/verify-access", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ address, signature, message, timestamp }),
   });
-  
+
   return await res.json();
 }
 ```
@@ -109,7 +112,7 @@ export async function POST(req: Request) {
   const isValid = nacl.sign.detached.verify(
     new TextEncoder().encode(message),
     bs58.decode(signature),
-    bs58.decode(address)
+    bs58.decode(address),
   );
   if (!isValid) {
     return Response.json({ error: "Invalid signature" }, { status: 401 });
@@ -118,10 +121,7 @@ export async function POST(req: Request) {
   // 3. Check token balance
   const connection = new Connection("https://api.mainnet-beta.solana.com");
   try {
-    const ata = await getAssociatedTokenAddress(
-      new PublicKey(TOKEN_MINT),
-      new PublicKey(address)
-    );
+    const ata = await getAssociatedTokenAddress(new PublicKey(TOKEN_MINT), new PublicKey(address));
     const account = await getAccount(connection, ata);
     const balance = Number(account.amount);
 
@@ -150,7 +150,7 @@ async function checkNFTOwnership(wallet: string, collection: string) {
     owner: new PublicKey(wallet),
   });
 
-  return nfts.some(nft => nft.collection?.address.toString() === collection);
+  return nfts.some((nft) => nft.collection?.address.toString() === collection);
 }
 ```
 

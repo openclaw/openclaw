@@ -2,15 +2,7 @@
 name: phantom-connect
 description: "Use when the user wants to build a wallet-connected application with Phantom Connect SDK for Solana. Use for integrating Phantom wallets into React, React Native, or vanilla JS/TS apps — including wallet connection, social login with Google or Apple, embedded wallets, transaction signing, message signing, token-gated access, crypto payments, and NFT minting. Covers @phantom/react-sdk, @phantom/react-native-sdk, and @phantom/browser-sdk. Do NOT use for direct wallet operations (use phantom-wallet skill instead)."
 homepage: https://docs.phantom.com
-metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "👻",
-        "requires": { "env": ["PHANTOM_APP_ID"] },
-        "primaryEnv": "PHANTOM_APP_ID",
-      },
-  }
+metadata: { "openclaw": { "emoji": "👻" } }
 ---
 
 # Phantom Connect SDK
@@ -19,11 +11,11 @@ Build wallet-connected Solana applications with the Phantom Connect SDK ecosyste
 
 ## SDK Selection
 
-| Platform | SDK | Package |
-|----------|-----|---------|
-| React web apps | React SDK | `@phantom/react-sdk` |
-| React Native / Expo | React Native SDK | `@phantom/react-native-sdk` |
-| Vanilla JS / Vue / Angular | Browser SDK | `@phantom/browser-sdk` |
+| Platform                   | SDK              | Package                     |
+| -------------------------- | ---------------- | --------------------------- |
+| React web apps             | React SDK        | `@phantom/react-sdk`        |
+| React Native / Expo        | React Native SDK | `@phantom/react-native-sdk` |
+| Vanilla JS / Vue / Angular | Browser SDK      | `@phantom/browser-sdk`      |
 
 ## Prerequisites
 
@@ -33,11 +25,11 @@ Build wallet-connected Solana applications with the Phantom Connect SDK ecosyste
 
 ## Auth Providers
 
-| Provider | Description | Requires appId |
-|----------|-------------|----------------|
-| `"injected"` | Phantom browser extension | No |
-| `"google"` | Google OAuth (embedded wallet) | Yes |
-| `"apple"` | Apple ID (embedded wallet) | Yes |
+| Provider     | Description                    | Requires appId |
+| ------------ | ------------------------------ | -------------- |
+| `"injected"` | Phantom browser extension      | No             |
+| `"google"`   | Google OAuth (embedded wallet) | Yes            |
+| `"apple"`    | Apple ID (embedded wallet)     | Yes            |
 
 ## Critical Rules
 
@@ -47,7 +39,7 @@ Build wallet-connected Solana applications with the Phantom Connect SDK ecosyste
 4. **Check `isConnected` before signing** — verify wallet connection before any operation
 5. **React Native: `react-native-get-random-values` must be the FIRST import** — before any other imports
 6. **BrowserSDK must be a singleton** — create one instance per app, never multiple
-7. **Import `AddressType` from `@phantom/browser-sdk` only**
+7. **Import `AddressType` from `@phantom/browser-sdk`** (React Native SDK re-exports it from `@phantom/react-native-sdk`)
 8. **Use devnet for testing, mainnet-beta for production** — never test against mainnet with real funds
 9. **Never expose private keys** — Phantom handles all signing internally
 10. **Embedded wallet spending limit**: $1,000 USD per day per app per user
@@ -115,12 +107,12 @@ For detailed implementation patterns, read these files:
 
 ## Common Issues
 
-| Issue | Solution |
-|-------|----------|
-| "appId required" | Add appId from Phantom Portal when using google/apple providers |
-| Redirect not working | Allowlist redirectUrl in Phantom Portal |
-| React Native crashes | Import `react-native-get-random-values` as FIRST import |
-| Extension not detected | Use `waitForPhantomExtension()` with timeout |
+| Issue                   | Solution                                                                                |
+| ----------------------- | --------------------------------------------------------------------------------------- |
+| "appId required"        | Add appId from Phantom Portal when using google/apple providers                         |
+| Redirect not working    | Allowlist redirectUrl in Phantom Portal                                                 |
+| React Native crashes    | Import `react-native-get-random-values` as FIRST import                                 |
+| Extension not detected  | Use `waitForPhantomExtension()` with timeout                                            |
 | `signTransaction` error | Use `signAndSendTransaction` instead — embedded wallets don't support `signTransaction` |
 
 ## Resources

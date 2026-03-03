@@ -12,10 +12,10 @@ metadata:
         "install":
           [
             {
-              "id": "npx",
-              "kind": "npx",
+              "id": "phantom-mcp",
+              "kind": "node",
               "package": "@phantom/mcp-server",
-              "label": "Phantom MCP Server (npx)",
+              "label": "Phantom MCP Server (npm)",
             },
           ],
       },
@@ -46,22 +46,22 @@ MCP config:
 
 ## Available Tools
 
-| Tool | Description |
-|------|-------------|
+| Tool                   | Description                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------- |
 | `get_wallet_addresses` | Get blockchain addresses (Solana, Ethereum, Bitcoin, Sui) for the connected wallet |
-| `transfer_tokens` | Transfer SOL or SPL tokens on Solana — builds, signs, and sends the transaction |
-| `buy_token` | Fetch Solana swap quotes from Phantom API; optionally sign and send |
-| `sign_transaction` | Sign a transaction (base64url for Solana, RLP hex for Ethereum) |
-| `sign_message` | Sign a UTF-8 message with automatic chain-specific routing |
+| `transfer_tokens`      | Transfer SOL or SPL tokens on Solana — builds, signs, and sends the transaction    |
+| `buy_token`            | Fetch Solana swap quotes from Phantom API; optionally sign and send                |
+| `sign_transaction`     | Sign a transaction (base64url for Solana, RLP hex for Ethereum)                    |
+| `sign_message`         | Sign a UTF-8 message with automatic chain-specific routing                         |
 
 ## Supported Networks
 
-| Chain | Networks | CAIP-2 Examples |
-|-------|----------|-----------------|
-| Solana | mainnet, devnet, testnet | `solana:mainnet`, `solana:devnet` |
-| Ethereum | Mainnet, Sepolia, Polygon, Base, Arbitrum | `eip155:1`, `eip155:137` |
-| Bitcoin | Mainnet | `bip122:000000000019d6689c085ae165831e93` |
-| Sui | Mainnet, Testnet | `sui:mainnet` |
+| Chain    | Networks                                  | CAIP-2 Examples                           |
+| -------- | ----------------------------------------- | ----------------------------------------- |
+| Solana   | mainnet, devnet, testnet                  | `solana:mainnet`, `solana:devnet`         |
+| Ethereum | Mainnet, Sepolia, Polygon, Base, Arbitrum | `eip155:1`, `eip155:137`                  |
+| Bitcoin  | Mainnet                                   | `bip122:000000000019d6689c085ae165831e93` |
+| Sui      | Mainnet, Testnet                          | `sui:mainnet`                             |
 
 ## Operations
 
