@@ -8,6 +8,7 @@ import {
 } from "./google-gemini-model-default.js";
 import {
   applyOpenAICodexModelDefault,
+  applyOpenAICodexModelDefaultWithOptions,
   OPENAI_CODEX_DEFAULT_MODEL,
 } from "./openai-codex-model-default.js";
 import {
@@ -226,6 +227,14 @@ describe("applyOpenAICodexModelDefault", () => {
     };
     const applied = applyOpenAICodexModelDefault(cfg);
     expectConfigUnchanged(applied, cfg);
+  });
+
+  it("overrides non-openai models when force=true", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+    };
+    const applied = applyOpenAICodexModelDefaultWithOptions(cfg, { force: true });
+    expectPrimaryModelChanged(applied, OPENAI_CODEX_DEFAULT_MODEL);
   });
 });
 

@@ -32,8 +32,18 @@ export function applyOpenAICodexModelDefault(cfg: OpenClawConfig): {
   next: OpenClawConfig;
   changed: boolean;
 } {
+  return applyOpenAICodexModelDefaultWithOptions(cfg, {});
+}
+
+export function applyOpenAICodexModelDefaultWithOptions(
+  cfg: OpenClawConfig,
+  opts: { force?: boolean },
+): {
+  next: OpenClawConfig;
+  changed: boolean;
+} {
   const current = resolvePrimaryModel(cfg.agents?.defaults?.model);
-  if (!shouldSetOpenAICodexModel(current)) {
+  if (!opts.force && !shouldSetOpenAICodexModel(current)) {
     return { next: cfg, changed: false };
   }
   return {
