@@ -746,7 +746,11 @@ export const registerTelegramHandlers = ({
       if (user?.is_bot) {
         return;
       }
-      if (reactionMode === "own" && !wasSentByBot(chatId, messageId)) {
+      // In private chats, skip the wasSentByBot check — all messages are either
+      // from the user or the bot, and the user can only react to bot messages.
+      // The wasSentByBot cache is unreliable due to chunk-splitting: the send path
+      // and the handler may use different module instances with separate Maps.
+      if (reactionMode === "own" && isGroup && !wasSentByBot(chatId, messageId)) {
         return;
       }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
