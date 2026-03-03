@@ -511,7 +511,8 @@ export async function runReplyAgent(params: {
       try {
         const { reactMessageDiscord } = await import("../../discord/send.js");
         const { resolveDiscordChannelId } = await import("../../discord/targets.js");
-        const rawChannelId = sessionCtx.To || sessionCtx.OriginatingTo;
+        // Prefer OriginatingTo over To for reaction target (To may be "slash:<user>" for native commands)
+        const rawChannelId = sessionCtx.OriginatingTo || sessionCtx.To;
         if (rawChannelId) {
           // Strip routing prefix (e.g., "channel:123456" -> "123456")
           const channelId = resolveDiscordChannelId(rawChannelId);

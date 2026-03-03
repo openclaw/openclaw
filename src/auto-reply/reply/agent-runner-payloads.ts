@@ -51,8 +51,27 @@ export function buildReplyPayloads(params: {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
   let errorReactionRequested = false;
 
+  // Helper: check if error is transient (rate limit, overloaded, timeout)
+  // vs actionable recovery messages (context overflow, session reset)
+  const isTransientApiError = (payload: ReplyPayload): boolean => {
+    if (!payload.isError) {
+      return false;
+    }
+    const text = payload.text?.toLowerCase() || "";
+    // Transient errors that should be suppressed
+    return (
+      text.includes("rate limit") ||
+      text.includes("overloaded") ||
+      text.includes("timeout") ||
+      text.includes("api error") ||
+      text.includes("429") ||
+      text.includes("503")
+    );
+  };
+
   // Apply errorPolicy filtering (skip for heartbeat to preserve alerts)
   // For react-only on non-Discord channels, fall back to silent (no reaction support)
+  // Only filter transient API errors, not actionable recovery messages
   const supportsReaction = params.originatingChannel === "discord";
   const effectiveErrorPolicy =
     params.errorPolicy === "react-only" && !supportsReaction ? "silent" : params.errorPolicy;
@@ -61,11 +80,11 @@ export function buildReplyPayloads(params: {
     params.isHeartbeat || !effectiveErrorPolicy
       ? params.payloads
       : effectiveErrorPolicy === "silent"
-        ? params.payloads.filter((payload) => !payload.isError)
+        ? params.payloads.filter((payload) => !isTransientApiError(payload))
         : effectiveErrorPolicy === "react-only"
           ? params.payloads
               .map((payload) => {
-                if (payload.isError) {
+                if (isTransientApiError(payload)) {
                   errorReactionRequested = true;
                   return null;
                 }
