@@ -142,8 +142,7 @@ const QWEN_PORTAL_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-const OLLAMA_BASE_URL = OLLAMA_NATIVE_BASE_URL;
-const OLLAMA_API_BASE_URL = OLLAMA_BASE_URL;
+const OLLAMA_API_BASE_URL = OLLAMA_NATIVE_BASE_URL;
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_SHOW_MAX_MODELS = 200;
 const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -579,9 +578,9 @@ export function normalizeProviders(params: {
   return mutated ? next : providers;
 }
 
-function buildMinimaxProvider(): ProviderConfig {
+function buildMinimaxProvider(baseUrl = MINIMAX_PORTAL_BASE_URL): ProviderConfig {
   return {
-    baseUrl: MINIMAX_PORTAL_BASE_URL,
+    baseUrl,
     api: "anthropic-messages",
     authHeader: true,
     models: [
@@ -635,9 +634,9 @@ function buildMinimaxPortalProvider(): ProviderConfig {
   };
 }
 
-function buildMoonshotProvider(): ProviderConfig {
+function buildMoonshotProvider(baseUrl = MOONSHOT_BASE_URL): ProviderConfig {
   return {
-    baseUrl: MOONSHOT_BASE_URL,
+    baseUrl,
     api: "openai-completions",
     models: [
       {
@@ -779,12 +778,12 @@ async function buildOllamaProvider(
 
 async function buildHuggingfaceProvider(apiKey?: string): Promise<ProviderConfig> {
   // Resolve env var name to value for discovery (GET /v1/models requires Bearer token).
-  const resolvedSecret =
-    apiKey?.trim() !== ""
-      ? /^[A-Z][A-Z0-9_]*$/.test(apiKey!.trim())
-        ? (process.env[apiKey!.trim()] ?? "").trim()
-        : apiKey!.trim()
-      : "";
+  const trimmedKey = apiKey?.trim();
+  const resolvedSecret = trimmedKey
+    ? /^[A-Z][A-Z0-9_]*$/.test(trimmedKey)
+      ? (process.env[trimmedKey] ?? "").trim()
+      : trimmedKey
+    : "";
   const models =
     resolvedSecret !== ""
       ? await discoverHuggingfaceModels(resolvedSecret)
@@ -933,7 +932,9 @@ export async function resolveImplicitProviders(params: {
     resolveEnvApiKeyVarName("minimax") ??
     resolveApiKeyFromProfiles({ provider: "minimax", store: authStore });
   if (minimaxKey) {
-    providers.minimax = { ...buildMinimaxProvider(), apiKey: minimaxKey };
+    // Honour the baseUrl from explicit config (e.g. api.minimaxi.com for CN users).
+    const minimaxBaseUrl = params.explicitProviders?.minimax?.baseUrl;
+    providers.minimax = { ...buildMinimaxProvider(minimaxBaseUrl), apiKey: minimaxKey };
   }
 
   const minimaxOauthProfile = listProfilesForProvider(authStore, "minimax-portal");
@@ -948,7 +949,13 @@ export async function resolveImplicitProviders(params: {
     resolveEnvApiKeyVarName("moonshot") ??
     resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
   if (moonshotKey) {
-    providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
+    // Honour the baseUrl from explicit config (e.g. api.moonshot.cn for CN users)
+    // so the implicit provider catalog uses the correct endpoint.
+    const moonshotBaseUrl = params.explicitProviders?.moonshot?.baseUrl;
+    providers.moonshot = {
+      ...buildMoonshotProvider(moonshotBaseUrl),
+      apiKey: moonshotKey,
+    };
   }
 
   const kimiCodingKey =

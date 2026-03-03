@@ -207,7 +207,7 @@ describe("models-config", () => {
     });
   });
 
-  it("preserves non-empty agent apiKey/baseUrl for matching providers in merge mode", async () => {
+  it("preserves non-empty agent apiKey and uses config baseUrl in merge mode", async () => {
     await withTempHome(async () => {
       const parsed = await runCustomProviderMergeTest({
         baseUrl: "https://agent.example/v1",
@@ -215,8 +215,10 @@ describe("models-config", () => {
         api: "openai-responses",
         models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
       });
+      // apiKey is a credential and is preserved from the existing models.json.
       expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
-      expect(parsed.providers.custom?.baseUrl).toBe("https://agent.example/v1");
+      // baseUrl is a config value; the new config always wins over stale models.json.
+      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
     });
   });
 
@@ -288,6 +290,65 @@ describe("models-config", () => {
         const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
         expect(kimi?.contextWindow).toBe(350000);
         expect(kimi?.maxTokens).toBe(16384);
+      });
+    });
+  });
+
+  it("preserves CN baseUrl when models.json already contains the international URL", async () => {
+    await withTempHome(async () => {
+      await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-cn-test", async () => {
+        // Simulate a stale models.json written with the international URL.
+        await writeAgentModelsJson({
+          providers: {
+            moonshot: {
+              baseUrl: "https://api.moonshot.ai/v1",
+              api: "openai-completions",
+              apiKey: "MOONSHOT_API_KEY",
+              models: [
+                {
+                  id: "kimi-k2.5",
+                  name: "Kimi K2.5",
+                  reasoning: false,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 256000,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        });
+
+        // User has switched to the CN endpoint in their config.
+        const cfg: OpenClawConfig = {
+          models: {
+            providers: {
+              moonshot: {
+                baseUrl: "https://api.moonshot.cn/v1",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "kimi-k2.5",
+                    name: "Kimi K2.5",
+                    reasoning: false,
+                    input: ["text", "image"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 256000,
+                    maxTokens: 8192,
+                  },
+                ],
+              },
+            },
+          },
+        };
+
+        await ensureOpenClawModelsJson(cfg);
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { baseUrl?: string }>;
+        }>();
+        // CN baseUrl from config must win over the stale international URL.
+        expect(parsed.providers.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
       });
     });
   });

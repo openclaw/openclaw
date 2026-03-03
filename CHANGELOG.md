@@ -150,7 +150,7 @@ Docs: https://docs.openclaw.ai
 - LINE/context and routing synthesis: fix group/room peer routing and command-authorization context propagation, and keep processing later events in mixed-success webhook batches. (from #21955, #24475, #27035, #28286) Thanks @lailoo, @mcaxtr, @jervyclaw, @Glucksberg, and @Takhoffman.
 - LINE/status/config/webhook synthesis: fix status false positives from snapshot/config state and accept LINE webhook HEAD probes for compatibility. (from #10487, #25726, #27537, #27908, #31387) Thanks @BlueBirdBack, @stakeswky, @loiie45e, @puritysb, and @mcaxtr.
 - LINE cleanup/test follow-ups: fold cleanup/test learnings into the synthesis review path while keeping runtime changes focused on regression fixes. (from #17630, #17289) Thanks @Clawborn and @davidahmann.
-- Mattermost/interactive buttons: add interactive button send/callback support with directory-based channel/user target resolution, and harden callbacks via account-scoped HMAC verification plus sender-scoped DM routing. (#19957) thanks @tonydehnke.
+ Mattermost/interactive buttons: add interactive button send/callback support with directory-based channel/user target resolution, and harden callbacks via account-scoped HMAC verification plus sender-scoped DM routing. (#19957) thanks @tonydehnke.
 - Feishu/groupPolicy legacy alias compatibility: treat legacy `groupPolicy: "allowall"` as `open` in both schema parsing and runtime policy checks so intended open-group configs no longer silently drop group messages when `groupAllowFrom` is empty. (from #36358) Thanks @Sid-Qin.
 
 - Mattermost/plugin SDK import policy: replace remaining monolithic `openclaw/plugin-sdk` imports in Mattermost mention-gating paths/tests with scoped subpaths (`openclaw/plugin-sdk/compat` and `openclaw/plugin-sdk/mattermost`) so `pnpm check` passes `lint:plugins:no-monolithic-plugin-sdk-entry-imports` on baseline. (#36480) Thanks @Takhoffman.
@@ -164,6 +164,9 @@ Docs: https://docs.openclaw.ai
 - Memory/doctor SecretRef handling: treat SecretRef-backed memory-search API keys as configured, and fail embedding setup with explicit unresolved-secret errors instead of crashing. (#36835) Thanks @joshavant.
 - Memory/flush default prompt: ban timestamped variant filenames during default memory flush runs so durable notes stay in the canonical daily `memory/YYYY-MM-DD.md` file. (#34951) thanks @zerone0x.
 - Agents/reply delivery timing: flush embedded Pi block replies before waiting on compaction retries so already-generated assistant replies reach channels before compaction wait completes. (#35489) thanks @Sid-Qin.
+
+- Models/Moonshot CN: fix Moonshot CN users getting HTTP 401 after onboarding -- stale api.moonshot.ai URL in models.json was preserved across regeneration, overriding the correctly configured api.moonshot.cn endpoint. The same fix covers any provider with a regional endpoint variant (e.g. MiniMax CN). Fixes #32607.
+ (fix(models): do not preserve stale baseUrl from models.json in merge mode)
 
 ## 2026.3.2
 
