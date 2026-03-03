@@ -439,9 +439,10 @@ describe("convertMessagesToInputItems", () => {
     expect(items).toEqual([]);
   });
 
-  it("falls back to toolUseId when toolCallId is missing", () => {
+  it("falls back to toolUseId when toolCallId is blank", () => {
     const msg = {
       role: "toolResult" as const,
+      toolCallId: "",
       toolUseId: "call_from_tool_use",
       toolName: "test_tool",
       content: [{ type: "text", text: "ok" }],
