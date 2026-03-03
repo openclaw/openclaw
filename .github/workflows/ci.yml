@@ -74,6 +74,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-sticky-disk: "true"
 
       - name: Build dist
         run: pnpm build
@@ -100,6 +101,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-sticky-disk: "true"
 
       - name: Download dist artifact
         uses: actions/download-artifact@v4
@@ -143,6 +145,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "${{ matrix.runtime == 'bun' }}"
+          use-sticky-disk: "true"
 
       - name: Configure Node test resources
         if: (github.event_name != 'push' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
@@ -172,6 +175,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-sticky-disk: "true"
 
       - name: Check types and lint and oxfmt
         run: pnpm check
@@ -211,6 +215,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-sticky-disk: "true"
 
       - name: Run ${{ matrix.tool }} dead-code scan
         run: ${{ matrix.command }}
@@ -236,6 +241,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-sticky-disk: "true"
 
       - name: Check docs
         run: pnpm check:docs
@@ -278,6 +284,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          use-sticky-disk: "true"
 
       - name: Setup Python
         uses: actions/setup-python@v5
