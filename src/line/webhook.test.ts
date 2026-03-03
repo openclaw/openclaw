@@ -111,4 +111,18 @@ describe("createLineWebhookMiddleware", () => {
     });
     expect(onEvents).not.toHaveBeenCalled();
   });
+
+  it("returns 200 immediately when onEvents fails", async () => {
+    const { res, onEvents } = await invokeWebhook({
+      body: JSON.stringify({ events: [{ type: "message" }] }),
+      onEvents: vi.fn(async () => {
+        throw new Error("transient failure");
+      }),
+    });
+    await Promise.resolve();
+
+    expect(onEvents).toHaveBeenCalledTimes(1);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ status: "ok" });
+  });
 });
