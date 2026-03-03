@@ -747,11 +747,26 @@ export async function runHeartbeatOnce(opts: {
   const deliveryAccountId = delivery.accountId;
   const heartbeatPlugin = delivery.channel !== "none" ? getChannelPlugin(delivery.channel) : null;
   if (delivery.channel !== "none" && heartbeatPlugin?.heartbeat?.checkReady) {
-    const readiness = await heartbeatPlugin.heartbeat.checkReady({
-      cfg,
-      accountId: deliveryAccountId,
-      deps: opts.deps,
-    });
+    let readiness: { ok: boolean; reason: string };
+    try {
+      readiness = await heartbeatPlugin.heartbeat.checkReady({
+        cfg,
+        accountId: deliveryAccountId,
+        deps: opts.deps,
+      });
+    } catch (err) {
+      const reason = formatErrorMessage(err);
+      emitHeartbeatEvent({
+        status: "failed",
+        reason,
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel,
+        accountId: delivery.accountId,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("failed") : undefined,
+      });
+      log.error(`heartbeat failed: ${reason}`, { error: reason });
+      return { status: "failed", reason };
+    }
     if (!readiness.ok) {
       emitHeartbeatEvent({
         status: "skipped",

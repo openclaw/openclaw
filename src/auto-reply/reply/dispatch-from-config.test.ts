@@ -1461,6 +1461,62 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
+  it("deduplicates heartbeat polls using the resolved per-agent heartbeat prompt", async () => {
+    setNoAbort();
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          heartbeat: {
+            prompt: "default heartbeat prompt",
+          },
+        },
+        list: [
+          {
+            id: "ops",
+            heartbeat: {
+              prompt: "ops heartbeat prompt",
+            },
+          },
+        ],
+      },
+    };
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    const firstCtx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:12345",
+      SessionKey: "agent:ops:main",
+      MessageSid: "msg-1",
+      CommandBody: "ops heartbeat prompt\nCurrent time: 2026-03-03 12:00 (Asia/Taipei)",
+    });
+    const secondCtx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:12345",
+      SessionKey: "agent:ops:main",
+      MessageSid: "msg-2",
+      CommandBody: "ops heartbeat prompt\nCurrent time: 2026-03-03 12:01 (Asia/Taipei)",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: firstCtx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+    await dispatchReplyFromConfig({
+      ctx: secondCtx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
   it("does not dedupe non-heartbeat content when MessageSid differs", async () => {
     setNoAbort();
     const cfg = emptyConfig;

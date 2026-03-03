@@ -208,4 +208,40 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       }),
     );
   });
+
+  it("returns failed when readiness probe throws", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => {
+            throw new Error("readiness-boom");
+          },
+        },
+      });
+
+      expect(result.status).toBe("failed");
+      if (result.status === "failed") {
+        expect(result.reason).toContain("readiness-boom");
+      }
+    });
+  });
 });

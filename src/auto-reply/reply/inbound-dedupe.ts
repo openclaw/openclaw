@@ -1,3 +1,4 @@
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { createDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
@@ -36,6 +37,23 @@ function resolveInboundTextBody(ctx: MsgContext): string {
     return trimmed;
   }
   return "";
+}
+
+function resolveInboundHeartbeatPrompt(
+  ctx: MsgContext,
+  config?: OpenClawConfig,
+): string | undefined {
+  const defaultPrompt = config?.agents?.defaults?.heartbeat?.prompt;
+  if (!config) {
+    return defaultPrompt;
+  }
+  const sessionKey = ctx.SessionKey?.trim();
+  if (!sessionKey) {
+    return defaultPrompt;
+  }
+  const agentId = resolveSessionAgentId({ sessionKey, config });
+  const agentPrompt = resolveAgentConfig(config, agentId)?.heartbeat?.prompt;
+  return agentPrompt ?? defaultPrompt;
 }
 
 export function buildInboundDedupeKey(ctx: MsgContext): string | null {
@@ -91,7 +109,7 @@ export function shouldSkipDuplicateInbound(
       : "";
   const body = resolveInboundTextBody(ctx);
   const dedupeBody = normalizeHeartbeatPollForDedupe(body, {
-    prompt: opts?.config?.agents?.defaults?.heartbeat?.prompt,
+    prompt: resolveInboundHeartbeatPrompt(ctx, opts?.config),
   });
   if (!dedupeBody) {
     return false;
