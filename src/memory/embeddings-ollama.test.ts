@@ -51,7 +51,7 @@ describe("embeddings-ollama", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       provider: "ollama",
       model: "",
       fallback: "none",
