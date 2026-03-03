@@ -248,6 +248,22 @@ describe("extractAssistantText", () => {
     expect(result).toBe("BeforeAfter");
   });
 
+  it("strips multiple leaked legacy tool_call snippets in one text block", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'A<tool_call>exec tool="exec" command="ls" />B<tool_call>exec tool="read" command="cat /tmp/f" />C',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("ABC");
+  });
+
   it("strips leaked legacy tool_call snippets with '<' inside quoted arguments", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
@@ -262,6 +278,22 @@ describe("extractAssistantText", () => {
 
     const result = extractAssistantText(msg);
     expect(result).toBe("BeforeAfter");
+  });
+
+  it("strips both minimax markers and legacy tool_call snippets when both are present", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Before<tool_call>exec tool="exec" command="ls" />Mid<invoke name="Bash">pwd</invoke></minimax:tool_call>After',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("BeforeMidAfter");
   });
 
   it("keeps literal tool_call explanations with unrelated self-closing tags", () => {

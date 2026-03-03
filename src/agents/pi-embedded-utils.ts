@@ -14,14 +14,12 @@ const MARKDOWN_CODE_OR_LEGACY_TOOL_CALL_RE =
   /```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]+`|<tool_call\b[^>]*>(?:(?:"[^"]*"|'[^']*'|[^<"'`])+?)\/>/gi;
 
 /**
- * Strip malformed Minimax tool invocations that leak into text content.
- * Minimax sometimes embeds tool calls as XML in text blocks instead of
- * proper structured tool calls. This removes:
- * - <invoke name="...">...</invoke> blocks
- * - </minimax:tool_call> closing tags
- * - leaked legacy <tool_call> ... /> snippets rendered as plain text
+ * Strip leaked tool-call syntax that shows up as plain assistant text.
+ * This removes both:
+ * - Minimax XML markers (<invoke ...>...</invoke>, </minimax:tool_call>)
+ * - legacy inline <tool_call ... /> snippets
  */
-export function stripMinimaxToolCallXml(text: string): string {
+export function stripLeakedToolCallSyntax(text: string): string {
   if (!text) {
     return text;
   }
@@ -48,6 +46,8 @@ export function stripMinimaxToolCallXml(text: string): string {
 
   return cleaned;
 }
+
+export const stripMinimaxToolCallXml = stripLeakedToolCallSyntax;
 
 /**
  * Strip downgraded tool call text representations that leak into text content.
@@ -228,7 +228,7 @@ export function extractAssistantText(msg: AssistantMessage): string {
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
+          stripDowngradedToolCallText(stripLeakedToolCallSyntax(text)),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
