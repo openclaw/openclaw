@@ -538,12 +538,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         .targetSentTimestamp;
       logVerbose(`signal: bare reaction (${emojiLabel}) from ${senderDisplayBare}`);
       if (!isRemove) {
-        // P2: prefer group info from the reaction payload itself; fall back to dataMessage.groupInfo.
-        const bareReactionGroupInfo =
-          (bareReaction as { groupInfo?: { groupId?: string; groupName?: string } | null })
-            .groupInfo ?? dataMessage?.groupInfo;
-        const groupId = bareReactionGroupInfo?.groupId ?? undefined;
-        const groupName = bareReactionGroupInfo?.groupName ?? undefined;
+        // P2: per-field fallback so a present-but-empty reaction.groupInfo doesn't shadow
+        // a populated dataMessage.groupInfo (e.g. Signal emits groupInfo={} on the reaction
+        // envelope while the real groupId/groupName live on dataMessage.groupInfo).
+        const bareReactionGroupInfo = bareReaction as {
+          groupInfo?: { groupId?: string; groupName?: string } | null;
+        };
+        const groupId =
+          bareReactionGroupInfo.groupInfo?.groupId ?? dataMessage?.groupInfo?.groupId ?? undefined;
+        const groupName =
+          bareReactionGroupInfo.groupInfo?.groupName ??
+          dataMessage?.groupInfo?.groupName ??
+          undefined;
         const isGroup = Boolean(groupId);
         // Apply full access policy (dmPolicy/groupPolicy/pairing) — same as handleReactionOnlyInbound.
         const bareAccessDecision = resolveAccessDecision(isGroup);
@@ -812,16 +818,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (mediaPaths.length > 1) {
       placeholder = formatAttachmentSummaryPlaceholder(mediaTypes);
     } else {
-      // Only set placeholder when we actually resolved a mediaType.
-      // kindFromMime(undefined) returns "unknown" which is truthy — guard against
-      // that case so null-body messages (e.g. blank reaction envelopes) aren't dispatched
-      // with <media:unknown> as the body.
       const kind = mediaType ? kindFromMime(mediaType) : undefined;
-      if (kind && kind !== "unknown") {
+      if (kind) {
         placeholder = `<media:${kind}>`;
-      } else if (kind === "unknown" || (!kind && dataMessage.attachments?.length)) {
+      } else if (mediaPath || (deps.ignoreAttachments && attachments.length)) {
+        // A path was resolved (real attachment, unrecognised MIME) or we are
+        // intentionally skipping fetching — preserve the attachment placeholder
+        // so the message is not silently lost.
         placeholder = "<media:attachment>";
       }
+      // No path resolved and ignoreAttachments is false: blank reaction envelope.
+      // Leave placeholder empty; the !bodyText guard below will drop it silently.
     }
 
     const bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
