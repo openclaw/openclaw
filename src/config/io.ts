@@ -127,11 +127,33 @@ export type ConfigWriteOptions = {
    */
   expectedConfigPath?: string;
   /**
+   * Optional optimistic-concurrency guard. When provided, the write is
+   * rejected if the on-disk config hash no longer matches the caller's
+   * read-time snapshot.
+   */
+  expectedConfigHash?: string;
+  /**
    * Paths that must be explicitly removed from the persisted file payload,
    * even if schema/default normalization reintroduces them.
    */
   unsetPaths?: string[][];
 };
+
+export class ConfigWriteConflictError extends Error {
+  readonly configPath: string;
+  readonly expectedHash: string;
+  readonly actualHash: string | null;
+
+  constructor(params: { configPath: string; expectedHash: string; actualHash: string | null }) {
+    super(
+      `Config changed on disk since it was loaded; refusing to overwrite newer edits at ${params.configPath}.`,
+    );
+    this.name = "ConfigWriteConflictError";
+    this.configPath = params.configPath;
+    this.expectedHash = params.expectedHash;
+    this.actualHash = params.actualHash;
+  }
+}
 
 export type ReadConfigFileSnapshotForWriteResult = {
   snapshot: ConfigFileSnapshot;
@@ -1037,6 +1059,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     clearConfigCache();
     let persistCandidate: unknown = cfg;
     const { snapshot } = await readConfigFileSnapshotInternal();
+    const currentHash = resolveConfigSnapshotHash(snapshot);
+    const expectedHash = options.expectedConfigHash?.trim();
+    if (expectedHash && currentHash !== expectedHash) {
+      throw new ConfigWriteConflictError({
+        configPath,
+        expectedHash,
+        actualHash: currentHash,
+      });
+    }
     let envRefMap: Map<string, string> | null = null;
     let changedPaths: Set<string> | null = null;
     if (snapshot.valid && snapshot.exists) {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, it, expect } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  ConfigWriteConflictError,
   createConfigIO,
   readConfigFileSnapshotForWrite,
   writeConfigFile as writeConfigFileViaWrapper,
@@ -144,6 +145,26 @@ describe("env snapshot TOCTOU via wrapper APIs", () => {
       });
 
       expect(await readGatewayToken(configPath)).toBe("original-key-123");
+    });
+  });
+});
+
+describe("expected config hash guard", () => {
+  it("rejects writes when the on-disk config changed after the caller snapshot", async () => {
+    await withGatewayTokenTempConfig(async (configPath) => {
+      const io = createConfigIO({ configPath });
+      const firstRead = await io.readConfigFileSnapshotForWrite();
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ gateway: { remote: { token: "mutated-on-disk" } } }, null, 2),
+      );
+
+      await expect(
+        io.writeConfigFile(firstRead.snapshot.config, {
+          ...firstRead.writeOptions,
+          expectedConfigHash: firstRead.snapshot.hash,
+        }),
+      ).rejects.toBeInstanceOf(ConfigWriteConflictError);
     });
   });
 });

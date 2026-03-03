@@ -11,6 +11,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.js";
 import {
   CONFIG_PATH,
+  ConfigWriteConflictError,
   type OpenClawConfig,
   isNixMode,
   loadConfig,
@@ -18,6 +19,7 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
+import { ensureControlUiAllowedOriginsForNonLoopbackBind } from "../config/gateway-control-ui-origins.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -260,12 +262,21 @@ export async function startGatewayServer(
         "gateway: legacy config entries detected but no auto-migration changes were produced; continuing with validation.",
       );
     } else {
-      await writeConfigFile(migrated);
-      if (changes.length > 0) {
-        log.info(
-          `gateway: migrated legacy config entries:\n${changes
-            .map((entry) => `- ${entry}`)
-            .join("\n")}`,
+      try {
+        await writeConfigFile(migrated, { expectedConfigHash: configSnapshot.hash });
+        if (changes.length > 0) {
+          log.info(
+            `gateway: migrated legacy config entries:\n${changes
+              .map((entry) => `- ${entry}`)
+              .join("\n")}`,
+          );
+        }
+      } catch (err) {
+        if (!(err instanceof ConfigWriteConflictError)) {
+          throw err;
+        }
+        log.warn(
+          `gateway: skipped legacy auto-migration because ${configSnapshot.path} changed on disk during startup.`,
         );
       }
     }
@@ -285,14 +296,20 @@ export async function startGatewayServer(
   const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
   if (autoEnable.changes.length > 0) {
     try {
-      await writeConfigFile(autoEnable.config);
+      await writeConfigFile(autoEnable.config, { expectedConfigHash: configSnapshot.hash });
       log.info(
         `gateway: auto-enabled plugins:\n${autoEnable.changes
           .map((entry) => `- ${entry}`)
           .join("\n")}`,
       );
     } catch (err) {
-      log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
+      if (err instanceof ConfigWriteConflictError) {
+        log.warn(
+          `gateway: skipped plugin auto-enable persistence because ${configSnapshot.path} changed on disk during startup.`,
+        );
+      } else {
+        log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
+      }
     }
   }
 
@@ -379,13 +396,16 @@ export async function startGatewayServer(
     });
   }
 
-  cfgAtStart = loadConfig();
+  const authSnapshot = await readConfigFileSnapshot();
+  cfgAtStart = authSnapshot.config;
   const authBootstrap = await ensureGatewayStartupAuth({
     cfg: cfgAtStart,
     env: process.env,
     authOverride: opts.auth,
     tailscaleOverride: opts.tailscale,
     persist: true,
+    writeConfig: async (nextCfg) =>
+      await writeConfigFile(nextCfg, { expectedConfigHash: authSnapshot.hash }),
   });
   cfgAtStart = authBootstrap.cfg;
   if (authBootstrap.generatedToken) {
@@ -415,9 +435,12 @@ export async function startGatewayServer(
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.
-  cfgAtStart = await maybeSeedControlUiAllowedOriginsAtStartup({
-    config: cfgAtStart,
-    writeConfig: writeConfigFile,
+  cfgAtStart = ensureControlUiAllowedOriginsForNonLoopbackBind(cfgAtStart).config;
+  const controlUiSeedSnapshot = await readConfigFileSnapshot();
+  await maybeSeedControlUiAllowedOriginsAtStartup({
+    config: controlUiSeedSnapshot.config,
+    writeConfig: async (nextCfg) =>
+      await writeConfigFile(nextCfg, { expectedConfigHash: controlUiSeedSnapshot.hash }),
     log,
   });
 

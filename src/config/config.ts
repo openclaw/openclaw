@@ -1,5 +1,6 @@
 export {
   clearConfigCache,
+  ConfigWriteConflictError,
   clearRuntimeConfigSnapshot,
   createConfigIO,
   getRuntimeConfigSnapshot,

@@ -4,7 +4,7 @@ import type {
   GatewayTailscaleConfig,
   OpenClawConfig,
 } from "../config/config.js";
-import { writeConfigFile } from "../config/config.js";
+import { ConfigWriteConflictError, writeConfigFile } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveSecretRefValues } from "../secrets/resolve.js";
@@ -194,6 +194,7 @@ export async function ensureGatewayStartupAuth(params: {
   authOverride?: GatewayAuthConfig;
   tailscaleOverride?: GatewayTailscaleConfig;
   persist?: boolean;
+  writeConfig?: (cfg: OpenClawConfig) => Promise<void>;
 }): Promise<{
   cfg: OpenClawConfig;
   auth: ReturnType<typeof resolveGatewayAuth>;
@@ -230,8 +231,17 @@ export async function ensureGatewayStartupAuth(params: {
     persistRequested,
     resolvedAuth: resolved,
   });
+  let persistedGeneratedToken = false;
   if (persist) {
-    await writeConfigFile(nextCfg);
+    const persistConfig = params.writeConfig ?? writeConfigFile;
+    try {
+      await persistConfig(nextCfg);
+      persistedGeneratedToken = true;
+    } catch (err) {
+      if (!(err instanceof ConfigWriteConflictError)) {
+        throw err;
+      }
+    }
   }
 
   const nextAuth = resolveGatewayAuthFromConfig({
@@ -245,7 +255,7 @@ export async function ensureGatewayStartupAuth(params: {
     cfg: nextCfg,
     auth: nextAuth,
     generatedToken,
-    persistedGeneratedToken: persist,
+    persistedGeneratedToken,
   };
 }
 

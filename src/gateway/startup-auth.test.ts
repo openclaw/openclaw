@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import { ConfigWriteConflictError, type OpenClawConfig } from "../config/config.js";
 import { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 
 const mocks = vi.hoisted(() => ({
@@ -69,6 +69,30 @@ describe("ensureGatewayStartupAuth", () => {
       authToken: result.auth.token,
       persistedConfig: mocks.writeConfigFile.mock.calls[0]?.[0],
     });
+  });
+
+  it("keeps a generated token ephemeral when the config changed before startup persistence", async () => {
+    const writeConfig = vi.fn(async () => {
+      throw new ConfigWriteConflictError({
+        configPath: "/tmp/openclaw.json",
+        expectedHash: "before",
+        actualHash: "after",
+      });
+    });
+
+    const result = await ensureGatewayStartupAuth({
+      cfg: {},
+      env: {} as NodeJS.ProcessEnv,
+      persist: true,
+      writeConfig,
+    });
+
+    expect(result.generatedToken).toMatch(/^[0-9a-f]{48}$/);
+    expect(result.persistedGeneratedToken).toBe(false);
+    expect(result.auth.mode).toBe("token");
+    expect(result.auth.token).toBe(result.generatedToken);
+    expect(writeConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("does not generate when token already exists", async () => {
