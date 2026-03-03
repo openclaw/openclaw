@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
@@ -736,7 +737,16 @@ export async function recordSessionMetaFromInbound(params: {
       if (!existing && !createIfMissing) {
         return null;
       }
-      const next = mergeSessionEntry(existing, patch);
+      const next = existing
+        ? normalizeSessionRuntimeModelFields({
+            ...existing,
+            ...patch,
+            // Inbound metadata updates must not refresh activity timestamps;
+            // idle reset evaluation relies on updatedAt from actual session turns.
+            sessionId: existing.sessionId ?? crypto.randomUUID(),
+            updatedAt: existing.updatedAt ?? Date.now(),
+          })
+        : mergeSessionEntry(existing, patch);
       store[resolved.normalizedKey] = next;
       for (const legacyKey of resolved.legacyKeys) {
         delete store[legacyKey];
