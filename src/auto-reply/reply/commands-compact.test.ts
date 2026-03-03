@@ -19,11 +19,15 @@ vi.mock("../../config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../config/sessions.js", () => ({
-  resolveSessionFilePath: vi.fn().mockReturnValue("/tmp/test-session.jsonl"),
-  resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
-  resolveFreshSessionTotalTokens: vi.fn().mockReturnValue(100_000),
-}));
+vi.mock("../../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveSessionFilePath: vi.fn().mockReturnValue("/tmp/test-session.jsonl"),
+    resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
+    resolveFreshSessionTotalTokens: vi.fn().mockReturnValue(100_000),
+  };
+});
 
 vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
@@ -38,8 +42,9 @@ vi.mock("./session-updates.js", () => ({
 }));
 
 import { handleCompactCommand } from "./commands-compact.js";
+import type { HandleCommandsParams } from "./commands-types.js";
 
-function buildParams(overrides: Record<string, unknown> = {}) {
+function buildParams(overrides: Partial<HandleCommandsParams> = {}): HandleCommandsParams {
   return {
     command: {
       commandBodyNormalized: "/compact",
@@ -48,15 +53,19 @@ function buildParams(overrides: Record<string, unknown> = {}) {
       ownerList: [],
       channel: "test",
       senderId: "test-user",
-      ...(overrides.command as Record<string, unknown>),
+      surface: "test",
+      rawBodyNormalized: "/compact",
     },
     sessionEntry: {
       sessionId: `test-session-${Date.now()}`,
-      ...(overrides.sessionEntry as Record<string, unknown>),
-    },
+    } as HandleCommandsParams["sessionEntry"],
     sessionKey: "main",
-    ctx: { CommandBody: "/compact", RawBody: "/compact", Body: "/compact" },
-    cfg: {},
+    ctx: {
+      CommandBody: "/compact",
+      RawBody: "/compact",
+      Body: "/compact",
+    } as HandleCommandsParams["ctx"],
+    cfg: {} as HandleCommandsParams["cfg"],
     isGroup: false,
     storePath: "/tmp",
     agentId: "main",
@@ -64,12 +73,16 @@ function buildParams(overrides: Record<string, unknown> = {}) {
     provider: "anthropic",
     model: "claude-sonnet-4-20250514",
     resolvedThinkLevel: undefined,
+    resolvedVerboseLevel: "off" as const,
+    resolvedReasoningLevel: "off" as const,
     resolveDefaultThinkingLevel: vi.fn().mockResolvedValue("default"),
-    sessionStore: {},
     workspaceDir: "/tmp",
     agentDir: "/tmp",
+    directives: {} as HandleCommandsParams["directives"],
+    elevated: { enabled: false, allowed: false, failures: [] },
+    defaultGroupActivation: () => "always" as const,
     ...overrides,
-  } as Parameters<typeof handleCompactCommand>[0];
+  } as HandleCommandsParams;
 }
 
 describe("handleCompactCommand cooldown", () => {
@@ -83,7 +96,7 @@ describe("handleCompactCommand cooldown", () => {
 
   it("allows first compaction", async () => {
     const params = buildParams();
-    const result = await handleCompactCommand(params);
+    const result = await handleCompactCommand(params, true);
     expect(result).not.toBeNull();
     expect(result?.reply?.text).toContain("Compacted");
   });
@@ -91,27 +104,27 @@ describe("handleCompactCommand cooldown", () => {
   it("blocks rapid second compaction with cooldown message", async () => {
     const sessionId = "cooldown-test-session";
     const params = buildParams({
-      sessionEntry: { sessionId },
+      sessionEntry: { sessionId } as HandleCommandsParams["sessionEntry"],
     });
 
-    const first = await handleCompactCommand(params);
+    const first = await handleCompactCommand(params, true);
     expect(first?.reply?.text).toContain("Compacted");
 
-    const second = await handleCompactCommand(params);
+    const second = await handleCompactCommand(params, true);
     expect(second?.reply?.text).toContain("already run recently");
   });
 
   it("allows compaction after cooldown expires", async () => {
     const sessionId = "cooldown-expire-test";
     const params = buildParams({
-      sessionEntry: { sessionId },
+      sessionEntry: { sessionId } as HandleCommandsParams["sessionEntry"],
     });
 
-    await handleCompactCommand(params);
+    await handleCompactCommand(params, true);
 
     vi.advanceTimersByTime(16_000);
 
-    const result = await handleCompactCommand(params);
+    const result = await handleCompactCommand(params, true);
     expect(result?.reply?.text).toContain("Compacted");
   });
 });

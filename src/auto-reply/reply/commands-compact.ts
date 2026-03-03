@@ -140,7 +140,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
 
-  recordCompaction(sessionId);
+  // Only record cooldown after successful compaction so transient failures
+  // don't block the user's retry.
+  if (result.ok && result.compacted) {
+    recordCompaction(sessionId);
+  }
 
   const compactLabel = result.ok
     ? result.compacted
