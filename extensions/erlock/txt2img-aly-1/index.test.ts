@@ -39,4 +39,18 @@ describe("txt2img-aly-1 tool", () => {
       process.env.OPENCLAW_ALY_API_KEY = current;
     }
   });
+
+  it("accepts parameters passed as a JSON string", async () => {
+    const tool = createTxt2ImgAlyTool();
+    const result = await tool.execute("call-3", {
+      model: "qwen-image-max",
+      input_: {
+        messages: [{ role: "user", content: [{ text: "a cat on a windowsill" }] }],
+      },
+      parameters: '{"size":"1328*1328","n":1}',
+    });
+
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text?: string }).text).toContain("OPENCLAW_ALY_API_KEY");
+  });
 });

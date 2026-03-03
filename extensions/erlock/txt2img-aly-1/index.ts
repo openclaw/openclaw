@@ -67,13 +67,27 @@ function parseArgs(raw: unknown): Txt2ImgArgs {
   if (!Object.hasOwn(raw, "parameters") || raw.parameters == null) {
     return parsed;
   }
-  if (!isRecord(raw.parameters)) {
+
+  let parametersRaw = raw.parameters;
+  if (typeof parametersRaw === "string") {
+    const trimmed = parametersRaw.trim();
+    if (!trimmed) {
+      throw new Error("parameters must be an object");
+    }
+    try {
+      parametersRaw = JSON.parse(trimmed) as unknown;
+    } catch {
+      throw new Error("parameters JSON string is invalid");
+    }
+  }
+
+  if (!isRecord(parametersRaw)) {
     throw new Error("parameters must be an object");
   }
 
   const parameters: Txt2ImgArgs["parameters"] = {};
-  if (Object.hasOwn(raw.parameters, "negative_prompt")) {
-    const value = raw.parameters.negative_prompt;
+  if (Object.hasOwn(parametersRaw, "negative_prompt")) {
+    const value = parametersRaw.negative_prompt;
     if (typeof value !== "string") {
       throw new Error("negative_prompt must be a string");
     }
@@ -83,23 +97,23 @@ function parseArgs(raw: unknown): Txt2ImgArgs {
     parameters.negative_prompt = value;
   }
 
-  if (Object.hasOwn(raw.parameters, "size")) {
-    const value = raw.parameters.size;
+  if (Object.hasOwn(parametersRaw, "size")) {
+    const value = parametersRaw.size;
     if (typeof value !== "string" || !ALLOWED_SIZES.has(value)) {
       throw new Error("size 不是支持的分辨率");
     }
     parameters.size = value as Txt2ImgArgs["parameters"]["size"];
   }
 
-  if (Object.hasOwn(raw.parameters, "n")) {
-    if (raw.parameters.n !== 1) {
+  if (Object.hasOwn(parametersRaw, "n")) {
+    if (parametersRaw.n !== 1) {
       throw new Error("n 仅支持1");
     }
     parameters.n = 1;
   }
 
-  if (Object.hasOwn(raw.parameters, "seed")) {
-    const value = raw.parameters.seed;
+  if (Object.hasOwn(parametersRaw, "seed")) {
+    const value = parametersRaw.seed;
     if (!Number.isInteger(value) || value < 0 || value >= 2147483648) {
       throw new Error("seed 范围[0,2147483647]");
     }
@@ -199,6 +213,31 @@ export function createTxt2ImgAlyTool(options?: {
           description: "输入基本信息",
         },
         parameters: {
+          type: "object",
+          description: "图像生成参数",
+          properties: {
+            negative_prompt: {
+              maxLength: 500,
+              type: "string",
+              description: "反向提示词，最长500字符",
+            },
+            size: {
+              enum: ["1664*928", "1472*1104", "1328*1328", "1104*1472", "928*1664"],
+              type: "string",
+              description: "输出图像分辨率",
+            },
+            n: {
+              const: 1,
+              type: "integer",
+              description: "生成图像数量，仅支持1",
+            },
+            seed: {
+              exclusiveMaximum: 2147483648,
+              minimum: 0,
+              type: "integer",
+              description: "随机种子，范围[0,2147483647]",
+            },
+          },
           anyOf: [
             {
               properties: {

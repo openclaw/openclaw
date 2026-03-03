@@ -13,6 +13,7 @@ You can also set `apiKey` and `baseUrl` in plugin config. Plugin config takes pr
 
 - Tool name: `txt2img_aly`
 - Input fields: `model`, `input_`, optional `parameters`
+- `parameters` can be an object or a JSON string that parses to an object
 - `model` only supports `qwen-image-max`
 - `input_.messages` supports single-round user message only
 
