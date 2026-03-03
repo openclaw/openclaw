@@ -214,9 +214,13 @@ export async function resolveApiKeyForProvider(params: {
 
   // Ollama and vllm typically run locally without authentication.
   // Fall back to a dummy key so downstream callers (streamFn, etc.) proceed.
-  const providerConfig = resolveProviderConfig(cfg, provider);
-  if (normalized === "ollama" || normalized === "vllm" || providerConfig?.api === "ollama") {
-    return { apiKey: "ollama", source: "ollama-local-default", mode: "api-key" };
+  // Skip when the user explicitly set an auth override (e.g. auth: "token")
+  // to avoid masking real auth errors on secured local gateways.
+  if (authOverride === undefined) {
+    const providerConfig = resolveProviderConfig(cfg, provider);
+    if (normalized === "ollama" || normalized === "vllm" || providerConfig?.api === "ollama") {
+      return { apiKey: "ollama", source: "ollama-local-default", mode: "api-key" };
+    }
   }
 
   if (provider === "openai") {

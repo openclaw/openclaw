@@ -190,4 +190,25 @@ describe("resolveApiKeyForProvider ollama keyless fallback", () => {
     expect(result.apiKey).toBe("my-custom-key");
     expect(result.source).toBe("models.json");
   });
+
+  it("skips keyless fallback when explicit auth override is set", async () => {
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "ollama",
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://127.0.0.1:11434",
+                api: "ollama",
+                auth: "token",
+                models: [],
+              },
+            },
+          },
+        },
+        store: emptyStore,
+      }),
+    ).rejects.toThrow('No API key found for provider "ollama"');
+  });
 });
