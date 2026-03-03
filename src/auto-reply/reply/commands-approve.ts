@@ -29,6 +29,10 @@ type ParsedApproveCommand =
   | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
   | { ok: false; error: string };
 
+type ExecApprovalResolveResponse = {
+  decision?: unknown;
+};
+
 function normalizeDecisionToken(token: string): string {
   return token
     .normalize("NFKC")
@@ -98,6 +102,13 @@ function buildResolveFailureMessage(err: unknown): string {
   return `❌ Failed to submit approval: ${message}`;
 }
 
+function normalizeDecision(value: unknown): "allow-once" | "allow-always" | "deny" | undefined {
+  if (value === "allow-once" || value === "allow-always" || value === "deny") {
+    return value;
+  }
+  return undefined;
+}
+
 export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -134,8 +145,9 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
 
   const resolvedBy = buildResolvedByLabel(params);
   const audit = buildApprovalAudit(params);
+  let resolveResult: ExecApprovalResolveResponse | null = null;
   try {
-    await callGateway({
+    resolveResult = await callGateway<ExecApprovalResolveResponse>({
       method: "exec.approval.resolve",
       params: { id: parsed.id, decision: parsed.decision, audit },
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
@@ -150,9 +162,10 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  const finalDecision = normalizeDecision(resolveResult?.decision) ?? parsed.decision;
 
   return {
     shouldContinue: false,
-    reply: { text: `✅ Exec approval ${parsed.decision} submitted for ${parsed.id}.` },
+    reply: { text: `✅ Exec approval ${finalDecision} submitted for ${parsed.id}.` },
   };
 };
