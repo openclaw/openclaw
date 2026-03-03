@@ -118,6 +118,27 @@ function createAudioConfigWithEcho(opts?: {
   return { cfg, providers };
 }
 
+function expectSingleEchoDeliveryCall() {
+  expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
+  const callArgs = mockDeliverOutboundPayloads.mock.calls[0]?.[0];
+  expect(callArgs).toBeDefined();
+  return callArgs as {
+    to?: string;
+    channel?: string;
+    accountId?: string;
+    payloads: Array<{ text?: string }>;
+  };
+}
+
+function createAudioConfigWithoutEchoFlag() {
+  const { cfg, providers } = createAudioConfigWithEcho();
+  const audio = cfg.tools?.media?.audio as { echoTranscript?: boolean } | undefined;
+  if (audio && "echoTranscript" in audio) {
+    delete audio.echoTranscript;
+  }
+  return { cfg, providers };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -160,21 +181,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
   it("does NOT echo when echoTranscript is absent (default)", async () => {
     const mediaPath = await createTempAudioFile();
     const ctx = createAudioCtxWithProvider(mediaPath);
-    const cfg: OpenClawConfig = {
-      tools: {
-        media: {
-          audio: {
-            enabled: true,
-            maxBytes: 1024 * 1024,
-            models: [{ provider: "groq" }],
-            // echoTranscript not set → defaults to false
-          },
-        },
-      },
-    };
-    const providers = {
-      groq: { id: "groq", transcribeAudio: async () => ({ text: "hello world" }) },
-    };
+    const { cfg, providers } = createAudioConfigWithoutEchoFlag();
 
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
@@ -191,9 +198,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
 
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
-    expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
-    const callArgs = mockDeliverOutboundPayloads.mock.calls[0]?.[0];
-    expect(callArgs).toBeDefined();
+    const callArgs = expectSingleEchoDeliveryCall();
     expect(callArgs.channel).toBe("whatsapp");
     expect(callArgs.to).toBe("+10000000001");
     expect(callArgs.accountId).toBe("acc1");
@@ -212,9 +217,8 @@ describe("applyMediaUnderstanding – echo transcript", () => {
 
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
-    expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
-    const callArgs = mockDeliverOutboundPayloads.mock.calls[0]?.[0];
-    expect(callArgs?.payloads[0].text).toBe("🎙️ Heard: custom message");
+    const callArgs = expectSingleEchoDeliveryCall();
+    expect(callArgs.payloads[0].text).toBe("🎙️ Heard: custom message");
   });
 
   it("does NOT echo when there are no audio attachments", async () => {
@@ -231,22 +235,11 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       From: "+10000000001",
     };
 
-    const cfg: OpenClawConfig = {
-      tools: {
-        media: {
-          audio: {
-            enabled: true,
-            maxBytes: 1024 * 1024,
-            models: [{ provider: "groq" }],
-            echoTranscript: true,
-          },
-          image: { enabled: false },
-        },
-      },
-    };
-    const providers = {
-      groq: { id: "groq", transcribeAudio: async () => ({ text: "should not appear" }) },
-    };
+    const { cfg, providers } = createAudioConfigWithEcho({
+      echoTranscript: true,
+      transcribedText: "should not appear",
+    });
+    cfg.tools!.media!.image = { enabled: false };
 
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
@@ -258,25 +251,9 @@ describe("applyMediaUnderstanding – echo transcript", () => {
   it("does NOT echo when transcription fails", async () => {
     const mediaPath = await createTempAudioFile();
     const ctx = createAudioCtxWithProvider(mediaPath);
-    const cfg: OpenClawConfig = {
-      tools: {
-        media: {
-          audio: {
-            enabled: true,
-            maxBytes: 1024 * 1024,
-            models: [{ provider: "groq" }],
-            echoTranscript: true,
-          },
-        },
-      },
-    };
-    const providers = {
-      groq: {
-        id: "groq",
-        transcribeAudio: async () => {
-          throw new Error("transcription provider failure");
-        },
-      },
+    const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: true });
+    providers.groq.transcribeAudio = async () => {
+      throw new Error("transcription provider failure");
     };
 
     // Should not throw; transcription failure is swallowed by runner
@@ -333,9 +310,8 @@ describe("applyMediaUnderstanding – echo transcript", () => {
 
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
-    expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
-    const callArgs = mockDeliverOutboundPayloads.mock.calls[0]?.[0];
-    expect(callArgs?.to).toBe("+19999999999");
+    const callArgs = expectSingleEchoDeliveryCall();
+    expect(callArgs.to).toBe("+19999999999");
   });
 
   it("echo delivery failure does not throw or break transcription", async () => {
