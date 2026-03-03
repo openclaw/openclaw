@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/blockrun-sanitizer",
+  "version": "2026.2.27",
+  "private": true,
+  "description": "Dual-LLM content sanitization plugin for OpenClaw",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

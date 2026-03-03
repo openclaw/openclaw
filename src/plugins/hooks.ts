@@ -8,6 +8,8 @@
 import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAfterCompactionEvent,
+  PluginHookAfterExternalContentWrapEvent,
+  PluginHookAfterExternalContentWrapResult,
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
@@ -53,6 +55,8 @@ import type {
 
 // Re-export types for consumers
 export type {
+  PluginHookAfterExternalContentWrapEvent,
+  PluginHookAfterExternalContentWrapResult,
   PluginHookAgentContext,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
@@ -454,6 +458,26 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run after_external_content_wrap hook.
+   * Allows plugins to sanitize or block external content after it has been
+   * wrapped with security markers but before it is returned to the agent.
+   * Runs sequentially (modifying hook).
+   */
+  async function runAfterExternalContentWrap(
+    event: PluginHookAfterExternalContentWrapEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookAfterExternalContentWrapResult | undefined> {
+    return runModifyingHook<
+      "after_external_content_wrap",
+      PluginHookAfterExternalContentWrapResult
+    >("after_external_content_wrap", event, ctx, (acc, next) => ({
+      sanitizedContent: next.sanitizedContent ?? acc?.sanitizedContent,
+      block: next.block || acc?.block,
+      blockReason: next.blockReason ?? acc?.blockReason,
+    }));
+  }
+
+  /**
    * Run tool_result_persist hook.
    *
    * This hook is intentionally synchronous: it runs in hot paths where session
@@ -731,6 +755,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runAfterExternalContentWrap,
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,

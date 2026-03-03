@@ -1,10 +1,11 @@
 import { Type } from "@sinclair/typebox";
-import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { logVerbose } from "../../globals.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import { resolveCitationRedirectUrl } from "./web-search-citation-redirect.js";
@@ -1110,6 +1111,39 @@ async function runKimiSearch(params: {
   };
 }
 
+/**
+ * Run the after_external_content_wrap hook on a web-search payload.
+ * If the hook blocks the content, throws an error.
+ * If the hook sanitizes the content, replaces the content field.
+ * On hook failure, returns the payload unchanged (fail-open).
+ */
+async function applySearchContentWrapHook(
+  payload: Record<string, unknown>,
+  rawContent: string,
+): Promise<Record<string, unknown>> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("after_external_content_wrap")) {
+    return payload;
+  }
+  const result = await hookRunner.runAfterExternalContentWrap(
+    {
+      wrappedContent: typeof payload.content === "string" ? payload.content : "",
+      rawContent,
+      source: "web_search",
+    },
+    {},
+  );
+  if (result?.block) {
+    throw new Error(
+      `Search content blocked by sanitizer plugin: ${result.blockReason ?? "potential injection detected"}`,
+    );
+  }
+  if (result?.sanitizedContent != null) {
+    return { ...payload, content: result.sanitizedContent };
+  }
+  return payload;
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -1172,7 +1206,7 @@ async function runWebSearch(params: {
       citations,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
+    return applySearchContentWrapHook(payload, content);
   }
 
   if (params.provider === "grok") {
@@ -1200,7 +1234,7 @@ async function runWebSearch(params: {
       inlineCitations,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
+    return applySearchContentWrapHook(payload, content);
   }
 
   if (params.provider === "kimi") {
@@ -1227,7 +1261,7 @@ async function runWebSearch(params: {
       citations,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
+    return applySearchContentWrapHook(payload, content);
   }
 
   if (params.provider === "gemini") {
@@ -1253,7 +1287,7 @@ async function runWebSearch(params: {
       citations: geminiResult.citations,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
+    return applySearchContentWrapHook(payload, geminiResult.content);
   }
 
   if (params.provider !== "brave") {

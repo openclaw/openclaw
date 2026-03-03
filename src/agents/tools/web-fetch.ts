@@ -1,11 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { stringEnum } from "../schema/typebox.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   extractReadableContent,
@@ -302,6 +303,42 @@ function wrapWebFetchField(value: string | undefined): string | undefined {
   return wrapExternalContent(value, { source: "web_fetch", includeWarning: false });
 }
 
+/**
+ * Run the after_external_content_wrap hook on a web-fetch payload.
+ * If the hook blocks the content, throws an error.
+ * If the hook sanitizes the content, replaces the text field.
+ * On hook failure, returns the payload unchanged (fail-open).
+ */
+async function applyExternalContentWrapHook(
+  payload: Record<string, unknown>,
+  rawContent: string,
+  origin?: string,
+): Promise<Record<string, unknown>> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("after_external_content_wrap")) {
+    return payload;
+  }
+  const wrappedText = typeof payload.text === "string" ? payload.text : "";
+  const result = await hookRunner.runAfterExternalContentWrap(
+    {
+      wrappedContent: wrappedText,
+      rawContent,
+      source: "web_fetch",
+      origin,
+    },
+    {},
+  );
+  if (result?.block) {
+    throw new Error(
+      `Content blocked by sanitizer plugin: ${result.blockReason ?? "potential injection detected"}`,
+    );
+  }
+  if (result?.sanitizedContent != null) {
+    return { ...payload, text: result.sanitizedContent };
+  }
+  return payload;
+}
+
 function buildFirecrawlWebFetchPayload(params: {
   firecrawl: Awaited<ReturnType<typeof fetchFirecrawlContent>>;
   rawUrl: string;
@@ -559,7 +596,8 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       tookMs: Date.now() - start,
     });
     if (payload) {
-      return payload;
+      const rawText = typeof payload.text === "string" ? payload.text : "";
+      return applyExternalContentWrapHook(payload, rawText, params.url);
     }
     throw error;
   }
@@ -575,7 +613,8 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         tookMs: Date.now() - start,
       });
       if (payload) {
-        return payload;
+        const rawText = typeof payload.text === "string" ? payload.text : "";
+        return applyExternalContentWrapHook(payload, rawText, params.url);
       }
       const rawDetailResult = await readResponseText(res, { maxBytes: DEFAULT_ERROR_MAX_BYTES });
       const rawDetail = rawDetailResult.text;
@@ -669,7 +708,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       warning: wrappedWarning,
     };
     writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
+    return applyExternalContentWrapHook(payload, text, params.url);
   } finally {
     if (release) {
       await release();
