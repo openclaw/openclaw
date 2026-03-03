@@ -105,7 +105,8 @@ function waitForSlackSocketDisconnect(
     }
 
     const disconnectListener = () => resolveOnce({ event: "disconnect" });
-    const startFailListener = () => resolveOnce({ event: "unable_to_socket_mode_start" });
+    const startFailListener = (error?: unknown) =>
+      resolveOnce({ event: "unable_to_socket_mode_start", error });
     const errorListener = (error: unknown) => resolveOnce({ event: "error", error });
     const abortListener = () => resolveOnce({ event: "disconnect" });
 
