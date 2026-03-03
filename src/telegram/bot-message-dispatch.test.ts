@@ -740,10 +740,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(reasoningDraftParams?.onSupersededPreview).toBeTypeOf("function");
-    const deleteMessageCalls = (
-      bot.api as unknown as { deleteMessage: { mock: { calls: unknown[][] } } }
-    ).deleteMessage.mock.calls;
-    expect(deleteMessageCalls).toContainEqual([123, 4444]);
+    // Archived reasoning previews should be edited to a minimal indicator
+    // instead of deleted, to avoid Telegram's "Deleted message" UI artifact.
+    const editMessageTextCalls = (
+      bot.api as unknown as { editMessageText: { mock: { calls: unknown[][] } } }
+    ).editMessageText.mock.calls;
+    expect(editMessageTextCalls).toContainEqual([123, 4444, "💭"]);
   });
 
   it.each(["block", "partial"] as const)(
@@ -1488,7 +1490,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     ]);
 
+    // Answer lane preview is cleared normally.
     expect(draftA.clear).toHaveBeenCalledTimes(1);
-    expect(draftB.clear).toHaveBeenCalledTimes(1);
+    // Reasoning lane preview (draftB) is edited to a minimal indicator
+    // instead of cleared, to avoid Telegram's "Deleted message" artifact.
+    expect(draftB.clear).not.toHaveBeenCalled();
   });
 });

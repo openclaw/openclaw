@@ -188,7 +188,7 @@ export const dispatchTelegramMessage = async ({
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
-  const archivedReasoningPreviewIds: number[] = [];
+  const archivedReasoningPreviews: ArchivedPreview[] = [];
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const useMessagePreviewTransportForDmReasoning =
       laneName === "reasoning" && threadSpec?.scope === "dm" && canStreamAnswerDraft;
@@ -206,8 +206,11 @@ export const dispatchTelegramMessage = async ({
             laneName === "answer" || laneName === "reasoning"
               ? (preview) => {
                   if (laneName === "reasoning") {
-                    if (!archivedReasoningPreviewIds.includes(preview.messageId)) {
-                      archivedReasoningPreviewIds.push(preview.messageId);
+                    if (!archivedReasoningPreviews.some((p) => p.messageId === preview.messageId)) {
+                      archivedReasoningPreviews.push({
+                        messageId: preview.messageId,
+                        textSnapshot: preview.textSnapshot,
+                      });
                     }
                     return;
                   }
@@ -632,7 +635,7 @@ export const dispatchTelegramMessage = async ({
     // Must stop() first to flush debounced content before clear() wipes state.
     const streamCleanupStates = new Map<
       NonNullable<DraftLaneState["stream"]>,
-      { shouldClear: boolean }
+      { shouldClear: boolean; isReasoningLane: boolean }
     >();
     const lanesToCleanup: Array<{ laneName: LaneName; lane: DraftLaneState }> = [
       { laneName: "answer", lane: answerLane },
@@ -646,7 +649,10 @@ export const dispatchTelegramMessage = async ({
       const shouldClear = !finalizedPreviewByLane[laneState.laneName];
       const existing = streamCleanupStates.get(stream);
       if (!existing) {
-        streamCleanupStates.set(stream, { shouldClear });
+        streamCleanupStates.set(stream, {
+          shouldClear,
+          isReasoningLane: laneState.laneName === "reasoning",
+        });
         continue;
       }
       existing.shouldClear = existing.shouldClear && shouldClear;
@@ -654,7 +660,24 @@ export const dispatchTelegramMessage = async ({
     for (const [stream, cleanupState] of streamCleanupStates) {
       await stream.stop();
       if (cleanupState.shouldClear) {
-        await stream.clear();
+        // For reasoning lane with real message preview, edit to a minimal
+        // indicator instead of deleting. Telegram shows a persistent
+        // "Deleted message" placeholder when a message is removed, which
+        // degrades UX. Editing to a thought bubble avoids this artifact.
+        if (cleanupState.isReasoningLane && stream.previewMode?.() === "message") {
+          const messageId = stream.messageId();
+          if (typeof messageId === "number") {
+            try {
+              await bot.api.editMessageText(chatId, messageId, "💭");
+            } catch {
+              await stream.clear();
+            }
+          } else {
+            await stream.clear();
+          }
+        } else {
+          await stream.clear();
+        }
       }
     }
     for (const archivedPreview of archivedAnswerPreviews) {
@@ -666,13 +689,19 @@ export const dispatchTelegramMessage = async ({
         );
       }
     }
-    for (const messageId of archivedReasoningPreviewIds) {
+    // Edit archived reasoning previews to minimal indicator instead of
+    // deleting, to avoid Telegram's "Deleted message" UI artifact.
+    for (const preview of archivedReasoningPreviews) {
       try {
-        await bot.api.deleteMessage(chatId, messageId);
-      } catch (err) {
-        logVerbose(
-          `telegram: archived reasoning preview cleanup failed (${messageId}): ${String(err)}`,
-        );
+        await bot.api.editMessageText(chatId, preview.messageId, "💭");
+      } catch {
+        try {
+          await bot.api.deleteMessage(chatId, preview.messageId);
+        } catch (err) {
+          logVerbose(
+            `telegram: archived reasoning preview cleanup failed (${preview.messageId}): ${String(err)}`,
+          );
+        }
       }
     }
   }
