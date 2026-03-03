@@ -40,7 +40,8 @@ export const formatTokensCompact = (
       typeof used === "number"
         ? used
         : cacheRead + (typeof cacheWrite === "number" ? cacheWrite : 0);
-    const hitRate = Math.round((cacheRead / total) * 100);
+    // Cap at 100% since cache read can exceed tokens used in some edge cases
+    const hitRate = Math.min(100, Math.round((cacheRead / total) * 100));
     result += ` · 🗄️ ${hitRate}% cached`;
   }
 
