@@ -25,6 +25,14 @@ By default, the Gateway writes a rolling log file under:
 
 The date uses the gateway host's local timezone.
 
+In addition to the main JSON log file, the Gateway also writes a second
+**formatted** log file in the same directory. If `logging.file` is
+`/path/to/openclaw.log`, the formatted file is
+`/path/to/openclaw-formatted.log`. Each line in the formatted file is plain
+text:
+
+`YYYY-MM-DD HH:mm:ss [level] [subsystem] message`
+
 You can override this in `~/.openclaw/openclaw.json`:
 
 ```json
@@ -85,6 +93,12 @@ openclaw channels logs --channel whatsapp
 
 Each line in the log file is a JSON object. The CLI and Control UI parse these
 entries to render structured output (time, level, subsystem, message).
+
+A companion **formatted** file is written alongside the main JSONL file for
+quick `tail`/`grep`. For a main file `openclaw.log`, the formatted file is
+`openclaw-formatted.log`, with one plain-text line per event:
+
+`2026-02-26 10:23:37 [info] [gateway] received SIGINT; shutting down`
 
 ### Console output
 
