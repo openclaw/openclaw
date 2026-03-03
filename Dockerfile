@@ -96,7 +96,8 @@ RUN set -eux; \
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # ---- Install gog (gogcli) ----
-# Pin version by setting GOGCLI_TAG at build time, or default to latest release tag.
+# Pin version by setting GOGCLI_TAG at build time, or default to the latest release.
+# Resolve "latest" via GitHub releases redirect (no API call) to avoid API rate limits in CI.
 ARG GOGCLI_TAG=latest
 RUN set -eux; \
   arch="$(dpkg --print-architecture)"; \
@@ -106,7 +107,11 @@ RUN set -eux; \
   *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
   esac; \
   if [ "$GOGCLI_TAG" = "latest" ]; then \
-  GOGCLI_TAG="$(curl -fsSL https://api.github.com/repos/steipete/gogcli/releases/latest | jq -r .tag_name)"; \
+  GOGCLI_TAG="$(curl -fsSIL https://github.com/steipete/gogcli/releases/latest | awk -F': ' 'tolower($1)==\"location\" {gsub(\"\\r\", \"\", $2); print $2}' | awk -F/ '{print $NF}' | tail -n1)"; \
+  if [ -z "$GOGCLI_TAG" ]; then \
+    echo "ERROR: Failed to resolve gogcli latest release tag" >&2; \
+    exit 1; \
+  fi; \
   fi; \
   ver="${GOGCLI_TAG#v}"; \
   url="https://github.com/steipete/gogcli/releases/download/${GOGCLI_TAG}/gogcli_${ver}_linux_${GOGARCH}.tar.gz"; \
