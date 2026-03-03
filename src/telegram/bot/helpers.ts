@@ -27,6 +27,8 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   groupAllowFrom?: Array<string | number>;
   /** Include pairing store in group auth. Defaults to false (Telegram uses strict group mode). */
   groupAuthIncludesPairingStore?: boolean;
+  /** DM policy - when "allowlist", pairing store is never included in group auth. */
+  dmPolicy?: string;
   resolveTelegramGroupConfig: (
     chatId: string | number,
     messageThreadId?: number,
@@ -64,8 +66,11 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
   // DM pairing store entries are not included by default, but can be opted in via config.
+  // When dmPolicy is "allowlist", pairing store is never included (explicit allowlist only).
   const baseGroupAllow = groupAllowOverride ?? params.groupAllowFrom ?? [];
-  const groupAllowWithStore = params.groupAuthIncludesPairingStore
+  const includePairingStore =
+    params.groupAuthIncludesPairingStore && params.dmPolicy !== "allowlist";
+  const groupAllowWithStore = includePairingStore
     ? [...(Array.isArray(baseGroupAllow) ? baseGroupAllow : []), ...storeAllowFrom]
     : baseGroupAllow;
   const effectiveGroupAllow = normalizeAllowFrom(groupAllowWithStore);

@@ -178,6 +178,7 @@ async function resolveTelegramCommandAuth(params: {
     messageThreadId,
     groupAllowFrom,
     groupAuthIncludesPairingStore: telegramCfg.groupAuthIncludesPairingStore,
+    dmPolicy: telegramCfg.dmPolicy,
     resolveTelegramGroupConfig,
   });
   const {
