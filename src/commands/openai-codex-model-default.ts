@@ -9,13 +9,20 @@ function shouldSetOpenAICodexModel(model?: string): boolean {
     return true;
   }
   const normalized = trimmed.toLowerCase();
+  // Already using Codex
   if (normalized.startsWith("openai-codex/")) {
     return false;
   }
+  // OpenAI models should switch to Codex
   if (normalized.startsWith("openai/")) {
     return true;
   }
-  return normalized === "gpt" || normalized === "gpt-mini";
+  // Legacy aliases
+  if (normalized === "gpt" || normalized === "gpt-mini") {
+    return true;
+  }
+  // For all other providers (Anthropic, Google, etc.), switch to Codex
+  return true;
 }
 
 function resolvePrimaryModel(model?: AgentModelListConfig | string): string | undefined {
