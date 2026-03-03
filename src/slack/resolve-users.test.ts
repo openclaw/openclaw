@@ -191,6 +191,25 @@ describe("resolveSlackUserAllowlist", () => {
     expect(client.users.info).toHaveBeenCalledTimes(2);
   });
 
+  it("deduplicates users.info calls for repeated IDs", async () => {
+    const client = makeMockClient({
+      usersInfo: {
+        UDUPE: { id: "UDUPE", name: "dupeuser", profile: { display_name: "Dupe User" } },
+      },
+    });
+
+    const results = await resolveSlackUserAllowlist({
+      token: "xoxb-test",
+      entries: ["UDUPE", "UDUPE", "UDUPE"],
+      client,
+    });
+
+    expect(results).toHaveLength(3);
+    expect(results.every((r) => r.id === "UDUPE")).toBe(true);
+    expect(client.users.info).toHaveBeenCalledTimes(1);
+    expect(client.users.list).not.toHaveBeenCalled();
+  });
+
   it("resolves mention-format IDs via users.info", async () => {
     const client = makeMockClient({
       usersInfo: {

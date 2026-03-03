@@ -208,8 +208,13 @@ export async function resolveSlackUserAllowlist(params: {
 
   const ordered: Array<{ index: number; result: SlackUserResolution }> = [];
 
+  const idLookupCache = new Map<string, SlackUserLookup | null>();
   for (const { index, input, id } of idEntries) {
-    const match = await lookupSlackUserById(client, id);
+    let match = idLookupCache.get(id);
+    if (match === undefined) {
+      match = await lookupSlackUserById(client, id);
+      idLookupCache.set(id, match);
+    }
     ordered.push({
       index,
       result: {
