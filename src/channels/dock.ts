@@ -9,6 +9,7 @@ import {
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,
   resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigAllowSendTo,
   resolveWhatsAppConfigDefaultTo,
 } from "../plugin-sdk/channel-config-helpers.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
@@ -64,7 +65,7 @@ export type ChannelDock = {
   elevated?: ChannelElevatedAdapter;
   config?: Pick<
     ChannelConfigAdapter<unknown>,
-    "resolveAllowFrom" | "formatAllowFrom" | "resolveDefaultTo"
+    "resolveAllowFrom" | "resolveAllowSendTo" | "formatAllowFrom" | "resolveDefaultTo"
   >;
   groups?: ChannelGroupAdapter;
   mentions?: ChannelMentionAdapter;
@@ -295,6 +296,8 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
     config: {
       resolveAllowFrom: ({ cfg, accountId }) => resolveWhatsAppConfigAllowFrom({ cfg, accountId }),
+      resolveAllowSendTo: ({ cfg, accountId }) =>
+        resolveWhatsAppConfigAllowSendTo({ cfg, accountId }),
       formatAllowFrom: ({ allowFrom }) => formatWhatsAppConfigAllowFromEntries(allowFrom),
       resolveDefaultTo: ({ cfg, accountId }) => resolveWhatsAppConfigDefaultTo({ cfg, accountId }),
     },
@@ -563,6 +566,7 @@ function buildDockFromPlugin(plugin: ChannelPlugin): ChannelDock {
     config: plugin.config
       ? {
           resolveAllowFrom: plugin.config.resolveAllowFrom,
+          resolveAllowSendTo: plugin.config.resolveAllowSendTo,
           formatAllowFrom: plugin.config.formatAllowFrom,
           resolveDefaultTo: plugin.config.resolveDefaultTo,
         }

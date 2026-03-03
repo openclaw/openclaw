@@ -20,10 +20,12 @@ vi.mock("openclaw/plugin-sdk/whatsapp", async () => {
     resolveWhatsAppOutboundTarget: ({
       to,
       allowFrom,
+      allowSendTo,
       mode,
     }: {
       to?: string;
       allowFrom: string[];
+      allowSendTo?: string[];
       mode: "explicit" | "implicit";
     }) => {
       const raw = typeof to === "string" ? to.trim() : "";
@@ -36,8 +38,10 @@ vi.mock("openclaw/plugin-sdk/whatsapp", async () => {
       }
 
       if (mode === "implicit" && !normalized.endsWith("@g.us")) {
-        const allowAll = allowFrom.includes("*");
-        const allowExact = allowFrom.some((entry) => {
+        // Use allowSendTo if defined, otherwise fall back to allowFrom
+        const effectiveList = allowSendTo ?? allowFrom;
+        const allowAll = effectiveList.includes("*");
+        const allowExact = effectiveList.some((entry) => {
           if (!entry) {
             return false;
           }
@@ -53,6 +57,32 @@ vi.mock("openclaw/plugin-sdk/whatsapp", async () => {
     },
     missingTargetError: (provider: string, hint: string) =>
       new Error(`Delivering to ${provider} requires target ${hint}`),
+    WhatsAppConfigSchema: {},
+    whatsappOnboardingAdapter: {},
+    resolveWhatsAppHeartbeatRecipients: vi.fn(),
+    buildChannelConfigSchema: vi.fn(),
+    collectWhatsAppStatusIssues: vi.fn(),
+    createActionGate: vi.fn(),
+    DEFAULT_ACCOUNT_ID: "default",
+    escapeRegExp: vi.fn(),
+    formatPairingApproveHint: vi.fn(),
+    listWhatsAppAccountIds: vi.fn(),
+    listWhatsAppDirectoryGroupsFromConfig: vi.fn(),
+    listWhatsAppDirectoryPeersFromConfig: vi.fn(),
+    looksLikeWhatsAppTargetId: vi.fn(),
+    migrateBaseNameToDefaultAccount: vi.fn(),
+    normalizeAccountId: vi.fn(),
+    normalizeE164: vi.fn(),
+    normalizeWhatsAppMessagingTarget: vi.fn(),
+    readStringParam: vi.fn(),
+    resolveDefaultWhatsAppAccountId: vi.fn(),
+    resolveWhatsAppAccount: vi.fn(),
+    resolveWhatsAppConfigAllowSendTo: vi.fn(),
+    resolveWhatsAppGroupIntroHint: vi.fn(),
+    resolveWhatsAppGroupRequireMention: vi.fn(),
+    resolveWhatsAppGroupToolPolicy: vi.fn(),
+    resolveWhatsAppMentionStripPatterns: vi.fn(() => []),
+    applyAccountNameToChannelSection: vi.fn(),
   };
 });
 

@@ -11,8 +11,8 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   chunkerMode: "text",
   textChunkLimit: 4000,
   pollMaxOptions: 12,
-  resolveTarget: ({ to, allowFrom, mode }) =>
-    resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+  resolveTarget: ({ to, allowFrom, allowSendTo, mode }) =>
+    resolveWhatsAppOutboundTarget({ to, allowFrom, allowSendTo, mode }),
   sendPayload: async (ctx) =>
     await sendTextMediaPayload({ channel: "whatsapp", ctx, adapter: whatsappOutbound }),
   sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
