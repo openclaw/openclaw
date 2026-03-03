@@ -10,20 +10,20 @@
  * - No other content (text, embeds, etc.)
  */
 
-import { execFile } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import type { RequestClient } from "@buape/carbon";
 import type { RetryRunner } from "../infra/retry-policy.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-
-const execFileAsync = promisify(execFile);
+import { parseFfprobeCodecAndSampleRate, runFfmpeg, runFfprobe } from "../media/ffmpeg-exec.js";
+import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "../media/ffmpeg-limits.js";
+import { unlinkIfExists } from "../media/temp-files.js";
 
 const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
+const DISCORD_OPUS_SAMPLE_RATE_HZ = 48_000;
 
 export type VoiceMessageMetadata = {
   durationSecs: number;
@@ -35,7 +35,7 @@ export type VoiceMessageMetadata = {
  */
 export async function getAudioDuration(filePath: string): Promise<number> {
   try {
-    const { stdout } = await execFileAsync("ffprobe", [
+    const stdout = await runFfprobe([
       "-v",
       "error",
       "-show_entries",
@@ -78,10 +78,15 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
 
   try {
     // Convert to raw 16-bit signed PCM, mono, 8kHz
-    await execFileAsync("ffmpeg", [
+    await runFfmpeg([
       "-y",
       "-i",
       filePath,
+      "-vn",
+      "-sn",
+      "-dn",
+      "-t",
+      String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
       "-f",
       "s16le",
       "-acodec",
@@ -121,12 +126,7 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
 
     return Buffer.from(waveform).toString("base64");
   } finally {
-    // Clean up temp file
-    try {
-      await fs.unlink(tempPcm);
-    } catch {
-      // Ignore cleanup errors
-    }
+    await unlinkIfExists(tempPcm);
   }
 }
 
@@ -160,20 +160,21 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
 
   // Check if already OGG
   if (ext === ".ogg") {
-    // Verify it's Opus codec, not Vorbis (Vorbis won't play on mobile)
+    // Fast-path only when the file is Opus at Discord's expected 48kHz.
     try {
-      const { stdout } = await execFileAsync("ffprobe", [
+      const stdout = await runFfprobe([
         "-v",
         "error",
         "-select_streams",
         "a:0",
         "-show_entries",
-        "stream=codec_name",
+        "stream=codec_name,sample_rate",
         "-of",
         "csv=p=0",
         filePath,
       ]);
-      if (stdout.trim().toLowerCase() === "opus") {
+      const { codec, sampleRateHz } = parseFfprobeCodecAndSampleRate(stdout);
+      if (codec === "opus" && sampleRateHz === DISCORD_OPUS_SAMPLE_RATE_HZ) {
         return { path: filePath, cleanup: false };
       }
     } catch {
@@ -187,12 +188,17 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
   const tempDir = resolvePreferredOpenClawTmpDir();
   const outputPath = path.join(tempDir, `voice-${crypto.randomUUID()}.ogg`);
 
-  await execFileAsync("ffmpeg", [
+  await runFfmpeg([
     "-y",
     "-i",
     filePath,
+    "-vn",
+    "-sn",
+    "-dn",
+    "-t",
+    String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
     "-ar",
-    "48000",
+    String(DISCORD_OPUS_SAMPLE_RATE_HZ),
     "-c:a",
     "libopus",
     "-b:a",
