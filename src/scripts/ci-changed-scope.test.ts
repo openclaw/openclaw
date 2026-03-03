@@ -1,8 +1,7 @@
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
-const require = createRequire(import.meta.url);
-const { detectChangedScope } = require("../../scripts/ci-changed-scope.mjs") as {
+const { detectChangedScope } = (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
   detectChangedScope: (paths: string[]) => {
     runNode: boolean;
     runMacos: boolean;
