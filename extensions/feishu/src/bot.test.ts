@@ -29,7 +29,9 @@ const {
   mockResolveAgentRoute: vi.fn(() => ({
     agentId: "main",
     accountId: "default",
+    channel: "feishu",
     sessionKey: "agent:main:feishu:dm:ou-attacker",
+    mainSessionKey: "agent:main:feishu:dm:ou-attacker",
     matchedBy: "default",
   })),
 }));
@@ -133,7 +135,9 @@ describe("handleFeishuMessage command authorization", () => {
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
       accountId: "default",
+      channel: "feishu",
       sessionKey: "agent:main:feishu:dm:ou-attacker",
+      mainSessionKey: "agent:main:feishu:dm:ou-attacker",
       matchedBy: "default",
     });
     mockCreateFeishuClient.mockReturnValue({
@@ -151,14 +155,19 @@ describe("handleFeishuMessage command authorization", () => {
         },
         channel: {
           routing: {
-            resolveAgentRoute: mockResolveAgentRoute,
+            resolveAgentRoute:
+              mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
           },
           reply: {
-            resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
+            resolveEnvelopeFormatOptions: vi.fn(() => ({
+              template: "channel+name+time",
+            })) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
             formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-            finalizeInboundContext: mockFinalizeInboundContext,
+            finalizeInboundContext:
+              mockFinalizeInboundContext as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
             dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-            withReplyDispatcher: mockWithReplyDispatcher,
+            withReplyDispatcher:
+              mockWithReplyDispatcher as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
           },
           commands: {
             shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,

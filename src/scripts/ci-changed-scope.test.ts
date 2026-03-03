@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+// @ts-expect-error -- script module intentionally has no .d.ts surface
 import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
 
 describe("detectChangedScope", () => {
