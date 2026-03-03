@@ -252,7 +252,9 @@ describe("imessage monitor gating + envelope builders", () => {
     cfg.channels.imessage.groupPolicy = "allowlist";
 
     const groupHistories = new Map();
-    // Pairing store is included in group auth by default for backward compatibility
+    // Pairing store is included in group auth when explicitly opted in
+    // (iMessage uses groupAllowFromFallbackToAllowFrom: false, which defaults
+    // to excluding pairing store, so we must opt in for backward compat)
     const allowed = resolveIMessageInboundDecision({
       cfg,
       accountId: "default",
@@ -272,6 +274,7 @@ describe("imessage monitor gating + envelope builders", () => {
       groupPolicy: "allowlist",
       dmPolicy: "pairing",
       storeAllowFrom: ["+15550003333"],
+      groupAuthIncludesPairingStore: true,
       historyLimit: 0,
       groupHistories,
     });

@@ -160,6 +160,7 @@ export async function handleIrcInbound(params: {
     configGroupAllowFrom,
     storeAllowList,
     dmPolicy,
+    groupAuthIncludesPairingStore: account.config.groupAuthIncludesPairingStore,
   });
 
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({

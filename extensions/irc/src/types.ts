@@ -51,6 +51,8 @@ export type IrcAccountConfig = {
   defaultTo?: string;
   groupPolicy?: GroupPolicy;
   groupAllowFrom?: Array<string | number>;
+  /** Include pairing store in group auth. Defaults to false (IRC uses strict group mode). */
+  groupAuthIncludesPairingStore?: boolean;
   groups?: Record<string, IrcChannelConfig>;
   channels?: string[];
   mentionPatterns?: string[];
