@@ -9,6 +9,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { isGifMedia, kindFromMime } from "../../media/mime.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
 import type { TelegramInlineButtons } from "../button-types.js";
@@ -34,6 +35,7 @@ const CAPTION_TOO_LONG_RE = /caption is too long/i;
 type DeliveryProgress = {
   hasReplied: boolean;
   hasDelivered: boolean;
+  deliveredCount: number;
 };
 
 type ChunkTextFn = (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
@@ -86,6 +88,7 @@ function markReplyApplied(progress: DeliveryProgress, replyToId?: number): void 
 
 function markDelivered(progress: DeliveryProgress): void {
   progress.hasDelivered = true;
+  progress.deliveredCount += 1;
 }
 
 async function deliverTextReply(params: {
@@ -427,6 +430,7 @@ async function deliverMediaReply(params: {
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
   chatId: string;
+  accountId?: string;
   token: string;
   runtime: RuntimeEnv;
   bot: Bot;
@@ -455,14 +459,24 @@ export async function deliverReplies(params: {
   const progress: DeliveryProgress = {
     hasReplied: false,
     hasDelivered: false,
+    deliveredCount: 0,
   };
+  const hookRunner = getGlobalHookRunner();
+  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
   const chunkText = buildChunkTextResolver({
     textLimit: params.textLimit,
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
   });
-  for (const reply of params.replies) {
-    const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
+  for (const originalReply of params.replies) {
+    let reply = originalReply;
+    const mediaList = reply?.mediaUrls?.length
+      ? reply.mediaUrls
+      : reply?.mediaUrl
+        ? [reply.mediaUrl]
+        : [];
+    const hasMedia = mediaList.length > 0;
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
@@ -471,52 +485,112 @@ export async function deliverReplies(params: {
       params.runtime.error?.(danger("reply missing text/media"));
       continue;
     }
-    const replyToId =
-      params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
-    const mediaList = reply.mediaUrls?.length
-      ? reply.mediaUrls
-      : reply.mediaUrl
-        ? [reply.mediaUrl]
-        : [];
-    const telegramData = reply.channelData?.telegram as
-      | { buttons?: TelegramInlineButtons }
-      | undefined;
-    const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
-    if (mediaList.length === 0) {
-      await deliverTextReply({
-        bot: params.bot,
-        chatId: params.chatId,
-        runtime: params.runtime,
-        thread: params.thread,
-        chunkText,
-        replyText: reply.text || "",
-        replyMarkup,
-        replyQuoteText: params.replyQuoteText,
-        linkPreview: params.linkPreview,
-        replyToId,
-        replyToMode: params.replyToMode,
-        progress,
-      });
-      continue;
+
+    const rawContent = reply.text || "";
+    if (hasMessageSendingHooks) {
+      const hookResult = await hookRunner?.runMessageSending(
+        {
+          to: params.chatId,
+          content: rawContent,
+          metadata: {
+            channel: "telegram",
+            mediaUrls: mediaList,
+            threadId: params.thread?.id,
+          },
+        },
+        {
+          channelId: "telegram",
+          accountId: params.accountId,
+          conversationId: params.chatId,
+        },
+      );
+      if (hookResult?.cancel) {
+        continue;
+      }
+      if (typeof hookResult?.content === "string" && hookResult.content !== rawContent) {
+        reply = { ...reply, text: hookResult.content };
+      }
     }
-    await deliverMediaReply({
-      reply,
-      mediaList,
-      bot: params.bot,
-      chatId: params.chatId,
-      runtime: params.runtime,
-      thread: params.thread,
-      tableMode: params.tableMode,
-      mediaLocalRoots: params.mediaLocalRoots,
-      chunkText,
-      onVoiceRecording: params.onVoiceRecording,
-      linkPreview: params.linkPreview,
-      replyQuoteText: params.replyQuoteText,
-      replyMarkup,
-      replyToId,
-      replyToMode: params.replyToMode,
-      progress,
-    });
+
+    const contentForSentHook = reply.text || "";
+
+    try {
+      const deliveredCountBeforeReply = progress.deliveredCount;
+      const replyToId =
+        params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+      const telegramData = reply.channelData?.telegram as
+        | { buttons?: TelegramInlineButtons }
+        | undefined;
+      const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
+      if (mediaList.length === 0) {
+        await deliverTextReply({
+          bot: params.bot,
+          chatId: params.chatId,
+          runtime: params.runtime,
+          thread: params.thread,
+          chunkText,
+          replyText: reply.text || "",
+          replyMarkup,
+          replyQuoteText: params.replyQuoteText,
+          linkPreview: params.linkPreview,
+          replyToId,
+          replyToMode: params.replyToMode,
+          progress,
+        });
+      } else {
+        await deliverMediaReply({
+          reply,
+          mediaList,
+          bot: params.bot,
+          chatId: params.chatId,
+          runtime: params.runtime,
+          thread: params.thread,
+          tableMode: params.tableMode,
+          mediaLocalRoots: params.mediaLocalRoots,
+          chunkText,
+          onVoiceRecording: params.onVoiceRecording,
+          linkPreview: params.linkPreview,
+          replyQuoteText: params.replyQuoteText,
+          replyMarkup,
+          replyToId,
+          replyToMode: params.replyToMode,
+          progress,
+        });
+      }
+
+      if (hasMessageSentHooks) {
+        const deliveredThisReply = progress.deliveredCount > deliveredCountBeforeReply;
+        void hookRunner?.runMessageSent(
+          {
+            to: params.chatId,
+            content: contentForSentHook,
+            success: deliveredThisReply,
+          },
+          {
+            channelId: "telegram",
+            accountId: params.accountId,
+            conversationId: params.chatId,
+          },
+        );
+      }
+    } catch (error) {
+      if (hasMessageSentHooks) {
+        void hookRunner?.runMessageSent(
+          {
+            to: params.chatId,
+            content: contentForSentHook,
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          {
+            channelId: "telegram",
+            accountId: params.accountId,
+            conversationId: params.chatId,
+          },
+        );
+      }
+      throw error;
+    }
   }
 
   return { delivered: progress.hasDelivered };
