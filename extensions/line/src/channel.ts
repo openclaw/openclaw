@@ -614,6 +614,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         lastStopAt: runtime?.lastStopAt ?? null,
         lastError: runtime?.lastError ?? null,
         mode: "webhook",
+        connectionModel: runtime?.connectionModel ?? "stateless",
         probe,
         lastInboundAt: runtime?.lastInboundAt ?? null,
         lastOutboundAt: runtime?.lastOutboundAt ?? null,
