@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadSecureJsonFile } from "../infra/crypto-store.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
@@ -53,7 +54,7 @@ describe("auth profiles read-only external CLI sync", () => {
         provider: "qwen-portal",
       });
 
-      const persisted = JSON.parse(fs.readFileSync(authPath, "utf8")) as AuthProfileStore;
+      const persisted = loadSecureJsonFile(authPath) as AuthProfileStore;
       expect(persisted.profiles["qwen-portal:default"]).toBeUndefined();
       expect(persisted.profiles["openai:default"]).toMatchObject({
         type: "api_key",

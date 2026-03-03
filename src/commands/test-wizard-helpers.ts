@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
+import { loadSecureJsonFile } from "../infra/crypto-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -87,6 +88,5 @@ export function authProfilePathForAgent(agentDir: string): string {
 }
 
 export async function readAuthProfilesForAgent<T>(agentDir: string): Promise<T> {
-  const raw = await fs.readFile(authProfilePathForAgent(agentDir), "utf8");
-  return JSON.parse(raw) as T;
+  return loadSecureJsonFile(authProfilePathForAgent(agentDir)) as T;
 }
