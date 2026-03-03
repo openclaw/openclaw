@@ -79,7 +79,7 @@ type FirecrawlFetchConfig =
     }
   | undefined;
 
-function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
+export function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   const fetch = cfg?.tools?.web?.fetch;
   if (!fetch || typeof fetch !== "object") {
     return undefined;
@@ -124,7 +124,7 @@ function resolveFetchMaxResponseBytes(fetch?: WebFetchConfig): number {
   return Math.min(FETCH_MAX_RESPONSE_BYTES_MAX, Math.max(FETCH_MAX_RESPONSE_BYTES_MIN, value));
 }
 
-function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
+export function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
   if (!fetch || typeof fetch !== "object") {
     return undefined;
   }
@@ -135,7 +135,7 @@ function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
   return firecrawl as FirecrawlFetchConfig;
 }
 
-function resolveFirecrawlApiKey(firecrawl?: FirecrawlFetchConfig): string | undefined {
+export function resolveFirecrawlApiKey(firecrawl?: FirecrawlFetchConfig): string | undefined {
   const fromConfig =
     firecrawl && "apiKey" in firecrawl && typeof firecrawl.apiKey === "string"
       ? normalizeSecretInput(firecrawl.apiKey)
@@ -144,7 +144,7 @@ function resolveFirecrawlApiKey(firecrawl?: FirecrawlFetchConfig): string | unde
   return fromConfig || fromEnv || undefined;
 }
 
-function resolveFirecrawlEnabled(params: {
+export function resolveFirecrawlEnabled(params: {
   firecrawl?: FirecrawlFetchConfig;
   apiKey?: string;
 }): boolean {
@@ -154,7 +154,7 @@ function resolveFirecrawlEnabled(params: {
   return Boolean(params.apiKey);
 }
 
-function resolveFirecrawlBaseUrl(firecrawl?: FirecrawlFetchConfig): string {
+export function resolveFirecrawlBaseUrl(firecrawl?: FirecrawlFetchConfig): string {
   const raw =
     firecrawl && "baseUrl" in firecrawl && typeof firecrawl.baseUrl === "string"
       ? firecrawl.baseUrl.trim()
@@ -162,7 +162,7 @@ function resolveFirecrawlBaseUrl(firecrawl?: FirecrawlFetchConfig): string {
   return raw || DEFAULT_FIRECRAWL_BASE_URL;
 }
 
-function resolveFirecrawlOnlyMainContent(firecrawl?: FirecrawlFetchConfig): boolean {
+export function resolveFirecrawlOnlyMainContent(firecrawl?: FirecrawlFetchConfig): boolean {
   if (typeof firecrawl?.onlyMainContent === "boolean") {
     return firecrawl.onlyMainContent;
   }
@@ -181,7 +181,7 @@ function resolveFirecrawlMaxAgeMs(firecrawl?: FirecrawlFetchConfig): number | un
   return parsed > 0 ? parsed : undefined;
 }
 
-function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): number {
+export function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): number {
   const resolved = resolveFirecrawlMaxAgeMs(firecrawl);
   if (typeof resolved === "number") {
     return resolved;
