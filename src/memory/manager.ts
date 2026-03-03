@@ -756,7 +756,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.intervalTimer = null;
     }
     if (this.watcher) {
-      await this.watcher.close();
+      try {
+        await this.watcher.close();
+      } catch (err) {
+        log.warn("Failed to close file watcher", { error: String(err) });
+      }
       this.watcher = null;
     }
     if (this.sessionUnsubscribe) {
@@ -766,7 +770,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (pendingSync) {
       try {
         await pendingSync;
-      } catch {}
+      } catch (err) {
+        log.warn("Pending sync failed during close", { error: String(err) });
+      }
     }
     this.db.close();
     INDEX_CACHE.delete(this.cacheKey);
