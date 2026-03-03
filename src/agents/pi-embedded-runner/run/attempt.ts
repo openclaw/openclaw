@@ -1645,14 +1645,31 @@ export async function runEmbeddedAttempt(
       // flushPendingToolResults() fires while tools are still executing, inserting
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
-      removeToolResultContextGuard?.();
-      await flushPendingToolResultsAfterIdle({
-        agent: session?.agent,
-        sessionManager,
-      });
-      session?.dispose();
-      releaseWsSession(params.sessionId);
-      await sessionLock.release();
+      try {
+        removeToolResultContextGuard?.();
+        await flushPendingToolResultsAfterIdle({
+          agent: session?.agent,
+          sessionManager,
+        });
+        session?.dispose();
+        releaseWsSession(params.sessionId);
+      } catch (cleanupError) {
+        // Log cleanup errors but don't let them prevent lock release
+        log.error("Error during session cleanup", {
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        });
+      } finally {
+        // CRITICAL: Always release the lock, even if cleanup fails
+        // Prevents Discord message handler timeouts from stuck locks
+        try {
+          await sessionLock.release();
+        } catch (lockError) {
+          log.error("Failed to release session lock", {
+            error: lockError instanceof Error ? lockError.message : String(lockError),
+            sessionFile: params.sessionFile,
+          });
+        }
+      }
     }
   } finally {
     restoreSkillEnv?.();
