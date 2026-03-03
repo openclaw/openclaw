@@ -81,6 +81,30 @@ enum OverlayPanelFactory {
         }
     }
 
+    /// Variant that avoids passing `isVisible` as `inout` to prevent Swift exclusivity
+    /// violations when callers hold overlapping access to the same stored property
+    /// (e.g. concurrent timer + dismiss on the same `@Observable` model).
+    @MainActor
+    static func present(
+        window: NSWindow?,
+        isCurrentlyVisible: Bool,
+        setVisible: (Bool) -> Void,
+        target: NSRect,
+        startOffsetY: CGFloat = -6,
+        onFirstPresent: (() -> Void)? = nil,
+        onAlreadyVisible: (NSWindow) -> Void)
+    {
+        guard let window else { return }
+        if !isCurrentlyVisible {
+            setVisible(true)
+            onFirstPresent?()
+            let start = target.offsetBy(dx: 0, dy: startOffsetY)
+            self.animatePresent(window: window, from: start, to: target)
+        } else {
+            onAlreadyVisible(window)
+        }
+    }
+
     @MainActor
     static func animateDismiss(
         window: NSWindow,

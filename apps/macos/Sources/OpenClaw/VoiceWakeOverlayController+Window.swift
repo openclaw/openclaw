@@ -15,13 +15,14 @@ extension VoiceWakeOverlayController {
         let target = self.targetFrame()
         OverlayPanelFactory.present(
             window: self.window,
-            isVisible: &self.model.isVisible,
+            isCurrentlyVisible: self.model.isVisible,
+            setVisible: { self.model.isVisible = $0 },
             target: target,
             onFirstPresent: {
                 self.logger.log(
                     level: .info,
                     "overlay present windowShown textLen=\(self.model.text.count, privacy: .public)")
-                // Keep the status item in “listening” mode until we explicitly dismiss the overlay.
+                // Keep the status item in "listening" mode until we explicitly dismiss the overlay.
                 AppStateStore.shared.triggerVoiceEars(ttl: nil)
             },
             onAlreadyVisible: { window in
