@@ -6,6 +6,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
   logMessageProcessed,
   logMessageQueued,
@@ -207,8 +208,12 @@ export async function dispatchReplyFromConfig(params: {
   const originatingChannel = ctx.OriginatingChannel;
   const originatingTo = ctx.OriginatingTo;
   const currentSurface = (ctx.Surface ?? ctx.Provider)?.toLowerCase();
+  const isWebchatSurface = currentSurface === INTERNAL_MESSAGE_CHANNEL;
   const shouldRouteToOriginating =
-    isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface;
+    !isWebchatSurface &&
+    isRoutableChannel(originatingChannel) &&
+    originatingTo &&
+    originatingChannel !== currentSurface;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
 
   /**
