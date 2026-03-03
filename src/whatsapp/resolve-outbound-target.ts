@@ -8,14 +8,19 @@ export type WhatsAppOutboundTargetResolution =
 export function resolveWhatsAppOutboundTarget(params: {
   to: string | null | undefined;
   allowFrom: Array<string | number> | null | undefined;
+  allowSendTo?: Array<string | number> | null | undefined;
   mode: string | null | undefined;
 }): WhatsAppOutboundTargetResolution {
   const trimmed = params.to?.trim() ?? "";
-  const allowListRaw = (params.allowFrom ?? [])
+
+  // When allowSendTo is explicitly defined, use it for outbound checks.
+  // Otherwise fall back to allowFrom (legacy behavior).
+  const hasExplicitSendTo = params.allowSendTo !== undefined && params.allowSendTo !== null;
+  const outboundListRaw = (hasExplicitSendTo ? params.allowSendTo! : (params.allowFrom ?? []))
     .map((entry) => String(entry).trim())
     .filter(Boolean);
-  const hasWildcard = allowListRaw.includes("*");
-  const allowList = allowListRaw
+  const hasWildcard = outboundListRaw.includes("*");
+  const outboundList = outboundListRaw
     .filter((entry) => entry !== "*")
     .map((entry) => normalizeWhatsAppTarget(entry))
     .filter((entry): entry is string => Boolean(entry));
@@ -31,12 +36,12 @@ export function resolveWhatsAppOutboundTarget(params: {
     if (isWhatsAppGroupJid(normalizedTo)) {
       return { ok: true, to: normalizedTo };
     }
-    // Enforce allowFrom for all direct-message send modes (including explicit).
-    // Group destinations are handled by group policy and are allowed above.
-    if (hasWildcard || allowList.length === 0) {
+    // When allowSendTo is explicitly set, empty means "block all".
+    // Legacy allowFrom behavior: empty means "allow all" (no restrictions).
+    if (hasWildcard || (!hasExplicitSendTo && outboundList.length === 0)) {
       return { ok: true, to: normalizedTo };
     }
-    if (allowList.includes(normalizedTo)) {
+    if (outboundList.includes(normalizedTo)) {
       return { ok: true, to: normalizedTo };
     }
     return {
