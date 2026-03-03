@@ -359,6 +359,8 @@ describe("isLikelyContextOverflowError", () => {
     const samples = [
       "Model context window too small (minimum is 128k tokens)",
       "Context window too small: minimum is 1000 tokens",
+      "cannot truncate prompt with n_keep (13575) >= n_ctx (4096)",
+      "llama.cpp: n_ctx (8192) < n_keep (9000)",
     ];
     for (const sample of samples) {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
