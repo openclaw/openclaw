@@ -74,3 +74,10 @@ export function makeGeminiCliAssistantMessage(model: string, content: unknown) {
     timestamp: 0,
   };
 }
+
+export function expectConvertedRoles(contents: Array<{ role?: string }>, expectedRoles: string[]) {
+  expect(contents).toHaveLength(expectedRoles.length);
+  for (const [index, role] of expectedRoles.entries()) {
+    expect(contents[index]?.role).toBe(role);
+  }
+}
