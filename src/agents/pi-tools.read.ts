@@ -745,15 +745,21 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapHostEditToolWithCurrentContent(base, root);
+  return wrapHostEditToolWithCurrentContent(base, root, options);
 }
 
 /**
  * Wraps the host edit tool to return the current file content on mismatch.
  * Implements Option 1 from https://github.com/openclaw/openclaw/issues/18132
  */
-function wrapHostEditToolWithCurrentContent(tool: AnyAgentTool, root: string): AnyAgentTool {
+function wrapHostEditToolWithCurrentContent(
+  tool: AnyAgentTool,
+  root: string,
+  options?: { workspaceOnly?: boolean },
+): AnyAgentTool {
   const wrapped = wrapToolParamNormalization(tool, CLAUDE_PARAM_GROUPS.edit);
+  const workspaceOnly = options?.workspaceOnly ?? false;
+
   return {
     ...wrapped,
     execute: async (toolCallId, params, signal, onUpdate) => {
@@ -777,13 +783,21 @@ function wrapHostEditToolWithCurrentContent(tool: AnyAgentTool, root: string): A
 
         if (typeof filePath === "string") {
           try {
-            // Use readFileWithinRoot to enforce workspace boundary
-            const relative = toRelativeWorkspacePath(root, filePath);
-            const safeRead = await readFileWithinRoot({
-              rootDir: root,
-              relativePath: relative,
-            });
-            const content = safeRead.buffer.toString("utf-8");
+            // Use the same path policy as the active host edit mode
+            let content: string;
+            if (workspaceOnly) {
+              // Enforce workspace boundary
+              const relative = toRelativeWorkspacePath(root, filePath);
+              const safeRead = await readFileWithinRoot({
+                rootDir: root,
+                relativePath: relative,
+              });
+              content = safeRead.buffer.toString("utf-8");
+            } else {
+              // Allow reading from anywhere on the host (matching createHostEditOperations)
+              const resolved = path.resolve(filePath);
+              content = await fs.readFile(resolved, "utf-8");
+            }
 
             // Append current content to error message
             return {
