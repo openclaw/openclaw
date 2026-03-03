@@ -318,7 +318,6 @@ async function authorizeDiscordReactionIngress(
   return { allowed: true };
 }
 
-<<<<<<< HEAD
 async function handleDiscordReactionEvent(
   params: {
     data: DiscordReactionEvent;
@@ -328,25 +327,6 @@ async function handleDiscordReactionEvent(
     logger: Logger;
   } & DiscordReactionRoutingParams,
 ) {
-=======
-async function handleDiscordReactionEvent(params: {
-  data: DiscordReactionEvent;
-  client: Client;
-  action: "added" | "removed";
-  cfg: LoadedConfig;
-  accountId: string;
-  botUserId?: string;
-  dmEnabled: boolean;
-  groupDmEnabled: boolean;
-  groupDmChannels: string[];
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  allowFrom: string[];
-  groupPolicy: "open" | "allowlist" | "disabled";
-  allowNameMatching: boolean;
-  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
-  logger: Logger;
-}) {
->>>>>>> c8e7eafa4 (refactor: remove listen-only groupPolicy, keep only suppressOutbound)
   try {
     const { data, client, action, botUserId, guildEntries } = params;
     if (!("user" in data)) {

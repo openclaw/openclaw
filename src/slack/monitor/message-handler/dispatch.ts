@@ -477,8 +477,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,
   // or draft stream). Falls back to statusThreadTs for edge cases.
+  // Skip when outbound is suppressed to avoid false participation state.
   const participationThreadTs = usedReplyThreadTs ?? statusThreadTs;
-  if (anyReplyDelivered && participationThreadTs) {
+  if (
+    anyReplyDelivered &&
+    participationThreadTs &&
+    !isOutboundSuppressed({ cfg, channel: "slack", accountId: account.accountId })
+  ) {
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs);
   }
 

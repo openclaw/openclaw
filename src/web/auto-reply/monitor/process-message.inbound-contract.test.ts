@@ -345,7 +345,6 @@ describe("web processMessage inbound contract", () => {
     expect(updateLastRouteMock).not.toHaveBeenCalled();
   });
 
-<<<<<<< HEAD
   it("does not update main last route for non-owner sender when main DM scope is pinned", async () => {
     const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
     updateLastRouteMock.mockClear();

@@ -310,10 +310,14 @@ export async function registerSlackMonitorSlashCommands(params: {
         return;
       }
       if (!prompt.trim()) {
-        await ack({
-          text: "Message required.",
-          response_type: "ephemeral",
-        });
+        if (slashSuppressed) {
+          await ack();
+        } else {
+          await ack({
+            text: "Message required.",
+            response_type: "ephemeral",
+          });
+        }
         return;
       }
       await ack();
