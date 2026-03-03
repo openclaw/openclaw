@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Discord/thread session lifecycle: reset thread-scoped sessions when a thread is archived so reopening a thread starts fresh without deleting transcript history. Thanks @thewilloftheshadow.
 - Discord/presence defaults: send an online presence update on ready when no custom presence is configured so bots no longer appear offline by default. Thanks @thewilloftheshadow.
 - Discord/typing cleanup: stop typing indicators after silent/NO_REPLY runs by marking the run complete before dispatch idle cleanup. Thanks @thewilloftheshadow.
+- Discord/config SecretRef typing: align Discord account token config typing with SecretInput so SecretRef tokens typecheck. (#32490) Thanks @scoootscooob.
 - Discord/voice messages: request upload slots with JSON fetch calls so voice message uploads no longer fail with content-type errors. Thanks @thewilloftheshadow.
 - Discord/voice decoder fallback: drop the native Opus dependency and use opusscript for voice decoding to avoid native-opus installs. Thanks @thewilloftheshadow.
 - Discord/auto presence health signal: add runtime availability-driven presence updates plus connected-state reporting to improve health monitoring and operator visibility. (#33277) Thanks @thewilloftheshadow.
