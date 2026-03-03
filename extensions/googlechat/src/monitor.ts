@@ -375,6 +375,8 @@ async function deliverGoogleChatReply(params: {
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
     params;
+  const replyToMode = account.config.replyToMode ?? "off";
+  const shouldThread = replyToMode !== "off" && payload.replyToId != null;
   const mediaList = payload.mediaUrls?.length
     ? payload.mediaUrls
     : payload.mediaUrl
@@ -431,7 +433,7 @@ async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread: shouldThread ? payload.replyToId : undefined,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],
@@ -463,7 +465,7 @@ async function deliverGoogleChatReply(params: {
             account,
             space: spaceId,
             text: chunk,
-            thread: payload.replyToId,
+            thread: shouldThread ? payload.replyToId : undefined,
           });
         }
         statusSink?.({ lastOutboundAt: Date.now() });
