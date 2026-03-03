@@ -1,7 +1,10 @@
+import os from "node:os";
+import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { MCP_PORT_OFFSET, ensureMcpConfigFile } from "../gateway/mcp-http.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -97,12 +100,26 @@ export async function runCliAgent(params: {
   const normalizedModel = normalizeCliModel(modelId, backend);
   const modelDisplay = `${params.provider}/${modelId}`;
 
-  const extraSystemPrompt = [
-    params.extraSystemPrompt?.trim(),
-    "Tools are disabled in this session. Do not call tools.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const isClaude = backendResolved.id === "claude-cli";
+
+  // MCP tool access only for Claude CLI; other backends get a "tools disabled" hint.
+  let mcpConfigPath: string | undefined;
+  if (isClaude) {
+    try {
+      const gatewayPort = params.config?.gateway?.port ?? 18789;
+      const mcpPort = gatewayPort + MCP_PORT_OFFSET;
+      const openclawDir = path.join(os.homedir(), ".openclaw");
+      mcpConfigPath = ensureMcpConfigFile(openclawDir, mcpPort);
+    } catch (err) {
+      log.warn(`mcp config setup failed: ${String(err)}`);
+    }
+  }
+
+  const extraSystemPrompt = isClaude
+    ? params.extraSystemPrompt?.trim() || undefined
+    : [params.extraSystemPrompt?.trim(), "Tools are disabled in this session. Do not call tools."]
+        .filter(Boolean)
+        .join("\n");
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
   const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
@@ -239,6 +256,13 @@ export async function runCliAgent(params: {
       promptArg: argsPrompt,
       useResume,
     });
+    // --mcp-config is a Claude Code specific flag.
+    if (mcpConfigPath && backendResolved.id === "claude-cli") {
+      if (!args.includes("--strict-mcp-config")) {
+        args.push("--strict-mcp-config");
+      }
+      args.push("--mcp-config", mcpConfigPath);
+    }
 
     const serialize = backend.serialize ?? true;
     const queueKey = serialize ? backendResolved.id : `${backendResolved.id}:${params.runId}`;
@@ -289,6 +313,11 @@ export async function runCliAgent(params: {
           const next = { ...process.env, ...backend.env };
           for (const key of backend.clearEnv ?? []) {
             delete next[key];
+          }
+          if (mcpConfigPath) {
+            next.OPENCLAW_MCP_AGENT_ID = sessionAgentId ?? "";
+            next.OPENCLAW_MCP_ACCOUNT_ID = "";
+            next.OPENCLAW_MCP_SESSION_KEY = params.sessionKey ?? "";
           }
           return next;
         })();

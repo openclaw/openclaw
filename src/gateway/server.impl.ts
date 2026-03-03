@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
@@ -73,6 +74,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { MCP_PORT_OFFSET, ensureMcpConfigFile, startMcpLoopbackServer } from "./mcp-http.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
@@ -900,6 +902,18 @@ export async function startGatewayServer(
     log,
     isNixMode,
   });
+
+  // Start a plain HTTP loopback server for MCP (avoids self-signed TLS issues).
+  const mcpPort = port + MCP_PORT_OFFSET;
+  let mcpServer: { close: () => Promise<void> } | undefined;
+  try {
+    mcpServer = await startMcpLoopbackServer(mcpPort);
+    ensureMcpConfigFile(path.join(os.homedir(), ".openclaw"), mcpPort);
+    log.info(`MCP loopback server listening on http://127.0.0.1:${mcpPort}/mcp`);
+  } catch (err) {
+    log.warn(`MCP loopback server failed to start: ${String(err)}`);
+  }
+
   const stopGatewayUpdateCheck = minimalTestGateway
     ? () => {}
     : scheduleGatewayUpdateCheck({
@@ -1059,6 +1073,7 @@ export async function startGatewayServer(
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
+      await mcpServer?.close().catch(() => {});
       await close(opts);
     },
   };
