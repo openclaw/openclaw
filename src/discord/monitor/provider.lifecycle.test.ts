@@ -105,6 +105,7 @@ describe("runDiscordGatewayLifecycle", () => {
         pendingGatewayErrors: params?.pendingGatewayErrors,
         releaseEarlyGatewayErrorGuard,
         statusSink,
+        abortSignal: undefined as AbortSignal | undefined,
       },
     };
   };
@@ -215,9 +216,10 @@ describe("runDiscordGatewayLifecycle", () => {
     const { lifecycleParams, statusSink } = createLifecycleHarness({ gateway });
     await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
 
-    const connectedCall = statusSink.mock.calls.find(
-      ([patch]: [Record<string, unknown>]) => patch.connected === true,
-    );
+    const connectedCall = statusSink.mock.calls.find((call) => {
+      const patch = (call[0] ?? {}) as Record<string, unknown>;
+      return patch.connected === true;
+    });
     expect(connectedCall).toBeDefined();
     expect(connectedCall![0]).toMatchObject({
       connected: true,
