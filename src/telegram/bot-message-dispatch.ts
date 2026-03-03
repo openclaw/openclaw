@@ -225,16 +225,20 @@ export const dispatchTelegramMessage = async ({
       stream,
       lastPartialText: "",
       hasStreamedMessage: false,
-      previewRevisionBaseline: stream?.previewRevision?.() ?? 0,
     };
   };
   const lanes: Record<LaneName, DraftLaneState> = {
     answer: createDraftLane("answer", canStreamAnswerDraft),
     reasoning: createDraftLane("reasoning", canStreamReasoningDraft),
   };
+  const finalizedPreviewByLane: Record<LaneName, boolean> = {
+    answer: false,
+    reasoning: false,
+  };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
   let splitReasoningOnNextStream = false;
+  let skipNextAnswerMessageStartRotation = false;
   const reasoningStepState = createTelegramReasoningStepState();
   type SplitLaneSegment = { lane: LaneName; text: string };
   type SplitLaneSegmentsResult = {
@@ -260,7 +264,24 @@ export const dispatchTelegramMessage = async ({
   const resetDraftLaneState = (lane: DraftLaneState) => {
     lane.lastPartialText = "";
     lane.hasStreamedMessage = false;
-    lane.previewRevisionBaseline = lane.stream?.previewRevision?.() ?? lane.previewRevisionBaseline;
+  };
+  const rotateAnswerLaneForNewAssistantMessage = () => {
+    if (answerLane.hasStreamedMessage) {
+      const previewMessageId = answerLane.stream?.messageId();
+      // Only archive previews that still need a matching final text update.
+      // Once a preview has already been finalized, archiving it here causes
+      // cleanup to delete a user-visible final message on later media-only turns.
+      if (typeof previewMessageId === "number" && !finalizedPreviewByLane.answer) {
+        archivedAnswerPreviews.push({
+          messageId: previewMessageId,
+          textSnapshot: answerLane.lastPartialText,
+        });
+      }
+      answerLane.stream?.forceNewMessage();
+    }
+    resetDraftLaneState(answerLane);
+    // New assistant message boundary: this lane now tracks a fresh preview lifecycle.
+    finalizedPreviewByLane.answer = false;
   };
   const updateDraftFromPartial = (lane: DraftLaneState, text: string | undefined) => {
     const laneStream = lane.stream;
@@ -287,6 +308,14 @@ export const dispatchTelegramMessage = async ({
   };
   const ingestDraftLaneSegments = (text: string | undefined) => {
     const split = splitTextIntoLaneSegments(text);
+    const hasAnswerSegment = split.segments.some((segment) => segment.lane === "answer");
+    if (hasAnswerSegment && finalizedPreviewByLane.answer) {
+      // Some providers can emit the first partial of a new assistant message before
+      // onAssistantMessageStart() arrives. Rotate preemptively so we do not edit
+      // the previously finalized preview message with the next message's text.
+      rotateAnswerLaneForNewAssistantMessage();
+      skipNextAnswerMessageStartRotation = true;
+    }
     for (const segment of split.segments) {
       if (segment.lane === "reasoning") {
         reasoningStepState.noteReasoningHint();
@@ -376,10 +405,6 @@ export const dispatchTelegramMessage = async ({
       ? ctxPayload.ReplyToBody.trim() || undefined
       : undefined;
   const deliveryState = createLaneDeliveryStateTracker();
-  const finalizedPreviewByLane: Record<LaneName, boolean> = {
-    answer: false,
-    reasoning: false,
-  };
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
       clearHistoryEntriesIfEnabled({ historyMap: groupHistories, historyKey, limit: historyLimit });
@@ -599,22 +624,11 @@ export const dispatchTelegramMessage = async ({
         onAssistantMessageStart: answerLane.stream
           ? async () => {
               reasoningStepState.resetForNextStep();
-              if (answerLane.hasStreamedMessage) {
-                const previewMessageId = answerLane.stream?.messageId();
-                // Only archive previews that still need a matching final text update.
-                // Once a preview has already been finalized, archiving it here causes
-                // cleanup to delete a user-visible final message on later media-only turns.
-                if (typeof previewMessageId === "number" && !finalizedPreviewByLane.answer) {
-                  archivedAnswerPreviews.push({
-                    messageId: previewMessageId,
-                    textSnapshot: answerLane.lastPartialText,
-                  });
-                }
-                answerLane.stream?.forceNewMessage();
+              if (skipNextAnswerMessageStartRotation) {
+                skipNextAnswerMessageStartRotation = false;
+                return;
               }
-              resetDraftLaneState(answerLane);
-              // New assistant message boundary: this lane now tracks a fresh preview lifecycle.
-              finalizedPreviewByLane.answer = false;
+              rotateAnswerLaneForNewAssistantMessage();
             }
           : undefined,
         onReasoningEnd: reasoningLane.stream
