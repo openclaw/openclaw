@@ -74,17 +74,16 @@ export async function inspectGatewayRestart(params: {
       : [];
   const running = runtime.status === "running";
   const runtimePid = runtime.pid;
+  const busyWithoutListeners = portUsage.status === "busy" && portUsage.listeners.length === 0;
   const noListenerDetailsAvailable =
-    portUsage.status === "busy" &&
-    portUsage.listeners.length === 0 &&
-    portUsage.errors != null &&
-    portUsage.errors.length > 0;
+    busyWithoutListeners && portUsage.errors != null && portUsage.errors.length > 0;
+  const noListenerFallbackWithoutPid = busyWithoutListeners && runtimePid == null;
   const ownsPort =
     runtimePid != null
       ? portUsage.listeners.some((listener) =>
           listenerOwnedByRuntimePid({ listener, runtimePid }),
         ) || noListenerDetailsAvailable
-      : gatewayListeners.length > 0 || noListenerDetailsAvailable;
+      : gatewayListeners.length > 0 || noListenerFallbackWithoutPid;
   const healthy = running && ownsPort;
   const staleGatewayPids = Array.from(
     new Set([
