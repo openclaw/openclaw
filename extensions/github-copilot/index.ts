@@ -134,6 +134,10 @@ export default definePluginEntry({
       catalog: {
         order: "late",
         run: async (ctx) => {
+          // Respect models.copilotDiscovery.enabled toggle.
+          if (ctx.config?.models?.copilotDiscovery?.enabled === false) {
+            return null;
+          }
           const { githubToken, hasProfile } = resolveFirstGithubToken({
             agentDir: ctx.agentDir,
             env: ctx.env,

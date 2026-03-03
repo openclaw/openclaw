@@ -88,6 +88,11 @@ export default definePluginEntry({
         run: async (ctx: ProviderDiscoveryContext) => {
           const explicit = ctx.config.models?.providers?.ollama;
           const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
+          // Respect models.ollamaDiscovery.enabled toggle.
+          // The toggle controls network probing, not explicit-provider defaulting.
+          if (!hasExplicitModels && ctx.config.models?.ollamaDiscovery?.enabled === false) {
+            return null;
+          }
           const ollamaKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
           if (hasExplicitModels && explicit) {
             return {

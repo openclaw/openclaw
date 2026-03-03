@@ -803,6 +803,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Fallback context-window value applied to discovered models when provider metadata lacks explicit limits. Use realistic defaults to avoid oversized prompts that exceed true provider constraints.",
   "models.bedrockDiscovery.defaultMaxTokens":
     "Fallback max-token value applied to discovered models without explicit output token limits. Use conservative defaults to reduce truncation surprises and unexpected token spend.",
+  "models.copilotDiscovery":
+    "GitHub Copilot implicit discovery settings. Controls whether OpenClaw probes for Copilot API access when GH_TOKEN or GITHUB_TOKEN is present.",
+  "models.copilotDiscovery.enabled":
+    "Set to false to prevent Copilot discovery from running even when GitHub tokens are detected. Useful when GH_TOKEN is set for other tools and you do not want Copilot provider auto-registration.",
+  "models.huggingfaceDiscovery":
+    "HuggingFace implicit discovery settings. Controls whether OpenClaw fetches the HuggingFace model catalog when HF_TOKEN is present.",
+  "models.huggingfaceDiscovery.enabled":
+    "Set to false to prevent HuggingFace model discovery from running even when HF_TOKEN is detected. Useful when the token is set for other tools like transformers-cli.",
+  "models.ollamaDiscovery":
+    "Ollama implicit discovery settings. Controls whether OpenClaw probes the local Ollama server for available models on startup.",
+  "models.ollamaDiscovery.enabled":
+    "Set to false to prevent Ollama discovery from probing localhost:11434 on startup. Useful when Ollama is not intended for OpenClaw or the local probe causes startup delays.",
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
   "channels.matrix.allowBots":
     'Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set "mentions" to only accept bot messages that visibly mention this bot.',
