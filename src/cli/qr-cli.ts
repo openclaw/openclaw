@@ -52,10 +52,27 @@ function readGatewayTokenEnv(env: NodeJS.ProcessEnv): string | undefined {
   return undefined;
 }
 
+function readGatewayPasswordEnv(env: NodeJS.ProcessEnv): string | undefined {
+  const primary =
+    typeof env.OPENCLAW_GATEWAY_PASSWORD === "string" ? env.OPENCLAW_GATEWAY_PASSWORD : "";
+  if (primary.trim().length > 0) {
+    return primary.trim();
+  }
+  const legacy =
+    typeof env.CLAWDBOT_GATEWAY_PASSWORD === "string" ? env.CLAWDBOT_GATEWAY_PASSWORD : "";
+  if (legacy.trim().length > 0) {
+    return legacy.trim();
+  }
+  return undefined;
+}
+
 function shouldResolveLocalGatewayPasswordSecret(
   cfg: ReturnType<typeof loadConfig>,
   env: NodeJS.ProcessEnv,
 ): boolean {
+  if (readGatewayPasswordEnv(env)) {
+    return false;
+  }
   const authMode = cfg.gateway?.auth?.mode;
   if (authMode === "password") {
     return true;
@@ -142,6 +159,17 @@ export function registerQrCli(program: Command) {
         const wantsRemote = opts.remote === true;
 
         const loadedRaw = loadConfig();
+        if (wantsRemote && !opts.url && !opts.publicUrl) {
+          const tailscaleMode = loadedRaw.gateway?.tailscale?.mode ?? "off";
+          const remoteUrl = loadedRaw.gateway?.remote?.url;
+          const hasRemoteUrl = typeof remoteUrl === "string" && remoteUrl.trim().length > 0;
+          const hasTailscaleServe = tailscaleMode === "serve" || tailscaleMode === "funnel";
+          if (!hasRemoteUrl && !hasTailscaleServe) {
+            throw new Error(
+              "qr --remote requires gateway.remote.url (or gateway.tailscale.mode=serve/funnel).",
+            );
+          }
+        }
         let loaded = loadedRaw;
         let remoteDiagnostics: string[] = [];
         if (wantsRemote && !token && !password) {
@@ -189,17 +217,6 @@ export function registerQrCli(program: Command) {
             cfg.gateway.auth.mode = "password";
             cfg.gateway.auth.password = remotePassword;
             cfg.gateway.auth.token = undefined;
-          }
-        }
-        if (wantsRemote && !opts.url && !opts.publicUrl) {
-          const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-          const remoteUrl = cfg.gateway?.remote?.url;
-          const hasRemoteUrl = typeof remoteUrl === "string" && remoteUrl.trim().length > 0;
-          const hasTailscaleServe = tailscaleMode === "serve" || tailscaleMode === "funnel";
-          if (!hasRemoteUrl && !hasTailscaleServe) {
-            throw new Error(
-              "qr --remote requires gateway.remote.url (or gateway.tailscale.mode=serve/funnel).",
-            );
           }
         }
         if (

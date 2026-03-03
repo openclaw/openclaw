@@ -215,6 +215,35 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
   });
 
+  it("uses env URL override credentials without resolving local password SecretRefs", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "MISSING_LOCAL_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig);
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+
+    await callGateway({
+      method: "health",
+    });
+
+    expect(lastClientOptions?.url).toBe("wss://gateway-in-container.internal:9443/ws");
+    expect(lastClientOptions?.token).toBe("env-token");
+    expect(lastClientOptions?.password).toBeUndefined();
+  });
+
   it("uses remote tlsFingerprint with env URL override", async () => {
     loadConfig.mockReturnValue({
       gateway: {
@@ -866,6 +895,32 @@ describe("callGateway password resolution", () => {
 
     expect(lastClientOptions?.token).toBeUndefined();
     expect(lastClientOptions?.password).toBe("remote-password");
+  });
+
+  it("resolves remote token ref before unresolved remote password ref can block auth", async () => {
+    process.env.REMOTE_REF_TOKEN = "resolved-remote-ref-token";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        auth: {},
+        remote: {
+          url: "wss://remote.example:18789",
+          token: { source: "env", provider: "default", id: "REMOTE_REF_TOKEN" },
+          password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.token).toBe("resolved-remote-ref-token");
+    expect(lastClientOptions?.password).toBeUndefined();
   });
 
   it("does not resolve remote password ref when remote token already wins", async () => {

@@ -210,6 +210,34 @@ describe("registerQrCli", () => {
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
+  it("uses OPENCLAW_GATEWAY_PASSWORD without resolving local password SecretRef", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "password-from-env");
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      gateway: {
+        bind: "custom",
+        customBindHost: "gateway.local",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "MISSING_LOCAL_GATEWAY_PASSWORD" },
+        },
+      },
+    });
+
+    await runQr(["--setup-code-only"]);
+
+    const expected = encodePairingSetupCode({
+      url: "ws://gateway.local:18789",
+      password: "password-from-env",
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expected);
+    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+  });
+
   it("does not resolve local password SecretRef when auth mode is token", async () => {
     loadConfig.mockReturnValue({
       secrets: {
@@ -398,6 +426,7 @@ describe("registerQrCli", () => {
     await expectQrExit(["--remote"]);
     const output = runtime.error.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
     expect(output).toContain("qr --remote requires");
+    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
   it("supports --remote with tailscale serve when remote token ref resolves", async () => {

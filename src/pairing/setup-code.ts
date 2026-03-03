@@ -194,6 +194,12 @@ async function resolveGatewayPasswordSecretRef(
   if (!ref) {
     return cfg;
   }
+  const hasPasswordEnvCandidate = Boolean(
+    env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim(),
+  );
+  if (hasPasswordEnvCandidate) {
+    return cfg;
+  }
   const mode = cfg.gateway?.auth?.mode;
   if (mode === "token" || mode === "none" || mode === "trusted-proxy") {
     return cfg;
@@ -202,10 +208,7 @@ async function resolveGatewayPasswordSecretRef(
     const hasTokenCandidate =
       Boolean(env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim()) ||
       Boolean(cfg.gateway?.auth?.token?.trim());
-    const hasPasswordEnvCandidate = Boolean(
-      env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim(),
-    );
-    if (hasTokenCandidate || hasPasswordEnvCandidate) {
+    if (hasTokenCandidate) {
       return cfg;
     }
   }

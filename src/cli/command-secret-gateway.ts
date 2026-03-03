@@ -4,8 +4,9 @@ import { callGateway } from "../gateway/call.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
 import { collectCommandSecretAssignmentsFromSnapshot } from "../secrets/command-config.js";
 import { setPathExistingStrict } from "../secrets/path-utils.js";
+import { resolveSecretRefValues } from "../secrets/resolve.js";
 import { collectConfigAssignments } from "../secrets/runtime-config-collectors.js";
-import { createResolverContext } from "../secrets/runtime-shared.js";
+import { applyResolvedAssignments, createResolverContext } from "../secrets/runtime-shared.js";
 import { describeUnknownError } from "../secrets/shared.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -25,6 +26,20 @@ type GatewaySecretsResolveResult = {
   diagnostics?: string[];
   inactiveRefPaths?: string[];
 };
+
+function dedupeDiagnostics(entries: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const entry of entries) {
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    ordered.push(trimmed);
+  }
+  return ordered;
+}
 
 function collectConfiguredTargetRefPaths(params: {
   config: OpenClawConfig;
@@ -147,6 +162,59 @@ function isUnsupportedSecretsResolveError(err: unknown): boolean {
   );
 }
 
+async function resolveCommandSecretRefsLocally(params: {
+  config: OpenClawConfig;
+  commandName: string;
+  targetIds: Set<string>;
+  preflightDiagnostics: string[];
+}): Promise<ResolveCommandSecretsResult> {
+  const sourceConfig = params.config;
+  const resolvedConfig = structuredClone(params.config);
+  const context = createResolverContext({
+    sourceConfig,
+    env: process.env,
+  });
+  collectConfigAssignments({
+    config: resolvedConfig,
+    context,
+  });
+  if (context.assignments.length > 0) {
+    const resolved = await resolveSecretRefValues(
+      context.assignments.map((assignment) => assignment.ref),
+      {
+        config: sourceConfig,
+        env: context.env,
+        cache: context.cache,
+      },
+    );
+    applyResolvedAssignments({
+      assignments: context.assignments,
+      resolved,
+    });
+  }
+
+  const inactiveRefPaths = new Set(
+    context.warnings
+      .filter((warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")
+      .map((warning) => warning.path),
+  );
+  const commandAssignments = collectCommandSecretAssignmentsFromSnapshot({
+    sourceConfig,
+    resolvedConfig,
+    commandName: params.commandName,
+    targetIds: params.targetIds,
+    inactiveRefPaths,
+  });
+
+  return {
+    resolvedConfig,
+    diagnostics: dedupeDiagnostics([
+      ...params.preflightDiagnostics,
+      ...commandAssignments.diagnostics,
+    ]),
+  };
+}
+
 export async function resolveCommandSecretRefsViaGateway(params: {
   config: OpenClawConfig;
   commandName: string;
@@ -184,6 +252,23 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       mode: GATEWAY_CLIENT_MODES.CLI,
     });
   } catch (err) {
+    try {
+      const fallback = await resolveCommandSecretRefsLocally({
+        config: params.config,
+        commandName: params.commandName,
+        targetIds: params.targetIds,
+        preflightDiagnostics: preflight.diagnostics,
+      });
+      return {
+        resolvedConfig: fallback.resolvedConfig,
+        diagnostics: dedupeDiagnostics([
+          ...fallback.diagnostics,
+          `${params.commandName}: gateway secrets.resolve unavailable (${describeUnknownError(err)}); resolved command secrets locally.`,
+        ]),
+      };
+    } catch {
+      // Fall through to original gateway-specific error reporting.
+    }
     if (isUnsupportedSecretsResolveError(err)) {
       throw new Error(
         `${params.commandName}: active gateway does not support secrets.resolve (${describeUnknownError(err)}). Update the gateway or run without SecretRefs.`,
@@ -227,6 +312,6 @@ export async function resolveCommandSecretRefsViaGateway(params: {
 
   return {
     resolvedConfig,
-    diagnostics: parsed.diagnostics,
+    diagnostics: dedupeDiagnostics(parsed.diagnostics),
   };
 }

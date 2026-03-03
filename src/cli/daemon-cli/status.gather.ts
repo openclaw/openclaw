@@ -110,9 +110,14 @@ function trimToUndefined(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function readGatewayTokenEnv(env: Record<string, string | undefined>): string | undefined {
+  return trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN) ?? trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
+}
+
 async function resolveDaemonProbePassword(params: {
   daemonCfg: OpenClawConfig;
   mergedDaemonEnv: Record<string, string | undefined>;
+  explicitToken?: string;
   explicitPassword?: string;
 }): Promise<string | undefined> {
   const explicitPassword = trimToUndefined(params.explicitPassword);
@@ -131,6 +136,19 @@ async function resolveDaemonProbePassword(params: {
   });
   if (!ref) {
     return normalizeSecretInputString(configured);
+  }
+  const authMode = params.daemonCfg.gateway?.auth?.mode;
+  if (authMode === "token" || authMode === "none" || authMode === "trusted-proxy") {
+    return undefined;
+  }
+  if (authMode !== "password") {
+    const tokenCandidate =
+      trimToUndefined(params.explicitToken) ||
+      readGatewayTokenEnv(params.mergedDaemonEnv) ||
+      trimToUndefined(params.daemonCfg.gateway?.auth?.token);
+    if (tokenCandidate) {
+      return undefined;
+    }
   }
   const resolved = await resolveSecretRefValues([ref], {
     config: params.daemonCfg,
@@ -268,6 +286,7 @@ export async function gatherDaemonStatus(
     ? await resolveDaemonProbePassword({
         daemonCfg,
         mergedDaemonEnv,
+        explicitToken: opts.rpc.token,
         explicitPassword: opts.rpc.password,
       })
     : undefined;

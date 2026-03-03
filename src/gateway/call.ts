@@ -350,6 +350,16 @@ async function resolveGatewayCredentialsWithEnv(
       password: context.explicitAuth.password,
     };
   }
+  if (context.urlOverride) {
+    return resolveGatewayCredentialsFromConfig({
+      cfg: context.config,
+      env,
+      explicitAuth: context.explicitAuth,
+      urlOverride: context.urlOverride,
+      urlOverrideSource: context.urlOverrideSource,
+      remotePasswordPrecedence: "env-first",
+    });
+  }
 
   let resolvedConfig = context.config;
   const envToken = readGatewayTokenEnv(env);
@@ -394,10 +404,7 @@ async function resolveGatewayCredentialsWithEnv(
     const localToken = trimToUndefined(resolvedConfig.gateway?.auth?.token);
     const localPassword = trimToUndefined(resolvedConfig.gateway?.auth?.password);
     const passwordCanWinBeforeRemoteTokenResolution = Boolean(
-      envPassword ||
-      localPassword ||
-      trimToUndefined(remote.password) ||
-      hasConfiguredSecretInput(remote.password, resolvedDefaults),
+      envPassword || localPassword || trimToUndefined(remote.password),
     );
     const remoteTokenRef = resolveSecretInputRef({
       value: remote.token,
@@ -430,15 +437,8 @@ async function resolveGatewayCredentialsWithEnv(
   if (localModeRemote) {
     const localToken = trimToUndefined(resolvedConfig.gateway?.auth?.token);
     const localPassword = trimToUndefined(resolvedConfig.gateway?.auth?.password);
-    const localModeRemotePasswordConfigured = hasConfiguredSecretInput(
-      localModeRemote.password,
-      resolvedDefaults,
-    );
     const localModePasswordSourceConfigured = Boolean(
-      envPassword ||
-      localPassword ||
-      trimToUndefined(localModeRemote.password) ||
-      localModeRemotePasswordConfigured,
+      envPassword || localPassword || trimToUndefined(localModeRemote.password),
     );
     const passwordCanWinBeforeRemoteTokenResolution =
       localPasswordCanWinInLocalMode && localModePasswordSourceConfigured;

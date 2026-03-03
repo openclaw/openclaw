@@ -117,11 +117,27 @@ function hasGatewayPasswordEnvCandidate(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.OPENCLAW_GATEWAY_PASSWORD?.trim() || env.CLAWDBOT_GATEWAY_PASSWORD?.trim());
 }
 
+function hasGatewayPasswordOverrideCandidate(params: {
+  env: NodeJS.ProcessEnv;
+  authOverride?: GatewayAuthConfig;
+}): boolean {
+  if (hasGatewayPasswordEnvCandidate(params.env)) {
+    return true;
+  }
+  return Boolean(
+    typeof params.authOverride?.password === "string" &&
+    params.authOverride.password.trim().length > 0,
+  );
+}
+
 function shouldResolveGatewayPasswordSecretRef(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   authOverride?: GatewayAuthConfig;
 }): boolean {
+  if (hasGatewayPasswordOverrideCandidate(params)) {
+    return false;
+  }
   const explicitMode = params.authOverride?.mode ?? params.cfg.gateway?.auth?.mode;
   if (explicitMode === "password") {
     return true;
@@ -131,9 +147,6 @@ function shouldResolveGatewayPasswordSecretRef(params: {
   }
 
   if (hasGatewayTokenCandidate(params)) {
-    return false;
-  }
-  if (hasGatewayPasswordEnvCandidate(params.env)) {
     return false;
   }
   return true;

@@ -84,6 +84,38 @@ describe("pairing setup code", () => {
     expect(resolved.authLabel).toBe("password");
   });
 
+  it("uses OPENCLAW_GATEWAY_PASSWORD without resolving configured password SecretRef", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.local",
+          auth: {
+            mode: "password",
+            password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+      {
+        env: {
+          OPENCLAW_GATEWAY_PASSWORD: "password-from-env",
+        },
+      },
+    );
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      throw new Error("expected setup resolution to succeed");
+    }
+    expect(resolved.payload.password).toBe("password-from-env");
+    expect(resolved.authLabel).toBe("password");
+  });
+
   it("does not resolve gateway.auth.password SecretRef in token mode", async () => {
     const resolved = await resolvePairingSetupFromConfig(
       {

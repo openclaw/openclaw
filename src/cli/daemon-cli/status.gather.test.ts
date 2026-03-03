@@ -218,6 +218,38 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
+  it("does not resolve daemon password SecretRef when token auth is configured", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "lan",
+        tls: { enabled: true },
+        auth: {
+          mode: "token",
+          token: "daemon-token",
+          password: { source: "env", provider: "default", id: "MISSING_DAEMON_GATEWAY_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: "daemon-token",
+        password: undefined,
+      }),
+    );
+  });
+
   it("skips TLS runtime loading when probe is disabled", async () => {
     const status = await gatherDaemonStatus({
       rpc: {},
