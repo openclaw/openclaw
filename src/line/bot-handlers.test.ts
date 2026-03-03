@@ -317,10 +317,14 @@ describe("handleLineWebhookEvents", () => {
       webhookEventId: "evt-later",
     } as MessageEvent;
     const runtime = createRuntime();
-    const processMessage = vi
-      .fn<Parameters<LineProcessMessageFn>, ReturnType<LineProcessMessageFn>>()
-      .mockRejectedValueOnce(new Error("boom"))
-      .mockResolvedValueOnce(undefined);
+    let invocation = 0;
+    const processMessage = vi.fn(async () => {
+      if (invocation === 0) {
+        invocation += 1;
+        throw new Error("boom");
+      }
+      invocation += 1;
+    });
 
     await handleLineWebhookEvents([failingEvent, laterEvent], {
       cfg: { channels: { line: {} } },
