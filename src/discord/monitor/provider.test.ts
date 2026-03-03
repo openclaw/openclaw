@@ -202,6 +202,7 @@ vi.mock("./listeners.js", () => ({
   DiscordPresenceListener: class DiscordPresenceListener {},
   DiscordReactionListener: class DiscordReactionListener {},
   DiscordReactionRemoveListener: class DiscordReactionRemoveListener {},
+  DiscordThreadUpdateListener: class DiscordThreadUpdateListener {},
   registerDiscordListener: vi.fn(),
 }));
 

@@ -5,8 +5,11 @@ import {
   MessageReactionAddListener,
   MessageReactionRemoveListener,
   PresenceUpdateListener,
+  ThreadUpdateListener,
   type User,
 } from "@buape/carbon";
+import type { OpenClawConfig } from "../../config/config.js";
+import { danger } from "../../globals.js";
 import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -30,6 +33,8 @@ import {
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import { setPresence } from "./presence-cache.js";
+import { isThreadArchived } from "./thread-bindings.discord-api.js";
+import { closeDiscordThreadSessions } from "./thread-session-close.js";
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
@@ -621,5 +626,55 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       const logger = this.logger ?? discordEventQueueLog;
       logger.error(danger(`discord presence handler failed: ${String(err)}`));
     }
+  }
+}
+
+type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
+
+export class DiscordThreadUpdateListener extends ThreadUpdateListener {
+  constructor(
+    private cfg: OpenClawConfig,
+    private accountId: string,
+    private logger?: Logger,
+  ) {
+    super();
+  }
+
+  async handle(data: ThreadUpdateEvent) {
+    await runDiscordListenerWithSlowLog({
+      logger: this.logger,
+      listener: this.constructor.name,
+      event: this.type,
+      run: async () => {
+        // Discord only fires THREAD_UPDATE when a field actually changes, so
+        // `thread_metadata.archived === true` in this payload means the thread
+        // *just* transitioned to the archived state. We use isThreadArchived()
+        // as the canonical helper (it handles both snake_case and camelCase
+        // variants of the metadata field), but the intent is explicitly to
+        // detect the archival event — not a re-delivery of an already-archived
+        // thread. No "before" state is provided by the gateway.
+        if (!isThreadArchived(data)) {
+          return;
+        }
+        const threadId = "id" in data && typeof data.id === "string" ? data.id : undefined;
+        if (!threadId) {
+          return;
+        }
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.info("Discord thread archived — resetting session", { threadId });
+        const count = await closeDiscordThreadSessions({
+          cfg: this.cfg,
+          accountId: this.accountId,
+          threadId,
+        });
+        if (count > 0) {
+          logger.info("Discord thread sessions reset after archival", { threadId, count });
+        }
+      },
+      onError: (err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord thread-update handler failed: ${String(err)}`));
+      },
+    });
   }
 }
