@@ -28,6 +28,7 @@ export {
   readProviderEnvValue,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
+  resolveSearchProxy,
   resolveSearchTimeoutSeconds,
   resolveSiteName,
   postTrustedWebToolsJson,

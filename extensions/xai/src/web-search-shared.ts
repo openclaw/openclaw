@@ -124,6 +124,7 @@ export function extractXaiWebSearchContent(data: XaiWebSearchResponse): {
 }
 
 export async function requestXaiWebSearch(params: {
+  searchConfig?: Record<string, unknown>;
   query: string;
   model: string;
   apiKey: string;
@@ -134,6 +135,7 @@ export async function requestXaiWebSearch(params: {
     {
       url: XAI_WEB_SEARCH_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
+      searchConfig: params.searchConfig,
       apiKey: params.apiKey,
       body: {
         model: params.model,

@@ -143,6 +143,7 @@ async function runXaiSearchProviderSetup(
 }
 
 function runXaiWebSearch(params: {
+  searchConfig?: SearchConfigRecord;
   query: string;
   model: string;
   apiKey: string;
@@ -161,6 +162,7 @@ function runXaiWebSearch(params: {
   return (async () => {
     const startedAt = Date.now();
     const result = await requestXaiWebSearch({
+      searchConfig: params.searchConfig,
       query: params.query,
       model: params.model,
       apiKey: params.apiKey,
@@ -256,6 +258,7 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
           void readNumberParam(args, "count", { integer: true });
 
           return await runXaiWebSearch({
+            searchConfig,
             query,
             model: resolveXaiWebSearchModel(searchConfig),
             apiKey,

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { makeProxyFetch } from "../../infra/net/proxy-fetch.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import {
@@ -31,6 +32,41 @@ type UnsupportedWebSearchFilterName =
 export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
 export const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+
+let cachedSearchProxy: { url: string; fetchImpl: typeof fetch } | undefined;
+
+function buildInvalidProxyUrlError(proxyUrl: string): Error {
+  return new Error(
+    `Invalid proxy URL in tools.web.search.proxy: "${proxyUrl}". Expected a valid HTTP/HTTPS URL (e.g. http://proxy:8080).`,
+  );
+}
+
+export function resolveSearchProxy(searchConfig?: SearchConfigRecord): typeof fetch | undefined {
+  const proxyUrl =
+    searchConfig && typeof searchConfig.proxy === "string" ? searchConfig.proxy.trim() : "";
+  if (!proxyUrl) {
+    cachedSearchProxy = undefined;
+    return undefined;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(proxyUrl);
+  } catch {
+    throw buildInvalidProxyUrlError(proxyUrl);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw buildInvalidProxyUrlError(proxyUrl);
+  }
+
+  if (cachedSearchProxy?.url === proxyUrl) {
+    return cachedSearchProxy.fetchImpl;
+  }
+
+  const fetchImpl = makeProxyFetch(proxyUrl);
+  cachedSearchProxy = { url: proxyUrl, fetchImpl };
+  return fetchImpl;
+}
 
 export function resolveSearchTimeoutSeconds(searchConfig?: SearchConfigRecord): number {
   return resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
@@ -65,12 +101,14 @@ export async function withTrustedWebSearchEndpoint<T>(
     url: string;
     timeoutSeconds: number;
     init: RequestInit;
+    searchConfig?: SearchConfigRecord;
   },
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
   return withTrustedWebToolsEndpoint(
     {
       url: params.url,
+      fetchImpl: resolveSearchProxy(params.searchConfig),
       init: params.init,
       timeoutSeconds: params.timeoutSeconds,
     },
@@ -87,6 +125,7 @@ export async function postTrustedWebToolsJson<T>(
     errorLabel: string;
     maxErrorBytes?: number;
     extraHeaders?: Record<string, string>;
+    searchConfig?: SearchConfigRecord;
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
@@ -94,6 +133,7 @@ export async function postTrustedWebToolsJson<T>(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
+      fetchImpl: resolveSearchProxy(params.searchConfig),
       init: {
         method: "POST",
         headers: {

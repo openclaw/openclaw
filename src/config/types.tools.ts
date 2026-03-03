@@ -515,6 +515,8 @@ export type ToolsConfig = {
       kimi?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Perplexity scoped config. */
       perplexity?: WebSearchLegacyProviderConfig;
+      /** HTTP/HTTPS proxy URL for web search API requests (e.g. "http://proxy:8080"). Applies to all search providers. */
+      proxy?: string;
     } & Record<string, unknown>;
     /** X (formerly Twitter) search tool configuration using xAI Grok. */
     x_search?: XSearchToolConfig;

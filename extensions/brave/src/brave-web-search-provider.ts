@@ -256,6 +256,7 @@ function mapBraveLlmContextResults(
 }
 
 async function runBraveLlmContextSearch(params: {
+  searchConfig?: SearchConfigRecord;
   query: string;
   apiKey: string;
   timeoutSeconds: number;
@@ -287,6 +288,7 @@ async function runBraveLlmContextSearch(params: {
     {
       url: url.toString(),
       timeoutSeconds: params.timeoutSeconds,
+      searchConfig: params.searchConfig,
       init: {
         method: "GET",
         headers: {
@@ -308,6 +310,7 @@ async function runBraveLlmContextSearch(params: {
 }
 
 async function runBraveWebSearch(params: {
+  searchConfig?: SearchConfigRecord;
   query: string;
   count: number;
   apiKey: string;
@@ -348,6 +351,7 @@ async function runBraveWebSearch(params: {
     {
       url: url.toString(),
       timeoutSeconds: params.timeoutSeconds,
+      searchConfig: params.searchConfig,
       init: {
         method: "GET",
         headers: {
@@ -566,6 +570,7 @@ function createBraveToolDefinition(
 
       if (braveMode === "llm-context") {
         const { results, sources } = await runBraveLlmContextSearch({
+          searchConfig,
           query,
           apiKey,
           timeoutSeconds,
@@ -598,6 +603,7 @@ function createBraveToolDefinition(
       }
 
       const results = await runBraveWebSearch({
+        searchConfig,
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
         apiKey,

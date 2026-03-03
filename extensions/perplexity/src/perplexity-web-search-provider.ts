@@ -211,6 +211,7 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
 }
 
 async function runPerplexitySearchApi(params: {
+  searchConfig?: SearchConfigRecord;
   query: string;
   apiKey: string;
   count: number;
@@ -242,6 +243,7 @@ async function runPerplexitySearchApi(params: {
     {
       url: PERPLEXITY_SEARCH_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
+      searchConfig: params.searchConfig,
       init: {
         method: "POST",
         headers: {
@@ -271,6 +273,7 @@ async function runPerplexitySearchApi(params: {
 }
 
 async function runPerplexitySearch(params: {
+  searchConfig?: SearchConfigRecord;
   query: string;
   apiKey: string;
   baseUrl: string;
@@ -291,6 +294,7 @@ async function runPerplexitySearch(params: {
     {
       url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      searchConfig: params.searchConfig,
       init: {
         method: "POST",
         headers: {
@@ -596,6 +600,7 @@ function createPerplexityToolDefinition(
               },
               ...(await (async () => {
                 const result = await runPerplexitySearch({
+                  searchConfig,
                   query,
                   apiKey: runtime.apiKey!,
                   baseUrl: runtime.baseUrl,
@@ -621,6 +626,7 @@ function createPerplexityToolDefinition(
                 wrapped: true,
               },
               results: await runPerplexitySearchApi({
+                searchConfig,
                 query,
                 apiKey: runtime.apiKey!,
                 count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),

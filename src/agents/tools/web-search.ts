@@ -38,4 +38,4 @@ export const __testing = {
   SEARCH_CACHE,
   resolveSearchProvider: (search?: Parameters<typeof resolveWebSearchProviderId>[0]["search"]) =>
     resolveWebSearchProviderId({ search }),
-};
+} as const;

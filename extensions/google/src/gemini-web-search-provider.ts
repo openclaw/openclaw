@@ -78,6 +78,7 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
 }
 
 async function runGeminiSearch(params: {
+  searchConfig?: SearchConfigRecord;
   query: string;
   apiKey: string;
   model: string;
@@ -89,6 +90,7 @@ async function runGeminiSearch(params: {
     {
       url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      searchConfig: params.searchConfig,
       init: {
         method: "POST",
         headers: {
@@ -217,6 +219,7 @@ function createGeminiToolDefinition(
 
       const start = Date.now();
       const result = await runGeminiSearch({
+        searchConfig,
         query,
         apiKey,
         model,

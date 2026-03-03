@@ -139,6 +139,7 @@ function buildKimiToolResultContent(data: KimiSearchResponse): string {
 }
 
 async function runKimiSearch(params: {
+  searchConfig?: SearchConfigRecord;
   query: string;
   apiKey: string;
   baseUrl: string;
@@ -154,6 +155,7 @@ async function runKimiSearch(params: {
       {
         url: endpoint,
         timeoutSeconds: params.timeoutSeconds,
+        searchConfig: params.searchConfig,
         init: {
           method: "POST",
           headers: {
@@ -287,6 +289,7 @@ function createKimiToolDefinition(
 
       const start = Date.now();
       const result = await runKimiSearch({
+        searchConfig,
         query,
         apiKey,
         baseUrl,
