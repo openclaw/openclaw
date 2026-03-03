@@ -259,6 +259,8 @@ and still route command execution against the target conversation session (`Comm
       { "command": "/agents", "description": "OpenClaw /agents", "should_escape": false },
       { "command": "/kill", "description": "OpenClaw /kill", "should_escape": false },
       { "command": "/steer", "description": "OpenClaw /steer", "should_escape": false },
+      { "command": "/config", "description": "OpenClaw /config", "should_escape": false },
+      { "command": "/debug", "description": "OpenClaw /debug", "should_escape": false },
       { "command": "/usage", "description": "OpenClaw /usage", "should_escape": false },
       { "command": "/stop", "description": "OpenClaw /stop", "should_escape": false },
       { "command": "/restart", "description": "OpenClaw /restart", "should_escape": false },
