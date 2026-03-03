@@ -179,15 +179,31 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
     expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(true);
   });
 
-  it("does not migrate loopback bind — returns null", () => {
+  it("seeds allowedOrigins for explicit loopback bind", () => {
     const res = migrateLegacyConfig({
       gateway: {
         bind: "loopback",
         auth: { mode: "token", token: "tok" },
       },
     });
-    expect(res.config).toBeNull();
-    expect(res.changes).toHaveLength(0);
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+    ]);
+    expect(res.changes.some((c) => c.includes("bind=loopback"))).toBe(true);
+  });
+
+  it("seeds allowedOrigins when bind is omitted (defaults to loopback)", () => {
+    const res = migrateLegacyConfig({
+      gateway: {
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+    ]);
+    expect(res.changes.some((c) => c.includes("bind=loopback"))).toBe(true);
   });
 
   it("preserves existing controlUi fields when seeding allowedOrigins", () => {

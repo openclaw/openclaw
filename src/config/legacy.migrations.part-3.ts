@@ -22,24 +22,22 @@ import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
   {
-    // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
-    // host-header fallback flag) for any non-loopback bind. The onboarding wizard was updated
-    // to seed this for new installs, but existing bind=lan/bind=custom installs that upgrade
-    // crash-loop immediately on next startup with no recovery path (issue #29385).
+    // v2026.2.26 introduced stricter Control UI origin handling. Existing installs may
+    // miss gateway.controlUi.allowedOrigins after upgrade (including loopback/default-bind
+    // setups surfaced in #33124), so we seed safe local defaults when the allowlist is absent.
     //
     // This migration runs on every gateway start via migrateLegacyConfig → applyLegacyMigrations
-    // and writes the seeded origins to disk before the startup guard fires, preventing the loop.
+    // and writes the seeded origins to disk before startup checks run.
     id: "gateway.controlUi.allowedOrigins-seed-for-non-loopback",
-    describe: "Seed gateway.controlUi.allowedOrigins for existing non-loopback gateway installs",
+    describe: "Seed gateway.controlUi.allowedOrigins for existing gateway installs",
     apply: (raw, changes) => {
       const gateway = getRecord(raw.gateway);
       if (!gateway) {
         return;
       }
       const bind = gateway.bind;
-      if (!isGatewayNonLoopbackBindMode(bind)) {
-        return;
-      }
+      const effectiveBind =
+        bind === "loopback" || isGatewayNonLoopbackBindMode(bind) ? bind : "loopback";
       const controlUi = getRecord(gateway.controlUi) ?? {};
       if (
         hasConfiguredControlUiAllowedOrigins({
@@ -53,14 +51,14 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       const port = resolveGatewayPortWithDefault(gateway.port, DEFAULT_GATEWAY_PORT);
       const origins = buildDefaultControlUiAllowedOrigins({
         port,
-        bind,
+        bind: effectiveBind,
         customBindHost:
           typeof gateway.customBindHost === "string" ? gateway.customBindHost : undefined,
       });
       gateway.controlUi = { ...controlUi, allowedOrigins: origins };
       raw.gateway = gateway;
       changes.push(
-        `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} for bind=${String(bind)}. ` +
+        `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} for bind=${String(effectiveBind)}. ` +
           "Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.",
       );
     },
