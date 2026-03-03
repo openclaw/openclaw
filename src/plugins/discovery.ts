@@ -461,7 +461,20 @@ function discoverInDirectory(params: {
       });
     }
     if (!entry.isDirectory()) {
-      continue;
+      // Follow symlinks: Dirent.isDirectory() returns false for symlinks,
+      // so resolve the target and check if it's a directory. Wrap in
+      // try/catch so broken symlinks are silently skipped instead of
+      // aborting discovery.
+      if (!entry.isSymbolicLink()) {
+        continue;
+      }
+      try {
+        if (!fs.statSync(fullPath).isDirectory()) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
     }
     if (shouldIgnoreScannedDirectory(entry.name)) {
       continue;
