@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Search indexed documents via the Hanzo Search API (Meilisearch).
+"""Search indexed documents via the Hanzo Search API.
 
 Usage:
     python3 search.py --query "search terms" --store "index-name" [options]
 
 Options:
     --query     Search query string (required)
-    --store     Meilisearch index name (required)
+    --store     Search index name (required)
     --limit     Max results (default: 10)
     --offset    Pagination offset (default: 0)
-    --filter    Meilisearch filter expression (optional, e.g. "category = 'deployment'")
-    --token     API token (default: $HANZO_API_KEY)
+    --filter    Filter expression (optional, e.g. "category = 'deployment'")
+    --token     API token (default: $HANZO_SEARCH_KEY or $HANZO_API_KEY)
     --base-url  API base URL (default: $HANZO_SEARCH_BASE_URL or https://search.hanzo.ai)
     --format    Output format: text, json (default: text)
 """
@@ -42,11 +42,10 @@ def search(args: argparse.Namespace) -> dict:
         or "https://search.hanzo.ai"
     ).rstrip("/")
     token = (args.token
-             or os.environ.get("MEILI_MASTER_KEY", "")
              or os.environ.get("HANZO_SEARCH_KEY", "")
              or os.environ.get("HANZO_API_KEY", ""))
     if not token:
-        print("Error: No API token. Set MEILI_MASTER_KEY, HANZO_SEARCH_KEY, or use --token.", file=sys.stderr)
+        print("Error: No API token. Set HANZO_SEARCH_KEY, HANZO_API_KEY, or use --token.", file=sys.stderr)
         sys.exit(1)
 
     url = f"{base_url}/indexes/{args.store}/search"
@@ -70,12 +69,12 @@ def search(args: argparse.Namespace) -> dict:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-        print(f"Error: HTTP {e.code} from Meilisearch API", file=sys.stderr)
+        print(f"Error: HTTP {e.code} from Hanzo Search API", file=sys.stderr)
         if error_body:
             print(error_body[:500], file=sys.stderr)
         sys.exit(1)
     except urllib.error.URLError as e:
-        print(f"Error: Failed to connect to Meilisearch API: {e.reason}", file=sys.stderr)
+        print(f"Error: Failed to connect to Hanzo Search API: {e.reason}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -109,14 +108,14 @@ def format_text(result: dict) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Search documents via Meilisearch API")
+    parser = argparse.ArgumentParser(description="Search documents via Hanzo Search API")
     parser.add_argument("--query", required=True, help="Search query string")
-    parser.add_argument("--store", required=True, help="Meilisearch index name")
+    parser.add_argument("--store", required=True, help="Search index name")
     parser.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--offset", type=int, default=0, help="Pagination offset (default: 0)")
     parser.add_argument("--filter", default=None,
-                        help="Meilisearch filter expression (e.g. \"category = 'docs'\")")
-    parser.add_argument("--token", default=None, help="API token (MEILI_MASTER_KEY)")
+                        help="Filter expression (e.g. \"category = 'docs'\")")
+    parser.add_argument("--token", default=None, help="API token (HANZO_SEARCH_KEY)")
     parser.add_argument("--base-url", default=None, help="API base URL")
     parser.add_argument("--format", default="text", choices=["text", "json"],
                         help="Output format (default: text)")

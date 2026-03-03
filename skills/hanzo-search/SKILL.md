@@ -1,13 +1,13 @@
 ---
 name: hanzo-search
-description: "Search indexed documentation and knowledge bases via Hanzo Search (Meilisearch). Supports fulltext search with faceted filtering and ranking. Use when a bot needs to search docs, knowledge bases, or indexed content, or when a user asks to find information across indexed sources."
+description: "Search indexed documentation and knowledge bases via Hanzo Search. Supports fulltext search with faceted filtering and ranking. Use when a bot needs to search docs, knowledge bases, or indexed content, or when a user asks to find information across indexed sources."
 metadata:
   { "bot": { "requires": { "bins": ["python3"] }, "primaryEnv": "HANZO_API_KEY", "emoji": "🔍" } }
 ---
 
-# Hanzo Search -- Meilisearch Document Search API
+# Hanzo Search -- Document Search API
 
-Search indexed documentation and knowledge bases with fulltext retrieval and faceted filtering, powered by Meilisearch.
+Search indexed documentation and knowledge bases with fulltext retrieval and faceted filtering.
 
 ## API Endpoints
 
@@ -22,7 +22,7 @@ Base URL: `https://search.hanzo.ai`
 
 ## Authentication
 
-All requests require a Bearer token in the `Authorization` header. Use the MEILI_MASTER_KEY via the HANZO_API_KEY env var.
+All requests require a Bearer token in the `Authorization` header. Set `HANZO_SEARCH_KEY` or `HANZO_API_KEY`.
 
 ```
 Authorization: Bearer <token>
@@ -50,7 +50,7 @@ python3 {baseDir}/scripts/search.py --query "how to deploy" --store my-docs
 - `q` (required): Search query string
 - `limit` (optional): Max results (default 10, max 100)
 - `offset` (optional): Pagination offset (default 0)
-- `filter` (optional): Meilisearch filter expression (e.g. `"category = 'deployment'"`)
+- `filter` (optional): Filter expression (e.g. `"category = 'deployment'"`)
 - `sort` (optional): Array of sort rules (e.g. `["updated_at:desc"]`)
 - `attributesToRetrieve` (optional): Array of attributes to return
 - `attributesToHighlight` (optional): Array of attributes to highlight
@@ -79,7 +79,7 @@ python3 {baseDir}/scripts/search.py --query "how to deploy" --store my-docs
 
 ## RAG Chat over Search Results
 
-RAG chat requires the Hanzo Cloud API layer on top of Meilisearch. The `chat.py` script calls the `/api/chat-docs` endpoint which retrieves documents via Meilisearch and generates an LLM-grounded response.
+RAG chat requires the Hanzo Cloud API layer. The `chat.py` script calls the `/api/chat-docs` endpoint which retrieves documents and generates an LLM-grounded response.
 
 ```bash
 python3 {baseDir}/scripts/chat.py --query "explain the deployment process" --store my-docs
@@ -122,7 +122,7 @@ Each line is a JSON chunk:
 
 ### `scripts/search.py`
 
-Search documents from the command line via Meilisearch.
+Search documents from the command line via Hanzo Search.
 
 ```bash
 python3 {baseDir}/scripts/search.py \
@@ -151,7 +151,8 @@ Each search query is billed per the Hanzo Search pricing tier. RAG chat queries 
 ## Environment Variables
 
 ```bash
-HANZO_API_KEY=...                                  # Meilisearch master key
+HANZO_SEARCH_KEY=...                                  # Search API key
+HANZO_API_KEY=...                                  # Fallback API key
 HANZO_SEARCH_BASE_URL=https://search.hanzo.ai      # Override search API base URL
 HANZO_CHAT_BASE_URL=https://search.hanzo.ai        # Override RAG chat API base URL
 ```
