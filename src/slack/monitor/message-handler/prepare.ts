@@ -115,12 +115,6 @@ async function resolveSlackConversationContext(params: {
   message: SlackMessageEvent;
 }): Promise<SlackConversationContext> {
   const { ctx, account, message } = params;
-  const cfg = ctx.cfg;
-  const slackSuppressed = isOutboundSuppressed({
-    cfg,
-    channel: "slack",
-    accountId: account.accountId,
-  });
 
   let channelInfo: {
     name?: string;
@@ -181,6 +175,11 @@ async function authorizeSlackInboundMessage(params: {
   const { ctx, account, message, conversation } = params;
   const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBots } =
     conversation;
+  const slackSuppressed = isOutboundSuppressed({
+    cfg: ctx.cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
 
   if (isBotMessage) {
     if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
@@ -332,6 +331,11 @@ export async function prepareSlackMessage(params: {
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
   const cfg = ctx.cfg;
+  const slackSuppressed = isOutboundSuppressed({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
   const conversation = await resolveSlackConversationContext({ ctx, account, message });
   const {
     channelInfo,
