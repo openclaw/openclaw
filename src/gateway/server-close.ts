@@ -38,7 +38,12 @@ export function createGatewayCloseHandler(params: {
       typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
         ? Math.max(0, Math.floor(opts.restartExpectedMs))
         : null;
-    if (params.bonjourStop) {
+    // On in-process restart, keep the Bonjour/mDNS service alive to avoid
+    // a name-conflict loop. Tearing down and re-advertising in quick succession
+    // races with the OS mDNS cache, causing incremental renames like "(2)", "(3)" …
+    // The server-discovery-runtime module caches the advertiser and reuses it on
+    // the next server iteration. Only stop Bonjour on actual shutdown (#33609).
+    if (params.bonjourStop && restartExpectedMs == null) {
       try {
         await params.bonjourStop();
       } catch {
