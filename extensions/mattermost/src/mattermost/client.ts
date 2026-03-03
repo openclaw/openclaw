@@ -190,6 +190,19 @@ export async function createMattermostPost(
   });
 }
 
+export type MattermostTeam = {
+  id: string;
+  name?: string | null;
+  display_name?: string | null;
+};
+
+export async function fetchMattermostUserTeams(
+  client: MattermostClient,
+  userId: string,
+): Promise<MattermostTeam[]> {
+  return await client.request<MattermostTeam[]>(`/users/${userId}/teams`);
+}
+
 export async function uploadMattermostFile(
   client: MattermostClient,
   params: {
