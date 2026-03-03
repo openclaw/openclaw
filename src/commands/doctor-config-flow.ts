@@ -1384,10 +1384,8 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
       );
     }
 
-    const groupPolicy =
-      (account.groupPolicy as string | undefined) ??
-      (parent?.groupPolicy as string | undefined) ??
-      undefined;
+    const accountGroupPolicy = account.groupPolicy as string | undefined;
+    const groupPolicy = accountGroupPolicy ?? (parent?.groupPolicy as string | undefined) ?? undefined;
 
     if (
       channelName === "discord" &&
@@ -1398,7 +1396,7 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
       hasConfigEntries(parent.guilds)
     ) {
       warnings.push(
-        `- ${prefix}.groupPolicy is "allowlist" but guilds is empty — this account override replaces channels.discord.guilds and can block all guild messages. Remove ${prefix}.guilds to inherit channels.discord.guilds, or configure guild entries under ${prefix}.guilds.`,
+        `- ${prefix}.guilds is empty while effective groupPolicy is "allowlist" — this account override replaces channels.discord.guilds and can block all guild messages. Remove ${prefix}.guilds to inherit channels.discord.guilds, or configure guild entries under ${prefix}.guilds.`,
       );
     }
 

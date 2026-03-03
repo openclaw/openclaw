@@ -22,6 +22,10 @@ export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 const log = createSubsystemLogger("discord/accounts");
 const warnedEmptyGuildOverrides = new Set<string>();
 
+export function resetDiscordAccountWarningStateForTests(): void {
+  warnedEmptyGuildOverrides.clear();
+}
+
 function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -62,7 +66,7 @@ function mergeDiscordAccountConfig(cfg: OpenClawConfig, accountId: string): Disc
     if (!warnedEmptyGuildOverrides.has(accountId)) {
       warnedEmptyGuildOverrides.add(accountId);
       log.warn?.(
-        `channels.discord.accounts.${accountId}.groupPolicy is "allowlist" but guilds is empty; inheriting channels.discord.guilds for this account. Configure channels.discord.accounts.${accountId}.guilds explicitly or remove the empty override.`,
+        `channels.discord.accounts.${accountId}.guilds is empty while effective groupPolicy is "allowlist"; inheriting channels.discord.guilds for this account. Configure channels.discord.accounts.${accountId}.guilds explicitly or remove the empty override.`,
       );
     }
     merged.guilds = base.guilds;
