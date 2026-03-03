@@ -117,7 +117,7 @@ export function createProfileAvailability({
 
     if (isExtension) {
       if (!httpReachable) {
-        await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl });
+        await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl, lockTab: profile.lockTab });
         if (!(await isHttpReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS))) {
           throw new Error(
             `Chrome extension relay for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`,

@@ -16,7 +16,7 @@ export async function ensureExtensionRelayForProfiles(params: {
     if (!profile || profile.driver !== "extension") {
       continue;
     }
-    await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch((err) => {
+    await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl, lockTab: profile.lockTab }).catch((err) => {
       params.onWarn(`Chrome extension relay init failed for profile "${name}": ${String(err)}`);
     });
   }
