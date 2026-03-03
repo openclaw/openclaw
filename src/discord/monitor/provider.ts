@@ -206,7 +206,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     cfg,
     accountId: opts.accountId,
   });
-  const token = normalizeDiscordToken(opts.token ?? undefined) ?? account.token;
+  const token =
+    normalizeDiscordToken(opts.token ?? undefined, "channels.discord.token") ?? account.token;
   if (!token) {
     throw new Error(
       `Discord bot token missing for account "${account.accountId}" (set discord.accounts.${account.accountId}.token or DISCORD_BOT_TOKEN for default).`,

@@ -10,6 +10,18 @@ describe("BlueBubblesConfigSchema", () => {
     expect(parsed.success).toBe(true);
   });
 
+  it("accepts SecretRef password when serverUrl is set", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      serverUrl: "http://localhost:1234",
+      password: {
+        source: "env",
+        provider: "default",
+        id: "BLUEBUBBLES_PASSWORD",
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
   it("requires password when top-level serverUrl is configured", () => {
     const parsed = BlueBubblesConfigSchema.safeParse({
       serverUrl: "http://localhost:1234",

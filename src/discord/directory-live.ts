@@ -23,7 +23,7 @@ function resolveDiscordDirectoryAccess(
   params: DirectoryConfigParams,
 ): DiscordDirectoryAccess | null {
   const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
-  const token = normalizeDiscordToken(account.token);
+  const token = normalizeDiscordToken(account.token, "channels.discord.token");
   if (!token) {
     return null;
   }

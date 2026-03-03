@@ -3,6 +3,8 @@ import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key
 import {
   normalizeSecretInputModeInput,
   ensureApiKeyFromOptionEnvOrPrompt,
+  promptSecretRefForOnboarding,
+  resolveSecretInputModeForEnvSelection,
 } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "./auth-token.js";
@@ -28,11 +30,41 @@ export async function applyAuthChoiceAnthropic(
       "Anthropic setup-token",
     );
 
-    const tokenRaw = await params.prompter.text({
-      message: "Paste Anthropic setup-token",
-      validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
+    const selectedMode = await resolveSecretInputModeForEnvSelection({
+      prompter: params.prompter,
+      explicitMode: requestedSecretInputMode,
+      copy: {
+        modeMessage: "How do you want to provide this setup token?",
+        plaintextLabel: "Paste setup token now",
+        plaintextHint: "Stores the token directly in the auth profile",
+      },
     });
-    const token = String(tokenRaw ?? "").trim();
+    let token = "";
+    let tokenRef: { source: "env" | "file" | "exec"; provider: string; id: string } | undefined;
+    if (selectedMode === "ref") {
+      const resolved = await promptSecretRefForOnboarding({
+        provider: "anthropic-setup-token",
+        config: params.config,
+        prompter: params.prompter,
+        preferredEnvVar: "ANTHROPIC_SETUP_TOKEN",
+        copy: {
+          sourceMessage: "Where is this Anthropic setup token stored?",
+          envVarPlaceholder: "ANTHROPIC_SETUP_TOKEN",
+        },
+      });
+      token = resolved.resolvedValue.trim();
+      tokenRef = resolved.ref;
+    } else {
+      const tokenRaw = await params.prompter.text({
+        message: "Paste Anthropic setup-token",
+        validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
+      });
+      token = String(tokenRaw ?? "").trim();
+    }
+    const tokenValidationError = validateAnthropicSetupToken(token);
+    if (tokenValidationError) {
+      throw new Error(tokenValidationError);
+    }
 
     const profileNameRaw = await params.prompter.text({
       message: "Token name (blank = default)",
@@ -51,6 +83,7 @@ export async function applyAuthChoiceAnthropic(
         type: "token",
         provider,
         token,
+        ...(tokenRef ? { tokenRef } : {}),
       },
     });
 

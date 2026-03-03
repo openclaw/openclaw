@@ -95,6 +95,19 @@ describe("createFeishuWSClient proxy handling", () => {
     expect(options.agent).toEqual({ proxyUrl: expectedProxy });
   });
 
+  it("accepts lowercase https_proxy when it is the configured HTTPS proxy var", () => {
+    process.env.https_proxy = "http://lower-https:8001";
+
+    createFeishuWSClient(baseAccount);
+
+    const expectedHttpsProxy = process.env.https_proxy || process.env.HTTPS_PROXY;
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(expectedHttpsProxy).toBeTruthy();
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith(expectedHttpsProxy);
+    const options = firstWsClientOptions();
+    expect(options.agent).toEqual({ proxyUrl: expectedHttpsProxy });
+  });
+
   it("passes HTTP_PROXY to ws client when https vars are unset", () => {
     process.env.HTTP_PROXY = "http://upper-http:8999";
 

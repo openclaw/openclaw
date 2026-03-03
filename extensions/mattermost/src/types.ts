@@ -1,4 +1,9 @@
-import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+import type {
+  BlockStreamingCoalesceConfig,
+  DmPolicy,
+  GroupPolicy,
+  SecretInput,
+} from "openclaw/plugin-sdk";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 
@@ -17,7 +22,7 @@ export type MattermostAccountConfig = {
   /** If false, do not start this Mattermost account. Default: true. */
   enabled?: boolean;
   /** Bot token for Mattermost. */
-  botToken?: string;
+  botToken?: SecretInput;
   /** Base URL for the Mattermost server (e.g., https://chat.example.com). */
   baseUrl?: string;
   /**

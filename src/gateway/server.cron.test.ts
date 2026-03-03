@@ -714,4 +714,74 @@ describe("gateway server cron", () => {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
   }, 60_000);
+
+  test("ignores non-string cron.webhookToken values without crashing webhook delivery", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-webhook-secretinput-",
+      cronEnabled: false,
+    });
+
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    expect(typeof configPath).toBe("string");
+    await fs.mkdir(path.dirname(configPath as string), { recursive: true });
+    await fs.writeFile(
+      configPath as string,
+      JSON.stringify(
+        {
+          cron: {
+            webhookToken: {
+              opaque: true,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    fetchWithSsrFGuardMock.mockClear();
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const notifyRes = await rpcReq(ws, "cron.add", {
+        name: "webhook secretinput object",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "send webhook" },
+        delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
+      });
+      expect(notifyRes.ok).toBe(true);
+      const notifyJobIdValue = (notifyRes.payload as { id?: unknown } | null)?.id;
+      const notifyJobId = typeof notifyJobIdValue === "string" ? notifyJobIdValue : "";
+      expect(notifyJobId.length > 0).toBe(true);
+
+      const notifyRunRes = await rpcReq(ws, "cron.run", { id: notifyJobId, mode: "force" }, 20_000);
+      expect(notifyRunRes.ok).toBe(true);
+
+      await waitForCondition(
+        () => fetchWithSsrFGuardMock.mock.calls.length === 1,
+        CRON_WAIT_TIMEOUT_MS,
+      );
+      const [notifyArgs] = fetchWithSsrFGuardMock.mock.calls[0] as unknown as [
+        {
+          url?: string;
+          init?: {
+            method?: string;
+            headers?: Record<string, string>;
+          };
+        },
+      ];
+      expect(notifyArgs.url).toBe("https://example.invalid/cron-finished");
+      expect(notifyArgs.init?.method).toBe("POST");
+      expect(notifyArgs.init?.headers?.Authorization).toBeUndefined();
+      expect(notifyArgs.init?.headers?.["Content-Type"]).toBe("application/json");
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  }, 45_000);
 });

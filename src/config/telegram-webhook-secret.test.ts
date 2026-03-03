@@ -14,6 +14,18 @@ describe("Telegram webhook config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts webhookUrl when webhookSecret is configured as SecretRef", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          webhookUrl: "https://example.com/telegram-webhook",
+          webhookSecret: { source: "env", provider: "default", id: "TELEGRAM_WEBHOOK_SECRET" },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects webhookUrl without webhookSecret", () => {
     const res = validateConfigObject({
       channels: {
@@ -36,6 +48,26 @@ describe("Telegram webhook config", () => {
           accounts: {
             ops: {
               webhookUrl: "https://example.com/telegram-webhook",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts account webhookUrl when account webhookSecret is configured as SecretRef", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          accounts: {
+            ops: {
+              webhookUrl: "https://example.com/telegram-webhook",
+              webhookSecret: {
+                source: "env",
+                provider: "default",
+                id: "TELEGRAM_OPS_WEBHOOK_SECRET",
+              },
             },
           },
         },

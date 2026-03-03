@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -120,7 +121,10 @@ function resolvePassword(accountId: string, merged: IrcAccountConfig) {
     }
   }
 
-  const configPassword = merged.password?.trim();
+  const configPassword = normalizeResolvedSecretInputString({
+    value: merged.password,
+    path: `channels.irc.accounts.${accountId}.password`,
+  });
   if (configPassword) {
     return { password: configPassword, source: "config" as const };
   }
@@ -136,7 +140,13 @@ function resolveNickServConfig(accountId: string, nickserv?: IrcNickServConfig):
     accountId === DEFAULT_ACCOUNT_ID ? process.env.IRC_NICKSERV_REGISTER_EMAIL?.trim() : undefined;
 
   const passwordFile = base.passwordFile?.trim();
-  let resolvedPassword = base.password?.trim() || envPassword || "";
+  let resolvedPassword =
+    normalizeResolvedSecretInputString({
+      value: base.password,
+      path: `channels.irc.accounts.${accountId}.nickserv.password`,
+    }) ||
+    envPassword ||
+    "";
   if (!resolvedPassword && passwordFile) {
     try {
       resolvedPassword = readFileSync(passwordFile, "utf-8").trim();

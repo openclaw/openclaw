@@ -16,6 +16,11 @@ export type SecretRef = {
 export type SecretInput = string | SecretRef;
 export const DEFAULT_SECRET_PROVIDER_ALIAS = "default";
 const ENV_SECRET_TEMPLATE_RE = /^\$\{([A-Z][A-Z0-9_]{0,127})\}$/;
+type SecretDefaults = {
+  env?: string;
+  file?: string;
+  exec?: string;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -69,14 +74,7 @@ export function parseEnvTemplateSecretRef(
   };
 }
 
-export function coerceSecretRef(
-  value: unknown,
-  defaults?: {
-    env?: string;
-    file?: string;
-    exec?: string;
-  },
-): SecretRef | null {
+export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): SecretRef | null {
   if (isSecretRef(value)) {
     return value;
   }
@@ -98,6 +96,76 @@ export function coerceSecretRef(
     return envTemplate;
   }
   return null;
+}
+
+export function hasConfiguredSecretInput(value: unknown, defaults?: SecretDefaults): boolean {
+  if (normalizeSecretInputString(value)) {
+    return true;
+  }
+  return coerceSecretRef(value, defaults) !== null;
+}
+
+export function normalizeSecretInputString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function formatSecretRefLabel(ref: SecretRef): string {
+  return `${ref.source}:${ref.provider}:${ref.id}`;
+}
+
+export function assertSecretInputResolved(params: {
+  value: unknown;
+  refValue?: unknown;
+  defaults?: SecretDefaults;
+  path: string;
+}): void {
+  const { ref } = resolveSecretInputRef({
+    value: params.value,
+    refValue: params.refValue,
+    defaults: params.defaults,
+  });
+  if (!ref) {
+    return;
+  }
+  throw new Error(
+    `${params.path}: unresolved SecretRef "${formatSecretRefLabel(ref)}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+  );
+}
+
+export function normalizeResolvedSecretInputString(params: {
+  value: unknown;
+  refValue?: unknown;
+  defaults?: SecretDefaults;
+  path: string;
+}): string | undefined {
+  const normalized = normalizeSecretInputString(params.value);
+  if (normalized) {
+    return normalized;
+  }
+  assertSecretInputResolved(params);
+  return undefined;
+}
+
+export function resolveSecretInputRef(params: {
+  value: unknown;
+  refValue?: unknown;
+  defaults?: SecretDefaults;
+}): {
+  explicitRef: SecretRef | null;
+  inlineRef: SecretRef | null;
+  ref: SecretRef | null;
+} {
+  const explicitRef = coerceSecretRef(params.refValue, params.defaults);
+  const inlineRef = explicitRef ? null : coerceSecretRef(params.value, params.defaults);
+  return {
+    explicitRef,
+    inlineRef,
+    ref: explicitRef ?? inlineRef,
+  };
 }
 
 export type EnvSecretProviderConfig = {

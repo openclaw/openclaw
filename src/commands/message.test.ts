@@ -18,6 +18,14 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
+const resolveCommandSecretRefsViaGateway = vi.fn(async ({ config }: { config: unknown }) => ({
+  resolvedConfig: config,
+  diagnostics: [] as string[],
+}));
+vi.mock("../cli/command-secret-gateway.js", () => ({
+  resolveCommandSecretRefsViaGateway,
+}));
+
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: callGatewayMock,
@@ -69,6 +77,7 @@ beforeEach(async () => {
   handleSlackAction.mockClear();
   handleTelegramAction.mockClear();
   handleWhatsAppAction.mockClear();
+  resolveCommandSecretRefsViaGateway.mockClear();
 });
 
 afterEach(() => {

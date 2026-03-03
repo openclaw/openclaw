@@ -208,9 +208,12 @@ function resolveAuth(cfg: OpenClawPluginApi["config"]): ResolveAuthResult {
   return { error: "Gateway auth is not configured (no token or password)." };
 }
 
-function pickFirstDefined(candidates: Array<string | undefined>): string | null {
+function pickFirstDefined(candidates: Array<unknown>): string | null {
   for (const value of candidates) {
-    const trimmed = value?.trim();
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
     if (trimmed) {
       return trimmed;
     }

@@ -132,23 +132,46 @@ describe("promptRemoteGatewayConfig", () => {
     expect(next.gateway?.remote?.token).toBeUndefined();
   });
 
-  it("allows private ws:// only when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", async () => {
-    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
-
+  it("supports storing remote auth as an external env secret ref", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "remote-token-value";
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
       if (params.message === "Gateway WebSocket URL") {
-        expect(params.validate?.("ws://10.0.0.8:18789")).toBeUndefined();
-        return "ws://10.0.0.8:18789";
+        return "wss://remote.example.com:18789";
+      }
+      if (params.message === "Environment variable name") {
+        return "OPENCLAW_GATEWAY_TOKEN";
       }
       return "";
     }) as WizardPrompter["text"];
 
-    const { next } = await runRemotePrompt({
-      text,
-      confirm: false,
-      selectResponses: { "Gateway auth": "off" },
+    const select: WizardPrompter["select"] = vi.fn(async (params) => {
+      if (params.message === "Gateway auth") {
+        return "token" as never;
+      }
+      if (params.message === "How do you want to provide this gateway token?") {
+        return "ref" as never;
+      }
+      if (params.message === "Where is this gateway token stored?") {
+        return "env" as never;
+      }
+      return (params.options[0]?.value ?? "") as never;
     });
 
-    expect(next.gateway?.remote?.url).toBe("ws://10.0.0.8:18789");
+    const cfg = {} as OpenClawConfig;
+    const prompter = createPrompter({
+      confirm: vi.fn(async () => false),
+      select,
+      text,
+    });
+
+    const next = await promptRemoteGatewayConfig(cfg, prompter);
+
+    expect(next.gateway?.mode).toBe("remote");
+    expect(next.gateway?.remote?.url).toBe("wss://remote.example.com:18789");
+    expect(next.gateway?.remote?.token).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENCLAW_GATEWAY_TOKEN",
+    });
   });
 });

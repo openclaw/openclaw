@@ -182,6 +182,21 @@ describe("cron webhook schema", () => {
     expect(res.success).toBe(true);
   });
 
+  it("accepts cron.webhookToken SecretRef values", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        webhook: "https://example.invalid/legacy-cron-webhook",
+        webhookToken: {
+          source: "env",
+          provider: "default",
+          id: "CRON_WEBHOOK_TOKEN",
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
   it("rejects non-http cron.webhook URLs", () => {
     const res = OpenClawSchema.safeParse({
       cron: {

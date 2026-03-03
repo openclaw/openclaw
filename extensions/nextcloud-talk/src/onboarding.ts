@@ -1,10 +1,13 @@
 import {
   addWildcardAllowFrom,
   formatDocsLink,
+  hasConfiguredSecretInput,
   mergeAllowFromEntries,
+  promptSingleChannelSecretInput,
   promptAccountId,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
+  type SecretInput,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type OpenClawConfig,
@@ -216,7 +219,8 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
     const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
     const canUseEnv = allowEnv && Boolean(process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim());
     const hasConfigSecret = Boolean(
-      resolvedAccount.config.botSecret || resolvedAccount.config.botSecretFile,
+      hasConfiguredSecretInput(resolvedAccount.config.botSecret) ||
+      resolvedAccount.config.botSecretFile,
     );
 
     let baseUrl = resolvedAccount.baseUrl;
@@ -238,59 +242,29 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
       ).trim();
     }
 
-    let secret: string | null = null;
+    let secret: SecretInput | null = null;
     if (!accountConfigured) {
       await noteNextcloudTalkSecretHelp(prompter);
     }
 
-    if (canUseEnv && !resolvedAccount.config.botSecret) {
-      const keepEnv = await prompter.confirm({
-        message: "NEXTCLOUD_TALK_BOT_SECRET detected. Use env var?",
-        initialValue: true,
-      });
-      if (keepEnv) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            "nextcloud-talk": {
-              ...next.channels?.["nextcloud-talk"],
-              enabled: true,
-              baseUrl,
-            },
-          },
-        };
-      } else {
-        secret = String(
-          await prompter.text({
-            message: "Enter Nextcloud Talk bot secret",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
-      }
-    } else if (hasConfigSecret) {
-      const keep = await prompter.confirm({
-        message: "Nextcloud Talk secret already configured. Keep it?",
-        initialValue: true,
-      });
-      if (!keep) {
-        secret = String(
-          await prompter.text({
-            message: "Enter Nextcloud Talk bot secret",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
-      }
-    } else {
-      secret = String(
-        await prompter.text({
-          message: "Enter Nextcloud Talk bot secret",
-          validate: (value) => (value?.trim() ? undefined : "Required"),
-        }),
-      ).trim();
+    const secretResult = await promptSingleChannelSecretInput({
+      cfg: next,
+      prompter,
+      providerHint: "nextcloud-talk",
+      credentialLabel: "bot secret",
+      accountConfigured,
+      canUseEnv: canUseEnv && !hasConfigSecret,
+      hasConfigToken: hasConfigSecret,
+      envPrompt: "NEXTCLOUD_TALK_BOT_SECRET detected. Use env var?",
+      keepPrompt: "Nextcloud Talk bot secret already configured. Keep it?",
+      inputPrompt: "Enter Nextcloud Talk bot secret",
+      preferredEnvVar: "NEXTCLOUD_TALK_BOT_SECRET",
+    });
+    if (secretResult.action === "set") {
+      secret = secretResult.value;
     }
 
-    if (secret || baseUrl !== resolvedAccount.baseUrl) {
+    if (secretResult.action === "use-env" || secret || baseUrl !== resolvedAccount.baseUrl) {
       if (accountId === DEFAULT_ACCOUNT_ID) {
         next = {
           ...next,
@@ -320,6 +294,74 @@ export const nextcloudTalkOnboardingAdapter: ChannelOnboardingAdapter = {
                     next.channels?.["nextcloud-talk"]?.accounts?.[accountId]?.enabled ?? true,
                   baseUrl,
                   ...(secret ? { botSecret: secret } : {}),
+                },
+              },
+            },
+          },
+        };
+      }
+    }
+
+    const existingApiUser = resolvedAccount.config.apiUser?.trim();
+    const existingApiPasswordConfigured = Boolean(
+      hasConfiguredSecretInput(resolvedAccount.config.apiPassword) ||
+      resolvedAccount.config.apiPasswordFile,
+    );
+    const configureApiCredentials = await prompter.confirm({
+      message: "Configure optional Nextcloud Talk API credentials for room lookups?",
+      initialValue: Boolean(existingApiUser && existingApiPasswordConfigured),
+    });
+    if (configureApiCredentials) {
+      const apiUser = String(
+        await prompter.text({
+          message: "Nextcloud Talk API user",
+          initialValue: existingApiUser,
+          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+        }),
+      ).trim();
+      const apiPasswordResult = await promptSingleChannelSecretInput({
+        cfg: next,
+        prompter,
+        providerHint: "nextcloud-talk-api",
+        credentialLabel: "API password",
+        accountConfigured: Boolean(existingApiUser && existingApiPasswordConfigured),
+        canUseEnv: false,
+        hasConfigToken: existingApiPasswordConfigured,
+        envPrompt: "",
+        keepPrompt: "Nextcloud Talk API password already configured. Keep it?",
+        inputPrompt: "Enter Nextcloud Talk API password",
+        preferredEnvVar: "NEXTCLOUD_TALK_API_PASSWORD",
+      });
+      const apiPassword = apiPasswordResult.action === "set" ? apiPasswordResult.value : undefined;
+      if (accountId === DEFAULT_ACCOUNT_ID) {
+        next = {
+          ...next,
+          channels: {
+            ...next.channels,
+            "nextcloud-talk": {
+              ...next.channels?.["nextcloud-talk"],
+              enabled: true,
+              apiUser,
+              ...(apiPassword ? { apiPassword } : {}),
+            },
+          },
+        };
+      } else {
+        next = {
+          ...next,
+          channels: {
+            ...next.channels,
+            "nextcloud-talk": {
+              ...next.channels?.["nextcloud-talk"],
+              enabled: true,
+              accounts: {
+                ...next.channels?.["nextcloud-talk"]?.accounts,
+                [accountId]: {
+                  ...next.channels?.["nextcloud-talk"]?.accounts?.[accountId],
+                  enabled:
+                    next.channels?.["nextcloud-talk"]?.accounts?.[accountId]?.enabled ?? true,
+                  apiUser,
+                  ...(apiPassword ? { apiPassword } : {}),
                 },
               },
             },
