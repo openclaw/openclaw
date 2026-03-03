@@ -307,6 +307,7 @@ describe("applyMediaUnderstanding", () => {
     const ctx = await createAudioCtx({
       body: "<media:audio> /capture status",
     });
+    ctx.CommandAuthorized = false;
     const result = await applyMediaUnderstanding({
       ctx,
       cfg: createGroqAudioConfig(),
@@ -320,6 +321,7 @@ describe("applyMediaUnderstanding", () => {
       body: "[Audio]\nUser text:\n/capture status\nTranscript:\ntranscribed text",
       commandBody: "/capture status",
     });
+    expect(ctx.CommandAuthorized).toBe(false);
   });
 
   it("handles URL-only attachments for audio transcription", async () => {

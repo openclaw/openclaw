@@ -458,6 +458,9 @@ describe("exec tool backgrounding", () => {
       allowBackground: false,
     });
     await expect(executeExecCommand(customBash, longDelayCmd)).rejects.toThrow(/timed out/i);
+    await expect(executeExecCommand(customBash, longDelayCmd)).rejects.toThrow(
+      /re-run with a higher timeout/i,
+    );
   });
 
   it.each<DisallowedElevationCase>(DISALLOWED_ELEVATION_CASES)(
