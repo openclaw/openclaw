@@ -78,13 +78,20 @@ export async function ensureQueueDir(stateDir?: string): Promise<string> {
 
 /** Persist a delivery entry to disk before attempting send. Returns the entry ID. */
 type QueuedDeliveryParams = QueuedDeliveryPayload;
+type EnqueueDeliveryOptions = {
+  markInFlight?: boolean;
+};
 
 export async function enqueueDelivery(
   params: QueuedDeliveryParams,
   stateDir?: string,
+  options?: EnqueueDeliveryOptions,
 ): Promise<string> {
   const queueDir = await ensureQueueDir(stateDir);
   const id = generateSecureUuid();
+  if (options?.markInFlight) {
+    markDeliveryInFlight(id);
+  }
   const entry: QueuedDelivery = {
     id,
     enqueuedAt: Date.now(),
@@ -103,9 +110,16 @@ export async function enqueueDelivery(
   const filePath = path.join(queueDir, `${id}.json`);
   const tmp = `${filePath}.${process.pid}.tmp`;
   const json = JSON.stringify(entry, null, 2);
-  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
-  await fs.promises.rename(tmp, filePath);
-  return id;
+  try {
+    await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
+    await fs.promises.rename(tmp, filePath);
+    return id;
+  } catch (error) {
+    if (options?.markInFlight) {
+      clearDeliveryInFlight(id);
+    }
+    throw error;
+  }
 }
 
 /** Remove a successfully delivered entry from the queue. */

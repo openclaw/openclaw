@@ -30,7 +30,6 @@ const queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(async () => "mock-queue-id"),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
-  markDeliveryInFlight: vi.fn(),
   clearDeliveryInFlight: vi.fn(),
 }));
 const logMocks = vi.hoisted(() => ({
@@ -57,7 +56,6 @@ vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
-  markDeliveryInFlight: queueMocks.markDeliveryInFlight,
   clearDeliveryInFlight: queueMocks.clearDeliveryInFlight,
 }));
 vi.mock("../../logging/subsystem.js", () => ({
@@ -214,7 +212,6 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.ackDelivery.mockResolvedValue(undefined);
     queueMocks.failDelivery.mockClear();
     queueMocks.failDelivery.mockResolvedValue(undefined);
-    queueMocks.markDeliveryInFlight.mockClear();
     queueMocks.clearDeliveryInFlight.mockClear();
     logMocks.warn.mockClear();
   });
@@ -778,7 +775,7 @@ describe("deliverOutboundPayloads", () => {
     expect(sendWhatsApp).not.toHaveBeenCalled();
   });
 
-  it("marks queue entries in-flight during send and clears marker on success", async () => {
+  it("requests in-flight reservation during enqueue and clears marker on success", async () => {
     const deferred = createDeferred<{ messageId: string; toJid: string }>();
     const sendWhatsApp = vi.fn().mockImplementation(async () => await deferred.promise);
     const deliveryPromise = deliverOutboundPayloads({
@@ -789,8 +786,15 @@ describe("deliverOutboundPayloads", () => {
       deps: { sendWhatsApp },
     });
 
-    await vi.waitFor(() =>
-      expect(queueMocks.markDeliveryInFlight).toHaveBeenCalledWith("mock-queue-id"),
+    await vi.waitFor(() => expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(1));
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "hello" }],
+      }),
+      undefined,
+      { markInFlight: true },
     );
     expect(queueMocks.clearDeliveryInFlight).not.toHaveBeenCalled();
 
@@ -812,7 +816,15 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("boom");
 
-    expect(queueMocks.markDeliveryInFlight).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "hello" }],
+      }),
+      undefined,
+      { markInFlight: true },
+    );
     expect(queueMocks.clearDeliveryInFlight).toHaveBeenCalledWith("mock-queue-id");
   });
 
