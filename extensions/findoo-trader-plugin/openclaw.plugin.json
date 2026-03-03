@@ -1,0 +1,27 @@
+{
+  "id": "findoo-trader-plugin",
+  "name": "Findoo Trader",
+  "description": "Unified trading infrastructure — exchange registry, risk control, paper trading, strategy engine, fund management. Replaces fin-core + fin-trading + fin-paper-trading + fin-strategy-engine + fin-fund-manager.",
+  "kind": "financial",
+  "version": "2026.3.2",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "exchanges": {
+        "type": "object",
+        "description": "Exchange configurations keyed by exchange ID"
+      },
+      "trading": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "maxAutoTradeUsd": { "type": "number", "default": 100 },
+          "confirmThresholdUsd": { "type": "number", "default": 500 },
+          "maxDailyLossUsd": { "type": "number", "default": 1000 },
+          "maxPositionPct": { "type": "number", "default": 25 },
+          "maxLeverage": { "type": "number", "default": 1 }
+        }
+      }
+    }
+  }
+}

@@ -18,16 +18,12 @@ const DEFAULT_TRADING_LIMITS = {
 } as const;
 
 const FINANCIAL_PLUGIN_IDS = [
-  "fin-core",
+  "findoo-trader-plugin",
   "findoo-datahub-plugin",
   "fin-market-data",
-  "fin-trading",
   "fin-portfolio",
   "fin-monitoring",
-  "fin-paper-trading",
-  "fin-strategy-engine",
   "fin-strategy-memory",
-  "fin-fund-manager",
   "fin-expert-sdk",
   "fin-info-feed",
 ] as const;

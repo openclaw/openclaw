@@ -6,7 +6,10 @@
     <title>FinClaw Fund Dashboard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <style>
       /*__FUND_CSS__*/
@@ -23,7 +26,9 @@
         <div class="sse-dot" id="sseDot"></div>
       </div>
       <span class="topbar__clock" id="timestamp"></span>
-      <button class="settings-btn" onclick="FundUI.openSettings()" title="Fund Settings">&#9881;</button>
+      <button class="settings-btn" onclick="FundUI.openSettings()" title="Fund Settings">
+        &#9881;
+      </button>
     </div>
 
     <div class="dashboard">
@@ -35,37 +40,95 @@
             <div class="pnl" id="hero-pnl">+$0 (+0.0%)</div>
             <div class="risk-badge" id="hero-risk">normal</div>
             <div class="mini-stats">
-              <div class="mini-stat"><div class="label">Active</div><div class="value" id="hero-active">0</div></div>
-              <div class="mini-stat"><div class="label">L3 Live</div><div class="value" id="hero-l3">0</div></div>
-              <div class="mini-stat"><div class="label">Cash %</div><div class="value" id="hero-cash">0%</div></div>
+              <div class="mini-stat">
+                <div class="label">Active</div>
+                <div class="value" id="hero-active">0</div>
+              </div>
+              <div class="mini-stat">
+                <div class="label">L3 Live</div>
+                <div class="value" id="hero-l3">0</div>
+              </div>
+              <div class="mini-stat">
+                <div class="label">Cash %</div>
+                <div class="value" id="hero-cash">0%</div>
+              </div>
             </div>
           </div>
         </div>
 
         <!-- Allocation -->
         <div class="panel-card fade-up d2">
-          <div class="panel-card__head"><span class="panel-card__title"><span class="icon">&#128188;</span> Capital Allocation</span></div>
+          <div class="panel-card__head">
+            <span class="panel-card__title"
+              ><span class="icon">&#128188;</span> Capital Allocation</span
+            >
+          </div>
           <div class="chart-container"><canvas id="alloc-chart"></canvas></div>
           <table class="race-table" id="alloc-table" style="margin-top: 8px">
-            <thead><tr><th>Strategy</th><th>Alloc</th><th>Weight</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Strategy</th>
+                <th>Alloc</th>
+                <th>Weight</th>
+              </tr>
+            </thead>
             <tbody></tbody>
           </table>
         </div>
 
         <!-- Risk Gauge -->
         <div class="panel-card fade-up d3">
-          <div class="panel-card__head"><span class="panel-card__title"><span class="icon">&#128737;</span> Risk Control</span></div>
+          <div class="panel-card__head">
+            <span class="panel-card__title"><span class="icon">&#128737;</span> Risk Control</span>
+          </div>
           <div class="gauge-container">
             <svg class="gauge-svg" viewBox="0 0 160 100">
-              <path d="M 20 90 A 60 60 0 0 1 140 90" fill="none" stroke="#1e2230" stroke-width="12" stroke-linecap="round" />
-              <path id="gauge-arc" d="M 20 90 A 60 60 0 0 1 140 90" fill="none" stroke="#22c55e" stroke-width="12" stroke-linecap="round" stroke-dasharray="0 999" />
-              <text id="gauge-text" x="80" y="80" text-anchor="middle" font-size="18" font-weight="700" font-family="JetBrains Mono, monospace" fill="#eaedf3">0%</text>
+              <path
+                d="M 20 90 A 60 60 0 0 1 140 90"
+                fill="none"
+                stroke="#1e2230"
+                stroke-width="12"
+                stroke-linecap="round"
+              />
+              <path
+                id="gauge-arc"
+                d="M 20 90 A 60 60 0 0 1 140 90"
+                fill="none"
+                stroke="#22c55e"
+                stroke-width="12"
+                stroke-linecap="round"
+                stroke-dasharray="0 999"
+              />
+              <text
+                id="gauge-text"
+                x="80"
+                y="80"
+                text-anchor="middle"
+                font-size="18"
+                font-weight="700"
+                font-family="JetBrains Mono, monospace"
+                fill="#eaedf3"
+              >
+                0%
+              </text>
             </svg>
             <div class="gauge-info">
-              <div class="stat-row"><span class="stat-label">Daily DD</span><span class="stat-value" id="risk-dd">0%</span></div>
-              <div class="stat-row"><span class="stat-label">Max Allowed</span><span class="stat-value" id="risk-max">10%</span></div>
-              <div class="stat-row"><span class="stat-label">Exposure</span><span class="stat-value" id="risk-exposure">0%</span></div>
-              <div class="stat-row"><span class="stat-label">Scale Factor</span><span class="stat-value" id="risk-scale">100%</span></div>
+              <div class="stat-row">
+                <span class="stat-label">Daily DD</span
+                ><span class="stat-value" id="risk-dd">0%</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-label">Max Allowed</span
+                ><span class="stat-value" id="risk-max">10%</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-label">Exposure</span
+                ><span class="stat-value" id="risk-exposure">0%</span>
+              </div>
+              <div class="stat-row">
+                <span class="stat-label">Scale Factor</span
+                ><span class="stat-value" id="risk-scale">100%</span>
+              </div>
             </div>
           </div>
           <ul class="action-list" id="risk-actions"></ul>
@@ -73,12 +136,29 @@
 
         <!-- Leaderboard -->
         <div class="panel-card panel-full fade-up d4">
-          <div class="panel-card__head"><span class="panel-card__title"><span class="icon">&#128200;</span> Strategy Leaderboard</span></div>
+          <div class="panel-card__head">
+            <span class="panel-card__title"
+              ><span class="icon">&#128200;</span> Strategy Leaderboard</span
+            >
+          </div>
           <table class="race-table" id="lb-table">
-            <thead><tr><th>#</th><th>Strategy</th><th>Level</th><th>Score</th><th>Fitness</th><th>Sharpe</th><th>MaxDD</th><th>Trades</th></tr></thead>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Strategy</th>
+                <th>Level</th>
+                <th>Score</th>
+                <th>Fitness</th>
+                <th>Sharpe</th>
+                <th>MaxDD</th>
+                <th>Trades</th>
+              </tr>
+            </thead>
             <tbody></tbody>
           </table>
-          <div id="lb-empty" class="empty-state" style="display: none">No eligible strategies found.</div>
+          <div id="lb-empty" class="empty-state" style="display: none">
+            No eligible strategies found.
+          </div>
         </div>
       </div>
       <footer class="dashboard-footer">OpenFinClaw Fund Manager</footer>
@@ -92,28 +172,147 @@
           <button class="slideover__close" onclick="FundUI.closeSettings()">&times;</button>
         </div>
         <div class="slideover__body">
-          <form id="fundSettingsForm" onsubmit="event.preventDefault(); FundUI.saveSettings();">
+          <form
+            id="fundSettingsForm"
+            onsubmit="
+              event.preventDefault();
+              FundUI.saveSettings();
+            "
+          >
             <div class="settings-section">
               <div class="settings-section__title">Capital Allocation</div>
-              <div class="fg"><label class="fg__label">Total Capital (USD)</label><input name="totalCapital" id="fs_totalCapital" type="number" step="any" style="width:100%" /></div>
-              <div class="fg"><label class="fg__label">Cash Reserve %</label><input name="cashReservePct" id="fs_cashReservePct" type="number" step="any" style="width:100%" /></div>
-              <div class="fg"><label class="fg__label">Max Single Strategy %</label><input name="maxSingleStrategyPct" id="fs_maxSingleStrategyPct" type="number" step="any" style="width:100%" /></div>
-              <div class="fg"><label class="fg__label">Max Total Exposure %</label><input name="maxExposurePct" id="fs_maxExposurePct" type="number" step="any" style="width:100%" /></div>
-              <div class="fg"><label class="fg__label">Rebalance Frequency</label><select name="rebalanceFrequency" id="fs_rebalanceFrequency" style="width:100%"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></div>
+              <div class="fg">
+                <label class="fg__label">Total Capital (USD)</label
+                ><input
+                  name="totalCapital"
+                  id="fs_totalCapital"
+                  type="number"
+                  step="any"
+                  style="width: 100%"
+                />
+              </div>
+              <div class="fg">
+                <label class="fg__label">Cash Reserve %</label
+                ><input
+                  name="cashReservePct"
+                  id="fs_cashReservePct"
+                  type="number"
+                  step="any"
+                  style="width: 100%"
+                />
+              </div>
+              <div class="fg">
+                <label class="fg__label">Max Single Strategy %</label
+                ><input
+                  name="maxSingleStrategyPct"
+                  id="fs_maxSingleStrategyPct"
+                  type="number"
+                  step="any"
+                  style="width: 100%"
+                />
+              </div>
+              <div class="fg">
+                <label class="fg__label">Max Total Exposure %</label
+                ><input
+                  name="maxExposurePct"
+                  id="fs_maxExposurePct"
+                  type="number"
+                  step="any"
+                  style="width: 100%"
+                />
+              </div>
+              <div class="fg">
+                <label class="fg__label">Rebalance Frequency</label
+                ><select name="rebalanceFrequency" id="fs_rebalanceFrequency" style="width: 100%">
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
             </div>
             <details class="settings-details">
               <summary>Backtest Engine Defaults</summary>
-              <div class="fg"><label class="fg__label">Commission Rate</label><input name="commissionRate" id="fs_commissionRate" type="number" step="any" style="width:100%" /></div>
-              <div class="fg"><label class="fg__label">Slippage Rate</label><input name="slippageRate" id="fs_slippageRate" type="number" step="any" style="width:100%" /></div>
-              <div class="fg"><label class="fg__label">Walk-Forward Windows</label><input name="wfWindows" id="fs_wfWindows" type="number" step="1" style="width:100%" /></div>
-              <div class="fg"><label class="fg__label">Walk-Forward Sample Ratio</label><input name="wfSampleRatio" id="fs_wfSampleRatio" type="number" step="any" style="width:100%" /></div>
+              <div class="fg">
+                <label class="fg__label">Commission Rate</label
+                ><input
+                  name="commissionRate"
+                  id="fs_commissionRate"
+                  type="number"
+                  step="any"
+                  style="width: 100%"
+                />
+              </div>
+              <div class="fg">
+                <label class="fg__label">Slippage Rate</label
+                ><input
+                  name="slippageRate"
+                  id="fs_slippageRate"
+                  type="number"
+                  step="any"
+                  style="width: 100%"
+                />
+              </div>
+              <div class="fg">
+                <label class="fg__label">Walk-Forward Windows</label
+                ><input
+                  name="wfWindows"
+                  id="fs_wfWindows"
+                  type="number"
+                  step="1"
+                  style="width: 100%"
+                />
+              </div>
+              <div class="fg">
+                <label class="fg__label">Walk-Forward Sample Ratio</label
+                ><input
+                  name="wfSampleRatio"
+                  id="fs_wfSampleRatio"
+                  type="number"
+                  step="any"
+                  style="width: 100%"
+                />
+              </div>
             </details>
             <details class="settings-details">
               <summary>Strategy Evolution</summary>
-              <div class="fg"><label class="fg__label">Evaluation Interval</label><select name="evaluationInterval" id="fs_evaluationInterval" style="width:100%"><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option></select></div>
-              <div class="fg"><label class="fg__label">Cull Ratio %</label><input name="cullRatio" id="fs_cullRatio" type="number" step="any" style="width:100%" /></div>
-              <div class="fg"><label class="fg__label">Mutation Probability</label><input name="mutationProbability" id="fs_mutationProbability" type="number" step="any" style="width:100%" /></div>
-              <div class="fg"><label class="fg__label">Min Strategies</label><input name="minStrategies" id="fs_minStrategies" type="number" step="1" style="width:100%" /></div>
+              <div class="fg">
+                <label class="fg__label">Evaluation Interval</label
+                ><select name="evaluationInterval" id="fs_evaluationInterval" style="width: 100%">
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="quarterly">Quarterly</option>
+                </select>
+              </div>
+              <div class="fg">
+                <label class="fg__label">Cull Ratio %</label
+                ><input
+                  name="cullRatio"
+                  id="fs_cullRatio"
+                  type="number"
+                  step="any"
+                  style="width: 100%"
+                />
+              </div>
+              <div class="fg">
+                <label class="fg__label">Mutation Probability</label
+                ><input
+                  name="mutationProbability"
+                  id="fs_mutationProbability"
+                  type="number"
+                  step="any"
+                  style="width: 100%"
+                />
+              </div>
+              <div class="fg">
+                <label class="fg__label">Min Strategies</label
+                ><input
+                  name="minStrategies"
+                  id="fs_minStrategies"
+                  type="number"
+                  step="1"
+                  style="width: 100%"
+                />
+              </div>
             </details>
             <button type="submit" class="submit-btn">Save Settings</button>
           </form>
@@ -126,29 +325,43 @@
     <script>
       // SettingsBridge (keep intact)
       var SettingsBridge = (function () {
-        var _reqId = 0, _pending = {}, TIMEOUT_MS = 5000;
+        var _reqId = 0,
+          _pending = {},
+          TIMEOUT_MS = 5000;
         window.addEventListener("message", function (ev) {
           var d = ev.data;
           if (!d || typeof d !== "object") return;
-          if ((d.type === "fin-config-patch-result" || d.type === "fin-config-get-result") && d._reqId != null) {
+          if (
+            (d.type === "fin-config-patch-result" || d.type === "fin-config-get-result") &&
+            d._reqId != null
+          ) {
             var p = _pending[d._reqId];
             if (!p) return;
-            clearTimeout(p.timer); delete _pending[d._reqId];
+            clearTimeout(p.timer);
+            delete _pending[d._reqId];
             if (d.ok) p.resolve(d.type === "fin-config-get-result" ? d.values || {} : d);
             else p.reject(new Error(d.error || "Bridge error"));
           }
         });
         function _send(msg) {
-          var id = ++_reqId; msg._reqId = id;
+          var id = ++_reqId;
+          msg._reqId = id;
           return new Promise(function (resolve, reject) {
-            var timer = setTimeout(function () { delete _pending[id]; reject(new Error("SettingsBridge timeout")); }, TIMEOUT_MS);
+            var timer = setTimeout(function () {
+              delete _pending[id];
+              reject(new Error("SettingsBridge timeout"));
+            }, TIMEOUT_MS);
             _pending[id] = { resolve: resolve, reject: reject, timer: timer };
             window.parent.postMessage(msg, "*");
           });
         }
         return {
-          get: function (section) { return _send({ type: "fin-config-get", section: section }); },
-          patch: function (section, values) { return _send({ type: "fin-config-patch", section: section, values: values }); },
+          get: function (section) {
+            return _send({ type: "fin-config-get", section: section });
+          },
+          patch: function (section, values) {
+            return _send({ type: "fin-config-patch", section: section, values: values });
+          },
         };
       })();
 
@@ -157,43 +370,107 @@
         el.className = "toast" + (type ? " toast--" + type : "");
         el.textContent = msg;
         document.getElementById("toastContainer").appendChild(el);
-        requestAnimationFrame(function () { el.classList.add("show"); });
-        setTimeout(function () { el.classList.remove("show"); setTimeout(function () { el.remove(); }, 300); }, 3000);
+        requestAnimationFrame(function () {
+          el.classList.add("show");
+        });
+        setTimeout(function () {
+          el.classList.remove("show");
+          setTimeout(function () {
+            el.remove();
+          }, 300);
+        }, 3000);
       }
 
       var FundUI = {
-        openSettings: function () { document.getElementById("slideBackdrop").classList.add("open"); FundUI.loadSettings(); },
-        closeSettings: function () { document.getElementById("slideBackdrop").classList.remove("open"); },
+        openSettings: function () {
+          document.getElementById("slideBackdrop").classList.add("open");
+          FundUI.loadSettings();
+        },
+        closeSettings: function () {
+          document.getElementById("slideBackdrop").classList.remove("open");
+        },
         loadSettings: function () {
-          Promise.all([SettingsBridge.get("fund"), SettingsBridge.get("backtest"), SettingsBridge.get("evolution")])
+          Promise.all([
+            SettingsBridge.get("fund"),
+            SettingsBridge.get("backtest"),
+            SettingsBridge.get("evolution"),
+          ])
             .then(function (results) {
-              var fund = results[0] || {}, bt = results[1] || {}, evo = results[2] || {};
-              var el = function (id) { return document.getElementById(id); };
+              var fund = results[0] || {},
+                bt = results[1] || {},
+                evo = results[2] || {};
+              var el = function (id) {
+                return document.getElementById(id);
+              };
               if (el("fs_totalCapital")) el("fs_totalCapital").value = fund.totalCapital ?? "";
-              if (el("fs_cashReservePct")) el("fs_cashReservePct").value = fund.cashReservePct ?? "";
-              if (el("fs_maxSingleStrategyPct")) el("fs_maxSingleStrategyPct").value = fund.maxSingleStrategyPct ?? "";
-              if (el("fs_maxExposurePct")) el("fs_maxExposurePct").value = fund.maxExposurePct ?? "";
-              if (el("fs_rebalanceFrequency")) el("fs_rebalanceFrequency").value = fund.rebalanceFrequency || "weekly";
+              if (el("fs_cashReservePct"))
+                el("fs_cashReservePct").value = fund.cashReservePct ?? "";
+              if (el("fs_maxSingleStrategyPct"))
+                el("fs_maxSingleStrategyPct").value = fund.maxSingleStrategyPct ?? "";
+              if (el("fs_maxExposurePct"))
+                el("fs_maxExposurePct").value = fund.maxExposurePct ?? "";
+              if (el("fs_rebalanceFrequency"))
+                el("fs_rebalanceFrequency").value = fund.rebalanceFrequency || "weekly";
               if (el("fs_commissionRate")) el("fs_commissionRate").value = bt.commissionRate ?? "";
               if (el("fs_slippageRate")) el("fs_slippageRate").value = bt.slippageRate ?? "";
               if (el("fs_wfWindows")) el("fs_wfWindows").value = bt.wfWindows ?? "";
               if (el("fs_wfSampleRatio")) el("fs_wfSampleRatio").value = bt.wfSampleRatio ?? "";
-              if (el("fs_evaluationInterval")) el("fs_evaluationInterval").value = evo.evaluationInterval || "monthly";
+              if (el("fs_evaluationInterval"))
+                el("fs_evaluationInterval").value = evo.evaluationInterval || "monthly";
               if (el("fs_cullRatio")) el("fs_cullRatio").value = evo.cullRatio ?? "";
-              if (el("fs_mutationProbability")) el("fs_mutationProbability").value = evo.mutationProbability ?? "";
+              if (el("fs_mutationProbability"))
+                el("fs_mutationProbability").value = evo.mutationProbability ?? "";
               if (el("fs_minStrategies")) el("fs_minStrategies").value = evo.minStrategies ?? "";
-            }).catch(function (e) { fundToast("Failed to load: " + e.message, "error"); });
+            })
+            .catch(function (e) {
+              fundToast("Failed to load: " + e.message, "error");
+            });
         },
         saveSettings: function () {
-          var el = function (id) { return document.getElementById(id); };
-          var pn = function (v) { if (v === "" || v == null) return undefined; var n = parseFloat(v); return Number.isFinite(n) ? n : undefined; };
-          var pi = function (v) { if (v === "" || v == null) return undefined; var n = parseInt(v, 10); return Number.isFinite(n) ? n : undefined; };
-          var fp = { totalCapital: pn(el("fs_totalCapital").value), cashReservePct: pn(el("fs_cashReservePct").value), maxSingleStrategyPct: pn(el("fs_maxSingleStrategyPct").value), maxExposurePct: pn(el("fs_maxExposurePct").value), rebalanceFrequency: el("fs_rebalanceFrequency").value || undefined };
-          var bp = { commissionRate: pn(el("fs_commissionRate").value), slippageRate: pn(el("fs_slippageRate").value), wfWindows: pi(el("fs_wfWindows").value), wfSampleRatio: pn(el("fs_wfSampleRatio").value) };
-          var ep = { evaluationInterval: el("fs_evaluationInterval").value || undefined, cullRatio: pn(el("fs_cullRatio").value), mutationProbability: pn(el("fs_mutationProbability").value), minStrategies: pi(el("fs_minStrategies").value) };
-          Promise.all([SettingsBridge.patch("fund", fp), SettingsBridge.patch("backtest", bp), SettingsBridge.patch("evolution", ep)])
-            .then(function () { fundToast("Settings saved", "success"); FundUI.closeSettings(); })
-            .catch(function (e) { fundToast("Save failed: " + e.message, "error"); });
+          var el = function (id) {
+            return document.getElementById(id);
+          };
+          var pn = function (v) {
+            if (v === "" || v == null) return undefined;
+            var n = parseFloat(v);
+            return Number.isFinite(n) ? n : undefined;
+          };
+          var pi = function (v) {
+            if (v === "" || v == null) return undefined;
+            var n = parseInt(v, 10);
+            return Number.isFinite(n) ? n : undefined;
+          };
+          var fp = {
+            totalCapital: pn(el("fs_totalCapital").value),
+            cashReservePct: pn(el("fs_cashReservePct").value),
+            maxSingleStrategyPct: pn(el("fs_maxSingleStrategyPct").value),
+            maxExposurePct: pn(el("fs_maxExposurePct").value),
+            rebalanceFrequency: el("fs_rebalanceFrequency").value || undefined,
+          };
+          var bp = {
+            commissionRate: pn(el("fs_commissionRate").value),
+            slippageRate: pn(el("fs_slippageRate").value),
+            wfWindows: pi(el("fs_wfWindows").value),
+            wfSampleRatio: pn(el("fs_wfSampleRatio").value),
+          };
+          var ep = {
+            evaluationInterval: el("fs_evaluationInterval").value || undefined,
+            cullRatio: pn(el("fs_cullRatio").value),
+            mutationProbability: pn(el("fs_mutationProbability").value),
+            minStrategies: pi(el("fs_minStrategies").value),
+          };
+          Promise.all([
+            SettingsBridge.patch("fund", fp),
+            SettingsBridge.patch("backtest", bp),
+            SettingsBridge.patch("evolution", ep),
+          ])
+            .then(function () {
+              fundToast("Settings saved", "success");
+              FundUI.closeSettings();
+            })
+            .catch(function (e) {
+              fundToast("Save failed: " + e.message, "error");
+            });
         },
       };
     </script>
@@ -201,29 +478,54 @@
       (function () {
         var DATA = /*__FUND_DATA__*/ {};
         var allocChart = null;
-        var ALLOC_COLORS = ["#ff5c5c", "#3b82f6", "#22c55e", "#f59e0b", "#a855f7", "#5c6070", "#ef4444"];
-        var RISK_COLORS = { normal: "#22c55e", caution: "#f59e0b", warning: "#ff5c5c", critical: "#E23D2D" };
+        var ALLOC_COLORS = [
+          "#ff5c5c",
+          "#3b82f6",
+          "#22c55e",
+          "#f59e0b",
+          "#a855f7",
+          "#5c6070",
+          "#ef4444",
+        ];
+        var RISK_COLORS = {
+          normal: "#22c55e",
+          caution: "#f59e0b",
+          warning: "#ff5c5c",
+          critical: "#E23D2D",
+        };
 
-        function fmt(n) { return (n || 0).toLocaleString("en-US", { maximumFractionDigits: 2 }); }
-        function signed(n) { return (n >= 0 ? "+" : "") + fmt(n); }
+        function fmt(n) {
+          return (n || 0).toLocaleString("en-US", { maximumFractionDigits: 2 });
+        }
+        function signed(n) {
+          return (n >= 0 ? "+" : "") + fmt(n);
+        }
 
         function getDefaultActions(level) {
           switch (level) {
-            case "critical": return ["HALT all trading", "Notify user", "Close risky positions"];
-            case "warning": return ["Shrink positions by 50%", "No new entries"];
-            case "caution": return ["Reduce sizes by 20%", "Tighten stops"];
-            default: return ["Normal operations"];
+            case "critical":
+              return ["HALT all trading", "Notify user", "Close risky positions"];
+            case "warning":
+              return ["Shrink positions by 50%", "No new entries"];
+            case "caution":
+              return ["Reduce sizes by 20%", "Tighten stops"];
+            default:
+              return ["Normal operations"];
           }
         }
 
         function updateDashboard(data) {
           DATA = data;
-          document.getElementById("timestamp").textContent = new Date().toLocaleTimeString("en-US", { hour12: false });
+          document.getElementById("timestamp").textContent = new Date().toLocaleTimeString(
+            "en-US",
+            { hour12: false },
+          );
 
           var s = data.status || {};
           document.getElementById("hero-equity").textContent = "$" + fmt(s.totalEquity || 0);
           var pnlEl = document.getElementById("hero-pnl");
-          var pnl = s.todayPnl || 0, pnlPct = s.todayPnlPct || 0;
+          var pnl = s.todayPnl || 0,
+            pnlPct = s.todayPnlPct || 0;
           pnlEl.textContent = signed(pnl) + " (" + signed(pnlPct) + "%)";
           pnlEl.className = "pnl " + (pnl >= 0 ? "pnl-positive" : "pnl-negative");
           var riskEl = document.getElementById("hero-risk");
@@ -231,80 +533,149 @@
           riskEl.className = "risk-badge risk-" + (s.riskLevel || "normal");
 
           var byLevel = s.byLevel || {};
-          document.getElementById("hero-active").textContent = (byLevel.L3_LIVE || 0) + (byLevel.L2_PAPER || 0) + (byLevel.L1_BACKTEST || 0);
+          document.getElementById("hero-active").textContent =
+            (byLevel.L3_LIVE || 0) + (byLevel.L2_PAPER || 0) + (byLevel.L1_BACKTEST || 0);
           document.getElementById("hero-l3").textContent = byLevel.L3_LIVE || 0;
           var alloc = data.allocations || {};
-          document.getElementById("hero-cash").textContent = (alloc.totalCapital > 0 ? (((alloc.cashReserve || 0) / alloc.totalCapital) * 100).toFixed(1) : "0") + "%";
+          document.getElementById("hero-cash").textContent =
+            (alloc.totalCapital > 0
+              ? (((alloc.cashReserve || 0) / alloc.totalCapital) * 100).toFixed(1)
+              : "0") + "%";
 
           // Allocation
           var items = alloc.items || [];
           var tbody = document.querySelector("#alloc-table tbody");
           tbody.innerHTML = "";
           for (var i = 0; i < items.length; i++) {
-            var a = items[i], tr = document.createElement("tr");
-            var td1 = document.createElement("td"); td1.textContent = a.strategyId; td1.style.color = "var(--text-hi)";
-            var td2 = document.createElement("td"); td2.textContent = "$" + fmt(a.capitalUsd);
-            var td3 = document.createElement("td"); td3.textContent = a.weightPct.toFixed(1) + "%";
-            tr.append(td1, td2, td3); tbody.appendChild(tr);
+            var a = items[i],
+              tr = document.createElement("tr");
+            var td1 = document.createElement("td");
+            td1.textContent = a.strategyId;
+            td1.style.color = "var(--text-hi)";
+            var td2 = document.createElement("td");
+            td2.textContent = "$" + fmt(a.capitalUsd);
+            var td3 = document.createElement("td");
+            td3.textContent = a.weightPct.toFixed(1) + "%";
+            tr.append(td1, td2, td3);
+            tbody.appendChild(tr);
           }
 
           if (typeof Chart !== "undefined") {
-            var labels = items.map(function (a) { return a.strategyId; });
-            var values = items.map(function (a) { return a.capitalUsd; });
+            var labels = items.map(function (a) {
+              return a.strategyId;
+            });
+            var values = items.map(function (a) {
+              return a.capitalUsd;
+            });
             var colors = ALLOC_COLORS.slice();
-            if (alloc.cashReserve > 0) { labels.push("Cash"); values.push(alloc.cashReserve); colors.push("#1e2230"); }
+            if (alloc.cashReserve > 0) {
+              labels.push("Cash");
+              values.push(alloc.cashReserve);
+              colors.push("#1e2230");
+            }
             if (allocChart && items.length > 0) {
-              allocChart.data.labels = labels; allocChart.data.datasets[0].data = values;
+              allocChart.data.labels = labels;
+              allocChart.data.datasets[0].data = values;
               allocChart.data.datasets[0].backgroundColor = colors.slice(0, labels.length);
               allocChart.update("none");
             } else if (items.length > 0) {
               try {
                 allocChart = new Chart(document.getElementById("alloc-chart"), {
                   type: "doughnut",
-                  data: { labels: labels, datasets: [{ data: values, backgroundColor: colors.slice(0, labels.length), borderColor: "#151820", borderWidth: 2 }] },
-                  options: { responsive: true, maintainAspectRatio: false, cutout: "70%", plugins: { legend: { position: "right", labels: { color: "#5c6070", font: { size: 10, family: "JetBrains Mono, monospace" } } } } },
+                  data: {
+                    labels: labels,
+                    datasets: [
+                      {
+                        data: values,
+                        backgroundColor: colors.slice(0, labels.length),
+                        borderColor: "#151820",
+                        borderWidth: 2,
+                      },
+                    ],
+                  },
+                  options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: "70%",
+                    plugins: {
+                      legend: {
+                        position: "right",
+                        labels: {
+                          color: "#5c6070",
+                          font: { size: 10, family: "JetBrains Mono, monospace" },
+                        },
+                      },
+                    },
+                  },
                 });
-              } catch (e) { console.warn("Chart error:", e); }
+              } catch (e) {
+                console.warn("Chart error:", e);
+              }
             }
           }
 
           // Risk
           var risk = data.risk || {};
-          var dd = risk.dailyDrawdown || 0, maxDD = risk.maxAllowedDrawdown || 10;
+          var dd = risk.dailyDrawdown || 0,
+            maxDD = risk.maxAllowedDrawdown || 10;
           var ratio = Math.min(dd / maxDD, 1);
           var gaugeArc = document.getElementById("gauge-arc");
-          gaugeArc.setAttribute("stroke-dasharray", (ratio * 188.5) + " 188.5");
+          gaugeArc.setAttribute("stroke-dasharray", ratio * 188.5 + " 188.5");
           gaugeArc.setAttribute("stroke", RISK_COLORS[risk.riskLevel] || "#22c55e");
           document.getElementById("gauge-text").textContent = dd.toFixed(1) + "%";
           document.getElementById("risk-dd").textContent = "-" + dd.toFixed(1) + "%";
           document.getElementById("risk-max").textContent = maxDD + "%";
-          document.getElementById("risk-exposure").textContent = (risk.exposurePct || 0).toFixed(1) + "%";
-          document.getElementById("risk-scale").textContent = ((risk.scaleFactor || 1) * 100).toFixed(0) + "%";
+          document.getElementById("risk-exposure").textContent =
+            (risk.exposurePct || 0).toFixed(1) + "%";
+          document.getElementById("risk-scale").textContent =
+            ((risk.scaleFactor || 1) * 100).toFixed(0) + "%";
           var actions = risk.actions || getDefaultActions(risk.riskLevel);
           var actionList = document.getElementById("risk-actions");
           actionList.innerHTML = "";
-          for (var j = 0; j < actions.length; j++) { var li = document.createElement("li"); li.textContent = actions[j]; actionList.appendChild(li); }
+          for (var j = 0; j < actions.length; j++) {
+            var li = document.createElement("li");
+            li.textContent = actions[j];
+            actionList.appendChild(li);
+          }
 
           // Leaderboard
           var lb = data.leaderboard || [];
           var lbTbody = document.querySelector("#lb-table tbody");
           var lbEmpty = document.getElementById("lb-empty");
           lbTbody.innerHTML = "";
-          if (lb.length === 0) { lbEmpty.style.display = "block"; document.getElementById("lb-table").style.display = "none"; }
-          else {
-            lbEmpty.style.display = "none"; document.getElementById("lb-table").style.display = "";
+          if (lb.length === 0) {
+            lbEmpty.style.display = "block";
+            document.getElementById("lb-table").style.display = "none";
+          } else {
+            lbEmpty.style.display = "none";
+            document.getElementById("lb-table").style.display = "";
             for (var k = 0; k < lb.length; k++) {
-              var e = lb[k], tr2 = document.createElement("tr");
+              var e = lb[k],
+                tr2 = document.createElement("tr");
               var lvlKey = e.level.split("_")[0].toLowerCase();
-              var sharpeClass = e.sharpe >= 1 ? "sharpe-good" : e.sharpe >= 0 ? "sharpe-ok" : "sharpe-bad";
-              var tdR = document.createElement("td"); tdR.textContent = String(e.rank);
-              var tdN = document.createElement("td"); tdN.textContent = e.strategyName; tdN.style.color = "var(--text-hi)";
-              var tdL = document.createElement("td"); var lvl = document.createElement("span"); lvl.className = "level-badge level-badge--" + lvlKey; lvl.textContent = lvlKey.toUpperCase(); tdL.appendChild(lvl);
-              var tdSc = document.createElement("td"); tdSc.textContent = e.leaderboardScore.toFixed(3);
-              var tdF = document.createElement("td"); tdF.textContent = e.fitness.toFixed(3);
-              var tdSh = document.createElement("td"); tdSh.className = sharpeClass; tdSh.textContent = e.sharpe.toFixed(2);
-              var tdDD = document.createElement("td"); tdDD.textContent = e.maxDrawdown.toFixed(1) + "%";
-              var tdTr = document.createElement("td"); tdTr.textContent = String(e.totalTrades);
+              var sharpeClass =
+                e.sharpe >= 1 ? "sharpe-good" : e.sharpe >= 0 ? "sharpe-ok" : "sharpe-bad";
+              var tdR = document.createElement("td");
+              tdR.textContent = String(e.rank);
+              var tdN = document.createElement("td");
+              tdN.textContent = e.strategyName;
+              tdN.style.color = "var(--text-hi)";
+              var tdL = document.createElement("td");
+              var lvl = document.createElement("span");
+              lvl.className = "level-badge level-badge--" + lvlKey;
+              lvl.textContent = lvlKey.toUpperCase();
+              tdL.appendChild(lvl);
+              var tdSc = document.createElement("td");
+              tdSc.textContent = e.leaderboardScore.toFixed(3);
+              var tdF = document.createElement("td");
+              tdF.textContent = e.fitness.toFixed(3);
+              var tdSh = document.createElement("td");
+              tdSh.className = sharpeClass;
+              tdSh.textContent = e.sharpe.toFixed(2);
+              var tdDD = document.createElement("td");
+              tdDD.textContent = e.maxDrawdown.toFixed(1) + "%";
+              var tdTr = document.createElement("td");
+              tdTr.textContent = String(e.totalTrades);
               tr2.append(tdR, tdN, tdL, tdSc, tdF, tdSh, tdDD, tdTr);
               lbTbody.appendChild(tr2);
             }
@@ -314,19 +685,42 @@
         function startSSE() {
           var sseDot = document.getElementById("sseDot");
           var es = new EventSource("/api/v1/fund/stream");
-          es.onopen = function () { if (sseDot) sseDot.classList.add("connected"); };
-          es.onmessage = function (ev) { try { updateDashboard(JSON.parse(ev.data)); } catch (err) { console.warn("SSE error:", err); } };
-          es.onerror = function () { if (sseDot) sseDot.classList.remove("connected"); es.close(); startPolling(); };
+          es.onopen = function () {
+            if (sseDot) sseDot.classList.add("connected");
+          };
+          es.onmessage = function (ev) {
+            try {
+              updateDashboard(JSON.parse(ev.data));
+            } catch (err) {
+              console.warn("SSE error:", err);
+            }
+          };
+          es.onerror = function () {
+            if (sseDot) sseDot.classList.remove("connected");
+            es.close();
+            startPolling();
+          };
         }
         function startPolling() {
           setInterval(function () {
-            fetch("/api/v1/fund/status").then(function (r) { return r.json(); })
-              .then(function (d) { updateDashboard({ status: d, leaderboard: DATA.leaderboard, allocations: DATA.allocations, risk: DATA.risk }); })
+            fetch("/api/v1/fund/status")
+              .then(function (r) {
+                return r.json();
+              })
+              .then(function (d) {
+                updateDashboard({
+                  status: d,
+                  leaderboard: DATA.leaderboard,
+                  allocations: DATA.allocations,
+                  risk: DATA.risk,
+                });
+              })
               .catch(function () {});
           }, 30000);
         }
         updateDashboard(DATA);
-        if (typeof EventSource !== "undefined") startSSE(); else startPolling();
+        if (typeof EventSource !== "undefined") startSSE();
+        else startPolling();
       })();
     </script>
   </body>

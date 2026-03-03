@@ -532,12 +532,12 @@ const plugin = {
                 );
               }
             } else if (record.level === "L3_LIVE") {
-              const finCore = runtime.services?.get?.("fin-exchange-registry") as
+              const liveExecutor = runtime.services?.get?.("fin-live-executor") as
                 | { createOrder?: (...args: unknown[]) => Promise<unknown> }
                 | undefined;
-              if (finCore?.createOrder) {
+              if (liveExecutor?.createOrder) {
                 const quantity = ((signal.sizePct / 100) * ctx.portfolio.equity) / latestBar.close;
-                orderResult = await finCore.createOrder(
+                orderResult = await liveExecutor.createOrder(
                   signal.symbol || symbol,
                   signal.orderType,
                   signal.action === "buy" ? "buy" : "sell",
@@ -545,7 +545,7 @@ const plugin = {
                   signal.limitPrice,
                 );
               } else {
-                orderResult = { warning: "Live exchange not available, order not submitted" };
+                orderResult = { warning: "Live executor not available, order not submitted" };
               }
             }
 

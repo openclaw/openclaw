@@ -4,7 +4,14 @@
 
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import type { AgentEventSqliteStore } from "./agent-event-sqlite-store.js";
-import type { HttpReq, HttpRes, RuntimeServices, StrategyRegistryLike } from "./types-http.js";
+import type {
+  HttpReq,
+  HttpRes,
+  RuntimeServices,
+  StrategyRegistryLike,
+  BacktestEngineLike,
+  DataProviderLike,
+} from "./types-http.js";
 import { parseJsonBody, jsonResponse, errorResponse } from "./types-http.js";
 
 export function registerStrategyRoutes(
@@ -194,6 +201,102 @@ export function registerStrategyRoutes(
         });
 
         jsonResponse(res, 200, { status: "promoted", id, from: strategy.level, to: nextLevel });
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
+  // POST /api/v1/finance/strategies/pause-all -- Pause all active strategies
+  api.registerHttpRoute({
+    path: "/api/v1/finance/strategies/pause-all",
+    handler: async (_req: unknown, res: HttpRes) => {
+      try {
+        const registry = runtime.services?.get?.("fin-strategy-registry") as
+          | StrategyRegistryLike
+          | undefined;
+        if (!registry?.updateStatus) {
+          errorResponse(res, 503, "Strategy registry not available");
+          return;
+        }
+
+        const all = registry.list();
+        let paused = 0;
+        for (const s of all) {
+          if (s.status !== "paused" && s.status !== "stopped") {
+            registry.updateStatus(s.id, "paused");
+            paused++;
+          }
+        }
+
+        eventStore.addEvent({
+          type: "system",
+          title: `All strategies paused (${paused})`,
+          detail: `${paused} strategies paused by user`,
+          status: "completed",
+        });
+
+        jsonResponse(res, 200, { status: "paused_all", count: paused });
+      } catch (err) {
+        errorResponse(res, 500, (err as Error).message);
+      }
+    },
+  });
+
+  // POST /api/v1/finance/strategies/backtest-all -- Run backtests for all strategies
+  api.registerHttpRoute({
+    path: "/api/v1/finance/strategies/backtest-all",
+    handler: async (_req: HttpReq, res: HttpRes) => {
+      try {
+        const registry = runtime.services?.get?.("fin-strategy-registry") as
+          | StrategyRegistryLike
+          | undefined;
+        if (!registry) {
+          errorResponse(res, 503, "Strategy registry not available");
+          return;
+        }
+
+        const backtestEngine = runtime.services?.get?.("fin-backtest-engine") as
+          | BacktestEngineLike
+          | undefined;
+        if (!backtestEngine) {
+          errorResponse(res, 503, "Backtest engine not available");
+          return;
+        }
+
+        const dataProvider = runtime.services?.get?.("fin-data-provider") as
+          | DataProviderLike
+          | undefined;
+        if (!dataProvider) {
+          errorResponse(res, 503, "Data provider not available");
+          return;
+        }
+
+        const strategies = registry.list();
+        const results: Array<{ id: string; name: string; success: boolean; error?: string; result?: Record<string, unknown> }> = [];
+
+        for (const s of strategies) {
+          try {
+            const detail = registry.get?.(s.id);
+            const symbol = (detail as { symbol?: string } | undefined)?.symbol ?? "BTC/USDT";
+            const definition = (detail as { definition?: Record<string, unknown> } | undefined)?.definition ?? {};
+            const ohlcv = await dataProvider.getOHLCV(symbol, "1d", 365);
+            const result = backtestEngine.run(definition, ohlcv, { initialCapital: 10000 });
+            registry.updateBacktest?.(s.id, result as unknown as Record<string, unknown>);
+            results.push({ id: s.id, name: s.name, success: true, result: result as unknown as Record<string, unknown> });
+          } catch (err) {
+            results.push({ id: s.id, name: s.name, success: false, error: (err as Error).message });
+          }
+        }
+
+        eventStore.addEvent({
+          type: "system",
+          title: `Batch backtest completed (${results.filter((r) => r.success).length}/${results.length})`,
+          detail: `${results.length} strategies backtested`,
+          status: "completed",
+        });
+
+        jsonResponse(res, 200, { status: "completed", results });
       } catch (err) {
         errorResponse(res, 500, (err as Error).message);
       }

@@ -17,6 +17,7 @@ import {
 } from "./data-gathering.js";
 import type { ExchangeHealthStore } from "./exchange-health-store.js";
 import type { RiskController } from "./risk-controller.js";
+import { registerAiChatRoute } from "./routes-ai-chat.js";
 import { registerAlertRoutes } from "./routes-alerts.js";
 import { registerStrategyRoutes } from "./routes-strategies.js";
 import type { DashboardTemplates } from "./template-renderer.js";
@@ -438,6 +439,9 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── Strategy Management ──
   registerStrategyRoutes(api, runtime, eventStore);
+
+  // ── AI Chat ──
+  registerAiChatRoute(api, runtime);
 
   // ── Emergency Stop ──
   api.registerHttpRoute({

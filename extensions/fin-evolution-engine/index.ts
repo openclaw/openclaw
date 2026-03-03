@@ -585,6 +585,60 @@ const plugin = {
       },
     });
 
+    // ── REST: POST /api/v1/finance/evolution/trigger ──
+
+    api.registerHttpRoute({
+      path: "/api/v1/finance/evolution/trigger",
+      handler: async (req: HttpReq, res: HttpRes) => {
+        try {
+          const body = await parseJsonBody(req);
+          const { strategyId, trigger } = body as { strategyId?: string; trigger?: string };
+          const deps = makeRdavdDeps();
+
+          if (strategyId) {
+            // Single strategy evolution
+            const result = await runRdavdCycle(
+              strategyId,
+              (trigger as "decay" | "regime_change" | "scheduled" | "manual") || "manual",
+              deps,
+            );
+
+            jsonResponse(res, 200, {
+              triggered: true,
+              strategyId,
+              outcome: result.cycle.outcome,
+              cycleId: result.cycle.id,
+              newNodeId: result.newNode?.id,
+              newFitness: result.newNode?.fitness,
+            });
+          } else {
+            // Global evolution: trigger RDAVD for all active strategies
+            const activeNodes = store.getActiveNodes();
+            const strategyIds = [...new Set(activeNodes.map((n) => n.strategyId))];
+
+            if (strategyIds.length === 0) {
+              jsonResponse(res, 200, { triggered: true, count: 0, message: "No active strategies to evolve" });
+              return;
+            }
+
+            const results: Array<{ strategyId: string; outcome: string; error?: string }> = [];
+            for (const sid of strategyIds) {
+              try {
+                const result = await runRdavdCycle(sid, "scheduled", deps);
+                results.push({ strategyId: sid, outcome: result.cycle.outcome });
+              } catch (err) {
+                results.push({ strategyId: sid, outcome: "error", error: (err as Error).message });
+              }
+            }
+
+            jsonResponse(res, 200, { triggered: true, count: results.length, results });
+          }
+        } catch (err) {
+          errorResponse(res, 500, (err as Error).message);
+        }
+      },
+    });
+
     // ── SSE: GET /api/v1/finance/evolution/stream ──
 
     api.registerHttpRoute({

@@ -1,0 +1,33 @@
+{
+  "name": "@openfinclaw/findoo-trader-plugin",
+  "version": "2026.3.2",
+  "description": "Unified trading infrastructure — exchange registry, risk control, paper trading, strategy engine, fund management",
+  "keywords": [
+    "ccxt",
+    "exchange",
+    "fund",
+    "paper-trading",
+    "risk",
+    "strategy",
+    "trading"
+  ],
+  "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
+  "type": "module",
+  "dependencies": {
+    "ccxt": "^4.4.0"
+  },
+  "devDependencies": {
+    "openfinclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openfinclaw/findoo-trader-plugin"
+    }
+  }
+}

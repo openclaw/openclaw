@@ -112,9 +112,7 @@
           <!-- Audit Feed -->
           <div class="panel-card fade-up d5" style="flex: 1">
             <div class="panel-card__head">
-              <div class="panel-card__title">
-                <span class="icon">&#128220;</span> Audit Log
-              </div>
+              <div class="panel-card__title"><span class="icon">&#128220;</span> Audit Log</div>
             </div>
             <div class="audit-feed" id="auditFeed">
               <div id="noAudit" class="empty">No audit entries</div>
@@ -162,15 +160,13 @@
         document.getElementById("statActive").textContent = stats.activeStrategies;
         document.getElementById("statTotal").textContent = stats.totalStrategies + " total";
         document.getElementById("statFitness").textContent = stats.avgFitness.toFixed(3);
-        document.getElementById("statBest").textContent =
-          "best: " + stats.bestFitness.toFixed(3);
+        document.getElementById("statBest").textContent = "best: " + stats.bestFitness.toFixed(3);
         document.getElementById("statMutations").textContent = stats.totalMutations;
         document.getElementById("statMutRate").textContent =
           (stats.mutationSuccessRate * 100).toFixed(0) + "% success";
         document.getElementById("statSurvival").textContent =
           (stats.survivalRate * 100).toFixed(0) + "%";
-        document.getElementById("statExtinct").textContent =
-          stats.extinctStrategies + " extinct";
+        document.getElementById("statExtinct").textContent = stats.extinctStrategies + " extinct";
 
         document.getElementById("pipeL0").textContent = stats.byLevel.L0;
         document.getElementById("pipeL1").textContent = stats.byLevel.L1;
@@ -276,8 +272,7 @@
           var time = a.createdAt ? a.createdAt.slice(11, 19) : "";
           html += '<div class="audit-item audit-item--' + a.type + '">';
           html += '<div class="audit-item__top">';
-          html +=
-            '<span class="audit-type audit-type--' + a.type + '">' + a.type + "</span>";
+          html += '<span class="audit-type audit-type--' + a.type + '">' + a.type + "</span>";
           html += '<span class="audit-time">' + time + "</span>";
           html += "</div>";
           if (a.strategyName) {

@@ -1925,14 +1925,15 @@
               '<div id="aiLoading" style="margin-bottom:8px"><span style="font-size:9px;color:var(--text-dim)">Thinking...</span></div>';
             msgArea.scrollTop = msgArea.scrollHeight;
 
-            postApi("/api/v1/finance/ai/ask", {
-              question: text,
-              context: { page: "strategy-lab", strategies: state.strategies.length },
+            postApi("/api/v1/finance/ai/chat", {
+              message: text,
+              page: "strategy-lab",
+              context: { strategies: state.strategies.length },
             })
               .then(function (r) {
                 var loading = $("aiLoading");
                 if (loading) loading.remove();
-                var reply = r.answer || r.message || "No response";
+                var reply = r.reply || r.answer || r.message || "No response";
                 msgArea.innerHTML +=
                   '<div style="margin-bottom:8px"><span style="background:var(--bg);color:var(--text);font-size:10px;padding:4px 8px;border-radius:var(--r-sm);display:inline-block;max-width:80%;border:1px solid var(--border)">' +
                   esc(reply) +

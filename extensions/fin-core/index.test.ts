@@ -685,10 +685,14 @@ describe("fin-core plugin", () => {
       "/api/v1/finance/strategies/resume",
       "/api/v1/finance/strategies/kill",
       "/api/v1/finance/strategies/promote",
+      "/api/v1/finance/strategies/pause-all",
+      "/api/v1/finance/strategies/backtest-all",
       // P0-5: Approval flow
       "/api/v1/finance/events/approve",
       // Risk evaluation
       "/api/v1/finance/risk/evaluate",
+      // AI chat
+      "/api/v1/finance/ai/chat",
     ];
 
     for (const path of expectedRoutes) {
@@ -1112,6 +1116,95 @@ describe("fin-core plugin", () => {
     expect(data.status).toBe("promoted");
     expect(data.from).toBe("L2_PAPER");
     expect(data.to).toBe("L3_LIVE");
+  });
+
+  // ── Pause All ──
+
+  it("POST /strategies/pause-all pauses all active strategies", async () => {
+    const { api, services, routes } = createFakeApi();
+    plugin.register(api);
+    injectFullMockServices(services);
+
+    const route = routes.get("/api/v1/finance/strategies/pause-all");
+    const recorder = createResponseRecorder();
+    (recorder.res as Record<string, unknown>).write = () => true;
+    await route?.({}, recorder.res);
+
+    const output = recorder.read();
+    expect(output.statusCode).toBe(200);
+    const data = JSON.parse(output.body);
+    expect(data.status).toBe("paused_all");
+    expect(typeof data.count).toBe("number");
+    expect(data.count).toBeGreaterThanOrEqual(0);
+  });
+
+  it("POST /strategies/pause-all returns 503 without registry", async () => {
+    const { api, routes } = createFakeApi();
+    plugin.register(api);
+
+    const route = routes.get("/api/v1/finance/strategies/pause-all");
+    const recorder = createResponseRecorder();
+    (recorder.res as Record<string, unknown>).write = () => true;
+    await route?.({}, recorder.res);
+
+    const output = recorder.read();
+    expect(output.statusCode).toBe(503);
+  });
+
+  // ── Backtest All ──
+
+  it("POST /strategies/backtest-all returns 503 without backtest engine", async () => {
+    const { api, services, routes } = createFakeApi();
+    plugin.register(api);
+    injectFullMockServices(services);
+    // Registry is available but backtest engine is not
+
+    const route = routes.get("/api/v1/finance/strategies/backtest-all");
+    const { req } = createPostReq({});
+    const recorder = createResponseRecorder();
+    (recorder.res as Record<string, unknown>).write = () => true;
+    await route?.(req, recorder.res);
+
+    const output = recorder.read();
+    expect(output.statusCode).toBe(503);
+    const data = JSON.parse(output.body);
+    expect(data.error).toContain("not available");
+  });
+
+  // ── AI Chat ──
+
+  it("POST /ai/chat returns fallback when agent not configured", async () => {
+    const { api, routes } = createFakeApi();
+    plugin.register(api);
+
+    const route = routes.get("/api/v1/finance/ai/chat");
+    const { req } = createPostReq({ message: "BTC 怎么样?", page: "overview" });
+    const recorder = createResponseRecorder();
+    (recorder.res as Record<string, unknown>).write = () => true;
+    await route?.(req, recorder.res);
+
+    const output = recorder.read();
+    expect(output.statusCode).toBe(200);
+    const data = JSON.parse(output.body);
+    expect(data.role).toBe("assistant");
+    expect(data.fallback).toBe(true);
+    expect(data.reply).toContain("BTC 怎么样?");
+  });
+
+  it("POST /ai/chat returns 400 without message", async () => {
+    const { api, routes } = createFakeApi();
+    plugin.register(api);
+
+    const route = routes.get("/api/v1/finance/ai/chat");
+    const { req } = createPostReq({});
+    const recorder = createResponseRecorder();
+    (recorder.res as Record<string, unknown>).write = () => true;
+    await route?.(req, recorder.res);
+
+    const output = recorder.read();
+    expect(output.statusCode).toBe(400);
+    const data = JSON.parse(output.body);
+    expect(data.error).toContain("Missing message");
   });
 
   // ── Emergency Stop ──

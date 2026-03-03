@@ -19,16 +19,12 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "phone-control",
   "talk-voice",
   // OpenFinClaw financial extensions
-  "fin-core",
+  "findoo-trader-plugin",
   "findoo-datahub-plugin",
   "fin-market-data",
-  "fin-trading",
   "fin-portfolio",
   "fin-monitoring",
-  "fin-paper-trading",
-  "fin-strategy-engine",
   "fin-strategy-memory",
-  "fin-fund-manager",
   "fin-expert-sdk",
   "fin-info-feed",
 ]);

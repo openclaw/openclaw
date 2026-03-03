@@ -1,7 +1,9 @@
 /**
  * P0-1 Acceptance: Binance Testnet Full-Chain Trading
  *
- * 100% real E2E — zero mocks. All tests hit the live Binance testnet.
+ * 100% real E2E — zero mocks, zero fake API.
+ * Uses the REAL OpenClaw plugin registry to wire fin-core → fin-trading,
+ * exactly as the gateway does in production.
  *
  * Requires env vars:
  *   BINANCE_TESTNET_API_KEY
@@ -13,10 +15,12 @@
  *   BINANCE_TESTNET_SECRET=yyy \
  *   pnpm test:live -- extensions/fin-trading/src/trading-acceptance.live.test.ts
  */
-import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+// Real OpenClaw plugin infrastructure — same code path as production gateway
+import { createPluginRegistry, type PluginRecord } from "../../../src/plugins/registry.js";
+import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
+import finCorePlugin from "../../fin-core/index.js";
 import { ExchangeRegistry } from "../../fin-core/src/exchange-registry.js";
-import { RiskController } from "../../fin-core/src/risk-controller.js";
 import finTradingPlugin from "../index.js";
 import { CcxtBridge, CcxtBridgeError } from "./ccxt-bridge.js";
 
@@ -32,51 +36,81 @@ function parseResult(raw: unknown): Record<string, unknown> {
   return JSON.parse(res.content[0]!.text);
 }
 
+function makePluginRecord(id: string, name: string): PluginRecord {
+  return {
+    id,
+    name,
+    version: "test",
+    description: `${name} (live test)`,
+    kind: undefined,
+    source: `extensions/${id}/index.ts`,
+    origin: "workspace" as const,
+    enabled: true,
+    status: "loaded" as const,
+    toolNames: [],
+    hookNames: [],
+    channelIds: [],
+    providerIds: [],
+    gatewayMethods: [],
+    cliCommands: [],
+    services: [],
+    commands: [],
+    httpHandlers: 0,
+    hookCount: 0,
+    configSchema: false,
+  };
+}
+
 /**
- * Build a minimal PluginApi backed by **real** ExchangeRegistry + RiskController.
- * Only the API envelope is faked; every service call hits Binance testnet.
+ * Boot the real OpenClaw plugin pipeline: createPluginRegistry → createApi → register.
+ * Exactly mirrors the gateway's plugin loading sequence.
+ *
+ * Returns the registry (with tools, services) and the shared runtime.
  */
-function createLiveApi(registry: ExchangeRegistry, riskController: RiskController) {
-  const tools = new Map<
-    string,
-    { execute: (id: string, params: Record<string, unknown>) => Promise<unknown> }
-  >();
-  const services = new Map<string, unknown>();
+function bootRealPluginPipeline(financialConfig: Record<string, unknown>) {
+  // 1. Create a PluginRuntime — only `services` is used by fin-core/fin-trading.
+  //    Other fields (media, tts, channel) are irrelevant for trading and left minimal.
+  const runtime = {
+    version: "live-test",
+    services: new Map(),
+  } as unknown as PluginRuntime;
 
-  services.set("fin-exchange-registry", {
-    getInstance: (id: string) => registry.getInstance(id),
-    listExchanges: () => registry.listExchanges(),
-  });
-  services.set("fin-risk-controller", riskController);
+  const logger = { info() {}, warn() {}, error() {}, debug() {} };
 
-  const api = {
-    id: "fin-trading",
-    name: "Trading",
-    source: "live-test",
-    config: {},
-    pluginConfig: {},
-    runtime: { version: "test", services },
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    registerTool(tool: {
-      name: string;
-      execute: (id: string, params: Record<string, unknown>) => Promise<unknown>;
-    }) {
-      tools.set(tool.name, tool);
-    },
-    registerHook() {},
-    registerHttpHandler() {},
-    registerHttpRoute() {},
-    registerChannel() {},
-    registerGatewayMethod() {},
-    registerCli() {},
-    registerService() {},
-    registerProvider() {},
-    registerCommand() {},
-    resolvePath: (p: string) => p,
-    on() {},
-  } as unknown as OpenClawPluginApi;
+  // 2. Real production createPluginRegistry — same code as gateway loader.ts:391-396
+  const { registry: pluginRegistry, createApi } = createPluginRegistry({ logger, runtime });
 
-  return { api, tools };
+  const appConfig = { financial: financialConfig } as Record<string, unknown>;
+
+  // 3. Load fin-core FIRST (just like production: services must be registered before consumers)
+  const finCoreRecord = makePluginRecord("fin-core", "Financial Core");
+  const finCoreApi = createApi(finCoreRecord, { config: appConfig });
+  finCorePlugin.register(finCoreApi);
+
+  // 4. Load fin-trading SECOND (consumes fin-core services via runtime.services)
+  const finTradingRecord = makePluginRecord("fin-trading", "Trading Engine");
+  const finTradingApi = createApi(finTradingRecord, { config: appConfig });
+  finTradingPlugin.register(finTradingApi);
+
+  return { pluginRegistry, runtime };
+}
+
+/**
+ * Extract a registered tool's execute function from the real plugin registry.
+ * Uses the same factory→tool path as the gateway agent runtime.
+ */
+function getToolExecute(
+  pluginRegistry: ReturnType<typeof createPluginRegistry>["registry"],
+  toolName: string,
+): (id: string, params: Record<string, unknown>) => Promise<unknown> {
+  const reg = pluginRegistry.tools.find((t) => t.names.includes(toolName));
+  if (!reg) throw new Error(`Tool ${toolName} not found in registry`);
+  const tool = reg.factory({});
+  if (!tool || Array.isArray(tool)) throw new Error(`Tool ${toolName} factory returned unexpected`);
+  return (id: string, params: Record<string, unknown>) =>
+    (
+      tool as { execute: (id: string, params: Record<string, unknown>) => Promise<unknown> }
+    ).execute(id, params);
 }
 
 // ── test suite ───────────────────────────────────────────────────
@@ -84,70 +118,122 @@ function createLiveApi(registry: ExchangeRegistry, riskController: RiskControlle
 describe.skipIf(!LIVE || !API_KEY || !SECRET)(
   "P0-1 Acceptance: Binance Testnet Full-Chain Trading",
   () => {
-    let registry: ExchangeRegistry;
+    let exchangeRegistry: ExchangeRegistry;
     let bridge: CcxtBridge;
     let btcPrice: number;
-
-    // Risk tiers: auto ≤$100, confirm ≤$500, reject >$500
-    let riskController: RiskController;
-    let tools: Map<
-      string,
-      { execute: (id: string, params: Record<string, unknown>) => Promise<unknown> }
-    >;
+    let finPlaceOrder: (id: string, params: Record<string, unknown>) => Promise<unknown>;
+    let pluginRegistry: ReturnType<typeof createPluginRegistry>["registry"];
+    let runtime: PluginRuntime;
 
     // Track order IDs for cleanup
     const createdOrderIds: Array<{ id: string; symbol: string }> = [];
 
     beforeAll(async () => {
-      // 1. Real exchange registry → Binance testnet
-      registry = new ExchangeRegistry();
-      registry.addExchange("binance-testnet", {
-        exchange: "binance",
-        apiKey: API_KEY,
-        secret: SECRET,
-        testnet: true,
-        defaultType: "spot",
+      // ── Boot the REAL OpenClaw plugin pipeline ──
+      const result = bootRealPluginPipeline({
+        exchanges: {
+          "binance-testnet": {
+            exchange: "binance",
+            apiKey: API_KEY,
+            secret: SECRET,
+            testnet: true,
+            defaultType: "spot",
+          },
+        },
+        trading: {
+          enabled: true,
+          maxAutoTradeUsd: 100,
+          confirmThresholdUsd: 500,
+          maxDailyLossUsd: 10000,
+          maxPositionPct: 0.5,
+          maxLeverage: 10,
+        },
       });
+      pluginRegistry = result.pluginRegistry;
+      runtime = result.runtime;
 
-      const instance = await registry.getInstance("binance-testnet");
+      // Verify services were registered through the REAL pipeline
+      expect(runtime.services.get("fin-exchange-registry")).toBeDefined();
+      expect(runtime.services.get("fin-risk-controller")).toBeDefined();
+
+      // Get the real ExchangeRegistry instance (registered by fin-core)
+      exchangeRegistry = runtime.services.get("fin-exchange-registry") as ExchangeRegistry;
+      const instance = await exchangeRegistry.getInstance("binance-testnet");
       bridge = new CcxtBridge(instance);
 
-      // 2. Fetch real BTC price for dynamic tier calculation
+      // Fetch real BTC price for dynamic tier calculation
       const ticker = await bridge.fetchTicker("BTC/USDT");
       btcPrice = Number(ticker.last);
-      console.log(`\n  ⚡ BTC/USDT testnet price: $${btcPrice.toFixed(2)}\n`);
+      console.log(`\n  ⚡ BTC/USDT testnet price: $${btcPrice.toFixed(2)}`);
 
-      // 3. Real risk controller: auto ≤$100, confirm ≤$500, reject >$500
-      riskController = new RiskController({
-        enabled: true,
-        maxAutoTradeUsd: 100,
-        confirmThresholdUsd: 500,
-        maxDailyLossUsd: 10000,
-        maxPositionPct: 0.5,
-        maxLeverage: 10,
-      });
+      // Get the real fin_place_order tool from the plugin registry
+      finPlaceOrder = getToolExecute(pluginRegistry, "fin_place_order");
 
-      // 4. Register real tools
-      const live = createLiveApi(registry, riskController);
-      tools = live.tools;
-      finTradingPlugin.register(live.api);
+      // Verify fin-core and fin-trading are both loaded
+      const coreRecord = pluginRegistry.plugins.find((p) => p.id === "fin-core");
+      const tradingRecord = pluginRegistry.plugins.find((p) => p.id === "fin-trading");
+      console.log(
+        `  ✅ fin-core: ${coreRecord?.services.length} services registered` +
+          ` | fin-trading: ${tradingRecord?.toolNames.length} tools registered\n`,
+      );
     });
 
     afterAll(async () => {
       // Safety net: cancel any leftover open orders
-      try {
-        for (const { id, symbol } of createdOrderIds) {
-          try {
-            await bridge.cancelOrder(id, symbol);
-            console.log(`  🧹 Cleaned up order ${id}`);
-          } catch {
-            // Already cancelled or filled — fine
-          }
+      for (const { id, symbol } of createdOrderIds) {
+        try {
+          await bridge.cancelOrder(id, symbol);
+          console.log(`  🧹 Cleaned up order ${id}`);
+        } catch {
+          // Already cancelled or filled — fine
         }
-      } catch {
-        // Best-effort
       }
-      await registry.closeAll();
+      await exchangeRegistry.closeAll();
+    });
+
+    // ═══════════════════════════════════════════════════════════════
+    // C0: Plugin Pipeline Verification
+    // ═══════════════════════════════════════════════════════════════
+    describe("C0: Plugin Pipeline Verification", () => {
+      it("C0.1 — fin-core registered services via real registerService", () => {
+        const coreRecord = pluginRegistry.plugins.find((p) => p.id === "fin-core");
+        expect(coreRecord).toBeDefined();
+        expect(coreRecord!.services).toContain("fin-exchange-registry");
+        expect(coreRecord!.services).toContain("fin-risk-controller");
+        expect(coreRecord!.services).toContain("fin-event-store");
+        console.log(`    C0.1 PASS — fin-core services: [${coreRecord!.services.join(", ")}]`);
+      });
+
+      it("C0.2 — fin-trading registered tools via real registerTool", () => {
+        const tradingRecord = pluginRegistry.plugins.find((p) => p.id === "fin-trading");
+        expect(tradingRecord).toBeDefined();
+        expect(tradingRecord!.toolNames).toContain("fin_place_order");
+        expect(tradingRecord!.toolNames).toContain("fin_cancel_order");
+        expect(tradingRecord!.toolNames).toContain("fin_modify_order");
+        console.log(`    C0.2 PASS — fin-trading tools: [${tradingRecord!.toolNames.join(", ")}]`);
+      });
+
+      it("C0.3 — fin-trading discovers fin-core services via runtime.services", () => {
+        // This is the REAL service discovery path: runtime.services.get()
+        const registryService = runtime.services.get("fin-exchange-registry");
+        const riskService = runtime.services.get("fin-risk-controller");
+        expect(registryService).toBeInstanceOf(ExchangeRegistry);
+        expect(riskService).toBeDefined();
+        console.log(`    C0.3 PASS — cross-plugin service discovery works`);
+      });
+
+      it("C0.4 — ExchangeRegistry was configured from config (not manually)", () => {
+        // fin-core reads config.financial.exchanges and calls registry.addExchange()
+        const registryService = runtime.services.get("fin-exchange-registry") as ExchangeRegistry;
+        const list = registryService.listExchanges();
+        const entry = list.find((e) => e.id === "binance-testnet");
+        expect(entry).toBeDefined();
+        expect(entry!.exchange).toBe("binance");
+        expect(entry!.testnet).toBe(true);
+        console.log(
+          `    C0.4 PASS — exchange loaded from config: ${entry!.id} (${entry!.exchange})`,
+        );
+      });
     });
 
     // ═══════════════════════════════════════════════════════════════
@@ -220,7 +306,6 @@ describe.skipIf(!LIVE || !API_KEY || !SECRET)(
         );
         expect(stillThere).toBeUndefined();
 
-        // Remove from cleanup list since already cancelled
         const idx = createdOrderIds.findIndex((o) => o.id === limitOrderId);
         if (idx >= 0) createdOrderIds.splice(idx, 1);
 
@@ -240,9 +325,8 @@ describe.skipIf(!LIVE || !API_KEY || !SECRET)(
         const autoAmount = 50 / btcPrice;
         const safePrice = Math.round(btcPrice * 0.85);
 
-        const tool = tools.get("fin_place_order")!;
         const result = parseResult(
-          await tool.execute("c2-auto", {
+          await finPlaceOrder("c2-auto", {
             exchange: "binance-testnet",
             symbol: "BTC/USDT",
             side: "buy",
@@ -271,9 +355,8 @@ describe.skipIf(!LIVE || !API_KEY || !SECRET)(
       it("C2.2 — confirm tier: ~$300 order requires confirmation", async () => {
         const confirmAmount = 300 / btcPrice;
 
-        const tool = tools.get("fin_place_order")!;
         const result = parseResult(
-          await tool.execute("c2-confirm", {
+          await finPlaceOrder("c2-confirm", {
             exchange: "binance-testnet",
             symbol: "BTC/USDT",
             side: "buy",
@@ -294,9 +377,8 @@ describe.skipIf(!LIVE || !API_KEY || !SECRET)(
       it("C2.3 — reject tier: ~$600 order is rejected", async () => {
         const rejectAmount = 600 / btcPrice;
 
-        const tool = tools.get("fin_place_order")!;
         const result = parseResult(
-          await tool.execute("c2-reject", {
+          await finPlaceOrder("c2-reject", {
             exchange: "binance-testnet",
             symbol: "BTC/USDT",
             side: "buy",
@@ -386,13 +468,12 @@ describe.skipIf(!LIVE || !API_KEY || !SECRET)(
     // C4: Tool-Level Integration — fin_place_order end-to-end
     // ═══════════════════════════════════════════════════════════════
     describe("C4: Tool-Level Integration", () => {
-      it("C4.1 — fin_place_order auto-executes, returns order + testnet flag", async () => {
+      it("C4.1 — fin_place_order auto-executes via real plugin pipeline", async () => {
         const safePrice = Math.round(btcPrice * 0.85);
         const smallAmount = 50 / btcPrice; // ~$50 → auto tier
 
-        const tool = tools.get("fin_place_order")!;
         const result = parseResult(
-          await tool.execute("c4-place", {
+          await finPlaceOrder("c4-place", {
             exchange: "binance-testnet",
             symbol: "BTC/USDT",
             side: "buy",
@@ -419,23 +500,23 @@ describe.skipIf(!LIVE || !API_KEY || !SECRET)(
         console.log(`    C4.1 PASS — fin_place_order → order ${orderId}, testnet=true, cleaned up`);
       });
 
-      it("C4.2 — fin_place_order handles missing exchange gracefully", async () => {
-        // Create a tool set with an empty registry (no exchanges configured)
-        const emptyRegistry = new ExchangeRegistry();
-        const emptyRisk = new RiskController({
-          enabled: true,
-          maxAutoTradeUsd: 100,
-          confirmThresholdUsd: 500,
-          maxDailyLossUsd: 10000,
-          maxPositionPct: 0.5,
-          maxLeverage: 10,
+      it("C4.2 — fin_place_order with empty registry via real plugin pipeline", async () => {
+        // Boot a SEPARATE real plugin pipeline with no exchanges
+        const { pluginRegistry: emptyPluginReg } = bootRealPluginPipeline({
+          exchanges: {},
+          trading: {
+            enabled: true,
+            maxAutoTradeUsd: 100,
+            confirmThresholdUsd: 500,
+            maxDailyLossUsd: 10000,
+            maxPositionPct: 0.5,
+            maxLeverage: 10,
+          },
         });
-        const { api: emptyApi, tools: emptyTools } = createLiveApi(emptyRegistry, emptyRisk);
-        finTradingPlugin.register(emptyApi);
 
-        const tool = emptyTools.get("fin_place_order")!;
+        const emptyPlaceOrder = getToolExecute(emptyPluginReg, "fin_place_order");
         const result = parseResult(
-          await tool.execute("c4-missing", {
+          await emptyPlaceOrder("c4-missing", {
             symbol: "BTC/USDT",
             side: "buy",
             type: "limit",
@@ -465,7 +546,6 @@ describe.skipIf(!LIVE || !API_KEY || !SECRET)(
         expect(order.id).toBeDefined();
         expect(order.symbol).toBe("BTC/USDT");
         expect(order.side).toBe("buy");
-        // Market orders should be filled (or partially filled) immediately
         expect(["closed", "filled"]).toContain(order.status);
         console.log(
           `    C5.1 PASS — market buy 0.001 BTC, status: ${order.status}, id: ${order.id}`,
@@ -495,12 +575,10 @@ describe.skipIf(!LIVE || !API_KEY || !SECRET)(
     // ═══════════════════════════════════════════════════════════════
     describe("C6: Multi-Symbol", () => {
       it("C6 — ETH/USDT: fetchTicker + limit order lifecycle", async () => {
-        // Fetch ETH price
         const ethTicker = await bridge.fetchTicker("ETH/USDT");
         const ethPrice = Number(ethTicker.last);
         expect(ethPrice).toBeGreaterThan(0);
 
-        // Place a safe limit buy (15% below market)
         const safePrice = Math.round(ethPrice * 0.85);
         const order = await bridge.placeOrder({
           symbol: "ETH/USDT",
@@ -515,11 +593,9 @@ describe.skipIf(!LIVE || !API_KEY || !SECRET)(
         const orderId = String(order.id);
         createdOrderIds.push({ id: orderId, symbol: "ETH/USDT" });
 
-        // Verify it's open
         const fetched = await bridge.fetchOrder(orderId, "ETH/USDT");
         expect(fetched.status).toBe("open");
 
-        // Cancel and verify
         await bridge.cancelOrder(orderId, "ETH/USDT");
         const openAfter = await bridge.fetchOpenOrders("ETH/USDT");
         const stillThere = openAfter.find((o) => (o as Record<string, unknown>).id === orderId);
