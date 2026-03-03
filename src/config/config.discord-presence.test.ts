@@ -64,4 +64,37 @@ describe("config discord presence", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts auto presence config", () => {
+    const res = validateConfigObject({
+      channels: {
+        discord: {
+          autoPresence: {
+            enabled: true,
+            intervalMs: 30000,
+            minUpdateIntervalMs: 15000,
+            exhaustedText: "token exhausted",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects auto presence min update interval above check interval", () => {
+    const res = validateConfigObject({
+      channels: {
+        discord: {
+          autoPresence: {
+            enabled: true,
+            intervalMs: 5000,
+            minUpdateIntervalMs: 6000,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
 });

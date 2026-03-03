@@ -786,7 +786,7 @@ Default slash command settings:
   </Accordion>
 
   <Accordion title="Presence configuration">
-    Presence updates are applied only when you set a status or activity field.
+    Presence updates are applied when you set a status or activity field, or when you enable auto presence.
 
     Status only example:
 
@@ -835,6 +835,29 @@ Default slash command settings:
     - 3: Watching
     - 4: Custom (uses the activity text as the status state; emoji is optional)
     - 5: Competing
+
+    Auto presence example (runtime health signal):
+
+```json5
+{
+  channels: {
+    discord: {
+      autoPresence: {
+        enabled: true,
+        intervalMs: 30000,
+        minUpdateIntervalMs: 15000,
+        exhaustedText: "token exhausted",
+      },
+    },
+  },
+}
+```
+
+    Auto presence maps runtime availability to Discord status: healthy => online, degraded or unknown => idle, exhausted or unavailable => dnd. Optional text overrides:
+
+    - `autoPresence.healthyText`
+    - `autoPresence.degradedText`
+    - `autoPresence.exhaustedText` (supports `{reason}` placeholder)
 
   </Accordion>
 
