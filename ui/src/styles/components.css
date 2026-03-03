@@ -10,7 +10,7 @@
   z-index: 10;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 8px;
   flex-wrap: wrap;
   margin: 0 calc(-1 * var(--shell-pad)) 0;
@@ -36,6 +36,7 @@
 .update-banner__dismiss {
   width: 28px;
   height: 28px;
+  margin-left: auto;
   border-color: transparent;
   color: var(--danger);
 }

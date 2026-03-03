@@ -317,4 +317,13 @@ describe("shouldRenderUpdateBanner", () => {
       ),
     ).toBe(true);
   });
+
+  it("returns true when update is available and not dismissed yet", () => {
+    expect(
+      shouldRenderUpdateBanner(
+        { latestVersion: "2026.3.2", currentVersion: "2026.2.26", channel: "latest" },
+        {},
+      ),
+    ).toBe(true);
+  });
 });

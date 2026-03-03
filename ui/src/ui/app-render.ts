@@ -317,6 +317,11 @@ export function renderApp(state: AppViewState) {
                 (running v${availableUpdate.currentVersion}).
               </span>
               <button
+                class="btn btn--sm update-banner__btn"
+                ?disabled=${state.updateRunning || !state.connected}
+                @click=${() => runUpdate(state)}
+              >${state.updateRunning ? "Updating…" : "Update now"}</button>
+              <button
                 class="btn btn--sm btn--icon update-banner__dismiss"
                 @click=${() =>
                   state.applySettings({
@@ -328,11 +333,6 @@ export function renderApp(state: AppViewState) {
               >
                 ${icons.x}
               </button>
-              <button
-                class="btn btn--sm update-banner__btn"
-                ?disabled=${state.updateRunning || !state.connected}
-                @click=${() => runUpdate(state)}
-              >${state.updateRunning ? "Updating…" : "Update now"}</button>
             </div>`
             : nothing
         }
