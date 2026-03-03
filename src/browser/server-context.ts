@@ -24,6 +24,7 @@ import { createProfileTabOps } from "./server-context.tab-ops.js";
 import {
   getTabRegistry as getTabRegistryFromState,
   startIdleTabSweep,
+  stopIdleTabSweep,
   touchTab as touchTabInRegistry,
 } from "./server-context.tab-registry.js";
 
@@ -98,13 +99,20 @@ function createProfileContext(
     openTab,
   });
 
-  const { resetProfile } = createProfileResetOps({
+  const { resetProfile: resetProfileInner } = createProfileResetOps({
     profile,
     getProfileState,
-    stopRunningBrowser,
+    stopRunningBrowser: async () => {
+      stopIdleTabSweep(getProfileState());
+      return stopRunningBrowser();
+    },
     isHttpReachable,
     resolveOpenClawUserDataDir,
   });
+  const resetProfile: typeof resetProfileInner = async () => {
+    stopIdleTabSweep(getProfileState());
+    return resetProfileInner();
+  };
 
   const getTabRegistry = (): Map<string, TabMeta> => getTabRegistryFromState(getProfileState());
 

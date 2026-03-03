@@ -167,22 +167,8 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     });
   });
 
-  app.delete("/tabs/:targetId", async (req, res) => {
-    const targetId = parseRequiredTargetId(res, req.params.targetId);
-    if (!targetId) {
-      return;
-    }
-    await runTabTargetMutation({
-      req,
-      res,
-      ctx,
-      targetId,
-      mutate: async (profileCtx, id) => {
-        await profileCtx.closeTab(id);
-      },
-    });
-  });
-
+  // Register the more specific path first so it is not shadowed by the
+  // parametric `/tabs/:targetId` route.
   app.delete("/tabs/by-owner/:ownerId", async (req, res) => {
     const ownerId = toStringOrEmpty(req.params.ownerId);
     if (!ownerId) {
@@ -196,6 +182,22 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       run: async (profileCtx) => {
         const result = await profileCtx.closeTabsByOwner(ownerId);
         res.json({ ok: true, closed: result.closed });
+      },
+    });
+  });
+
+  app.delete("/tabs/:targetId", async (req, res) => {
+    const targetId = parseRequiredTargetId(res, req.params.targetId);
+    if (!targetId) {
+      return;
+    }
+    await runTabTargetMutation({
+      req,
+      res,
+      ctx,
+      targetId,
+      mutate: async (profileCtx, id) => {
+        await profileCtx.closeTab(id);
       },
     });
   });

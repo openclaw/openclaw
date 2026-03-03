@@ -96,7 +96,7 @@ type RouteWithTabParams<T> = {
 };
 
 export function resolveOwnerIdFromRequest(req: BrowserRequest): string | undefined {
-  // Check body first, then query, then custom header
+  // Check body first, then query string.
   const body = req.body as Record<string, unknown> | undefined;
   const fromBody = typeof body?.ownerId === "string" ? body.ownerId.trim() : "";
   if (fromBody) {

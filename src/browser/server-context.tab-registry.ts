@@ -55,13 +55,6 @@ export function touchTab(
   }
 }
 
-export function getTabMeta(
-  profileState: ProfileRuntimeState,
-  targetId: string,
-): TabMeta | undefined {
-  return ensureRegistry(profileState).get(targetId);
-}
-
 export function getTabRegistry(profileState: ProfileRuntimeState): Map<string, TabMeta> {
   return ensureRegistry(profileState);
 }
