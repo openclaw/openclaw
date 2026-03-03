@@ -162,20 +162,12 @@ export class FeishuStreamingSession {
     const cardId = createData.data.card_id;
     const cardContent = JSON.stringify({ type: "card", data: { card_id: cardId } });
 
-    // Topic-group replies require root_id routing. Prefer create+root_id when available.
+    // Prefer message.reply when we have a reply target — reply_in_thread
+    // reliably routes streaming cards into Feishu topics, whereas
+    // message.create with root_id may silently ignore root_id for card
+    // references (card_id format).
     let sendRes;
-    if (options?.rootId) {
-      const createData = {
-        receive_id: receiveId,
-        msg_type: "interactive",
-        content: cardContent,
-        root_id: options.rootId,
-      };
-      sendRes = await this.client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: createData,
-      });
-    } else if (options?.replyToMessageId) {
+    if (options?.replyToMessageId) {
       sendRes = await this.client.im.message.reply({
         path: { message_id: options.replyToMessageId },
         data: {
@@ -183,6 +175,15 @@ export class FeishuStreamingSession {
           content: cardContent,
           ...(options.replyInThread ? { reply_in_thread: true } : {}),
         },
+      });
+    } else if (options?.rootId) {
+      // root_id is undeclared in the SDK types but accepted at runtime
+      sendRes = await this.client.im.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: Object.assign(
+          { receive_id: receiveId, msg_type: "interactive", content: cardContent },
+          { root_id: options.rootId },
+        ),
       });
     } else {
       sendRes = await this.client.im.message.create({
