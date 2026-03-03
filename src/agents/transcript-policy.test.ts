@@ -15,7 +15,7 @@ describe("resolveTranscriptPolicy", () => {
   it("enables sanitizeToolCallIds for Google provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "google",
-      modelId: "gemini-2.0-flash",
+      modelId: "gemini-2.5-flash-lite",
       modelApi: "google-generative-ai",
     });
     expect(policy.sanitizeToolCallIds).toBe(true);
