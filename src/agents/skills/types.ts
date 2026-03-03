@@ -52,6 +52,8 @@ export type SkillCommandSpec = {
   name: string;
   skillName: string;
   description: string;
+  /** Whether this command accepts user-provided args text after the command name. */
+  acceptsArgs?: boolean;
   /** Optional deterministic dispatch behavior for this command. */
   dispatch?: SkillCommandDispatchSpec;
 };
