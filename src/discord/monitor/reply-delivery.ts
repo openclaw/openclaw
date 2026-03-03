@@ -83,7 +83,7 @@ async function sendDiscordChunkWithFallback(params: {
   binding?: DiscordThreadBindingLookupRecord;
   username?: string;
   avatarUrl?: string;
-}) {
+}): Promise<{ messageId?: string } | undefined> {
   if (!params.text.trim()) {
     return;
   }
@@ -91,7 +91,7 @@ async function sendDiscordChunkWithFallback(params: {
   const binding = params.binding;
   if (binding?.webhookId && binding?.webhookToken) {
     try {
-      await sendWebhookMessageDiscord(text, {
+      const sent = await sendWebhookMessageDiscord(text, {
         webhookId: binding.webhookId,
         webhookToken: binding.webhookToken,
         accountId: binding.accountId,
@@ -100,17 +100,18 @@ async function sendDiscordChunkWithFallback(params: {
         username: params.username,
         avatarUrl: params.avatarUrl,
       });
-      return;
+      return { messageId: sent.messageId };
     } catch {
       // Fall through to the standard bot sender path.
     }
   }
-  await sendMessageDiscord(params.target, text, {
+  const sent = await sendMessageDiscord(params.target, text, {
     token: params.token,
     rest: params.rest,
     accountId: params.accountId,
     replyTo: params.replyTo,
   });
+  return { messageId: sent.messageId };
 }
 
 async function sendAdditionalDiscordMedia(params: {
@@ -120,17 +121,22 @@ async function sendAdditionalDiscordMedia(params: {
   accountId?: string;
   mediaUrls: string[];
   resolveReplyTo: () => string | undefined;
-}) {
+}): Promise<{ messageId?: string }> {
+  let lastMessageId: string | undefined;
   for (const mediaUrl of params.mediaUrls) {
     const replyTo = params.resolveReplyTo();
-    await sendMessageDiscord(params.target, "", {
+    const sent = await sendMessageDiscord(params.target, "", {
       token: params.token,
       rest: params.rest,
       mediaUrl,
       accountId: params.accountId,
       replyTo,
     });
+    if (sent.messageId && sent.messageId !== "unknown") {
+      lastMessageId = sent.messageId;
+    }
   }
+  return { messageId: lastMessageId };
 }
 
 export async function deliverDiscordReply(params: {
@@ -148,7 +154,7 @@ export async function deliverDiscordReply(params: {
   chunkMode?: ChunkMode;
   sessionKey?: string;
   threadBindings?: DiscordThreadBindingLookup;
-}): Promise<{ delivered: boolean; messageId?: string }> {
+}): Promise<{ delivered: boolean; messageId?: string; deliveredContent?: string }> {
   const chunkLimit = Math.min(params.textLimit, 2000);
   const replyTo = params.replyToId?.trim() || undefined;
   const replyToMode = params.replyToMode ?? "all";
@@ -175,7 +181,10 @@ export async function deliverDiscordReply(params: {
   });
   const persona = resolveBindingPersona(binding);
   let deliveredAny = false;
+  let lastMessageId: string | undefined;
+  let lastDeliveredContent: string | undefined;
   for (const payload of params.replies) {
+    let deliveredThisPayload = false;
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = payload.text ?? "";
     const tableMode = params.tableMode ?? "code";
@@ -198,7 +207,7 @@ export async function deliverDiscordReply(params: {
           continue;
         }
         const replyTo = resolveReplyTo();
-        await sendDiscordChunkWithFallback({
+        const sent = await sendDiscordChunkWithFallback({
           target: params.target,
           text: chunk,
           token: params.token,
@@ -210,6 +219,13 @@ export async function deliverDiscordReply(params: {
           avatarUrl: persona.avatarUrl,
         });
         deliveredAny = true;
+        deliveredThisPayload = true;
+        if (sent?.messageId && sent.messageId !== "unknown") {
+          lastMessageId = sent.messageId;
+        }
+      }
+      if (deliveredThisPayload) {
+        lastDeliveredContent = text;
       }
       continue;
     }
@@ -222,15 +238,19 @@ export async function deliverDiscordReply(params: {
     // Voice message path: audioAsVoice flag routes through sendVoiceMessageDiscord.
     if (payload.audioAsVoice) {
       const replyTo = resolveReplyTo();
-      await sendVoiceMessageDiscord(params.target, firstMedia, {
+      const sent = await sendVoiceMessageDiscord(params.target, firstMedia, {
         token: params.token,
         rest: params.rest,
         accountId: params.accountId,
         replyTo,
       });
       deliveredAny = true;
+      deliveredThisPayload = true;
+      if (sent.messageId && sent.messageId !== "unknown") {
+        lastMessageId = sent.messageId;
+      }
       // Voice messages cannot include text; send remaining text separately if present.
-      await sendDiscordChunkWithFallback({
+      const textSent = await sendDiscordChunkWithFallback({
         target: params.target,
         text,
         token: params.token,
@@ -241,8 +261,11 @@ export async function deliverDiscordReply(params: {
         username: persona.username,
         avatarUrl: persona.avatarUrl,
       });
+      if (textSent?.messageId && textSent.messageId !== "unknown") {
+        lastMessageId = textSent.messageId;
+      }
       // Additional media items are sent as regular attachments (voice is single-file only).
-      await sendAdditionalDiscordMedia({
+      const additionalMedia = await sendAdditionalDiscordMedia({
         target: params.target,
         token: params.token,
         rest: params.rest,
@@ -250,11 +273,15 @@ export async function deliverDiscordReply(params: {
         mediaUrls: mediaList.slice(1),
         resolveReplyTo,
       });
+      if (additionalMedia.messageId) {
+        lastMessageId = additionalMedia.messageId;
+      }
+      lastDeliveredContent = text;
       continue;
     }
 
     const replyTo = resolveReplyTo();
-    await sendMessageDiscord(params.target, text, {
+    const sent = await sendMessageDiscord(params.target, text, {
       token: params.token,
       rest: params.rest,
       mediaUrl: firstMedia,
@@ -262,7 +289,11 @@ export async function deliverDiscordReply(params: {
       replyTo,
     });
     deliveredAny = true;
-    await sendAdditionalDiscordMedia({
+    deliveredThisPayload = true;
+    if (sent.messageId && sent.messageId !== "unknown") {
+      lastMessageId = sent.messageId;
+    }
+    const additionalMedia = await sendAdditionalDiscordMedia({
       target: params.target,
       token: params.token,
       rest: params.rest,
@@ -270,10 +301,20 @@ export async function deliverDiscordReply(params: {
       mediaUrls: mediaList.slice(1),
       resolveReplyTo,
     });
+    if (additionalMedia.messageId) {
+      lastMessageId = additionalMedia.messageId;
+    }
+    if (deliveredThisPayload) {
+      lastDeliveredContent = text;
+    }
   }
 
   if (binding && deliveredAny) {
     params.threadBindings?.touchThread?.({ threadId: binding.threadId });
   }
-  return { delivered: deliveredAny };
+  return {
+    delivered: deliveredAny,
+    ...(lastMessageId ? { messageId: lastMessageId } : {}),
+    ...(lastDeliveredContent !== undefined ? { deliveredContent: lastDeliveredContent } : {}),
+  };
 }

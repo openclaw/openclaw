@@ -66,9 +66,13 @@ describe("deliverReplies identity passthrough", () => {
   it("reports delivered metadata from successful sends", async () => {
     sendMock.mockResolvedValueOnce({ messageId: "slack-msg-1", channelId: "C123" });
 
-    const result = await deliverReplies(baseParams({ replies: [{ text: "hello" }] }));
+    const result = await deliverReplies(baseParams({ replies: [{ text: "hello   " }] }));
 
     expect(sendMock).toHaveBeenCalledOnce();
-    expect(result).toEqual({ delivered: true, messageId: "slack-msg-1" });
+    expect(result).toEqual({
+      delivered: true,
+      messageId: "slack-msg-1",
+      deliveredContent: "hello",
+    });
   });
 });

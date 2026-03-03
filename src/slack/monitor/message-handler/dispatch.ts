@@ -216,7 +216,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         usedReplyThreadTs ??= replyThreadTs;
       }
       replyPlan.markSent();
-      deliveredContentByPayload.set(payload, payload.text ?? "");
+      deliveredContentByPayload.set(payload, delivery.deliveredContent ?? payload.text ?? "");
     }
     return delivery;
   };

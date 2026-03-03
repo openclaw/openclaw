@@ -18,9 +18,10 @@ export async function deliverReplies(params: {
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all";
   identity?: SlackSendIdentity;
-}): Promise<{ delivered: boolean; messageId?: string }> {
+}): Promise<{ delivered: boolean; messageId?: string; deliveredContent?: string }> {
   let delivered = false;
   let lastMessageId: string | undefined;
+  let lastDeliveredContent: string | undefined;
   for (const payload of params.replies) {
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
     // must not force threading.
@@ -44,6 +45,7 @@ export async function deliverReplies(params: {
         ...(params.identity ? { identity: params.identity } : {}),
       });
       delivered = true;
+      lastDeliveredContent = trimmed;
       if (sent.messageId && sent.messageId !== "unknown" && sent.messageId !== "suppressed") {
         lastMessageId = sent.messageId;
       }
@@ -60,6 +62,7 @@ export async function deliverReplies(params: {
           ...(params.identity ? { identity: params.identity } : {}),
         });
         delivered = true;
+        lastDeliveredContent = caption;
         if (sent.messageId && sent.messageId !== "unknown" && sent.messageId !== "suppressed") {
           lastMessageId = sent.messageId;
         }
@@ -70,6 +73,7 @@ export async function deliverReplies(params: {
   return {
     delivered,
     messageId: lastMessageId,
+    ...(lastDeliveredContent !== undefined ? { deliveredContent: lastDeliveredContent } : {}),
   };
 }
 

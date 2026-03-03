@@ -679,7 +679,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       });
       if (delivery.delivered) {
         replyReference.markSent();
-        deliveredContentByPayload.set(payload, payload.text ?? "");
+        deliveredContentByPayload.set(payload, delivery.deliveredContent ?? payload.text ?? "");
       }
       return delivery;
     },

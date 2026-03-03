@@ -26,7 +26,11 @@ function createMockDraftStream() {
 
 const deliveryMocks = vi.hoisted(() => ({
   editMessageDiscord: vi.fn(async () => ({})),
-  deliverDiscordReply: vi.fn(async () => ({ delivered: true })),
+  deliverDiscordReply: vi.fn<
+    (
+      ...args: unknown[]
+    ) => Promise<{ delivered: boolean; messageId?: string; deliveredContent?: string }>
+  >(async () => ({ delivered: true })),
   createDiscordDraftStream: vi.fn(() => createMockDraftStream()),
 }));
 const editMessageDiscord = deliveryMocks.editMessageDiscord;
@@ -525,6 +529,36 @@ describe("processDiscordMessage draft streaming", () => {
         content: "Hello\nWorld",
         success: true,
         channelId: "discord",
+      }),
+    );
+  });
+
+  it("emits hook content from delivered metadata on normal send path", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "|A|B|   " });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+    deliverDiscordReply.mockResolvedValueOnce({
+      delivered: true,
+      messageId: "discord-msg-2",
+      deliveredContent: "A\tB",
+    });
+
+    const ctx = await createBaseContext({
+      discordConfig: { streamMode: "off", maxLinesPerMessage: 5 },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(emitMessageSentHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "A\tB",
+        success: true,
+        channelId: "discord",
+        messageId: "discord-msg-2",
       }),
     );
   });

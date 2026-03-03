@@ -182,6 +182,24 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("returns delivered content and messageId for successful text sends", async () => {
+    const result = await deliverDiscordReply({
+      replies: [{ text: "|A|B|\n|-|-|\n|1|2|" }],
+      target: "channel:789",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    const sentText = sendMessageDiscordMock.mock.calls[0]?.[1];
+    expect(result).toEqual({
+      delivered: true,
+      messageId: "msg-1",
+      deliveredContent: sentText,
+    });
+  });
+
   it("sends bound-session text replies through webhook delivery", async () => {
     const threadBindings = await createBoundThreadBindings({ label: "codex-refactor" });
 
@@ -307,6 +325,10 @@ describe("deliverDiscordReply", () => {
     });
 
     expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ delivered: true });
+    expect(result).toMatchObject({
+      delivered: true,
+      messageId: "msg-1",
+      deliveredContent: "hello",
+    });
   });
 });
