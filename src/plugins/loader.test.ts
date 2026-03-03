@@ -496,6 +496,30 @@ module.exports = { id: "core-src-import", register() {} };`,
     expect(entry?.error).toContain("openclaw/plugin-sdk");
   });
 
+  it("does not add core src hint for non-core /src/ module paths", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "non-core-src-import",
+      filename: "non-core-src-import.cjs",
+      body: `require("/home/alice/src/my-plugin/missing.js");
+module.exports = { id: "non-core-src-import", register() {} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["non-core-src-import"],
+      },
+    });
+
+    const entry = registry.plugins.find((item) => item.id === "non-core-src-import");
+    expect(entry?.status).toBe("error");
+    expect(entry?.error).toContain("Cannot find module");
+    expect(entry?.error).not.toContain(
+      "plugin runtime imports cannot reference OpenClaw core src/*",
+    );
+  });
+
   it("registers channel plugins", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

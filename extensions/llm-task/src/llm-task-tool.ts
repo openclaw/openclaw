@@ -25,7 +25,8 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   }
 
   // Bundled install (built)
-  const mod = await import("../../../dist/agents/pi-embedded-runner.js");
+  const distModulePath = "../../../dist/agents/pi-embedded-runner.js";
+  const mod = await import(distModulePath);
   if (typeof mod.runEmbeddedPiAgent !== "function") {
     throw new Error("Internal error: runEmbeddedPiAgent not available");
   }

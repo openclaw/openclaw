@@ -191,7 +191,8 @@ function appendCoreSrcImportHint(errorText: string): string {
   if (!failedToLoadModule) {
     return errorText;
   }
-  const referencesCoreSrc = normalized.includes("/src/") || normalized.includes("../src/");
+  const referencesCoreSrc =
+    normalized.includes("/openclaw/src/") || /(?:^|[\s"'`(])(?:\.\.\/){2,}src\//.test(normalized);
   if (!referencesCoreSrc) {
     return errorText;
   }
