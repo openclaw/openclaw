@@ -90,6 +90,7 @@ import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
+import { runPreflightAtStartup } from "./server-preflight.js";
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
@@ -830,6 +831,9 @@ export async function startGatewayServer(
     log,
     isNixMode,
   });
+  if (!minimalTestGateway) {
+    runPreflightAtStartup({ cfg: cfgAtStart, agentDir: defaultWorkspaceDir });
+  }
   const stopGatewayUpdateCheck = minimalTestGateway
     ? () => {}
     : scheduleGatewayUpdateCheck({
