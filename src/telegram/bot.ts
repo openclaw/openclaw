@@ -52,6 +52,7 @@ export type TelegramBotOptions = {
     lastUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;
   };
+  setStatus?: (next: Record<string, unknown>) => void | Promise<void>;
   testTimings?: {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
@@ -132,6 +133,22 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     void opts.updateOffset.onUpdateId(safe);
   };
 
+  const setStatusSafely = (next: Record<string, unknown>) => {
+    if (!opts.setStatus) {
+      return;
+    }
+    try {
+      const maybePending = opts.setStatus(next);
+      if (maybePending && typeof (maybePending as PromiseLike<unknown>).then === "function") {
+        void (maybePending as PromiseLike<unknown>).catch((err) => {
+          logVerbose(`telegram: setStatus failed: ${String(err)}`);
+        });
+      }
+    } catch (err) {
+      logVerbose(`telegram: setStatus failed: ${String(err)}`);
+    }
+  };
+
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
     const updateId = resolveTelegramUpdateId(ctx);
     const skipCutoff = highestPersistedUpdateId ?? initialUpdateId;
@@ -162,6 +179,15 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         maybePersistSafeWatermark();
       }
     }
+  });
+
+  bot.use(async (_ctx, next) => {
+    const now = Date.now();
+    setStatusSafely({
+      lastEventAt: now,
+      lastInboundAt: now,
+    });
+    await next();
   });
 
   bot.use(sequentialize(getTelegramSequentialKey));

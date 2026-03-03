@@ -310,6 +310,7 @@ describe("startTelegramWebhook", () => {
     createTelegramBotSpy.mockClear();
     webhookCallbackSpy.mockClear();
     const runtimeLog = vi.fn();
+    const setStatus = vi.fn();
     const cfg = { bindings: [] };
     await withStartedWebhook(
       {
@@ -317,12 +318,14 @@ describe("startTelegramWebhook", () => {
         accountId: "opie",
         config: cfg,
         runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
+        setStatus,
       },
       async ({ port }) => {
         expect(createTelegramBotSpy).toHaveBeenCalledWith(
           expect.objectContaining({
             accountId: "opie",
             config: expect.objectContaining({ bindings: [] }),
+            setStatus,
           }),
         );
         const health = await fetch(`http://127.0.0.1:${port}/healthz`);

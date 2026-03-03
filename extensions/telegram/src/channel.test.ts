@@ -137,18 +137,19 @@ describe("telegramPlugin duplicate token guard", () => {
       webhookPort: 9876,
     };
 
-    await telegramPlugin.gateway!.startAccount!(
-      createStartAccountCtx({
-        cfg,
-        accountId: "ops",
-        runtime: createRuntimeEnv(),
-      }),
-    );
+    const ctx = createStartAccountCtx({
+      cfg,
+      accountId: "ops",
+      runtime: createRuntimeEnv(),
+    });
+
+    await telegramPlugin.gateway!.startAccount!(ctx);
 
     expect(monitorTelegramProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         useWebhook: true,
         webhookPort: 9876,
+        setStatus: ctx.setStatus,
       }),
     );
   });

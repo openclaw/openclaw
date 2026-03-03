@@ -30,6 +30,7 @@ export type MonitorTelegramOpts = {
   webhookHost?: string;
   proxyFetch?: typeof fetch;
   webhookUrl?: string;
+  setStatus?: (next: Record<string, unknown>) => void | Promise<void>;
 };
 
 export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
@@ -172,6 +173,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         fetch: proxyFetch,
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
+        setStatus: opts.setStatus,
       });
       await waitForAbortSignal(opts.abortSignal);
       return;
@@ -220,6 +222,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           proxyFetch,
           config: cfg,
           accountId: account.accountId,
+          setStatus: opts.setStatus,
           updateOffset: {
             lastUpdateId,
             onUpdateId: persistUpdateId,

@@ -58,6 +58,9 @@ const { registerUnhandledRejectionHandlerMock, emitUnhandledRejection, resetUnha
 const { createTelegramBotErrors } = vi.hoisted(() => ({
   createTelegramBotErrors: [] as unknown[],
 }));
+const { createTelegramBotCalls } = vi.hoisted(() => ({
+  createTelegramBotCalls: [] as Array<Record<string, unknown>>,
+}));
 
 const { createdBotStops } = vi.hoisted(() => ({
   createdBotStops: [] as Array<ReturnType<typeof vi.fn<() => void>>>,
@@ -135,7 +138,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("./bot.js", () => ({
-  createTelegramBot: () => {
+  createTelegramBot: (opts?: Record<string, unknown>) => {
+    createTelegramBotCalls.push(opts ?? {});
     const nextError = createTelegramBotErrors.shift();
     if (nextError) {
       throw nextError;
@@ -210,6 +214,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     registerUnhandledRejectionHandlerMock.mockClear();
     resetUnhandledRejection();
     createTelegramBotErrors.length = 0;
+    createTelegramBotCalls.length = 0;
     createdBotStops.length = 0;
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -236,6 +241,14 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(api.sendMessage).toHaveBeenCalledWith(123, "echo:hi", {
       parse_mode: "HTML",
     });
+  });
+
+  it("forwards setStatus callback to polling bot creation", async () => {
+    const setStatus = vi.fn();
+
+    await monitorWithAutoAbort({ setStatus });
+
+    expect(createTelegramBotCalls.at(-1)?.setStatus).toBe(setStatus);
   });
 
   it("uses agent maxConcurrent for runner concurrency", async () => {
@@ -447,6 +460,23 @@ describe("monitorTelegramProvider (grammY)", () => {
       }),
     );
     expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it("forwards setStatus callback in webhook mode", async () => {
+    const setStatus = vi.fn();
+    await monitorTelegramProvider({
+      token: "tok",
+      useWebhook: true,
+      webhookUrl: "https://example.test/telegram",
+      webhookSecret: "secret",
+      setStatus,
+    });
+
+    expect(startTelegramWebhookSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        setStatus,
+      }),
+    );
   });
 
   it("webhook mode waits for abort signal before returning", async () => {

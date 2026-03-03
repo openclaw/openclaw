@@ -488,6 +488,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         accountId: account.accountId,
         config: ctx.cfg,
         runtime: ctx.runtime,
+        setStatus: ctx.setStatus,
         abortSignal: ctx.abortSignal,
         useWebhook: Boolean(account.config.webhookUrl),
         webhookUrl: account.config.webhookUrl,

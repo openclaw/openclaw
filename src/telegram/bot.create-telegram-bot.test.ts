@@ -116,6 +116,45 @@ describe("createTelegramBot", () => {
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
     expect(sequentializeKey).toBe(getTelegramSequentialKey);
   });
+  it("updates channel liveness status on inbound updates when setStatus is provided", async () => {
+    const setStatus = vi.fn();
+    createTelegramBot({ token: "tok", setStatus });
+
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (
+          middleware,
+        ): middleware is (
+          ctx: Record<string, unknown>,
+          next: () => Promise<void>,
+        ) => Promise<void> => typeof middleware === "function",
+      );
+
+    const ctx = {
+      update: {
+        update_id: 7,
+        message: {
+          chat: { id: 1234, type: "private" },
+          text: "hello",
+        },
+      },
+    };
+
+    for (const middleware of middlewares) {
+      await middleware(ctx, async () => {});
+      if (setStatus.mock.calls.length > 0) {
+        break;
+      }
+    }
+
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastEventAt: expect.any(Number),
+        lastInboundAt: expect.any(Number),
+      }),
+    );
+  });
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
