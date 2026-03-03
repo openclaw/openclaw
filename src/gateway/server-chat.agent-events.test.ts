@@ -266,6 +266,89 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("flushes buffered text as delta before final when throttle suppresses the latest chunk", () => {
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-flush", {
+      sessionKey: "session-flush",
+      clientRunId: "client-flush",
+    });
+
+    handler({
+      runId: "run-flush",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello" },
+    });
+
+    now = 10_100;
+    handler({
+      runId: "run-flush",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world" },
+    });
+
+    emitLifecycleEnd(handler, "run-flush");
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(3);
+    const firstPayload = chatCalls[0]?.[1] as { state?: string };
+    const secondPayload = chatCalls[1]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    const thirdPayload = chatCalls[2]?.[1] as { state?: string };
+    expect(firstPayload.state).toBe("delta");
+    expect(secondPayload.state).toBe("delta");
+    expect(secondPayload.message?.content?.[0]?.text).toBe("Hello world");
+    expect(thirdPayload.state).toBe("final");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy.mockRestore();
+  });
+
+  it("does not flush an extra delta when the latest text already broadcast", () => {
+    let now = 11_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-no-dup-flush", {
+      sessionKey: "session-no-dup-flush",
+      clientRunId: "client-no-dup-flush",
+    });
+
+    handler({
+      runId: "run-no-dup-flush",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello" },
+    });
+
+    now = 11_200;
+    handler({
+      runId: "run-no-dup-flush",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world" },
+    });
+
+    emitLifecycleEnd(handler, "run-no-dup-flush");
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(3);
+    expect(chatCalls.map(([, payload]) => (payload as { state?: string }).state)).toEqual([
+      "delta",
+      "delta",
+      "final",
+    ]);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy.mockRestore();
+  });
+
   it("cleans up agent run sequence tracking when lifecycle completes", () => {
     const { agentRunSeq, chatRunState, handler, nowSpy } = createHarness({ now: 2_500 });
     chatRunState.registry.add("run-cleanup", {
