@@ -59,6 +59,7 @@ describe("runServiceRestart token drift", () => {
     service.isLoaded.mockClear();
     service.readCommand.mockClear();
     service.restart.mockClear();
+    service.label = "TestService";
     service.isLoaded.mockResolvedValue(true);
     service.readCommand.mockResolvedValue({
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
