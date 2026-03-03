@@ -96,6 +96,14 @@ function buildDiscordCommandOptions(params: {
   if (!args || args.length === 0) {
     return undefined;
   }
+  // Use autocomplete for the argsMenu arg so Discord passes inline values (e.g. /acp close)
+  // instead of forcing the dropdown and sending null (fixes #32753).
+  const argsMenuArgName =
+    command.argsMenu === "auto"
+      ? args.find((a) => resolveCommandArgChoices({ command, arg: a, cfg }).length > 0)?.name
+      : typeof command.argsMenu === "object"
+        ? command.argsMenu.arg
+        : undefined;
   return args.map((arg) => {
     const required = arg.required ?? false;
     if (arg.type === "number") {
@@ -115,9 +123,10 @@ function buildDiscordCommandOptions(params: {
       };
     }
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
+    const isMenuArg = argsMenuArgName !== undefined && arg.name === argsMenuArgName;
     const shouldAutocomplete =
       resolvedChoices.length > 0 &&
-      (typeof arg.choices === "function" || resolvedChoices.length > 25);
+      (isMenuArg || typeof arg.choices === "function" || resolvedChoices.length > 25);
     const autocomplete = shouldAutocomplete
       ? async (interaction: AutocompleteInteraction) => {
           const focused = interaction.options.getFocused();
