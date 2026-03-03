@@ -1,5 +1,4 @@
 import Testing
-
 @testable import OpenClaw
 
 @Suite struct CameraCaptureServiceTests {

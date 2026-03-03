@@ -80,7 +80,9 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
 
   val gatewayStatus by viewModel.statusText.collectAsState()
   val micEnabled by viewModel.micEnabled.collectAsState()
+  val micCooldown by viewModel.micCooldown.collectAsState()
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
+  val micStatusText by viewModel.micStatusText.collectAsState()
   val micLiveTranscript by viewModel.micLiveTranscript.collectAsState()
   val micQueuedMessages by viewModel.micQueuedMessages.collectAsState()
   val micConversation by viewModel.micConversation.collectAsState()
@@ -101,7 +103,11 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
         }
       }
     lifecycleOwner.lifecycle.addObserver(observer)
-    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+      // Stop TTS when leaving the voice screen
+      viewModel.setVoiceScreenActive(false)
+    }
   }
 
   val requestMicPermission =
@@ -240,6 +246,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
           }
           Button(
             onClick = {
+              if (micCooldown) return@Button
               if (micEnabled) {
                 viewModel.setMicEnabled(false)
                 return@Button
@@ -251,13 +258,16 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
                 requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
               }
             },
+            enabled = !micCooldown,
             shape = CircleShape,
             contentPadding = PaddingValues(0.dp),
             modifier = Modifier.size(60.dp),
             colors =
               ButtonDefaults.buttonColors(
-                containerColor = if (micEnabled) mobileDanger else mobileAccent,
+                containerColor = if (micCooldown) mobileTextSecondary else if (micEnabled) mobileDanger else mobileAccent,
                 contentColor = Color.White,
+                disabledContainerColor = mobileTextSecondary,
+                disabledContentColor = Color.White.copy(alpha = 0.5f),
               ),
           ) {
             Icon(
@@ -278,6 +288,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
         when {
           queueCount > 0 -> "$queueCount queued"
           micIsSending -> "Sending"
+          micCooldown -> "Cooldown"
           micEnabled -> "Listening"
           else -> "Mic off"
         }

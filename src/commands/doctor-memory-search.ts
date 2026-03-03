@@ -5,7 +5,7 @@ import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
-import { importNodeLlamaCpp } from "../memory/node-llama.js";
+import { DEFAULT_LOCAL_MODEL } from "../memory/embeddings.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -43,8 +43,26 @@ export async function noteMemorySearchHealth(
   // If a specific provider is configured (not "auto"), check only that one.
   if (resolved.provider !== "auto") {
     if (resolved.provider === "local") {
-      if (await hasLocalEmbeddings(resolved.local)) {
-        return; // local model file exists
+      if (hasLocalEmbeddings(resolved.local, true)) {
+        // Model path looks valid (explicit file, hf: URL, or default model).
+        // If a gateway probe is available and reports not-ready, warn anyway —
+        // the model download or node-llama-cpp setup may have failed at runtime.
+        if (opts?.gatewayMemoryProbe?.checked && !opts.gatewayMemoryProbe.ready) {
+          const detail = opts.gatewayMemoryProbe.error?.trim();
+          note(
+            [
+              'Memory search provider is set to "local" and a model path is configured,',
+              "but the gateway reports local embeddings are not ready.",
+              detail ? `Gateway probe: ${detail}` : null,
+              "",
+              `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            "Memory search",
+          );
+        }
+        return;
       }
       note(
         [
@@ -96,7 +114,7 @@ export async function noteMemorySearchHealth(
   }
 
   // provider === "auto": check all providers in resolution order
-  if (await hasLocalEmbeddings(resolved.local)) {
+  if (hasLocalEmbeddings(resolved.local)) {
     return;
   }
   for (const provider of ["openai", "gemini", "voyage", "mistral"] as const) {
@@ -136,18 +154,22 @@ export async function noteMemorySearchHealth(
   );
 }
 
-async function hasLocalEmbeddings(local: { modelPath?: string }): Promise<boolean> {
-  const modelPath = local.modelPath?.trim();
+/**
+ * Check whether local embeddings are available.
+ *
+ * When `useDefaultFallback` is true (explicit `provider: "local"`), an empty
+ * modelPath is treated as available because the runtime falls back to
+ * DEFAULT_LOCAL_MODEL (an auto-downloaded HuggingFace model).
+ *
+ * When false (provider: "auto"), we only consider local available if the user
+ * explicitly configured a local file path — matching `canAutoSelectLocal()`
+ * in the runtime, which skips local for empty/hf: model paths.
+ */
+function hasLocalEmbeddings(local: { modelPath?: string }, useDefaultFallback = false): boolean {
+  const modelPath =
+    local.modelPath?.trim() || (useDefaultFallback ? DEFAULT_LOCAL_MODEL : undefined);
   if (!modelPath) {
-    // No explicit model path — the runtime falls back to a default hf: model
-    // resolved by node-llama-cpp from its own cache. If node-llama-cpp is
-    // importable the default model will be downloaded/resolved at runtime.
-    try {
-      await importNodeLlamaCpp();
-      return true;
-    } catch {
-      return false;
-    }
+    return false;
   }
   // Remote/downloadable models (hf: or http:) aren't pre-resolved on disk,
   // so we can't confirm availability without a network call. Treat as
@@ -164,7 +186,7 @@ async function hasLocalEmbeddings(local: { modelPath?: string }): Promise<boolea
 }
 
 async function hasApiKeyForProvider(
-  provider: "openai" | "gemini" | "voyage" | "mistral",
+  provider: "openai" | "gemini" | "voyage" | "mistral" | "ollama",
   cfg: OpenClawConfig,
   agentDir: string,
 ): Promise<boolean> {
