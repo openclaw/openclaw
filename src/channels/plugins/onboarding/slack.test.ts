@@ -58,11 +58,13 @@ describe("noteSlackTokenHelp", () => {
     const prompter = createBasePrompter(async (message, title) => {
       notes.push({ message, title });
     });
+    const writeSpy = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
 
     await noteSlackTokenHelp(prompter, "OpenClaw");
 
     expect(notes).toHaveLength(2);
+    expect(writeSpy).not.toHaveBeenCalled();
     expect(notes[1]?.message.startsWith("Manifest (JSON):\n")).toBe(true);
     const manifest = notes[1]?.message.replace("Manifest (JSON):\n", "") ?? "";
     const parsed = JSON.parse(manifest) as {
