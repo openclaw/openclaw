@@ -130,6 +130,24 @@ describe("doctor breaking-change upgrade checks", () => {
     expect(collectBreakingChangeUpgradeWarnings(cfg)).toEqual([]);
   });
 
+  it("warns when groupAllowFrom is explicitly empty even if allowFrom has entries", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          enabled: true,
+          botToken: "token",
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+          allowFrom: ["123456"],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(collectBreakingChangeUpgradeWarnings(cfg).join("\n")).toContain(
+      'groupPolicy resolves to "allowlist"',
+    );
+  });
+
   it("warns when only some chats are opened via overrides", () => {
     const cfg = {
       channels: {

@@ -65,8 +65,9 @@ function collectTelegramGroupAllowlistUpgradeWarnings(cfg: OpenClawConfig): stri
       );
     });
     const hasAccountSenderAllowlist =
-      hasEffectiveTelegramAllowEntries(account.config.groupAllowFrom) ||
-      hasEffectiveTelegramAllowEntries(account.config.allowFrom);
+      typeof account.config.groupAllowFrom !== "undefined"
+        ? hasEffectiveTelegramAllowEntries(account.config.groupAllowFrom)
+        : hasEffectiveTelegramAllowEntries(account.config.allowFrom);
     if (hasAccountSenderAllowlist) {
       continue;
     }
