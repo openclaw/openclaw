@@ -5,6 +5,7 @@ import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import {
   LEGACY_GATEWAY_WINDOWS_TASK_NAMES,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
+  normalizeGatewayProfile,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
@@ -474,7 +475,10 @@ function readCliArgv(argv: string[]): string[] | null {
   return null;
 }
 
-function parseGatewayActionFromCliArgv(cliArgv: string[]): {
+function parseGatewayActionFromCliArgv(
+  cliArgv: string[],
+  env: NodeJS.ProcessEnv,
+): {
   action: GatewayManagementAction;
   hard: boolean;
   json: boolean;
@@ -484,6 +488,7 @@ function parseGatewayActionFromCliArgv(cliArgv: string[]): {
   }
 
   let gatewayIdx = -1;
+  let requestedProfile: string | null | undefined;
   for (let idx = 0; idx < cliArgv.length; idx += 1) {
     const token = cliArgv[idx]?.trim() ?? "";
     if (!token) {
@@ -499,6 +504,16 @@ function parseGatewayActionFromCliArgv(cliArgv: string[]): {
     }
 
     if (token.startsWith("-")) {
+      const tokenLower = token.toLowerCase();
+      if (tokenLower.startsWith("--profile=")) {
+        requestedProfile = normalizeGatewayProfile(token.slice("--profile=".length));
+      } else if (tokenLower === "--profile") {
+        const next = cliArgv[idx + 1];
+        if (next === undefined) {
+          return null;
+        }
+        requestedProfile = normalizeGatewayProfile(next);
+      }
       const consumedRootOption = consumeRootOptionToken(cliArgv, idx);
       if (consumedRootOption === 0) {
         return null;
@@ -550,6 +565,16 @@ function parseGatewayActionFromCliArgv(cliArgv: string[]): {
 
   const hard = actionRaw === "restart" && trailing.has("--hard");
   const json = trailing.has("--json");
+
+  // `openclaw --profile X gateway ...` must only be intercepted when X targets this
+  // gateway process; otherwise we risk restarting the wrong profile instance.
+  if (requestedProfile !== undefined) {
+    const currentProfile = normalizeGatewayProfile(env.OPENCLAW_PROFILE);
+    if (requestedProfile !== currentProfile) {
+      return null;
+    }
+  }
+
   return { action: actionRaw, hard, json };
 }
 
@@ -650,7 +675,11 @@ function parseGatewayActionFromSystemctlArgv(
 function parseGatewayActionFromLaunchctlArgv(
   argv: string[],
   env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
 ): GatewayManagementAction | null {
+  if (platform !== "darwin") {
+    return null;
+  }
   if (normalizeExecutableToken(argv[0] ?? "") !== "launchctl") {
     return null;
   }
@@ -711,12 +740,14 @@ export function detectGatewayManagementExecCommand(params: {
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 }): GatewayManagementExecCommand | null {
+  const platform = params.platform ?? process.platform;
   const analysis = analyzeShellCommand({
     command: params.command,
     cwd: params.cwd,
     env: params.env,
-    platform: process.platform,
+    platform,
   });
   if (!analysis.ok || analysis.segments.length === 0) {
     return null;
@@ -730,7 +761,7 @@ export function detectGatewayManagementExecCommand(params: {
         : segment.argv;
     const cliArgv = readCliArgv(argv);
     if (cliArgv) {
-      const parsed = parseGatewayActionFromCliArgv(cliArgv);
+      const parsed = parseGatewayActionFromCliArgv(cliArgv, params.env);
       if (parsed) {
         return {
           action: parsed.action,
@@ -752,7 +783,7 @@ export function detectGatewayManagementExecCommand(params: {
       };
     }
 
-    const launchctlAction = parseGatewayActionFromLaunchctlArgv(argv, params.env);
+    const launchctlAction = parseGatewayActionFromLaunchctlArgv(argv, params.env, platform);
     if (launchctlAction) {
       return {
         action: launchctlAction,

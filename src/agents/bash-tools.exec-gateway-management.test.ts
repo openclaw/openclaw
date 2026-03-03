@@ -116,7 +116,7 @@ describe("detectGatewayManagementExecCommand", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "openclaw --profile dev gateway restart",
       cwd: process.cwd(),
-      env: process.env,
+      env: { ...process.env, OPENCLAW_PROFILE: "dev" },
     });
 
     expect(detected).toEqual({
@@ -125,6 +125,16 @@ describe("detectGatewayManagementExecCommand", () => {
       hard: false,
       complex: false,
     });
+  });
+
+  it("does not detect profile-scoped restart commands targeting another profile", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "openclaw --profile dev gateway restart",
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_PROFILE: "prod" },
+    });
+
+    expect(detected).toBeNull();
   });
 
   it("detects package-manager wrapped restart commands", () => {
@@ -387,6 +397,7 @@ describe("detectGatewayManagementExecCommand", () => {
       command: "launchctl kickstart -k gui/501/ai.openclaw.gateway",
       cwd: process.cwd(),
       env: process.env,
+      platform: "darwin",
     });
 
     expect(detected).toEqual({
@@ -395,6 +406,17 @@ describe("detectGatewayManagementExecCommand", () => {
       hard: false,
       complex: false,
     });
+  });
+
+  it("does not detect launchctl commands on non-darwin platforms", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "launchctl kickstart -k gui/501/ai.openclaw.gateway",
+      cwd: process.cwd(),
+      env: process.env,
+      platform: "linux",
+    });
+
+    expect(detected).toBeNull();
   });
 
   it("detects schtasks commands for gateway task names", () => {
