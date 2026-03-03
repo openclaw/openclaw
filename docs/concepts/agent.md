@@ -119,7 +119,7 @@ More details: [Streaming + chunking](/concepts/streaming).
 Model refs in config (for example `agents.defaults.model` and `agents.defaults.models`) are parsed by splitting on the **first** `/`.
 
 - Use `provider/model` when configuring models.
-- If the model ID itself contains `/`, include the provider prefix (example: `custom/vendor-model`).
+- If the model ID itself contains `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
 - If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
 
 ## Configuration (minimal)

@@ -550,6 +550,7 @@ export async function runEmbeddedPiAgent(
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
             thinkLevel,
+            thinkLevelExplicit: params.thinkLevel !== undefined,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,

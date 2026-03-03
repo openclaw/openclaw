@@ -26,6 +26,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
+  /** True when caller explicitly chose a thinking level (including "off"). */
+  thinkLevelExplicit?: boolean;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
 };
 

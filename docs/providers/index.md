@@ -28,6 +28,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 - [Amazon Bedrock](/providers/bedrock)
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
+- [Claude Personal (Pro/Max subscription)](/providers/claude-personal)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [GLM models](/providers/glm)
 - [Hugging Face (Inference)](/providers/huggingface)
@@ -56,7 +57,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 ## Community tools
 
-- [Claude Personal (subscription proxy)](/providers/claude-personal) - Community proxy for Claude personal subscription credentials (verify Anthropic policy/terms before use)
+- [Claude Max API Proxy](/providers/claude-max-api-proxy) - Community proxy for Claude subscription credentials (verify Anthropic policy/terms before use)
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).

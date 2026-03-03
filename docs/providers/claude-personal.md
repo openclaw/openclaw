@@ -1,154 +1,104 @@
 ---
-summary: "Community proxy to expose Claude personal subscription credentials as an OpenAI-compatible endpoint"
+summary: "Use a personal Claude subscription (Pro or Max) with OpenClaw via Claude Code system-keychain auth"
 read_when:
-  - You want to use a Claude personal subscription (Pro or Max) with OpenAI-compatible tools
-  - You want a local API server that wraps Claude Code CLI
-  - You want to evaluate subscription-based vs API-key-based Anthropic access
-title: "Claude Personal (Subscription Proxy)"
+  - You have a Claude Pro or Max subscription and want to use it in OpenClaw
+  - You want to set up claude-personal provider auth
+  - You are debugging keychain auth or token expiry issues
+title: "Claude Personal (Subscription)"
 ---
 
-# Claude Personal Subscription Proxy
+# Claude Personal (Subscription)
 
-**claude-personal** refers to the `claude-personal` provider ID, which covers personal Claude subscriptions (Pro or Max). A community tool called **claude-max-api-proxy** exposes your Claude personal subscription as an OpenAI-compatible API endpoint. This allows you to use your subscription with any tool that supports the OpenAI API format.
+The `claude-personal` provider lets you use a personal Claude subscription (Pro or Max) in OpenClaw via the Claude Agent SDK and Claude Code's system-keychain credentials.
 
 <Warning>
-This path is technical compatibility only. Anthropic has blocked some subscription
-usage outside Claude Code in the past. You must decide for yourself whether to use
-it and verify Anthropic's current terms before relying on it.
+**Anthropic policy notice:** Using the Claude Agent SDK for 24/7 autonomous bots
+is prohibited by Anthropic. Using a personal subscription for business purposes
+or for people other than the subscriber violates Anthropic Terms of Service.
+You must decide for yourself whether your use complies with Anthropic's current terms.
+API keys remain the clearer and safer path for production or business use.
 </Warning>
 
-## Why Use This?
+## How it works
 
-| Approach                     | Cost                                                | Best For                                   |
-| ---------------------------- | --------------------------------------------------- | ------------------------------------------ |
-| Anthropic API                | Pay per token (~$15/M input, $75/M output for Opus) | Production apps, high volume               |
-| Claude personal subscription | $200/month flat                                     | Personal use, development, unlimited usage |
+OpenClaw reads credentials from the Claude Code system keychain (the same credentials
+`claude` CLI uses). No separate API key is required — your active Pro or Max
+subscription is the auth.
 
-If you have a Claude personal subscription (Pro or Max) and want to use it with OpenAI-compatible tools, this proxy may reduce cost for some workflows. API keys remain the clearer policy path for production use.
+Because this uses Claude Code's session state rather than a standard API token, there
+is **no automatic token refresh**. If the system-keychain credentials expire or
+become invalid (for example after a browser session ends or you sign out of Claude),
+OpenClaw will fail over to Pi runtime for that turn. You must re-authenticate with
+`claude` to restore the keychain credentials.
 
-## How It Works
+## Setup
 
-```
-Your App → claude-personal proxy → Claude Code CLI → Anthropic (via subscription)
-     (OpenAI format)              (converts format)      (uses your login)
-```
-
-The proxy:
-
-1. Accepts OpenAI-format requests at `http://localhost:3456/v1/chat/completions`
-2. Converts them to Claude Code CLI commands
-3. Returns responses in OpenAI format (streaming supported)
-
-## Installation
+### CLI (recommended)
 
 ```bash
-# Requires Node.js 20+ and Claude Code CLI
-npm install -g claude-max-api-proxy
-
-# Verify Claude CLI is authenticated
-claude --version
+openclaw models auth setup-claude-personal
 ```
 
-## Usage
+This prints the Anthropic policy notice, asks for acknowledgment, then creates a
+synthetic profile (`claude-personal:system-keychain`) that OpenClaw uses for
+cooldown tracking and failover.
 
-### Start the server
+### Interactive onboarding
 
 ```bash
-claude-max-api
-# Server runs at http://localhost:3456
+openclaw models auth add
+# choose: Configure Claude Code w/Keychain
 ```
 
-### Test it
+### Verify
 
 ```bash
-# Health check
-curl http://localhost:3456/health
-
-# List models
-curl http://localhost:3456/v1/models
-
-# Chat completion
-curl http://localhost:3456/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "claude-opus-4",
-    "messages": [{"role": "user", "content": "Hello!"}]
-  }'
+openclaw models status
+openclaw channels status --probe
 ```
 
-### With OpenClaw
-
-You can point OpenClaw at the proxy as a custom OpenAI-compatible endpoint:
+## Configuration
 
 ```json5
 {
-  env: {
-    OPENAI_API_KEY: "not-needed",
-    OPENAI_BASE_URL: "http://localhost:3456/v1",
-  },
   agents: {
     defaults: {
-      model: { primary: "openai/claude-opus-4" },
+      model: { primary: "claude-personal/claude-opus-4-6" },
+      claudeSdk: {
+        // Optional: override the thinking level for SDK turns.
+        // Omit to let the model's default apply.
+        thinkingDefault: "medium",
+      },
     },
   },
 }
 ```
 
-## Available Models
+Full `claudeSdk` options: [Configuration reference](/gateway/configuration-reference#agentsdefaultsclaudesdk).
 
-| Model ID          | Maps To         |
-| ----------------- | --------------- |
-| `claude-opus-4`   | Claude Opus 4   |
-| `claude-sonnet-4` | Claude Sonnet 4 |
-| `claude-haiku-4`  | Claude Haiku 4  |
+## Thinking
 
-## Auto-Start on macOS
+Claude 4.6 models (`claude-opus-4-6`, `claude-sonnet-4-6`) default to adaptive
+thinking when no explicit level is set. You can override per-message (`/think:<level>`)
+or via config:
 
-Create a LaunchAgent to run the proxy automatically:
+- `agents.defaults.claudeSdk.thinkingDefault` — SDK-specific default
+- `agents.defaults.models["claude-personal/<model>"].params.thinking` — per-model
 
-```bash
-cat > ~/Library/LaunchAgents/com.claude-personal-api.plist << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.claude-personal-api</string>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/local/bin/node</string>
-    <string>/usr/local/lib/node_modules/claude-max-api-proxy/dist/server/standalone.js</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>/usr/local/bin:/opt/homebrew/bin:~/.local/bin:/usr/bin:/bin</string>
-  </dict>
-</dict>
-</plist>
-EOF
+## Auth failover
 
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-personal-api.plist
-```
+If keychain auth is unavailable (expired, signed out, all profiles cooling down),
+OpenClaw retries the turn on Pi runtime and continues normal model/provider
+failover from there. See [Model failover](/concepts/model-failover#claude-code-keychain-providers).
 
-## Links
+## No token refresh
 
-- **npm:** [https://www.npmjs.com/package/claude-max-api-proxy](https://www.npmjs.com/package/claude-max-api-proxy)
-- **GitHub:** [https://github.com/atalovesyou/claude-max-api-proxy](https://github.com/atalovesyou/claude-max-api-proxy)
-- **Issues:** [https://github.com/atalovesyou/claude-max-api-proxy/issues](https://github.com/atalovesyou/claude-max-api-proxy/issues)
+The `claude-personal` provider uses a `token` credential type with no refresh
+mechanism. If credentials become stale, OpenClaw cannot renew them automatically.
+Re-run `claude` to sign in and restore system-keychain auth, then retry.
 
-## Notes
+## See also
 
-- This is a **community tool**, not officially supported by Anthropic or OpenClaw
-- Requires an active Claude personal subscription (Pro or Max) with Claude Code CLI authenticated
-- The proxy runs locally and does not send data to any third-party servers
-- Streaming responses are fully supported
-
-## See Also
-
-- [Anthropic provider](/providers/anthropic) - Native OpenClaw integration with Claude setup-token or API keys
-- [OpenAI provider](/providers/openai) - For OpenAI/Codex subscriptions
+- [Claude SDK Runtime](/concepts/claude-sdk-runtime)
+- [Model failover](/concepts/model-failover)
+- [Configuration reference](/gateway/configuration-reference#agentsdefaultsclaudesdk)
