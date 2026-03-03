@@ -48,16 +48,10 @@ function makeImageToolResult(params: {
   toolName: string;
   text: string;
 }): AgentMessage {
+  const base = makeToolResult(params);
   return {
-    role: "toolResult",
-    toolCallId: params.toolCallId,
-    toolName: params.toolName,
-    content: [
-      { type: "image", data: "AA==", mimeType: "image/png" },
-      { type: "text", text: params.text },
-    ],
-    isError: false,
-    timestamp: Date.now(),
+    ...base,
+    content: [{ type: "image", data: "AA==", mimeType: "image/png" }, ...base.content],
   };
 }
 
@@ -119,6 +113,23 @@ function pruneWithAggressiveDefaults(
     ctx: CONTEXT_WINDOW_1000,
     ...extra,
   });
+}
+
+function makeLargeExecToolResult(toolCallId: string, textChar: string): AgentMessage {
+  return makeToolResult({
+    toolCallId,
+    toolName: "exec",
+    text: textChar.repeat(20_000),
+  });
+}
+
+function makeSimpleToolPruningMessages(includeTrailingAssistant = false): AgentMessage[] {
+  return [
+    makeUser("u1"),
+    makeAssistant("a1"),
+    makeLargeExecToolResult("t1", "x"),
+    ...(includeTrailingAssistant ? [makeAssistant("a2")] : []),
+  ];
 }
 
 type ContextHandler = (
@@ -235,23 +246,11 @@ describe("context-pruning", () => {
     const messages: AgentMessage[] = [
       makeUser("u1"),
       makeAssistant("a1"),
-      makeToolResult({
-        toolCallId: "t1",
-        toolName: "exec",
-        text: "x".repeat(20_000),
-      }),
-      makeToolResult({
-        toolCallId: "t2",
-        toolName: "exec",
-        text: "y".repeat(20_000),
-      }),
+      makeLargeExecToolResult("t1", "x"),
+      makeLargeExecToolResult("t2", "y"),
       makeUser("u2"),
       makeAssistant("a2"),
-      makeToolResult({
-        toolCallId: "t3",
-        toolName: "exec",
-        text: "z".repeat(20_000),
-      }),
+      makeLargeExecToolResult("t3", "z"),
     ];
 
     const next = pruneWithAggressiveDefaults(messages, {
@@ -267,16 +266,7 @@ describe("context-pruning", () => {
   });
 
   it("uses contextWindow override when ctx.model is missing", () => {
-    const messages: AgentMessage[] = [
-      makeUser("u1"),
-      makeAssistant("a1"),
-      makeToolResult({
-        toolCallId: "t1",
-        toolName: "exec",
-        text: "x".repeat(20_000),
-      }),
-      makeAssistant("a2"),
-    ];
+    const messages = makeSimpleToolPruningMessages(true);
 
     const next = pruneContextMessages({
       messages,
@@ -298,16 +288,7 @@ describe("context-pruning", () => {
       lastCacheTouchAt: Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000,
     });
 
-    const messages: AgentMessage[] = [
-      makeUser("u1"),
-      makeAssistant("a1"),
-      makeToolResult({
-        toolCallId: "t1",
-        toolName: "exec",
-        text: "x".repeat(20_000),
-      }),
-      makeAssistant("a2"),
-    ];
+    const messages = makeSimpleToolPruningMessages(true);
 
     const handler = createContextHandler();
     const result = runContextHandler(handler, messages, sessionManager);
@@ -329,15 +310,7 @@ describe("context-pruning", () => {
       lastCacheTouchAt: lastTouch,
     });
 
-    const messages: AgentMessage[] = [
-      makeUser("u1"),
-      makeAssistant("a1"),
-      makeToolResult({
-        toolCallId: "t1",
-        toolName: "exec",
-        text: "x".repeat(20_000),
-      }),
-    ];
+    const messages = makeSimpleToolPruningMessages();
 
     const handler = createContextHandler();
     const first = runContextHandler(handler, messages, sessionManager);
