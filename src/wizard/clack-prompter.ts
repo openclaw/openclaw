@@ -59,8 +59,15 @@ export function createClackPrompter(): WizardPrompter {
     outro: async (message) => {
       outro(stylePromptTitle(message) ?? message);
     },
-    note: async (message, title) => {
-      emitNote(message, title);
+    note: async (message, title, options) => {
+      if (options?.plain) {
+        if (title) {
+          console.log(`\n${title}:`);
+        }
+        console.log(message);
+      } else {
+        emitNote(message, title);
+      }
     },
     select: async (params) =>
       guardCancel(
