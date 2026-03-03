@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   coerceToFailoverError,
   describeFailoverError,
+  isTimeoutError,
   resolveFailoverReasonFromError,
+  resolveFailoverStatus,
 } from "./failover-error.js";
 
 describe("failover-error", () => {
@@ -12,6 +14,12 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
+    // Transient server errors (502/503/504) should trigger failover as timeout.
+    expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
+    // Anthropic 529 (overloaded) should trigger failover as rate_limit.
+    expect(resolveFailoverReasonFromError({ status: 529 })).toBe("rate_limit");
   });
 
   it("infers format errors from error messages", () => {
@@ -25,6 +33,43 @@ describe("failover-error", () => {
   it("infers timeout from common node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
+  });
+
+  it("infers timeout from abort/error stop-reason messages", () => {
+    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: abort" })).toBe(
+      "timeout",
+    );
+    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: error" })).toBe(
+      "timeout",
+    );
+    expect(resolveFailoverReasonFromError({ message: "stop reason: abort" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("timeout");
+  });
+
+  it("infers timeout from connection/network error messages", () => {
+    expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "Network error: ECONNREFUSED" })).toBe(
+      "timeout",
+    );
+    expect(
+      resolveFailoverReasonFromError({
+        message: "dial tcp: lookup api.example.com: no such host (ENOTFOUND)",
+      }),
+    ).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "temporary dns failure EAI_AGAIN" })).toBe(
+      "timeout",
+    );
+  });
+
+  it("treats AbortError reason=abort as timeout", () => {
+    const err = Object.assign(new Error("aborted"), {
+      name: "AbortError",
+      reason: "reason: abort",
+    });
+    expect(isTimeoutError(err)).toBe(true);
   });
 
   it("coerces failover-worthy errors into FailoverError with metadata", () => {
@@ -46,6 +91,62 @@ describe("failover-error", () => {
     });
     expect(err?.reason).toBe("format");
     expect(err?.status).toBe(400);
+  });
+
+  it("401/403 with generic message still returns auth (backward compat)", () => {
+    expect(resolveFailoverReasonFromError({ status: 401, message: "Unauthorized" })).toBe("auth");
+    expect(resolveFailoverReasonFromError({ status: 403, message: "Forbidden" })).toBe("auth");
+  });
+
+  it("401 with permanent auth message returns auth_permanent", () => {
+    expect(resolveFailoverReasonFromError({ status: 401, message: "invalid_api_key" })).toBe(
+      "auth_permanent",
+    );
+  });
+
+  it("403 with revoked key message returns auth_permanent", () => {
+    expect(resolveFailoverReasonFromError({ status: 403, message: "api key revoked" })).toBe(
+      "auth_permanent",
+    );
+  });
+
+  it("resolveFailoverStatus maps auth_permanent to 403", () => {
+    expect(resolveFailoverStatus("auth_permanent")).toBe(403);
+  });
+
+  it("coerces permanent auth error with correct reason", () => {
+    const err = coerceToFailoverError(
+      { status: 401, message: "invalid_api_key" },
+      { provider: "anthropic", model: "claude-opus-4-6" },
+    );
+    expect(err?.reason).toBe("auth_permanent");
+    expect(err?.provider).toBe("anthropic");
+  });
+
+  it("403 permission_error returns auth_permanent", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 403,
+        message:
+          "permission_error: OAuth authentication is currently not allowed for this organization.",
+      }),
+    ).toBe("auth_permanent");
+  });
+
+  it("permission_error in error message string classifies as auth_permanent", () => {
+    const err = coerceToFailoverError(
+      "HTTP 403 permission_error: OAuth authentication is currently not allowed for this organization.",
+      { provider: "anthropic", model: "claude-opus-4-6" },
+    );
+    expect(err?.reason).toBe("auth_permanent");
+  });
+
+  it("'not allowed for this organization' classifies as auth_permanent", () => {
+    const err = coerceToFailoverError(
+      "OAuth authentication is currently not allowed for this organization",
+      { provider: "anthropic", model: "claude-opus-4-6" },
+    );
+    expect(err?.reason).toBe("auth_permanent");
   });
 
   it("describes non-Error values consistently", () => {
