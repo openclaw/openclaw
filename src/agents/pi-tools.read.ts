@@ -670,7 +670,7 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapEditToolWithCurrentContent(base, params.bridge);
+  return wrapEditToolWithCurrentContent(base, params.bridge, params.root);
 }
 
 /**
@@ -678,7 +678,11 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
  * This allows the agent to retry immediately without a separate Read call.
  * Implements Option 1 from https://github.com/openclaw/openclaw/issues/18132
  */
-function wrapEditToolWithCurrentContent(tool: AnyAgentTool, bridge: SandboxFsBridge): AnyAgentTool {
+function wrapEditToolWithCurrentContent(
+  tool: AnyAgentTool,
+  bridge: SandboxFsBridge,
+  root: string,
+): AnyAgentTool {
   const wrapped = wrapToolParamNormalization(tool, CLAUDE_PARAM_GROUPS.edit);
   return {
     ...wrapped,
@@ -703,8 +707,8 @@ function wrapEditToolWithCurrentContent(tool: AnyAgentTool, bridge: SandboxFsBri
 
         if (typeof filePath === "string") {
           try {
-            // bridge.readFile returns Buffer, no encoding parameter
-            const content = await bridge.readFile({ filePath, cwd: "" });
+            // bridge.readFile returns Buffer, use sandbox root for cwd
+            const content = await bridge.readFile({ filePath, cwd: root });
             const currentContent = Buffer.from(content).toString("utf-8");
 
             // Append current content to error message
