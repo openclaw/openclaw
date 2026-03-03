@@ -106,3 +106,45 @@ export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[]
     merge: mergeConsecutiveUserTurns,
   });
 }
+
+/**
+ * Validates and fixes conversation turn sequences for Mistral API.
+ * Mistral requires that tool result messages are always followed by an assistant
+ * message, never directly by a user message. When a user message directly follows
+ * a tool result (e.g. after history truncation or concurrent input), the Mistral
+ * tokenizer rejects the sequence with "Unexpected role 'user' after role 'tool'".
+ *
+ * This function inserts a synthetic assistant bridge message between tool results
+ * and user messages to satisfy Mistral's ordering constraint.
+ */
+export function validateMistralTurns(messages: AgentMessage[]): AgentMessage[] {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return messages;
+  }
+
+  const result: AgentMessage[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    result.push(msg);
+
+    // Check if this is a tool message and the next one is a user message
+    if (
+      i < messages.length - 1 &&
+      msg &&
+      typeof msg === "object" &&
+      (msg as { role?: string }).role === "tool"
+    ) {
+      const next = messages[i + 1];
+      if (next && typeof next === "object" && (next as { role?: string }).role === "user") {
+        // Insert a synthetic assistant bridge message
+        result.push({
+          role: "assistant",
+          content: [{ type: "text", text: "(continuing)" }],
+        } as AgentMessage);
+      }
+    }
+  }
+
+  return result;
+}

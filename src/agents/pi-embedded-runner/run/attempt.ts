@@ -51,6 +51,7 @@ import {
   resolveBootstrapTotalMaxChars,
   validateAnthropicTurns,
   validateGeminiTurns,
+  validateMistralTurns,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
@@ -1150,9 +1151,12 @@ export async function runEmbeddedAttempt(
         const validatedGemini = transcriptPolicy.validateGeminiTurns
           ? validateGeminiTurns(prior)
           : prior;
-        const validated = transcriptPolicy.validateAnthropicTurns
+        const validatedAnthropic = transcriptPolicy.validateAnthropicTurns
           ? validateAnthropicTurns(validatedGemini)
           : validatedGemini;
+        const validated = transcriptPolicy.validateMistralTurns
+          ? validateMistralTurns(validatedAnthropic)
+          : validatedAnthropic;
         const truncated = limitHistoryTurns(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),

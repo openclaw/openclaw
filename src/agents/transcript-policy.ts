@@ -19,6 +19,7 @@ export type TranscriptPolicy = {
   applyGoogleTurnOrdering: boolean;
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
+  validateMistralTurns: boolean;
   allowSyntheticToolResults: boolean;
 };
 
@@ -130,6 +131,7 @@ export function resolveTranscriptPolicy(params: {
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
     validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
+    validateMistralTurns: !isOpenAi && isMistral,
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
   };
 }

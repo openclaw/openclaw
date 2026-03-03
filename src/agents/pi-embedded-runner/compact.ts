@@ -38,6 +38,7 @@ import {
   ensureSessionHeader,
   validateAnthropicTurns,
   validateGeminiTurns,
+  validateMistralTurns,
 } from "../pi-embedded-helpers.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
@@ -602,9 +603,12 @@ export async function compactEmbeddedPiSessionDirect(
         const validatedGemini = transcriptPolicy.validateGeminiTurns
           ? validateGeminiTurns(prior)
           : prior;
-        const validated = transcriptPolicy.validateAnthropicTurns
+        const validatedAnthropic = transcriptPolicy.validateAnthropicTurns
           ? validateAnthropicTurns(validatedGemini)
           : validatedGemini;
+        const validated = transcriptPolicy.validateMistralTurns
+          ? validateMistralTurns(validatedAnthropic)
+          : validatedAnthropic;
         // Capture full message history BEFORE limiting — plugins need the complete conversation
         const preCompactionMessages = [...session.messages];
         const truncated = limitHistoryTurns(
