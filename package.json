@@ -48,6 +48,10 @@
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
     },
+    "./dist/auto-reply/reply/provider-dispatcher.js": {
+      "types": "./dist/plugin-sdk/auto-reply/reply/provider-dispatcher.d.ts",
+      "default": "./dist/auto-reply/reply/provider-dispatcher.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
