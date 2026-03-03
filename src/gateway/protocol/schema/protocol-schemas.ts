@@ -47,6 +47,8 @@ import {
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   TalkModeParamsSchema,
+  TalkTranscribeParamsSchema,
+  TalkTranscribeResultSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
 } from "./channels.js";
@@ -216,6 +218,8 @@ export const ProtocolSchemas = {
   WizardStartResult: WizardStartResultSchema,
   WizardStatusResult: WizardStatusResultSchema,
   TalkModeParams: TalkModeParamsSchema,
+  TalkTranscribeParams: TalkTranscribeParamsSchema,
+  TalkTranscribeResult: TalkTranscribeResultSchema,
   TalkConfigParams: TalkConfigParamsSchema,
   TalkConfigResult: TalkConfigResultSchema,
   ChannelsStatusParams: ChannelsStatusParamsSchema,

@@ -93,14 +93,6 @@ function normalizeSttConfig(value: unknown): TalkSttConfig | undefined {
   if (provider) {
     stt.provider = provider;
   }
-  const model = normalizeString(value.model);
-  if (model) {
-    stt.model = model;
-  }
-  const apiKey = normalizeString(value.apiKey);
-  if (apiKey) {
-    stt.apiKey = apiKey;
-  }
   const language = normalizeString(value.language);
   if (language) {
     stt.language = language;

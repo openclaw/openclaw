@@ -42,6 +42,15 @@ export const TalkConfigResultSchema = Type.Object(
               outputFormat: Type.Optional(Type.String()),
               apiKey: Type.Optional(Type.String()),
               interruptOnSpeech: Type.Optional(Type.Boolean()),
+              stt: Type.Optional(
+                Type.Object(
+                  {
+                    provider: Type.Optional(Type.String()),
+                    language: Type.Optional(Type.String()),
+                  },
+                  { additionalProperties: false },
+                ),
+              ),
             },
             { additionalProperties: false },
           ),
@@ -156,6 +165,22 @@ export const WebLoginStartParamsSchema = Type.Object(
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     verbose: Type.Optional(Type.Boolean()),
     accountId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkTranscribeParamsSchema = Type.Object(
+  {
+    audio: Type.String(),
+    mime: Type.Optional(Type.String()),
+    language: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkTranscribeResultSchema = Type.Object(
+  {
+    text: Type.String(),
   },
   { additionalProperties: false },
 );

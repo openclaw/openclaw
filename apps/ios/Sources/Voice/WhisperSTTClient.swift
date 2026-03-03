@@ -1,66 +1,10 @@
 import Foundation
-import OSLog
 
-/// Lightweight client for OpenAI Whisper speech-to-text API.
-/// Accepts raw PCM audio, wraps it in a WAV container, and POSTs
-/// multipart/form-data to `/v1/audio/transcriptions`.
+/// WAV encoding utility for gateway STT. Wraps raw Float32 mono PCM in a
+/// minimal 16-bit WAV container suitable for server-side transcription.
 struct WhisperSTTClient {
-    let apiKey: String
-    let model: String
-    let language: String?
-
-    private static let logger = Logger(subsystem: "ai.openclaw", category: "WhisperSTT")
-    private static let apiURL = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
-
-    init(apiKey: String, model: String = "whisper-1", language: String? = nil) {
-        self.apiKey = apiKey
-        self.model = model
-        self.language = language
-    }
-
-    /// Transcribe raw PCM audio data (mono, Float32) at the given sample rate.
-    func transcribe(pcmData: Data, sampleRate: Double) async throws -> String {
-        let wavData = Self.wavFromPCM(pcmData: pcmData, sampleRate: UInt32(sampleRate))
-
-        let boundary = "whisper-\(UUID().uuidString)"
-        var request = URLRequest(url: Self.apiURL)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 30
-
-        var body = Data()
-        Self.appendFormField(&body, boundary: boundary, name: "model", value: model)
-        if let language, !language.isEmpty {
-            Self.appendFormField(&body, boundary: boundary, name: "language", value: language)
-        }
-        Self.appendFormField(&body, boundary: boundary, name: "response_format", value: "text")
-        Self.appendFileField(&body, boundary: boundary, name: "file", filename: "audio.wav",
-                             contentType: "audio/wav", data: wavData)
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-        request.httpBody = body
-
-        Self.logger.info("transcribe: sending \(wavData.count) bytes model=\(model)")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw WhisperSTTError.invalidResponse
-        }
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? ""
-            Self.logger.error("transcribe failed: status=\(httpResponse.statusCode) body=\(errorBody, privacy: .public)")
-            throw WhisperSTTError.apiError(statusCode: httpResponse.statusCode, body: errorBody)
-        }
-
-        let transcript = (String(data: data, encoding: .utf8) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        Self.logger.info("transcribe ok: chars=\(transcript.count)")
-        return transcript
-    }
-
-    // MARK: - WAV encoding
-
     /// Wraps raw Float32 mono PCM data in a minimal WAV container (16-bit PCM).
-    private static func wavFromPCM(pcmData: Data, sampleRate: UInt32) -> Data {
+    static func wavFromPCM(pcmData: Data, sampleRate: UInt32) -> Data {
         let sampleCount = pcmData.count / MemoryLayout<Float>.size
         let int16Data = pcmData.withUnsafeBytes { raw -> Data in
             let floats = raw.bindMemory(to: Float.self)
@@ -96,40 +40,6 @@ struct WhisperSTTClient {
         header.appendLittleEndian(dataSize)
         header.append(int16Data)
         return header
-    }
-
-    // MARK: - Multipart helpers
-
-    private static func appendFormField(_ body: inout Data, boundary: String, name: String, value: String) {
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
-        body.append("\(value)\r\n".data(using: .utf8)!)
-    }
-
-    private static func appendFileField(
-        _ body: inout Data, boundary: String, name: String,
-        filename: String, contentType: String, data: Data
-    ) {
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append(
-            "Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: \(contentType)\r\n\r\n".data(using: .utf8)!)
-        body.append(data)
-        body.append("\r\n".data(using: .utf8)!)
-    }
-}
-
-enum WhisperSTTError: LocalizedError {
-    case invalidResponse
-    case apiError(statusCode: Int, body: String)
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidResponse:
-            return "Invalid response from Whisper API"
-        case .apiError(let statusCode, let body):
-            return "Whisper API error \(statusCode): \(body)"
-        }
     }
 }
 

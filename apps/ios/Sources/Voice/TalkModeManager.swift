@@ -87,8 +87,6 @@ final class TalkModeManager: NSObject {
     private var voiceAliases: [String: String] = [:]
     private var interruptOnSpeech: Bool = true
     private var sttProvider: String = "apple"
-    private var sttApiKey: String?
-    private var sttModel: String = "whisper-1"
     private var sttLanguage: String?
     private var whisperAudioBuffer: Data?
     private var whisperSampleRate: Double?
@@ -188,8 +186,8 @@ final class TalkModeManager: NSObject {
 
         await self.reloadConfig()
 
-        // Apple Speech requires speech recognition permission; Whisper (openai) does not.
-        if self.sttProvider != "openai" {
+        // Apple Speech requires speech recognition permission; gateway STT does not.
+        if self.sttProvider != "gateway" {
             let speechOk = await Self.requestSpeechPermission()
             guard speechOk else {
                 self.logger.warning("start blocked: speech permission denied")
@@ -334,7 +332,7 @@ final class TalkModeManager: NSObject {
                     NSLocalizedDescriptionKey: "Microphone permission denied",
                 ])
             }
-            if self.sttProvider != "openai" {
+            if self.sttProvider != "gateway" {
                 let speechOk = await Self.requestSpeechPermission()
                 guard speechOk else {
                     self.statusText = Self.permissionMessage(
@@ -513,7 +511,7 @@ final class TalkModeManager: NSObject {
 
         self.stopRecognition()
 
-        if self.sttProvider == "openai" {
+        if self.sttProvider == "gateway" {
             try self.startWhisperCapture()
             return
         }
@@ -644,9 +642,9 @@ final class TalkModeManager: NSObject {
         self.whisperSampleRate = nil
     }
 
-    // MARK: - Whisper (OpenAI) STT capture
+    // MARK: - Gateway STT capture
 
-    /// Start audio capture for Whisper STT — mic tap only, no SFSpeechRecognizer.
+    /// Start audio capture for gateway STT — mic tap only, no SFSpeechRecognizer.
     private func startWhisperCapture() throws {
         GatewayDiagnostics.log("talk audio: whisper capture session \(Self.describeAudioSession())")
         let input = self.audioEngine.inputNode
@@ -745,12 +743,16 @@ final class TalkModeManager: NSObject {
         return sqrt(sum / Float(count))
     }
 
-    /// Called when Whisper silence is detected — transcribe accumulated audio.
+    /// Called when silence is detected — encode PCM to WAV, send to gateway for transcription.
     private func whisperTranscribeAndProcess(restartAfter: Bool) async {
         guard let pcmData = self.whisperAudioBuffer, !pcmData.isEmpty,
-              let sampleRate = self.whisperSampleRate,
-              let apiKey = self.sttApiKey, !apiKey.isEmpty else {
-            self.logger.warning("whisper: no audio or missing API key")
+              let sampleRate = self.whisperSampleRate else {
+            self.logger.warning("gateway stt: no audio data")
+            if restartAfter { await self.start() }
+            return
+        }
+        guard self.gatewayConnected, let gateway else {
+            self.logger.warning("gateway stt: gateway not connected")
             if restartAfter { await self.start() }
             return
         }
@@ -760,20 +762,40 @@ final class TalkModeManager: NSObject {
         self.statusText = "Transcribing\u{2026}"
         self.stopRecognition()
 
-        let client = WhisperSTTClient(apiKey: apiKey, model: self.sttModel, language: self.sttLanguage)
         do {
-            let transcript = try await client.transcribe(pcmData: pcmData, sampleRate: sampleRate)
-            let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                GatewayDiagnostics.log("talk whisper: empty transcript")
+            let wavData = WhisperSTTClient.wavFromPCM(pcmData: pcmData, sampleRate: UInt32(sampleRate))
+            let base64Audio = wavData.base64EncodedString()
+
+            var paramsDict: [String: Any] = ["audio": base64Audio, "mime": "audio/wav"]
+            if let lang = self.sttLanguage, !lang.isEmpty {
+                paramsDict["language"] = lang
+            }
+            let paramsJSON = try JSONSerialization.data(withJSONObject: paramsDict)
+            let paramsString = String(data: paramsJSON, encoding: .utf8) ?? "{}"
+
+            let res = try await gateway.request(
+                method: "talk.transcribe",
+                paramsJSON: paramsString,
+                timeoutSeconds: 30
+            )
+            guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any],
+                  let text = json["text"] as? String else {
+                GatewayDiagnostics.log("talk gateway stt: invalid response")
                 if restartAfter { await self.start() }
                 return
             }
-            GatewayDiagnostics.log("talk whisper: transcript chars=\(trimmed.count)")
+
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                GatewayDiagnostics.log("talk gateway stt: empty transcript")
+                if restartAfter { await self.start() }
+                return
+            }
+            GatewayDiagnostics.log("talk gateway stt: transcript chars=\(trimmed.count)")
             await self.processTranscript(trimmed, restartAfter: restartAfter)
         } catch {
-            self.logger.error("whisper transcribe failed: \(error.localizedDescription, privacy: .public)")
-            GatewayDiagnostics.log("talk whisper: error=\(error.localizedDescription)")
+            self.logger.error("gateway stt failed: \(error.localizedDescription, privacy: .public)")
+            GatewayDiagnostics.log("talk gateway stt: error=\(error.localizedDescription)")
             self.statusText = "Transcription error"
             if restartAfter { await self.start() }
         }
@@ -834,8 +856,8 @@ final class TalkModeManager: NSObject {
         if self.captureMode == .continuous {
             guard self.isListening, !self.isSpeechOutputActive else { return }
 
-            // Whisper: silence detection triggers batch transcription (no streaming partial transcript).
-            if self.sttProvider == "openai" {
+            // Gateway STT: silence detection triggers batch transcription (no streaming partial transcript).
+            if self.sttProvider == "gateway" {
                 guard self.whisperAudioBuffer != nil, !(self.whisperAudioBuffer?.isEmpty ?? true) else { return }
                 guard self.lastHeard != nil || self.lastAudioActivity != nil else { return }
                 let lastActivity = [self.lastHeard, self.lastAudioActivity].compactMap { $0 }.max()
@@ -2200,35 +2222,19 @@ extension TalkModeManager {
                 self.interruptOnSpeech = interrupt
             }
 
-            // STT config (speech-to-text provider).
+            // STT config: "gateway" sends audio to the gateway for server-side transcription;
+            // anything else (or absent) falls back to on-device Apple Speech.
             if let sttBlock = talk?["stt"] as? [String: Any] {
                 let provider = (sttBlock["provider"] as? String)?
                     .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                self.sttProvider = (provider == "openai") ? "openai" : "apple"
-                self.sttModel = (sttBlock["model"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? "whisper-1"
+                self.sttProvider = (provider == "gateway") ? "gateway" : "apple"
                 self.sttLanguage = (sttBlock["language"] as? String)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-
-                // API key: local Keychain override > gateway config value.
-                let rawSttApiKey = (sttBlock["apiKey"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                let configSttKey = Self.normalizedTalkApiKey(rawSttApiKey)
-                let localSttKey = Self.normalizedTalkApiKey(
-                    GatewaySettingsStore.loadTalkProviderApiKey(provider: "openai-stt"))
-                if rawSttApiKey == Self.redactedConfigSentinel {
-                    self.sttApiKey = (localSttKey?.isEmpty == false) ? localSttKey : nil
-                } else {
-                    self.sttApiKey = (localSttKey?.isEmpty == false) ? localSttKey : configSttKey
-                }
-                if self.sttProvider == "openai" {
-                    GatewayDiagnostics.log(
-                        "talk stt: provider=openai model=\(self.sttModel) keyPresent=\(self.sttApiKey != nil)")
+                if self.sttProvider == "gateway" {
+                    GatewayDiagnostics.log("talk stt: provider=gateway")
                 }
             } else {
                 self.sttProvider = "apple"
-                self.sttApiKey = nil
-                self.sttModel = "whisper-1"
                 self.sttLanguage = nil
             }
 
@@ -2245,8 +2251,6 @@ extension TalkModeManager {
             self.gatewayTalkApiKeyConfigured = false
             self.gatewayTalkConfigLoaded = false
             self.sttProvider = "apple"
-            self.sttApiKey = nil
-            self.sttModel = "whisper-1"
             self.sttLanguage = nil
             self.pcmFormatUnavailable = false
         }

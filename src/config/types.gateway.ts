@@ -64,13 +64,9 @@ export type TalkProviderConfig = {
 };
 
 export type TalkSttConfig = {
-  /** STT provider: "apple" (default) or "openai" (Whisper). */
+  /** STT provider: "apple" (default on-device) or "gateway" (server-side transcription). */
   provider?: string;
-  /** Whisper model ID (default: "whisper-1"). */
-  model?: string;
-  /** OpenAI API key for Whisper STT. */
-  apiKey?: string;
-  /** Optional ISO-639-1 language hint for Whisper. */
+  /** Optional ISO-639-1 language hint for transcription. */
   language?: string;
 };
 
