@@ -103,6 +103,10 @@ describe("registerPreActionHooks", () => {
       .argument("<value>")
       .option("--json")
       .action(() => {});
+    config
+      .command("validate")
+      .option("--json")
+      .action(() => {});
     registerPreActionHooks(program, "9.9.9-test");
     return program;
   }
@@ -202,6 +206,24 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["config", "set"],
     });
+  });
+
+  it("bypasses config guard for config validate", async () => {
+    await runPreAction({
+      parseArgv: ["config", "validate"],
+      processArgv: ["node", "openclaw", "config", "validate"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("bypasses config guard for config validate when root option values are present", async () => {
+    await runPreAction({
+      parseArgv: ["config", "validate"],
+      processArgv: ["node", "openclaw", "--profile", "work", "config", "validate"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
   });
 
   beforeAll(() => {

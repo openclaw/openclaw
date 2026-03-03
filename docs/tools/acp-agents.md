@@ -249,6 +249,7 @@ Current acpx built-in harness aliases:
 - `codex`
 - `opencode`
 - `gemini`
+- `kimi`
 
 When OpenClaw uses the acpx backend, prefer these values for `agentId` unless your acpx config defines custom agent aliases.
 
@@ -266,7 +267,7 @@ Core ACP baseline:
     dispatch: { enabled: true },
     backend: "acpx",
     defaultAgent: "codex",
-    allowedAgents: ["pi", "claude", "codex", "opencode", "gemini"],
+    allowedAgents: ["pi", "claude", "codex", "opencode", "gemini", "kimi"],
     maxConcurrentSessions: 8,
     stream: {
       coalesceIdleMs: 300,
