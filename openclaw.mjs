@@ -1,6 +1,23 @@
 #!/usr/bin/env node
 
+import fs from "node:fs/promises";
 import module from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Fast path for --version: exit before loading heavy modules (~100x faster)
+const argv = new Set(process.argv.slice(2));
+if (argv.has("--version") || argv.has("-v")) {
+  try {
+    const pkg = JSON.parse(await fs.readFile(path.join(__dirname, "package.json"), "utf-8"));
+    console.log(pkg.version);
+  } catch {
+    console.log("unknown");
+  }
+  process.exit(0);
+}
 
 // https://nodejs.org/api/module.html#module-compile-cache
 if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {

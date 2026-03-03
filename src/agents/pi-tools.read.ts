@@ -684,35 +684,36 @@ function wrapEditToolWithCurrentContent(tool: AnyAgentTool, bridge: SandboxFsBri
     ...wrapped,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const result = await wrapped.execute(toolCallId, params, signal, onUpdate);
-      
-      // Check if edit failed due to mismatch
-      if (result.isError && result.content.some(block => {
-        if (block.type === 'text') {
-          const text = block.text.toLowerCase();
-          return text.includes('mismatch') || 
-                 text.includes('not found') || 
-                 text.includes('no exact match') ||
-                 text.includes('could not find') ||
-                 text.includes('does not match');
-        }
-        return false;
-      })) {
+
+      // Check if edit failed due to oldText mismatch (specific error from pi-coding-agent)
+      if (
+        result.isError &&
+        result.content.some((block) => {
+          if (block.type === "text") {
+            const text = block.text.toLowerCase();
+            // Only match specific oldText mismatch errors from createEditTool
+            return text.includes("oldtext") && text.includes("not found");
+          }
+          return false;
+        })
+      ) {
         // Try to read current file content and append it to the error
         const record = params as Record<string, unknown>;
         const filePath = record?.file_path || record?.path;
-        
-        if (typeof filePath === 'string') {
+
+        if (typeof filePath === "string") {
           try {
-            const content = await bridge.readFile({ filePath, cwd: '', encoding: 'utf-8' });
-            const currentContent = typeof content === 'string' ? content : Buffer.from(content).toString('utf-8');
-            
+            // bridge.readFile returns Buffer, no encoding parameter
+            const content = await bridge.readFile({ filePath, cwd: "" });
+            const currentContent = Buffer.from(content).toString("utf-8");
+
             // Append current content to error message
             return {
               ...result,
               content: [
                 ...result.content,
                 {
-                  type: 'text' as const,
+                  type: "text" as const,
                   text: `\n\n--- Current file content ---\n${currentContent}\n--- End of current content ---`,
                 },
               ],
@@ -723,7 +724,7 @@ function wrapEditToolWithCurrentContent(tool: AnyAgentTool, bridge: SandboxFsBri
           }
         }
       }
-      
+
       return result;
     },
   };
@@ -740,51 +741,53 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapHostEditToolWithCurrentContent(base, root, options);
+  return wrapHostEditToolWithCurrentContent(base, root);
 }
 
 /**
  * Wraps the host edit tool to return the current file content on mismatch.
  * Implements Option 1 from https://github.com/openclaw/openclaw/issues/18132
  */
-function wrapHostEditToolWithCurrentContent(
-  tool: AnyAgentTool, 
-  root: string, 
-  options?: { workspaceOnly?: boolean }
-): AnyAgentTool {
+function wrapHostEditToolWithCurrentContent(tool: AnyAgentTool, root: string): AnyAgentTool {
   const wrapped = wrapToolParamNormalization(tool, CLAUDE_PARAM_GROUPS.edit);
   return {
     ...wrapped,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const result = await wrapped.execute(toolCallId, params, signal, onUpdate);
-      
-      // Check if edit failed due to mismatch
-      if (result.isError && result.content.some(block => {
-        if (block.type === 'text') {
-          const text = block.text.toLowerCase();
-          return text.includes('mismatch') || 
-                 text.includes('not found') || 
-                 text.includes('no exact match') ||
-                 text.includes('could not find') ||
-                 text.includes('does not match');
-        }
-        return false;
-      })) {
+
+      // Check if edit failed due to oldText mismatch (specific error from pi-coding-agent)
+      if (
+        result.isError &&
+        result.content.some((block) => {
+          if (block.type === "text") {
+            const text = block.text.toLowerCase();
+            // Only match specific oldText mismatch errors from createEditTool
+            return text.includes("oldtext") && text.includes("not found");
+          }
+          return false;
+        })
+      ) {
         // Try to read current file content and append it to the error
         const record = params as Record<string, unknown>;
         const filePath = record?.file_path || record?.path;
-        
-        if (typeof filePath === 'string') {
+
+        if (typeof filePath === "string") {
           try {
-            const content = await fs.readFile(filePath, 'utf-8');
-            
+            // Use readFileWithinRoot to enforce workspace boundary
+            const relative = toRelativeWorkspacePath(root, filePath);
+            const safeRead = await readFileWithinRoot({
+              rootDir: root,
+              relativePath: relative,
+            });
+            const content = safeRead.buffer.toString("utf-8");
+
             // Append current content to error message
             return {
               ...result,
               content: [
                 ...result.content,
                 {
-                  type: 'text' as const,
+                  type: "text" as const,
                   text: `\n\n--- Current file content ---\n${content}\n--- End of current content ---`,
                 },
               ],
@@ -795,7 +798,7 @@ function wrapHostEditToolWithCurrentContent(
           }
         }
       }
-      
+
       return result;
     },
   };
