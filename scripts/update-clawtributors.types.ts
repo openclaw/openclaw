@@ -29,4 +29,8 @@ export type Entry = {
   html_url: string;
   avatar_url: string;
   lines: number;
+  commits: number;
+  prs: number;
+  score: number;
+  firstCommitDate: string;
 };

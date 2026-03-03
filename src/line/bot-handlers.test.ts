@@ -16,10 +16,15 @@ vi.mock("../pairing/pairing-messages.js", () => ({
   buildPairingReply: () => "pairing-reply",
 }));
 
+const { downloadLineMediaMock } = vi.hoisted(() => ({
+  downloadLineMediaMock: vi.fn(async () => ({
+    path: "/tmp/line-media-file.pdf",
+    contentType: "application/pdf",
+  })),
+}));
+
 vi.mock("./download.js", () => ({
-  downloadLineMedia: async () => {
-    throw new Error("downloadLineMedia should not be called from bot-handlers tests");
-  },
+  downloadLineMedia: downloadLineMediaMock,
 }));
 
 vi.mock("./send.js", () => ({
@@ -80,6 +85,7 @@ describe("handleLineWebhookEvents", () => {
   beforeEach(() => {
     buildLineMessageContextMock.mockClear();
     buildLinePostbackContextMock.mockClear();
+    downloadLineMediaMock.mockClear();
     readAllowFromStoreMock.mockClear();
     upsertPairingRequestMock.mockClear();
   });
@@ -182,6 +188,41 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks group sender that is only present in pairing-store allowlist", async () => {
+    const processMessage = vi.fn();
+    readAllowFromStoreMock.mockResolvedValueOnce(["user-paired"]);
+    const event = {
+      type: "message",
+      message: { id: "m3b", type: "text", text: "hi" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-paired" },
+      mode: "active",
+      webhookEventId: "evt-3b",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: { line: { groupPolicy: "allowlist", groupAllowFrom: ["user-owner"] } },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "allowlist", groupAllowFrom: ["user-owner"] },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
   it("blocks group messages when wildcard group config disables groups", async () => {
     const processMessage = vi.fn();
     const event = {
@@ -212,5 +253,95 @@ describe("handleLineWebhookEvents", () => {
 
     expect(processMessage).not.toHaveBeenCalled();
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+  });
+
+  it("downloads file attachments and forwards media refs to message context", async () => {
+    const processMessage = vi.fn();
+    const event = {
+      type: "message",
+      message: { id: "mf-1", type: "file", fileName: "doc.pdf", fileSize: "42" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "user", userId: "user-file" },
+      mode: "active",
+      webhookEventId: "evt-file-1",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: { channels: { line: {} } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { dmPolicy: "open" },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1234,
+      processMessage,
+    });
+
+    expect(downloadLineMediaMock).toHaveBeenCalledTimes(1);
+    expect(downloadLineMediaMock).toHaveBeenCalledWith("mf-1", "token", 1234);
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandAuthorized: false,
+        allMedia: [
+          {
+            path: "/tmp/line-media-file.pdf",
+            contentType: "application/pdf",
+          },
+        ],
+      }),
+    );
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues processing later events when one event handler fails", async () => {
+    const failingEvent = {
+      type: "message",
+      message: { id: "m-err", type: "text", text: "hi" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "user", userId: "user-err" },
+      mode: "active",
+      webhookEventId: "evt-err",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+    const laterEvent = {
+      ...failingEvent,
+      message: { id: "m-later", type: "text", text: "hello" },
+      webhookEventId: "evt-later",
+    } as MessageEvent;
+    const runtime = createRuntime();
+    let invocation = 0;
+    const processMessage = vi.fn(async () => {
+      if (invocation === 0) {
+        invocation += 1;
+        throw new Error("boom");
+      }
+      invocation += 1;
+    });
+
+    await handleLineWebhookEvents([failingEvent, laterEvent], {
+      cfg: { channels: { line: {} } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { dmPolicy: "open" },
+      },
+      runtime,
+      mediaMaxBytes: 1234,
+      processMessage,
+    });
+
+    expect(processMessage).toHaveBeenCalledTimes(2);
+    expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 });

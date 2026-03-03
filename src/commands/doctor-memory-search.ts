@@ -5,6 +5,7 @@ import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
+import { DEFAULT_LOCAL_MODEL } from "../memory/embeddings.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -42,8 +43,26 @@ export async function noteMemorySearchHealth(
   // If a specific provider is configured (not "auto"), check only that one.
   if (resolved.provider !== "auto") {
     if (resolved.provider === "local") {
-      if (hasLocalEmbeddings(resolved.local)) {
-        return; // local model file exists
+      if (hasLocalEmbeddings(resolved.local, true)) {
+        // Model path looks valid (explicit file, hf: URL, or default model).
+        // If a gateway probe is available and reports not-ready, warn anyway —
+        // the model download or node-llama-cpp setup may have failed at runtime.
+        if (opts?.gatewayMemoryProbe?.checked && !opts.gatewayMemoryProbe.ready) {
+          const detail = opts.gatewayMemoryProbe.error?.trim();
+          note(
+            [
+              'Memory search provider is set to "local" and a model path is configured,',
+              "but the gateway reports local embeddings are not ready.",
+              detail ? `Gateway probe: ${detail}` : null,
+              "",
+              `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            "Memory search",
+          );
+        }
+        return;
       }
       note(
         [
@@ -84,7 +103,7 @@ export async function noteMemorySearchHealth(
         "",
         "Fix (pick one):",
         `- Set ${envVar} in your environment`,
-        `- Configure credentials: ${formatCliCommand("openclaw configure")}`,
+        `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
         `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
@@ -125,7 +144,7 @@ export async function noteMemorySearchHealth(
       "",
       "Fix (pick one):",
       "- Set OPENAI_API_KEY, GEMINI_API_KEY, VOYAGE_API_KEY, or MISTRAL_API_KEY in your environment",
-      `- Configure credentials: ${formatCliCommand("openclaw configure")}`,
+      `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
       `- For local embeddings: configure agents.defaults.memorySearch.provider and local model path`,
       `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
       "",
@@ -135,8 +154,20 @@ export async function noteMemorySearchHealth(
   );
 }
 
-function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
-  const modelPath = local.modelPath?.trim();
+/**
+ * Check whether local embeddings are available.
+ *
+ * When `useDefaultFallback` is true (explicit `provider: "local"`), an empty
+ * modelPath is treated as available because the runtime falls back to
+ * DEFAULT_LOCAL_MODEL (an auto-downloaded HuggingFace model).
+ *
+ * When false (provider: "auto"), we only consider local available if the user
+ * explicitly configured a local file path — matching `canAutoSelectLocal()`
+ * in the runtime, which skips local for empty/hf: model paths.
+ */
+function hasLocalEmbeddings(local: { modelPath?: string }, useDefaultFallback = false): boolean {
+  const modelPath =
+    local.modelPath?.trim() || (useDefaultFallback ? DEFAULT_LOCAL_MODEL : undefined);
   if (!modelPath) {
     return false;
   }
@@ -155,7 +186,7 @@ function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
 }
 
 async function hasApiKeyForProvider(
-  provider: "openai" | "gemini" | "voyage" | "mistral",
+  provider: "openai" | "gemini" | "voyage" | "mistral" | "ollama",
   cfg: OpenClawConfig,
   agentDir: string,
 ): Promise<boolean> {

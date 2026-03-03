@@ -130,4 +130,31 @@ describe("WhatsApp dmPolicy precedence", () => {
     expectSilentlyBlocked(result);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
+
+  it("always allows same-phone DMs even when allowFrom is restrictive", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+          allowFrom: ["+15550001111"],
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550009999",
+      selfE164: "+15550009999",
+      senderE164: "+15550009999",
+      group: false,
+      pushName: "Owner",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550009999@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
 });
