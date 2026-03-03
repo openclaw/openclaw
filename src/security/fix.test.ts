@@ -255,4 +255,66 @@ describe("security fix", () => {
     expectPerms((await fs.stat(transcriptPath)).mode & 0o777, 0o600);
     expectPerms((await fs.stat(includePath)).mode & 0o777, 0o600);
   });
+
+  it('falls back to dmPolicy="pairing" when allowlist has empty allowFrom and no pairing store', async () => {
+    const stateDir = await createStateDir("allowlist-fallback");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await writeJsonConfig(configPath, {
+      channels: {
+        telegram: { dmPolicy: "allowlist" },
+      },
+    });
+
+    const { res, channels } = await runFixAndReadChannels(stateDir, configPath);
+    expect(res.configWritten).toBe(true);
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "channels.telegram.dmPolicy=allowlist -> pairing (empty allowFrom, no store)",
+      ]),
+    );
+    expect(channels.telegram.dmPolicy).toBe("pairing");
+  });
+
+  it('seeds allowFrom from pairing store when dmPolicy="allowlist" and store has entries', async () => {
+    const stateDir = await createStateDir("allowlist-seed");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await writeJsonConfig(configPath, {
+      channels: {
+        whatsapp: { dmPolicy: "allowlist" },
+      },
+    });
+    await writeWhatsAppAllowFromStore(stateDir, ["+15559990000"]);
+
+    const { res, channels } = await runFixAndReadChannels(stateDir, configPath);
+    expect(res.configWritten).toBe(true);
+    expect(res.changes).toEqual(
+      expect.arrayContaining(["channels.whatsapp.allowFrom: seeded 1 entry from pairing store"]),
+    );
+    expect(channels.whatsapp.dmPolicy).toBe("allowlist");
+    expect(channels.whatsapp.allowFrom).toEqual(["+15559990000"]);
+  });
+
+  it('falls back per-account dmPolicy="allowlist" to "pairing" with no pairing store', async () => {
+    const stateDir = await createStateDir("per-account-allowlist");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await writeJsonConfig(configPath, {
+      channels: {
+        telegram: {
+          accounts: {
+            bot1: { dmPolicy: "allowlist" },
+          },
+        },
+      },
+    });
+
+    const { res, channels } = await runFixAndReadChannels(stateDir, configPath);
+    expect(res.configWritten).toBe(true);
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "channels.telegram.accounts.bot1.dmPolicy=allowlist -> pairing (empty allowFrom, no store)",
+      ]),
+    );
+    const accounts = channels.telegram.accounts as Record<string, Record<string, unknown>>;
+    expect(accounts.bot1.dmPolicy).toBe("pairing");
+  });
 });

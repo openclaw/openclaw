@@ -1,13 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigIO } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { runExec } from "../process/exec.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeAgentId,
+} from "../routing/session-key.js";
 import { createIcaclsResetCommand, formatIcaclsResetCommand, type ExecFn } from "./windows-acl.js";
 
 export type SecurityFixChmodAction = {
@@ -273,6 +278,109 @@ function setWhatsAppGroupAllowFromFromStore(params: {
   }
 }
 
+async function fixAllowlistDmPolicyEmptyAllowFrom(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  changes: string[];
+}): Promise<void> {
+  const channels = params.cfg.channels;
+  if (!channels || typeof channels !== "object") {
+    return;
+  }
+
+  const hasEntries = (list: unknown): boolean =>
+    Array.isArray(list) &&
+    list.some((v) => {
+      const s = String(v).trim();
+      return s.length > 0;
+    });
+
+  const fixAccount = async (
+    channelName: string,
+    account: Record<string, unknown>,
+    prefix: string,
+    accountId?: string,
+  ) => {
+    const dmEntry = account.dm;
+    const dm =
+      dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
+        ? (dmEntry as Record<string, unknown>)
+        : undefined;
+    const dmPolicy = (account.dmPolicy as string | undefined) ?? (dm?.policy as string | undefined);
+    if (dmPolicy !== "allowlist") {
+      return;
+    }
+    if (hasEntries(account.allowFrom) || hasEntries(dm?.allowFrom)) {
+      return;
+    }
+
+    const normalizedChannel = (normalizeChatChannelId(channelName) ?? channelName)
+      .trim()
+      .toLowerCase();
+    if (!normalizedChannel) {
+      return;
+    }
+    const normalizedAccountId = normalizeAccountId(accountId) || DEFAULT_ACCOUNT_ID;
+    const storeEntries = await readChannelAllowFromStore(
+      normalizedChannel,
+      params.env,
+      normalizedAccountId,
+    ).catch(() => []);
+    const recovered = Array.from(new Set(storeEntries.map((e) => String(e).trim()))).filter(
+      Boolean,
+    );
+
+    if (recovered.length > 0) {
+      // Respect channel-specific allowFrom placement (mirrors doctor-config-flow logic).
+      const useNested =
+        channelName === "googlechat" || channelName === "discord" || channelName === "slack";
+      if (useNested) {
+        const dmObj = dm ?? {};
+        dmObj.allowFrom = recovered;
+        account.dm = dmObj;
+      } else {
+        account.allowFrom = recovered;
+      }
+      params.changes.push(
+        `${prefix}.allowFrom: seeded ${recovered.length} ${recovered.length === 1 ? "entry" : "entries"} from pairing store`,
+      );
+    } else {
+      if (account.dmPolicy === "allowlist") {
+        account.dmPolicy = "pairing";
+      } else if (dm?.policy === "allowlist") {
+        dm.policy = "pairing";
+      }
+      params.changes.push(`${prefix}.dmPolicy=allowlist -> pairing (empty allowFrom, no store)`);
+    }
+  };
+
+  for (const [channelName, channelValue] of Object.entries(channels)) {
+    if (!channelValue || typeof channelValue !== "object") {
+      continue;
+    }
+    const section = channelValue as Record<string, unknown>;
+    // eslint-disable-next-line no-await-in-loop
+    await fixAccount(channelName, section, `channels.${channelName}`);
+
+    const accounts = section.accounts;
+    if (!accounts || typeof accounts !== "object") {
+      continue;
+    }
+    for (const [accountId, accountValue] of Object.entries(accounts)) {
+      if (!accountValue || typeof accountValue !== "object") {
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await fixAccount(
+        channelName,
+        accountValue as Record<string, unknown>,
+        `channels.${channelName}.accounts.${accountId}`,
+        accountId,
+      );
+    }
+  }
+}
+
 function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }): {
   cfg: OpenClawConfig;
   changes: string[];
@@ -426,9 +534,23 @@ export async function fixSecurityFootguns(opts?: {
       });
     }
 
+    await fixAllowlistDmPolicyEmptyAllowFrom({ cfg: fixed.cfg, env, changes });
+
     if (changes.length > 0) {
       try {
         await io.writeConfigFile(fixed.cfg);
+        configWritten = true;
+      } catch (err) {
+        errors.push(`writeConfigFile failed: ${String(err)}`);
+      }
+    }
+  } else if (snap.exists && snap.config && typeof snap.config === "object") {
+    const fixedCfg = structuredClone(snap.config);
+    await fixAllowlistDmPolicyEmptyAllowFrom({ cfg: fixedCfg, env, changes });
+
+    if (changes.length > 0) {
+      try {
+        await io.writeConfigFile(fixedCfg);
         configWritten = true;
       } catch (err) {
         errors.push(`writeConfigFile failed: ${String(err)}`);
