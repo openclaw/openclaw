@@ -1,17 +1,13 @@
 package ai.openclaw.android
 
-import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import android.view.WindowManager
-import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.core.view.WindowCompat
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -26,10 +22,7 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    val isDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-    WebView.setWebContentsDebuggingEnabled(isDebuggable)
-    applyImmersiveMode()
-    NodeForegroundService.start(this)
+    WindowCompat.setDecorFitsSystemWindows(window, false)
     permissionRequester = PermissionRequester(this)
     screenCaptureRequester = ScreenCaptureRequester(this)
     viewModel.camera.attachLifecycleOwner(this)
@@ -57,18 +50,9 @@ class MainActivity : ComponentActivity() {
         }
       }
     }
-  }
 
-  override fun onResume() {
-    super.onResume()
-    applyImmersiveMode()
-  }
-
-  override fun onWindowFocusChanged(hasFocus: Boolean) {
-    super.onWindowFocusChanged(hasFocus)
-    if (hasFocus) {
-      applyImmersiveMode()
-    }
+    // Keep startup path lean: start foreground service after first frame.
+    window.decorView.post { NodeForegroundService.start(this) }
   }
 
   override fun onStart() {
@@ -79,13 +63,5 @@ class MainActivity : ComponentActivity() {
   override fun onStop() {
     viewModel.setForeground(false)
     super.onStop()
-  }
-
-  private fun applyImmersiveMode() {
-    WindowCompat.setDecorFitsSystemWindows(window, false)
-    val controller = WindowInsetsControllerCompat(window, window.decorView)
-    controller.systemBarsBehavior =
-      WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-    controller.hide(WindowInsetsCompat.Type.systemBars())
   }
 }

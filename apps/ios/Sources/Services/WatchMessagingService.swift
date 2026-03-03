@@ -148,11 +148,15 @@ final class WatchMessagingService: NSObject, WatchMessagingServicing, @unchecked
 
     private func sendReachableMessage(_ payload: [String: Any], with session: WCSession) async throws {
         try await withCheckedThrowingContinuation { continuation in
-            session.sendMessage(payload, replyHandler: { _ in
-                continuation.resume()
-            }, errorHandler: { error in
-                continuation.resume(throwing: error)
-            })
+            session.sendMessage(
+                payload,
+                replyHandler: { _ in
+                    continuation.resume()
+                },
+                errorHandler: { error in
+                    continuation.resume(throwing: error)
+                }
+            )
         }
     }
 
