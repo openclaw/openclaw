@@ -490,6 +490,7 @@ export async function runCronIsolatedAgentTurn(params: {
           sessionId: cronSession.sessionEntry.sessionId,
           sessionKey: agentSessionKey,
           agentId,
+          trigger: "cron",
           messageChannel,
           agentAccountId: resolvedDelivery.accountId,
           sessionFile,
