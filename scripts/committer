@@ -59,6 +59,21 @@ for file in "${files[@]}"; do
   esac
 done
 
+# Block known local secret scratch files.
+for file in "${files[@]}"; do
+  case "$file" in
+    .env.github | */.env.github | .env.github.* | */.env.github.* | \
+      betterstack.txt | */betterstack.txt | \
+      claude.txt | */claude.txt | \
+      github-app.txt | */github-app.txt | \
+      grafana.txt | */grafana.txt | \
+      slack.txt | */slack.txt)
+      printf 'Error: refusing to commit sensitive local file: %s\n' "$file" >&2
+      exit 1
+      ;;
+  esac
+done
+
 last_commit_error=''
 
 run_git_commit() {
