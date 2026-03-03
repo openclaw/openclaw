@@ -31,7 +31,7 @@ const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";
 
 function makeCtx(
-  mediaField: "voice" | "audio" | "photo" | "video" | "document" | "animation",
+  mediaField: "voice" | "audio" | "photo" | "video" | "document" | "animation" | "sticker",
   getFile: TelegramContext["getFile"],
   opts?: { file_name?: string },
 ): TelegramContext {
@@ -77,6 +77,17 @@ function makeCtx(
       width: 200,
       height: 200,
       ...(opts?.file_name && { file_name: opts.file_name }),
+    };
+  }
+  if (mediaField === "sticker") {
+    msg.sticker = {
+      file_id: "stk1",
+      file_unique_id: "ustk1",
+      type: "regular",
+      width: 512,
+      height: 512,
+      is_animated: false,
+      is_video: false,
     };
   }
   return {
@@ -242,6 +253,45 @@ describe("resolveMedia getFile retry", () => {
     const result = await expectTransientGetFileRetrySuccess();
     // Should retry transient errors.
     expect(result).not.toBeNull();
+  });
+
+  it("retries getFile for stickers on transient failure", async () => {
+    const getFile = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Network request for 'getFile' failed!"))
+      .mockResolvedValueOnce({ file_path: "stickers/file_0.webp" });
+
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker-data"),
+      contentType: "image/webp",
+      fileName: "file_0.webp",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_0.webp",
+      contentType: "image/webp",
+    });
+
+    const ctx = makeCtx("sticker", getFile);
+    const promise = resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    await flushRetryTimers();
+    const result = await promise;
+
+    expect(getFile).toHaveBeenCalledTimes(2);
+    expect(result).toEqual(
+      expect.objectContaining({ path: "/tmp/file_0.webp", placeholder: "<media:sticker>" }),
+    );
+  });
+
+  it("returns null for sticker when getFile exhausts retries", async () => {
+    const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
+
+    const ctx = makeCtx("sticker", getFile);
+    const promise = resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    await flushRetryTimers();
+    const result = await promise;
+
+    expect(getFile).toHaveBeenCalledTimes(3);
+    expect(result).toBeNull();
   });
 });
 
