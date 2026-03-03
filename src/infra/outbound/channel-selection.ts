@@ -2,12 +2,11 @@ import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  isDeliverableMessageChannel,
   listDeliverableMessageChannels,
   type DeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { normalizeDeliverableOutboundChannel } from "./channel-resolution.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 
 export type MessageChannelId = DeliverableMessageChannel;
 
@@ -75,10 +74,12 @@ export async function resolveMessageChannelSelection(params: {
     if (!isKnownChannel(normalized)) {
       // Attempt bootstrap recovery: the plugin registry may not be loaded yet
       // (e.g. after a provider restart or in an early outbound-only context).
-      const recovered = normalizeDeliverableOutboundChannel(params.channel);
-      if (recovered && isDeliverableMessageChannel(recovered)) {
+      // resolveOutboundChannelPlugin triggers maybeBootstrapChannelPlugin which
+      // loads plugins when the active registry is empty.
+      const plugin = resolveOutboundChannelPlugin({ channel: normalized, cfg: params.cfg });
+      if (plugin) {
         return {
-          channel: recovered,
+          channel: normalized as MessageChannelId,
           configured: await listConfiguredMessageChannels(params.cfg),
         };
       }

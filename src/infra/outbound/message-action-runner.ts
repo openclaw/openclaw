@@ -236,6 +236,8 @@ async function resolveChannel(
     if (channelHint && toolContext?.currentChannelProvider) {
       const fallback = normalizeMessageChannel(toolContext.currentChannelProvider);
       if (fallback && isDeliverableMessageChannel(fallback)) {
+        // Update params so downstream code reads the corrected channel type.
+        params.channel = fallback;
         return fallback;
       }
     }
