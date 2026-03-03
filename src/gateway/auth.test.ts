@@ -42,6 +42,20 @@ function createTailscaleForwardedReq(): never {
   } as never;
 }
 
+function createNonTailscaleForwardedReq(): never {
+  return {
+    socket: { remoteAddress: "127.0.0.1" },
+    headers: {
+      host: "gateway.local",
+      "x-forwarded-for": "203.0.113.10",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "ai-hub.bone-egret.ts.net",
+      "tailscale-user-login": "peter",
+      "tailscale-user-name": "Peter",
+    },
+  } as never;
+}
+
 function createTailscaleWhois() {
   return async () => ({ login: "peter", name: "Peter" });
 }
@@ -276,6 +290,10 @@ describe("gateway auth", () => {
 
   it("does not treat proxied tailscale serve requests as direct without trusted proxies", () => {
     expect(isLocalDirectRequest(createTailscaleForwardedReq())).toBe(false);
+  });
+
+  it("does not treat proxied .ts.net requests as direct when forwarded client IP is non-tailscale", () => {
+    expect(isLocalDirectRequest(createNonTailscaleForwardedReq(), ["127.0.0.1"])).toBe(false);
   });
 
   it("does not treat non-tailscale proxied requests as direct when trusted proxies are configured", () => {

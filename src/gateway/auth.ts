@@ -6,6 +6,7 @@ import type {
 } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { isCarrierGradeNatIpv4Address } from "../shared/net/ip.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
@@ -131,7 +132,13 @@ export function isLocalDirectRequest(
   }
   const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
   const forwardedHost = headerValue(req.headers?.["x-forwarded-host"]);
-  if (remoteIsTrustedProxy && isTailscaleProxyRequest(req) && forwardedHost?.endsWith(".ts.net")) {
+  const tailscaleClientIp = resolveTailscaleClientIp(req);
+  if (
+    remoteIsTrustedProxy &&
+    isTailscaleProxyRequest(req) &&
+    forwardedHost?.endsWith(".ts.net") &&
+    isCarrierGradeNatIpv4Address(tailscaleClientIp)
+  ) {
     return true;
   }
   const clientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback) ?? "";
