@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -680,11 +681,74 @@ export function createHostWorkspaceWriteTool(root: string, options?: { workspace
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
 }
 
+/** Resolve path for host edit: expand ~ and resolve relative paths against root. */
+function resolveHostEditPath(root: string, pathParam: string): string {
+  const expanded =
+    pathParam.startsWith("~/") || pathParam === "~"
+      ? pathParam.replace(/^~/, os.homedir())
+      : pathParam;
+  return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(root, expanded);
+}
+
+/**
+ * When the upstream edit tool throws after having already written (e.g. generateDiffString fails),
+ * the file may be correctly updated but the tool reports failure. This wrapper catches errors and
+ * if the target file on disk contains the intended newText, returns success so we don't surface
+ * a false "edit failed" to the user (fixes #32333, same pattern as #30773 for write).
+ */
+function wrapHostEditToolWithPostWriteRecovery(base: AnyAgentTool, root: string): AnyAgentTool {
+  return {
+    ...base,
+    execute: async (
+      toolCallId: string,
+      params: unknown,
+      signal: AbortSignal | undefined,
+      onUpdate?: (update: unknown) => void,
+    ) => {
+      try {
+        return await base.execute(toolCallId, params, signal, onUpdate);
+      } catch (err) {
+        const record =
+          params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
+        const pathParam = record && typeof record.path === "string" ? record.path : undefined;
+        const newText =
+          record && typeof record.newText === "string"
+            ? record.newText
+            : record && typeof record.new_string === "string"
+              ? record.new_string
+              : undefined;
+        if (!pathParam || !newText) {
+          throw err;
+        }
+        try {
+          const absolutePath = resolveHostEditPath(root, pathParam);
+          const content = await fs.readFile(absolutePath, "utf-8");
+          if (content.includes(newText)) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Successfully replaced text in ${pathParam}.`,
+                },
+              ],
+              details: { diff: "", firstChangedLine: undefined },
+            } as AgentToolResult<unknown>;
+          }
+        } catch {
+          // File read failed or path invalid; rethrow original error.
+        }
+        throw err;
+      }
+    },
+  };
+}
+
 export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  const withRecovery = wrapHostEditToolWithPostWriteRecovery(base, root);
+  return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
 }
 
 export function createOpenClawReadTool(
