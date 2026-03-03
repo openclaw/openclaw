@@ -833,9 +833,10 @@ function wrapAbortAfterCommitRecovery(
             .then((stat) => ({ size: stat.size, mtimeMs: stat.mtimeMs }))
             .catch(() => undefined)
         : undefined;
-      const beforeContent = resolvedPath
-        ? await fs.readFile(resolvedPath, "utf8").catch(() => undefined)
-        : undefined;
+      const beforeContent =
+        options.kind === "edit" && resolvedPath
+          ? await fs.readFile(resolvedPath, "utf8").catch(() => undefined)
+          : undefined;
 
       try {
         return await tool.execute(toolCallId, params, signal, onUpdate);
