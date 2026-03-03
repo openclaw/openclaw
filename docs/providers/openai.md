@@ -10,6 +10,7 @@ title: "OpenAI"
 
 OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in** for subscription
 access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in.
+OpenAI explicitly supports subscription OAuth usage in external tools/workflows like OpenClaw.
 
 ## Option A: OpenAI API key (OpenAI Platform)
 

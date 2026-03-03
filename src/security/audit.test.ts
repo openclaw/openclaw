@@ -149,7 +149,7 @@ function expectNoFinding(res: SecurityAuditReport, checkId: string): void {
 describe("security audit", () => {
   let fixtureRoot = "";
   let caseId = 0;
-  let channelSecurityStateDir = "";
+  let channelSecurityRoot = "";
   let sharedCodeSafetyStateDir = "";
   let sharedCodeSafetyWorkspaceDir = "";
   let sharedExtensionsStateDir = "";
@@ -162,12 +162,11 @@ describe("security audit", () => {
   };
 
   const withChannelSecurityStateDir = async (fn: (tmp: string) => Promise<void>) => {
+    const channelSecurityStateDir = path.join(channelSecurityRoot, `state-${caseId++}`);
     const credentialsDir = path.join(channelSecurityStateDir, "credentials");
-    await fs.rm(credentialsDir, { recursive: true, force: true });
     await fs.mkdir(credentialsDir, { recursive: true, mode: 0o700 });
-    await withEnvAsync(
-      { OPENCLAW_STATE_DIR: channelSecurityStateDir },
-      async () => await fn(channelSecurityStateDir),
+    await withEnvAsync({ OPENCLAW_STATE_DIR: channelSecurityStateDir }, () =>
+      fn(channelSecurityStateDir),
     );
   };
 
@@ -213,11 +212,8 @@ description: test skill
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
-    channelSecurityStateDir = path.join(fixtureRoot, "channel-security");
-    await fs.mkdir(path.join(channelSecurityStateDir, "credentials"), {
-      recursive: true,
-      mode: 0o700,
-    });
+    channelSecurityRoot = path.join(fixtureRoot, "channel-security");
+    await fs.mkdir(channelSecurityRoot, { recursive: true, mode: 0o700 });
     const codeSafetyFixture = await createSharedCodeSafetyFixture();
     sharedCodeSafetyStateDir = codeSafetyFixture.stateDir;
     sharedCodeSafetyWorkspaceDir = codeSafetyFixture.workspaceDir;
@@ -846,6 +842,71 @@ description: test skill
     expect(res.findings.some((f) => f.checkId === "fs.config.perms_writable")).toBe(false);
     expect(res.findings.some((f) => f.checkId === "fs.config.perms_world_readable")).toBe(false);
     expect(res.findings.some((f) => f.checkId === "fs.config.perms_group_readable")).toBe(false);
+  });
+
+  it("warns when workspace skill files resolve outside workspace root", async () => {
+    if (isWindows) {
+      return;
+    }
+
+    const tmp = await makeTmpDir("workspace-skill-symlink-escape");
+    const stateDir = path.join(tmp, "state");
+    const workspaceDir = path.join(tmp, "workspace");
+    const outsideDir = path.join(tmp, "outside");
+    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+    await fs.mkdir(path.join(workspaceDir, "skills", "leak"), { recursive: true });
+    await fs.mkdir(outsideDir, { recursive: true });
+
+    const outsideSkillPath = path.join(outsideDir, "SKILL.md");
+    await fs.writeFile(outsideSkillPath, "# outside\n", "utf-8");
+    await fs.symlink(outsideSkillPath, path.join(workspaceDir, "skills", "leak", "SKILL.md"));
+
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    await fs.chmod(configPath, 0o600);
+
+    const res = await runSecurityAudit({
+      config: { agents: { defaults: { workspace: workspaceDir } } },
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath,
+      execDockerRawFn: execDockerRawUnavailable,
+    });
+
+    const finding = res.findings.find((f) => f.checkId === "skills.workspace.symlink_escape");
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain(outsideSkillPath);
+  });
+
+  it("does not warn for workspace skills that stay inside workspace root", async () => {
+    const tmp = await makeTmpDir("workspace-skill-in-root");
+    const stateDir = path.join(tmp, "state");
+    const workspaceDir = path.join(tmp, "workspace");
+    await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+    await fs.mkdir(path.join(workspaceDir, "skills", "safe"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "skills", "safe", "SKILL.md"),
+      "# in workspace\n",
+      "utf-8",
+    );
+
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    if (!isWindows) {
+      await fs.chmod(configPath, 0o600);
+    }
+
+    const res = await runSecurityAudit({
+      config: { agents: { defaults: { workspace: workspaceDir } } },
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      stateDir,
+      configPath,
+      execDockerRawFn: execDockerRawUnavailable,
+    });
+
+    expect(res.findings.some((f) => f.checkId === "skills.workspace.symlink_escape")).toBe(false);
   });
 
   it("scores small-model risk by tool/sandbox exposure", async () => {

@@ -25,6 +25,8 @@ type UpsertChannelPairingRequestForAccount = (
 type FetchRemoteMedia = typeof import("../../media/fetch.js").fetchRemoteMedia;
 type SaveMediaBuffer = typeof import("../../media/store.js").saveMediaBuffer;
 type TextToSpeechTelephony = typeof import("../../tts/tts.js").textToSpeechTelephony;
+type TranscribeAudioFile =
+  typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;
 type BuildMentionRegexes = typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;
 type MatchesMentionPatterns =
   typeof import("../../auto-reply/reply/mentions.js").matchesMentionPatterns;
@@ -90,6 +92,9 @@ type MediaKindFromMime = typeof import("../../media/constants.js").mediaKindFrom
 type IsVoiceCompatibleAudio = typeof import("../../media/audio.js").isVoiceCompatibleAudio;
 type GetImageMetadata = typeof import("../../media/image-ops.js").getImageMetadata;
 type ResizeToJpeg = typeof import("../../media/image-ops.js").resizeToJpeg;
+type OnAgentEvent = typeof import("../../infra/agent-events.js").onAgentEvent;
+type OnSessionTranscriptUpdate =
+  typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 type CreateMemoryGetTool = typeof import("../../agents/tools/memory-tool.js").createMemoryGetTool;
 type CreateMemorySearchTool =
   typeof import("../../agents/tools/memory-tool.js").createMemorySearchTool;
@@ -206,6 +211,9 @@ export type PluginRuntime = {
   };
   tts: {
     textToSpeechTelephony: TextToSpeechTelephony;
+  };
+  stt: {
+    transcribeAudioFile: TranscribeAudioFile;
   };
   tools: {
     createMemoryGetTool: CreateMemoryGetTool;
@@ -360,6 +368,10 @@ export type PluginRuntime = {
       buildTemplateMessageFromPayload: BuildTemplateMessageFromPayload;
       monitorLineProvider: MonitorLineProvider;
     };
+  };
+  events: {
+    onAgentEvent: OnAgentEvent;
+    onSessionTranscriptUpdate: OnSessionTranscriptUpdate;
   };
   logging: {
     shouldLogVerbose: ShouldLogVerbose;

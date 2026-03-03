@@ -212,7 +212,7 @@ describe("applyAuthChoiceMiniMax", () => {
       mode: "api_key",
     });
     expect(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model)).toBe(
-      "minimax/MiniMax-M2.5-Lightning",
+      "minimax/MiniMax-M2.5-highspeed",
     );
     expect(text).not.toHaveBeenCalled();
     expect(confirm).not.toHaveBeenCalled();

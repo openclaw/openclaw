@@ -80,7 +80,7 @@ const modelCatalogMocks = vi.hoisted(() => ({
     { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
     { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
     { provider: "openai-codex", id: "gpt-5.2", name: "GPT-5.2 (Codex)" },
-    { provider: "minimax", id: "MiniMax-M2.1", name: "MiniMax M2.1" },
+    { provider: "minimax", id: "MiniMax-M2.5", name: "MiniMax M2.5" },
   ]),
   resetModelCatalogCacheForTest: vi.fn(),
 }));
