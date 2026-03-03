@@ -838,11 +838,19 @@ function wrapAbortAfterCommitRecovery(
 
         const oldText = typeof record?.oldText === "string" ? record.oldText : undefined;
         const newText = typeof record?.newText === "string" ? record.newText : undefined;
-        if (
-          newText !== undefined &&
+
+        const hasOldText = oldText !== undefined && oldText.length > 0;
+        const hasNewText = newText !== undefined && newText.length > 0;
+
+        const committedReplacement =
+          hasNewText &&
           current.includes(newText) &&
-          (oldText === undefined || !current.includes(oldText))
-        ) {
+          (!hasOldText || newText.includes(oldText) || !current.includes(oldText));
+
+        // For empty newText (deletion edits), post-state alone is too ambiguous:
+        // if oldText was absent before execution, we can't distinguish no-op abort
+        // from committed deletion. Avoid recovering this case to prevent false success.
+        if (committedReplacement) {
           return {
             content: [{ type: "text", text: `Successfully replaced text in ${rawPath}.` }],
             details: undefined,

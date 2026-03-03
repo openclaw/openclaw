@@ -26,7 +26,8 @@ vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
   };
 });
 
-const { createHostWorkspaceWriteTool, createHostWorkspaceEditTool } = await import("./pi-tools.read.js");
+const { createHostWorkspaceWriteTool, createHostWorkspaceEditTool } =
+  await import("./pi-tools.read.js");
 
 describe("host tool abort-after-commit recovery", () => {
   let tmpDir = "";
@@ -67,6 +68,23 @@ describe("host tool abort-after-commit recovery", () => {
     expect(text).toContain("Successfully replaced text");
   });
 
+  it("recovers committed edit when newText contains oldText", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-abort-embed-"));
+    const file = path.join(tmpDir, "note.txt");
+    // Simulate post-commit state for oldText="foo" -> newText="foobar"
+    await fs.writeFile(file, "foobar\n", "utf8");
+
+    const tool = createHostWorkspaceEditTool(tmpDir, { workspaceOnly: false });
+    const result = await tool.execute(
+      "tc-3",
+      { path: file, oldText: "foo", newText: "foobar" },
+      undefined,
+      undefined,
+    );
+    const text = (result.content?.[0] as { text?: string })?.text ?? "";
+    expect(text).toContain("Successfully replaced text");
+  });
+
   it("keeps edit aborted error when oldText still exists (no committed replacement)", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-abort-fail-"));
     const file = path.join(tmpDir, "note.txt");
@@ -76,11 +94,22 @@ describe("host tool abort-after-commit recovery", () => {
     const tool = createHostWorkspaceEditTool(tmpDir, { workspaceOnly: false });
     await expect(
       tool.execute(
-        "tc-3",
+        "tc-4",
         { path: file, oldText: "before", newText: "after" },
         undefined,
         undefined,
       ),
+    ).rejects.toThrow("Operation aborted");
+  });
+
+  it("keeps edit aborted error for empty newText to avoid false positives", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-abort-empty-new-"));
+    const file = path.join(tmpDir, "note.txt");
+    await fs.writeFile(file, "something else\n", "utf8");
+
+    const tool = createHostWorkspaceEditTool(tmpDir, { workspaceOnly: false });
+    await expect(
+      tool.execute("tc-5", { path: file, oldText: "before", newText: "" }, undefined, undefined),
     ).rejects.toThrow("Operation aborted");
   });
 });
