@@ -61,6 +61,7 @@ const GATEWAY_TEST_ENV_KEYS = [
 let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
+let suiteConfigRootSeq = 0;
 
 export async function writeSessionStore(params: {
   entries: Record<string, Partial<SessionEntry>>;
@@ -121,7 +122,11 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   }
   applyGatewaySkipEnv();
   if (options.uniqueConfigRoot) {
-    tempConfigRoot = await fs.mkdtemp(path.join(tempHome, "openclaw-test-"));
+    const suiteRoot = path.join(tempHome, ".openclaw-test-suite");
+    await fs.mkdir(suiteRoot, { recursive: true });
+    tempConfigRoot = path.join(suiteRoot, `case-${suiteConfigRootSeq++}`);
+    await fs.rm(tempConfigRoot, { recursive: true, force: true });
+    await fs.mkdir(tempConfigRoot, { recursive: true });
   } else {
     tempConfigRoot = path.join(tempHome, ".openclaw-test");
     await fs.rm(tempConfigRoot, { recursive: true, force: true });
@@ -182,6 +187,9 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
     tempHome = undefined;
   }
   tempConfigRoot = undefined;
+  if (options.restoreEnv) {
+    suiteConfigRootSeq = 0;
+  }
 }
 
 export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
@@ -344,6 +352,57 @@ export async function withGatewayServer<T>(
   } finally {
     await started.server.close();
   }
+}
+
+export async function createGatewaySuiteHarness(opts?: {
+  port?: number;
+  serverOptions?: GatewayServerOptions;
+}): Promise<{
+  port: number;
+  server: Awaited<ReturnType<typeof startGatewayServer>>;
+  openWs: (headers?: Record<string, string>) => Promise<WebSocket>;
+  close: () => Promise<void>;
+}> {
+  const started = await startGatewayServerWithRetries({
+    port: opts?.port ?? (await getFreePort()),
+    opts: opts?.serverOptions,
+  });
+  return {
+    port: started.port,
+    server: started.server,
+    openWs: async (headers?: Record<string, string>) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${started.port}`, headers ? { headers } : undefined);
+      trackConnectChallengeNonce(ws);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
+        const cleanup = () => {
+          clearTimeout(timer);
+          ws.off("open", onOpen);
+          ws.off("error", onError);
+          ws.off("close", onClose);
+        };
+        const onOpen = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = (err: unknown) => {
+          cleanup();
+          reject(err instanceof Error ? err : new Error(String(err)));
+        };
+        const onClose = (code: number, reason: Buffer) => {
+          cleanup();
+          reject(new Error(`closed ${code}: ${reason.toString()}`));
+        };
+        ws.once("open", onOpen);
+        ws.once("error", onError);
+        ws.once("close", onClose);
+      });
+      return ws;
+    },
+    close: async () => {
+      await started.server.close();
+    },
+  };
 }
 
 export async function startServerWithClient(

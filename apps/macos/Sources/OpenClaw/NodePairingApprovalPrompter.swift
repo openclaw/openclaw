@@ -32,9 +32,7 @@ final class NodePairingApprovalPrompter {
     private var queue: [PendingRequest] = []
     var pendingCount: Int = 0
     var pendingRepairCount: Int = 0
-    private var activeAlert: NSAlert?
-    private var activeRequestId: String?
-    private var alertHostWindow: NSWindow?
+    private let alertState = PairingAlertState()
     private var remoteResolutionsByRequestId: [String: PairingResolution] = [:]
     private var autoApproveAttempts: Set<String> = []
 
@@ -99,12 +97,10 @@ final class NodePairingApprovalPrompter {
     private func stopPushTask() {
         PairingAlertSupport.stopPairingPrompter(
             isStopping: &self.isStopping,
-            activeAlert: &self.activeAlert,
-            activeRequestId: &self.activeRequestId,
             task: &self.task,
             queue: &self.queue,
             isPresenting: &self.isPresenting,
-            alertHostWindow: &self.alertHostWindow)
+            state: self.alertState)
     }
 
     private func loadPendingRequestsFromGateway() async {
@@ -180,7 +176,7 @@ final class NodePairingApprovalPrompter {
             if pendingById[req.requestId] != nil { continue }
             let resolution = self.inferResolution(for: req, list: list)
 
-            if self.activeRequestId == req.requestId, self.activeAlert != nil {
+            if self.alertState.activeRequestId == req.requestId, self.alertState.activeAlert != nil {
                 self.remoteResolutionsByRequestId[req.requestId] = resolution
                 self.logger.info(
                     """
@@ -222,7 +218,7 @@ final class NodePairingApprovalPrompter {
     }
 
     private func endActiveAlert() {
-        PairingAlertSupport.endActiveAlert(activeAlert: &self.activeAlert, activeRequestId: &self.activeRequestId)
+        PairingAlertSupport.endActiveAlert(state: self.alertState)
     }
 
     private func handle(push: GatewayPush) {
@@ -284,18 +280,8 @@ final class NodePairingApprovalPrompter {
             requestId: req.requestId,
             messageText: "Allow node to connect?",
             informativeText: Self.describe(req),
-            activeAlert: &self.activeAlert,
-            activeRequestId: &self.activeRequestId,
-            alertHostWindow: &self.alertHostWindow,
-            clearActive: self.clearActiveAlert(hostWindow:),
+            state: self.alertState,
             onResponse: self.handleAlertResponse)
-    }
-
-    private func clearActiveAlert(hostWindow: NSWindow) {
-        PairingAlertSupport.clearActivePairingAlert(
-            activeAlert: &self.activeAlert,
-            activeRequestId: &self.activeRequestId,
-            hostWindow: hostWindow)
     }
 
     private func handleAlertResponse(_ response: NSApplication.ModalResponse, request: PendingRequest) async {
@@ -575,7 +561,7 @@ final class NodePairingApprovalPrompter {
         let resolution: PairingResolution =
             resolved.decision == PairingResolution.approved.rawValue ? .approved : .rejected
 
-        if self.activeRequestId == resolved.requestId, self.activeAlert != nil {
+        if self.alertState.activeRequestId == resolved.requestId, self.alertState.activeAlert != nil {
             self.remoteResolutionsByRequestId[resolved.requestId] = resolution
             self.logger.info(
                 """

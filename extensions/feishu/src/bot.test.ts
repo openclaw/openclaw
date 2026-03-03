@@ -1,5 +1,6 @@
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { buildFeishuAgentBody, handleFeishuMessage, toMessageResourceType } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -27,8 +28,10 @@ const {
   mockCreateFeishuClient: vi.fn(),
   mockResolveAgentRoute: vi.fn(() => ({
     agentId: "main",
+    channel: "feishu",
     accountId: "default",
     sessionKey: "agent:main:feishu:dm:ou-attacker",
+    mainSessionKey: "agent:main:main",
     matchedBy: "default",
   })),
 }));
@@ -122,7 +125,9 @@ describe("handleFeishuMessage command authorization", () => {
   const mockBuildPairingReply = vi.fn(() => "Pairing response");
   const mockEnqueueSystemEvent = vi.fn();
   const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
+    id: "inbound-clip.mp4",
     path: "/tmp/inbound-clip.mp4",
+    size: Buffer.byteLength("video"),
     contentType: "video/mp4",
   });
 
@@ -131,8 +136,10 @@ describe("handleFeishuMessage command authorization", () => {
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
+      channel: "feishu",
       accountId: "default",
       sessionKey: "agent:main:feishu:dm:ou-attacker",
+      mainSessionKey: "agent:main:main",
       matchedBy: "default",
     });
     mockCreateFeishuClient.mockReturnValue({
@@ -143,38 +150,46 @@ describe("handleFeishuMessage command authorization", () => {
       },
     });
     mockEnqueueSystemEvent.mockReset();
-    setFeishuRuntime({
-      system: {
-        enqueueSystemEvent: mockEnqueueSystemEvent,
-      },
-      channel: {
-        routing: {
-          resolveAgentRoute: mockResolveAgentRoute,
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        system: {
+          enqueueSystemEvent: mockEnqueueSystemEvent,
         },
-        reply: {
-          resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
-          formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-          finalizeInboundContext: mockFinalizeInboundContext,
-          dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-          withReplyDispatcher: mockWithReplyDispatcher,
-        },
-        commands: {
-          shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
-          resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+        channel: {
+          routing: {
+            resolveAgentRoute:
+              mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+          },
+          reply: {
+            resolveEnvelopeFormatOptions: vi.fn(
+              () => ({}),
+            ) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext:
+              mockFinalizeInboundContext as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+            withReplyDispatcher:
+              mockWithReplyDispatcher as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
+          },
+          commands: {
+            shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+            resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+          },
+          media: {
+            saveMediaBuffer:
+              mockSaveMediaBuffer as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
+          },
+          pairing: {
+            readAllowFromStore: mockReadAllowFromStore,
+            upsertPairingRequest: mockUpsertPairingRequest,
+            buildPairingReply: mockBuildPairingReply,
+          },
         },
         media: {
-          saveMediaBuffer: mockSaveMediaBuffer,
+          detectMime: vi.fn(async () => "application/octet-stream"),
         },
-        pairing: {
-          readAllowFromStore: mockReadAllowFromStore,
-          upsertPairingRequest: mockUpsertPairingRequest,
-          buildPairingReply: mockBuildPairingReply,
-        },
-      },
-      media: {
-        detectMime: vi.fn(async () => "application/octet-stream"),
-      },
-    } as unknown as PluginRuntime);
+      }),
+    );
   });
 
   it("does not enqueue inbound preview text as system events", async () => {
@@ -366,6 +381,41 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("replies pairing challenge to DM chat_id instead of user:sender id", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "pairing",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          user_id: "u_mobile_only",
+        },
+      },
+      message: {
+        message_id: "msg-pairing-chat-reply",
+        chat_id: "oc_dm_chat_1",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    mockReadAllowFromStore.mockResolvedValue([]);
+    mockUpsertPairingRequest.mockResolvedValue({ code: "ABCDEFGH", created: true });
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockSendMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc_dm_chat_1",
+      }),
+    );
+  });
   it("creates pairing request and drops unauthorized DMs in pairing mode", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockReadAllowFromStore.mockResolvedValue([]);
@@ -410,7 +460,7 @@ describe("handleFeishuMessage command authorization", () => {
     });
     expect(mockSendMessageFeishu).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: "user:ou-unapproved",
+        to: "chat:oc-dm",
         accountId: "default",
       }),
     );
@@ -1038,6 +1088,67 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("ignores stale non-existent contact scope permission errors", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockRejectedValue({
+            response: {
+              data: {
+                code: 99991672,
+                msg: "permission denied: contact:contact.base:readonly https://open.feishu.cn/app/cli_scope_bug",
+              },
+            },
+          }),
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_scope_bug",
+          appSecret: "sec_scope_bug",
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-perm-scope",
+        },
+      },
+      message: {
+        message_id: "msg-perm-scope-1",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello group" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.not.stringContaining("Permission grant URL"),
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("ou-perm-scope: hello group"),
+      }),
+    );
+  });
+
   it("routes group sessions by sender when groupSessionScope=group_sender", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
@@ -1113,6 +1224,83 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("keeps root_id as topic key when root_id and thread_id both exist", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic_sender",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "msg-scope-topic-thread-id",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om_root_topic",
+        thread_id: "omt_topic_1",
+        message_type: "text",
+        content: JSON.stringify({ text: "topic sender scope" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:om_root_topic:sender:ou-topic-user" },
+        parentPeer: { kind: "group", id: "oc-group" },
+      }),
+    );
+  });
+
+  it("uses thread_id as topic key when root_id is missing", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic_sender",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "msg-scope-topic-thread-only",
+        chat_id: "oc-group",
+        chat_type: "group",
+        thread_id: "omt_topic_1",
+        message_type: "text",
+        content: JSON.stringify({ text: "topic sender scope" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:omt_topic_1:sender:ou-topic-user" },
+        parentPeer: { kind: "group", id: "oc-group" },
+      }),
+    );
+  });
+
   it("maps legacy topicSessionMode=enabled to group_topic routing", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
@@ -1136,6 +1324,45 @@ describe("handleFeishuMessage command authorization", () => {
         chat_id: "oc-group",
         chat_type: "group",
         root_id: "om_root_legacy",
+        message_type: "text",
+        content: JSON.stringify({ text: "legacy topic mode" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:om_root_legacy" },
+        parentPeer: { kind: "group", id: "oc-group" },
+      }),
+    );
+  });
+
+  it("maps legacy topicSessionMode=enabled to root_id when both root_id and thread_id exist", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          topicSessionMode: "enabled",
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-legacy-thread-id" } },
+      message: {
+        message_id: "msg-legacy-topic-thread-id",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om_root_legacy",
+        thread_id: "omt_topic_legacy",
         message_type: "text",
         content: JSON.stringify({ text: "legacy topic mode" }),
       },
@@ -1185,6 +1412,140 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         peer: { kind: "group", id: "oc-group:topic:msg-new-topic-root" },
         parentPeer: { kind: "group", id: "oc-group" },
+      }),
+    );
+  });
+
+  it("keeps topic session key stable after first turn creates a thread", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+              replyInThread: "enabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const firstTurn: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-init" } },
+      message: {
+        message_id: "msg-topic-first",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "create topic" }),
+      },
+    };
+    const secondTurn: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-init" } },
+      message: {
+        message_id: "msg-topic-second",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "msg-topic-first",
+        thread_id: "omt_topic_created",
+        message_type: "text",
+        content: JSON.stringify({ text: "follow up in same topic" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event: firstTurn });
+    await dispatchMessage({ cfg, event: secondTurn });
+
+    expect(mockResolveAgentRoute).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:msg-topic-first" },
+      }),
+    );
+    expect(mockResolveAgentRoute).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:msg-topic-first" },
+      }),
+    );
+  });
+
+  it("replies to the topic root when handling a message inside an existing topic", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              replyInThread: "enabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "om_child_message",
+        root_id: "om_root_topic",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "reply inside topic" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_root_topic",
+        rootId: "om_root_topic",
+      }),
+    );
+  });
+
+  it("forces thread replies when inbound message contains thread_id", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group",
+              replyInThread: "disabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-thread-reply" } },
+      message: {
+        message_id: "msg-thread-reply",
+        chat_id: "oc-group",
+        chat_type: "group",
+        thread_id: "omt_topic_thread_reply",
+        message_type: "text",
+        content: JSON.stringify({ text: "thread content" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyInThread: true,
+        threadReply: true,
       }),
     );
   });

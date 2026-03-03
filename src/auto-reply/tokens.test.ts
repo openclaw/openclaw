@@ -62,6 +62,12 @@ describe("stripSilentToken", () => {
     expect(stripSilentToken("  NO_REPLY  ")).toBe("");
   });
 
+  it("strips token preceded by bold markdown formatting", () => {
+    expect(stripSilentToken("**NO_REPLY")).toBe("");
+    expect(stripSilentToken("some text **NO_REPLY")).toBe("some text");
+    expect(stripSilentToken("reasoning**NO_REPLY")).toBe("reasoning");
+  });
+
   it("works with custom token", () => {
     expect(stripSilentToken("done HEARTBEAT_OK", "HEARTBEAT_OK")).toBe("done");
   });
