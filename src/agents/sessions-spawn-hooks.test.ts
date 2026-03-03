@@ -65,6 +65,28 @@ function mockAgentStartFailure() {
   });
 }
 
+async function runSessionThreadSpawnAndGetError(params: {
+  toolCallId: string;
+  spawningResult: { status: "error"; error: string } | { status: "ok"; threadBindingReady: false };
+}): Promise<{ error?: string; childSessionKey?: string }> {
+  hookRunnerMocks.runSubagentSpawning.mockResolvedValueOnce(params.spawningResult);
+  const tool = await getSessionsSpawnTool({
+    agentSessionKey: "main",
+    agentChannel: "discord",
+    agentAccountId: "work",
+    agentTo: "channel:123",
+  });
+
+  const result = await tool.execute(params.toolCallId, {
+    task: "do thing",
+    runTimeoutSeconds: 1,
+    thread: true,
+    mode: "session",
+  });
+  expect(result.details).toMatchObject({ status: "error" });
+  return result.details as { error?: string; childSessionKey?: string };
+}
+
 describe("sessions_spawn subagent lifecycle hooks", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
@@ -214,26 +236,13 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
   });
 
   it("returns error when thread binding cannot be created", async () => {
-    hookRunnerMocks.runSubagentSpawning.mockResolvedValueOnce({
-      status: "error",
-      error: "Unable to create or bind a Discord thread for this subagent session.",
+    const details = await runSessionThreadSpawnAndGetError({
+      toolCallId: "call4",
+      spawningResult: {
+        status: "error",
+        error: "Unable to create or bind a Discord thread for this subagent session.",
+      },
     });
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "discord",
-      agentAccountId: "work",
-      agentTo: "channel:123",
-    });
-
-    const result = await tool.execute("call4", {
-      task: "do thing",
-      runTimeoutSeconds: 1,
-      thread: true,
-      mode: "session",
-    });
-
-    expect(result.details).toMatchObject({ status: "error" });
-    const details = result.details as { error?: string; childSessionKey?: string };
     expect(details.error).toMatch(/thread/i);
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
     expectSessionsDeleteWithoutAgentStart();
@@ -245,26 +254,13 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
   });
 
   it("returns error when thread binding is not marked ready", async () => {
-    hookRunnerMocks.runSubagentSpawning.mockResolvedValueOnce({
-      status: "ok",
-      threadBindingReady: false,
+    const details = await runSessionThreadSpawnAndGetError({
+      toolCallId: "call4b",
+      spawningResult: {
+        status: "ok",
+        threadBindingReady: false,
+      },
     });
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "discord",
-      agentAccountId: "work",
-      agentTo: "channel:123",
-    });
-
-    const result = await tool.execute("call4b", {
-      task: "do thing",
-      runTimeoutSeconds: 1,
-      thread: true,
-      mode: "session",
-    });
-
-    expect(result.details).toMatchObject({ status: "error" });
-    const details = result.details as { error?: string; childSessionKey?: string };
     expect(details.error).toMatch(/unable to create or bind a thread/i);
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
     expectSessionsDeleteWithoutAgentStart();

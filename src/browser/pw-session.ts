@@ -456,6 +456,18 @@ async function findPageByTargetId(
   return null;
 }
 
+async function resolvePageByTargetIdOrThrow(opts: {
+  cdpUrl: string;
+  targetId: string;
+}): Promise<Page> {
+  const { browser } = await connectBrowser(opts.cdpUrl);
+  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+  if (!page) {
+    throw new Error("tab not found");
+  }
+  return page;
+}
+
 export async function getPageForTargetId(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -782,11 +794,7 @@ export async function closePageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
 }): Promise<void> {
-  const { browser } = await connectBrowser(opts.cdpUrl);
-  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
-  if (!page) {
-    throw new Error("tab not found");
-  }
+  const page = await resolvePageByTargetIdOrThrow(opts);
   await page.close();
 }
 
@@ -798,11 +806,7 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
 }): Promise<void> {
-  const { browser } = await connectBrowser(opts.cdpUrl);
-  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
-  if (!page) {
-    throw new Error("tab not found");
-  }
+  const page = await resolvePageByTargetIdOrThrow(opts);
   try {
     await page.bringToFront();
   } catch (err) {

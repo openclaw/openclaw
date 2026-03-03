@@ -200,7 +200,7 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
   return touched ? out : messages;
 }
 
-function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
+export function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
