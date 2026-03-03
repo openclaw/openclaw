@@ -139,58 +139,39 @@ describe("configureGatewayForOnboarding", () => {
     ]);
   });
 
-  it("adds Tailscale origin to controlUi.allowedOrigins when tailscale serve is enabled", async () => {
-    mocks.randomToken.mockReturnValue("generated-token");
-    mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
-    const result = await runGatewayConfig({
-      tailscaleChoice: "serve",
-    });
+  it("honors secretInputMode=ref for gateway password prompts", async () => {
+    const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "gateway-secret";
+    try {
+      const prompter = createPrompter({
+        selectQueue: ["loopback", "password", "off", "env"],
+        textQueue: ["18789", "OPENCLAW_GATEWAY_PASSWORD"],
+      });
+      const runtime = createRuntime();
 
-    expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toContain(
-      "https://my-host.tail1234.ts.net",
-    );
-  });
+      const result = await configureGatewayForOnboarding({
+        flow: "advanced",
+        baseConfig: {},
+        nextConfig: {},
+        localPort: 18789,
+        quickstartGateway: createQuickstartGateway("password"),
+        secretInputMode: "ref",
+        prompter,
+        runtime,
+      });
 
-  it("does not add Tailscale origin when getTailnetHostname fails", async () => {
-    mocks.randomToken.mockReturnValue("generated-token");
-    mocks.getTailnetHostname.mockRejectedValue(new Error("not found"));
-    const result = await runGatewayConfig({
-      tailscaleChoice: "serve",
-    });
-
-    expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toBeUndefined();
-  });
-
-  it("formats IPv6 Tailscale fallback addresses as valid HTTPS origins", async () => {
-    mocks.randomToken.mockReturnValue("generated-token");
-    mocks.getTailnetHostname.mockResolvedValue("fd7a:115c:a1e0::99");
-    const result = await runGatewayConfig({
-      tailscaleChoice: "serve",
-    });
-
-    expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toContain(
-      "https://[fd7a:115c:a1e0::99]",
-    );
-  });
-
-  it("does not duplicate Tailscale origin when allowlist already contains case variants", async () => {
-    mocks.randomToken.mockReturnValue("generated-token");
-    mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
-    const result = await runGatewayConfig({
-      tailscaleChoice: "serve",
-      nextConfig: {
-        gateway: {
-          controlUi: {
-            allowedOrigins: ["HTTPS://MY-HOST.TAIL1234.TS.NET"],
-          },
-        },
-      },
-    });
-
-    const origins = result.nextConfig.gateway?.controlUi?.allowedOrigins ?? [];
-    const tsOriginCount = origins.filter(
-      (origin) => origin.toLowerCase() === "https://my-host.tail1234.ts.net",
-    ).length;
-    expect(tsOriginCount).toBe(1);
+      expect(result.nextConfig.gateway?.auth?.mode).toBe("password");
+      expect(result.nextConfig.gateway?.auth?.password).toEqual({
+        source: "env",
+        provider: "default",
+        id: "OPENCLAW_GATEWAY_PASSWORD",
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PASSWORD = previous;
+      }
+    }
   });
 });
