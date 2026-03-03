@@ -515,7 +515,7 @@ function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined):
 function mapThinkingLevelToOpenRouterReasoningEffort(
   thinkingLevel: ThinkLevel,
 ): "none" | "minimal" | "low" | "medium" | "high" | "xhigh" {
-  if (thinkingLevel === "off" || thinkingLevel === "auto") {
+  if (thinkingLevel === "off") {
     return "none";
   }
   if (thinkingLevel === "adaptive") {

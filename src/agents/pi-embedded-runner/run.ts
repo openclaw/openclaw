@@ -375,8 +375,8 @@ export async function runEmbeddedPiAgent(
       let profileIndex = 0;
 
       let initialThinkLevel = params.thinkLevel ?? "off";
-      // Resolve "auto" thinking level via haiku pre-classification
-      if (initialThinkLevel === "auto") {
+      // Resolve "adaptive" thinking level via haiku pre-classification
+      if (initialThinkLevel === "adaptive") {
         try {
           initialThinkLevel = await resolveAutoThinkingLevel({
             sessionFile: params.sessionFile,

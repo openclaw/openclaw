@@ -3,7 +3,7 @@ import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 
 export function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
   // pi-agent-core supports "xhigh"; OpenClaw enables it for specific models.
-  if (!level || level === "auto") {
+  if (!level) {
     return "off";
   }
   // "adaptive" maps to "medium" at the pi-agent-core layer.  The Pi SDK
