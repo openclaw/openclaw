@@ -4,6 +4,7 @@ import { matchesSkillFilter } from "../../agents/skills/filter.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
+import { getSandboxSkillEligibility } from "../../infra/skills-sandbox.js";
 
 export function resolveCronSkillsSnapshot(params: {
   workspaceDir: string;
@@ -31,7 +32,7 @@ export function resolveCronSkillsSnapshot(params: {
   return buildWorkspaceSkillSnapshot(params.workspaceDir, {
     config: params.config,
     skillFilter,
-    eligibility: { remote: getRemoteSkillEligibility() },
+    eligibility: { remote: getRemoteSkillEligibility(), sandbox: getSandboxSkillEligibility() },
     snapshotVersion,
   });
 }

@@ -8,6 +8,7 @@ import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agent
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
+import { getSandboxSkillEligibility } from "../infra/skills-sandbox.js";
 import { listChatCommands } from "./commands-registry.js";
 
 export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {
@@ -41,7 +42,7 @@ export function listSkillCommandsForWorkspace(params: {
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     config: params.cfg,
     skillFilter: params.skillFilter,
-    eligibility: { remote: getRemoteSkillEligibility() },
+    eligibility: { remote: getRemoteSkillEligibility(), sandbox: getSandboxSkillEligibility() },
     reservedNames: listReservedChatSlashCommandNames(),
   });
 }
@@ -100,8 +101,7 @@ export function listSkillCommandsForAgents(params: {
   for (const { workspaceDir, skillFilter } of workspaceFilters.values()) {
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       config: params.cfg,
-      skillFilter,
-      eligibility: { remote: getRemoteSkillEligibility() },
+      eligibility: { remote: getRemoteSkillEligibility(), sandbox: getSandboxSkillEligibility() },
       reservedNames: used,
     });
     for (const command of commands) {
