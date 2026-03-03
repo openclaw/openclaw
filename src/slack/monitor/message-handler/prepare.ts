@@ -285,12 +285,12 @@ function resolveSlackRoutingContext(params: {
     !isThreadReply && replyToMode === "all" && threadContext.messageTs
       ? threadContext.messageTs
       : undefined;
-  const roomThreadId =
-    isThreadReply && threadTs
-      ? threadTs
-      : replyToMode === "off"
-        ? undefined
-        : threadContext.messageTs;
+  // Only fork channel/group messages into thread-specific sessions when they are
+  // actual thread replies (thread_ts present, different from message ts).
+  // Top-level channel messages must stay on the per-channel session for continuity.
+  // Before this fix, every channel message used its own ts as threadId, creating
+  // isolated sessions per message (regression from #10686).
+  const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
   const canonicalThreadId = isRoomish ? roomThreadId : isThreadReply ? threadTs : autoThreadId;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: route.sessionKey,
