@@ -291,10 +291,22 @@ async function sendRawConnectReq(
   }>(ws, isConnectResMessage(params.id));
 }
 
-async function startRateLimitedTokenServerWithPairedDeviceToken() {
+async function resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath: string): Promise<{
+  identity: { deviceId: string };
+  deviceToken: string;
+}> {
   const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
   const { getPairedDevice } = await import("../infra/device-pairing.js");
 
+  const identity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+  const paired = await getPairedDevice(identity.deviceId);
+  const deviceToken = paired?.tokens?.operator?.token;
+  expect(paired?.deviceId).toBe(identity.deviceId);
+  expect(deviceToken).toBeDefined();
+  return { identity: { deviceId: identity.deviceId }, deviceToken: String(deviceToken ?? "") };
+}
+
+async function startRateLimitedTokenServerWithPairedDeviceToken() {
   testState.gatewayAuth = {
     mode: "token",
     token: "secret",
@@ -309,12 +321,7 @@ async function startRateLimitedTokenServerWithPairedDeviceToken() {
     if (!initial.ok) {
       await approvePendingPairingIfNeeded();
     }
-
-    const identity = loadOrCreateDeviceIdentity(deviceIdentityPath);
-    const paired = await getPairedDevice(identity.deviceId);
-    const deviceToken = paired?.tokens?.operator?.token;
-    expect(paired?.deviceId).toBe(identity.deviceId);
-    expect(deviceToken).toBeDefined();
+    const { deviceToken } = await resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath);
 
     ws.close();
     return { server, port, prevToken, deviceToken: String(deviceToken ?? ""), deviceIdentityPath };
@@ -331,24 +338,17 @@ async function ensurePairedDeviceTokenForCurrentIdentity(ws: WebSocket): Promise
   deviceToken: string;
   deviceIdentityPath: string;
 }> {
-  const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
-  const { getPairedDevice } = await import("../infra/device-pairing.js");
-
   const deviceIdentityPath = nextAuthIdentityPath("openclaw-auth-device");
 
   const res = await connectReq(ws, { token: "secret", deviceIdentityPath });
   if (!res.ok) {
     await approvePendingPairingIfNeeded();
   }
-
-  const identity = loadOrCreateDeviceIdentity(deviceIdentityPath);
-  const paired = await getPairedDevice(identity.deviceId);
-  const deviceToken = paired?.tokens?.operator?.token;
-  expect(paired?.deviceId).toBe(identity.deviceId);
-  expect(deviceToken).toBeDefined();
+  const { identity, deviceToken } =
+    await resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath);
   return {
-    identity: { deviceId: identity.deviceId },
-    deviceToken: String(deviceToken ?? ""),
+    identity,
+    deviceToken,
     deviceIdentityPath,
   };
 }

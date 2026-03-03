@@ -42,12 +42,24 @@ async function postHook(
   });
 }
 
+function setMainAndHooksAgents(): void {
+  testState.agentsConfig = {
+    list: [{ id: "main", default: true }, { id: "hooks" }],
+  };
+}
+
+function mockIsolatedRunOkOnce(): void {
+  cronIsolatedRun.mockClear();
+  cronIsolatedRun.mockResolvedValueOnce({
+    status: "ok",
+    summary: "done",
+  });
+}
+
 describe("gateway server hooks", () => {
   test("handles auth, wake, and agent flows", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-    testState.agentsConfig = {
-      list: [{ id: "main", default: true }, { id: "hooks" }],
-    };
+    setMainAndHooksAgents();
     await withGatewayServer(async ({ port }) => {
       const resNoAuth = await postHook(port, "/hooks/wake", { text: "Ping" }, { token: null });
       expect(resNoAuth.status).toBe(401);
@@ -58,22 +70,14 @@ describe("gateway server hooks", () => {
       expect(wakeEvents.some((e) => e.includes("Ping"))).toBe(true);
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockResolvedValueOnce({
-        status: "ok",
-        summary: "done",
-      });
+      mockIsolatedRunOkOnce();
       const resAgent = await postHook(port, "/hooks/agent", { message: "Do it", name: "Email" });
       expect(resAgent.status).toBe(202);
       const agentEvents = await waitForSystemEvent();
       expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockResolvedValueOnce({
-        status: "ok",
-        summary: "done",
-      });
+      mockIsolatedRunOkOnce();
       const resAgentModel = await postHook(port, "/hooks/agent", {
         message: "Do it",
         name: "Email",
@@ -87,11 +91,7 @@ describe("gateway server hooks", () => {
       expect(call?.job?.payload?.model).toBe("openai/gpt-4.1-mini");
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockResolvedValueOnce({
-        status: "ok",
-        summary: "done",
-      });
+      mockIsolatedRunOkOnce();
       const resAgentWithId = await postHook(port, "/hooks/agent", {
         message: "Do it",
         name: "Email",
@@ -105,11 +105,7 @@ describe("gateway server hooks", () => {
       expect(routedCall?.job?.agentId).toBe("hooks");
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockResolvedValueOnce({
-        status: "ok",
-        summary: "done",
-      });
+      mockIsolatedRunOkOnce();
       const resAgentUnknown = await postHook(port, "/hooks/agent", {
         message: "Do it",
         name: "Email",
@@ -243,15 +239,9 @@ describe("gateway server hooks", () => {
       allowRequestSessionKey: true,
       allowedSessionKeyPrefixes: ["hook:", "agent:"],
     };
-    testState.agentsConfig = {
-      list: [{ id: "main", default: true }, { id: "hooks" }],
-    };
+    setMainAndHooksAgents();
     await withGatewayServer(async ({ port }) => {
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockResolvedValueOnce({
-        status: "ok",
-        summary: "done",
-      });
+      mockIsolatedRunOkOnce();
 
       const resAgent = await postHook(port, "/hooks/agent", {
         message: "Do it",
@@ -285,15 +275,9 @@ describe("gateway server hooks", () => {
         },
       ],
     };
-    testState.agentsConfig = {
-      list: [{ id: "main", default: true }, { id: "hooks" }],
-    };
+    setMainAndHooksAgents();
     await withGatewayServer(async ({ port }) => {
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockResolvedValueOnce({
-        status: "ok",
-        summary: "done",
-      });
+      mockIsolatedRunOkOnce();
       const resNoAgent = await postHook(port, "/hooks/agent", { message: "No explicit agent" });
       expect(resNoAgent.status).toBe(202);
       await waitForSystemEvent();
@@ -303,11 +287,7 @@ describe("gateway server hooks", () => {
       expect(noAgentCall?.job?.agentId).toBeUndefined();
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockResolvedValueOnce({
-        status: "ok",
-        summary: "done",
-      });
+      mockIsolatedRunOkOnce();
       const resAllowed = await postHook(port, "/hooks/agent", {
         message: "Allowed",
         agentId: "hooks",
