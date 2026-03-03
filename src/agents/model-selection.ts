@@ -14,7 +14,7 @@ export type ModelRef = {
   model: string;
 };
 
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "auto";
+export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
@@ -27,7 +27,7 @@ const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
   "sonnet-4.6": "claude-sonnet-4-6",
   "sonnet-4.5": "claude-sonnet-4-5",
 };
-const OPENAI_CODEX_OAUTH_MODEL_PREFIXES = ["gpt-5.3-codex"] as const;
+const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
@@ -57,6 +57,18 @@ export function normalizeProviderId(provider: string): string {
   // Backward compatibility for older provider naming.
   if (normalized === "bytedance" || normalized === "doubao") {
     return "volcengine";
+  }
+  return normalized;
+}
+
+/** Normalize provider ID for auth lookup. Coding-plan variants share auth with base. */
+export function normalizeProviderIdForAuth(provider: string): string {
+  const normalized = normalizeProviderId(provider);
+  if (normalized === "volcengine-plan") {
+    return "volcengine";
+  }
+  if (normalized === "byteplus-plan") {
+    return "byteplus";
   }
   return normalized;
 }
@@ -133,25 +145,9 @@ function normalizeProviderModelId(provider: string, model: string): string {
   return model;
 }
 
-function shouldUseOpenAICodexProvider(provider: string, model: string): boolean {
-  if (provider !== "openai") {
-    return false;
-  }
-  const normalized = model.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  return OPENAI_CODEX_OAUTH_MODEL_PREFIXES.some(
-    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}-`),
-  );
-}
-
 export function normalizeModelRef(provider: string, model: string): ModelRef {
   const normalizedProvider = normalizeProviderId(provider);
   const normalizedModel = normalizeProviderModelId(normalizedProvider, model.trim());
-  if (shouldUseOpenAICodexProvider(normalizedProvider, normalizedModel)) {
-    return { provider: "openai-codex", model: normalizedModel };
-  }
   return { provider: normalizedProvider, model: normalizedModel };
 }
 
@@ -542,9 +538,33 @@ export function resolveThinkingDefault(params: {
   model: string;
   catalog?: ModelCatalogEntry[];
 }): ThinkLevel {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const modelLower = params.model.toLowerCase();
+  const perModelThinking =
+    params.cfg.agents?.defaults?.models?.[modelKey(params.provider, params.model)]?.params
+      ?.thinking;
+  if (
+    perModelThinking === "off" ||
+    perModelThinking === "minimal" ||
+    perModelThinking === "low" ||
+    perModelThinking === "medium" ||
+    perModelThinking === "high" ||
+    perModelThinking === "xhigh" ||
+    perModelThinking === "adaptive"
+  ) {
+    return perModelThinking;
+  }
   const configured = params.cfg.agents?.defaults?.thinkingDefault;
   if (configured) {
     return configured;
+  }
+  const isAnthropicFamilyModel =
+    normalizedProvider === "anthropic" ||
+    normalizedProvider === "amazon-bedrock" ||
+    modelLower.includes("anthropic/") ||
+    modelLower.includes(".anthropic.");
+  if (isAnthropicFamilyModel && CLAUDE_46_MODEL_RE.test(modelLower)) {
+    return "adaptive";
   }
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
