@@ -921,6 +921,34 @@ describe("signalMessageActions", () => {
     );
   });
 
+  it("uses numeric messageId directly without falling back to toolContext", async () => {
+    sendReactionSignal.mockClear();
+    await runSignalAction(
+      "react",
+      { to: "+15559999999", messageId: 1737630212345, emoji: "👍" },
+      { toolContext: { currentMessageId: "9999999999999" } },
+    );
+    expect(sendReactionSignal).toHaveBeenCalledTimes(1);
+    expect(sendReactionSignal).toHaveBeenCalledWith(
+      "+15559999999",
+      1737630212345,
+      "👍",
+      expect.objectContaining({}),
+    );
+  });
+
+  it("handles string messageId unchanged (regression)", async () => {
+    sendReactionSignal.mockClear();
+    await runSignalAction("react", { to: "+15559999999", messageId: "1737630212345", emoji: "✅" });
+    expect(sendReactionSignal).toHaveBeenCalledTimes(1);
+    expect(sendReactionSignal).toHaveBeenCalledWith(
+      "+15559999999",
+      1737630212345,
+      "✅",
+      expect.objectContaining({}),
+    );
+  });
+
   it("requires targetAuthor for group reactions", async () => {
     const cfg = {
       channels: { signal: { account: "+15550001111" } },
