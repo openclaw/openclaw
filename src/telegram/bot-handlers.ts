@@ -1,6 +1,5 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -13,12 +12,17 @@ import {
 import { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
+import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { DmPolicy } from "../config/types.base.js";
-import type { TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
+import type {
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { MediaFetchError } from "../media/fetch.js";
@@ -28,7 +32,7 @@ import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
-  normalizeAllowFromWithStore,
+  normalizeDmAllowFromWithStore,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
@@ -59,6 +63,7 @@ import {
   calculateTotalPages,
   getModelsPageSize,
   parseModelCallbackData,
+  resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
@@ -78,6 +83,24 @@ function hasInboundMedia(msg: Message): boolean {
     Boolean(msg.media_group_id) ||
     (Array.isArray(msg.photo) && msg.photo.length > 0) ||
     Boolean(msg.video ?? msg.video_note ?? msg.document ?? msg.audio ?? msg.voice ?? msg.sticker)
+  );
+}
+
+function hasReplyTargetMedia(msg: Message): boolean {
+  const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
+  const replyTarget = msg.reply_to_message ?? externalReply;
+  return Boolean(replyTarget && hasInboundMedia(replyTarget));
+}
+
+function resolveInboundMediaFileId(msg: Message): string | undefined {
+  return (
+    msg.sticker?.file_id ??
+    msg.photo?.[msg.photo.length - 1]?.file_id ??
+    msg.video?.file_id ??
+    msg.video_note?.file_id ??
+    msg.document?.file_id ??
+    msg.audio?.file_id ??
+    msg.voice?.file_id
   );
 }
 
@@ -183,14 +206,18 @@ export const registerTelegramHandlers = ({
     buildKey: (entry) => entry.debounceKey,
     shouldDebounce: (entry) => {
       const text = entry.msg.text ?? entry.msg.caption ?? "";
-      const hasText = text.trim().length > 0;
-      if (hasText && hasControlCommand(text, cfg, { botUsername: entry.botUsername })) {
+      const hasDebounceableText = shouldDebounceTextInbound({
+        text,
+        cfg,
+        commandOptions: { botUsername: entry.botUsername },
+      });
+      if (!hasDebounceableText) {
         return false;
       }
       if (entry.debounceLane === "forward") {
         return true;
       }
-      return entry.allMedia.length === 0 && hasText;
+      return entry.allMedia.length === 0;
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
@@ -198,7 +225,8 @@ export const registerTelegramHandlers = ({
         return;
       }
       if (entries.length === 1) {
-        await processMessage(last.ctx, last.allMedia, last.storeAllowFrom);
+        const replyMedia = await resolveReplyMediaForMessage(last.ctx, last.msg);
+        await processMessage(last.ctx, last.allMedia, last.storeAllowFrom, undefined, replyMedia);
         return;
       }
       const combinedText = entries
@@ -217,11 +245,14 @@ export const registerTelegramHandlers = ({
         date: last.msg.date ?? first.msg.date,
       });
       const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
+      const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
+      const replyMedia = await resolveReplyMediaForMessage(baseCtx, syntheticMessage);
       await processMessage(
-        buildSyntheticContext(baseCtx, syntheticMessage),
+        syntheticCtx,
         combinedMedia,
         first.storeAllowFrom,
         messageIdOverride ? { messageIdOverride } : undefined,
+        replyMedia,
       );
     },
     onError: (err) => {
@@ -268,7 +299,7 @@ export const registerTelegramHandlers = ({
     const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
     const threadKeys =
       dmThreadId != null
-        ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })
+        ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
         : null;
     const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
     const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
@@ -336,7 +367,8 @@ export const registerTelegramHandlers = ({
       }
 
       const storeAllowFrom = await loadStoreAllowFrom();
-      await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom);
+      const replyMedia = await resolveReplyMediaForMessage(primaryEntry.ctx, primaryEntry.msg);
+      await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom, undefined, replyMedia);
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
     }
@@ -397,6 +429,45 @@ export const registerTelegramHandlers = ({
 
   const loadStoreAllowFrom = async () =>
     readChannelAllowFromStore("telegram", process.env, accountId).catch(() => []);
+
+  const resolveReplyMediaForMessage = async (
+    ctx: TelegramContext,
+    msg: Message,
+  ): Promise<TelegramMediaRef[]> => {
+    const replyMessage = msg.reply_to_message;
+    if (!replyMessage || !hasInboundMedia(replyMessage)) {
+      return [];
+    }
+    const replyFileId = resolveInboundMediaFileId(replyMessage);
+    if (!replyFileId) {
+      return [];
+    }
+    try {
+      const media = await resolveMedia(
+        {
+          message: replyMessage,
+          me: ctx.me,
+          getFile: async () => await bot.api.getFile(replyFileId),
+        },
+        mediaMaxBytes,
+        opts.token,
+        opts.proxyFetch,
+      );
+      if (!media) {
+        return [];
+      }
+      return [
+        {
+          path: media.path,
+          contentType: media.contentType,
+          stickerMetadata: media.stickerMetadata,
+        },
+      ];
+    } catch (err) {
+      logger.warn({ chatId: msg.chat.id, error: String(err) }, "reply media fetch failed");
+      return [];
+    }
+  };
 
   const isAllowlistAuthorized = (
     allow: NormalizedAllowFrom,
@@ -536,7 +607,9 @@ export const registerTelegramHandlers = ({
     },
     "callback-allowlist": {
       enforceDirectAuthorization: true,
-      enforceGroupAllowlistAuthorization: true,
+      // Group auth is already enforced by shouldSkipGroupMessage (group policy + allowlist).
+      // An extra allowlist gate here would block users whose original command was authorized.
+      enforceGroupAllowlistAuthorization: false,
       deniedDmReason: "callback unauthorized by inlineButtonsScope allowlist",
       deniedGroupReason: "callback unauthorized by inlineButtonsScope allowlist",
     },
@@ -544,23 +617,30 @@ export const registerTelegramHandlers = ({
 
   const resolveTelegramEventAuthorizationContext = async (params: {
     chatId: number;
+    isGroup: boolean;
     isForum: boolean;
     messageThreadId?: number;
     groupAllowContext?: TelegramGroupAllowContext;
   }): Promise<TelegramEventAuthorizationContext> => {
-    const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
     const groupAllowContext =
       params.groupAllowContext ??
       (await resolveTelegramGroupAllowFromContext({
         chatId: params.chatId,
         accountId,
-        dmPolicy,
+        isGroup: params.isGroup,
         isForum: params.isForum,
         messageThreadId: params.messageThreadId,
         groupAllowFrom,
         resolveTelegramGroupConfig,
       }));
-    return { dmPolicy, ...groupAllowContext };
+    // Use direct config dmPolicy override if available for DMs
+    const effectiveDmPolicy =
+      !params.isGroup &&
+      groupAllowContext.groupConfig &&
+      "dmPolicy" in groupAllowContext.groupConfig
+        ? (groupAllowContext.groupConfig.dmPolicy ?? telegramCfg.dmPolicy ?? "pairing")
+        : (telegramCfg.dmPolicy ?? "pairing");
+    return { dmPolicy: effectiveDmPolicy, ...groupAllowContext };
   };
 
   const authorizeTelegramEventSender = (params: {
@@ -579,6 +659,7 @@ export const registerTelegramHandlers = ({
       storeAllowFrom,
       groupConfig,
       topicConfig,
+      groupAllowOverride,
       effectiveGroupAllow,
       hasGroupAllowOverride,
     } = context;
@@ -614,8 +695,10 @@ export const registerTelegramHandlers = ({
         return { allowed: false, reason: "direct-disabled" };
       }
       if (dmPolicy !== "open") {
-        const effectiveDmAllow = normalizeAllowFromWithStore({
-          allowFrom,
+        // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
+        const dmAllowFrom = groupAllowOverride ?? allowFrom;
+        const effectiveDmAllow = normalizeDmAllowFromWithStore({
+          allowFrom: dmAllowFrom,
           storeAllowFrom,
           dmPolicy,
         });
@@ -666,6 +749,7 @@ export const registerTelegramHandlers = ({
       }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId,
+        isGroup,
         isForum,
       });
       const senderAuthorization = authorizeTelegramEventSender({
@@ -679,6 +763,20 @@ export const registerTelegramHandlers = ({
       });
       if (!senderAuthorization.allowed) {
         return;
+      }
+
+      // Enforce requireTopic for DM reactions: since Telegram doesn't provide messageThreadId
+      // for reactions, we cannot determine if the reaction came from a topic, so block all
+      // reactions if requireTopic is enabled for this DM.
+      if (!isGroup) {
+        const requireTopic = (eventAuthContext.groupConfig as TelegramDirectConfig | undefined)
+          ?.requireTopic;
+        if (requireTopic === true) {
+          logVerbose(
+            `Blocked telegram reaction in DM ${chatId}: requireTopic=true but topic unknown for reactions`,
+          );
+          return;
+        }
       }
 
       // Detect added reactions.
@@ -748,6 +846,7 @@ export const registerTelegramHandlers = ({
     msg: Message;
     chatId: number;
     resolvedThreadId?: number;
+    dmThreadId?: number;
     storeAllowFrom: string[];
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
@@ -757,6 +856,7 @@ export const registerTelegramHandlers = ({
       msg,
       chatId,
       resolvedThreadId,
+      dmThreadId,
       storeAllowFrom,
       sendOversizeWarning,
       oversizeLogMessage,
@@ -769,7 +869,9 @@ export const registerTelegramHandlers = ({
     if (text && !isCommandLike) {
       const nowMs = Date.now();
       const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
-      const key = `text:${chatId}:${resolvedThreadId ?? "main"}:${senderId}`;
+      // Use resolvedThreadId for forum groups, dmThreadId for DM topics
+      const threadId = resolvedThreadId ?? dmThreadId;
+      const key = `text:${chatId}:${threadId ?? "main"}:${senderId}`;
       const existing = textFragmentBuffer.get(key);
 
       if (existing) {
@@ -907,8 +1009,9 @@ export const registerTelegramHandlers = ({
         ]
       : [];
     const senderId = msg.from?.id ? String(msg.from.id) : "";
+    const conversationThreadId = resolvedThreadId ?? dmThreadId;
     const conversationKey =
-      resolvedThreadId != null ? `${chatId}:topic:${resolvedThreadId}` : String(chatId);
+      conversationThreadId != null ? `${chatId}:topic:${conversationThreadId}` : String(chatId);
     const debounceLane = resolveTelegramDebounceLane(msg);
     const debounceKey = senderId
       ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}:${debounceLane}`
@@ -1002,10 +1105,18 @@ export const registerTelegramHandlers = ({
       const isForum = callbackMessage.chat.is_forum === true;
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId,
+        isGroup,
         isForum,
         messageThreadId,
       });
-      const { resolvedThreadId, storeAllowFrom } = eventAuthContext;
+      const { resolvedThreadId, dmThreadId, storeAllowFrom, groupConfig } = eventAuthContext;
+      const requireTopic = (groupConfig as { requireTopic?: boolean } | undefined)?.requireTopic;
+      if (!isGroup && requireTopic === true && dmThreadId == null) {
+        logVerbose(
+          `Blocked telegram callback in DM ${chatId}: requireTopic=true but no topic present`,
+        );
+        return;
+      }
       const senderId = callback.from?.id ? String(callback.from.id) : "";
       const senderUsername = callback.from?.username ?? "";
       const authorizationMode: TelegramEventAuthorizationMode =
@@ -1035,10 +1146,10 @@ export const registerTelegramHandlers = ({
           return;
         }
 
-        const agentId = paginationMatch[2]?.trim() || resolveDefaultAgentId(cfg) || undefined;
+        const agentId = paginationMatch[2]?.trim() || resolveDefaultAgentId(cfg);
         const skillCommands = listSkillCommandsForAgents({
           cfg,
-          agentIds: agentId ? [agentId] : undefined,
+          agentIds: [agentId],
         });
         const result = buildCommandsMessagePaginated(cfg, skillCommands, {
           page,
@@ -1154,12 +1265,28 @@ export const registerTelegramHandlers = ({
         }
 
         if (modelCallback.type === "select") {
-          const { provider, model } = modelCallback;
+          const selection = resolveModelSelection({
+            callback: modelCallback,
+            providers,
+            byProvider,
+          });
+          if (selection.kind !== "resolved") {
+            const providerInfos: ProviderInfo[] = providers.map((p) => ({
+              id: p,
+              count: byProvider.get(p)?.size ?? 0,
+            }));
+            const buttons = buildProviderKeyboard(providerInfos);
+            await editMessageWithButtons(
+              `Could not resolve model "${selection.model}".\n\nSelect a provider:`,
+              buttons,
+            );
+            return;
+          }
           // Process model selection as a synthetic message with /model command
           const syntheticMessage = buildSyntheticTextMessage({
             base: callbackMessage,
             from: callback.from,
-            text: `/model ${provider}/${model}`,
+            text: `/model ${selection.provider}/${selection.model}`,
           });
           await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
             forceWasMentioned: true,
@@ -1260,20 +1387,25 @@ export const registerTelegramHandlers = ({
       }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId: event.chatId,
+        isGroup: event.isGroup,
         isForum: event.isForum,
         messageThreadId: event.messageThreadId,
       });
       const {
         dmPolicy,
         resolvedThreadId,
+        dmThreadId,
         storeAllowFrom,
         groupConfig,
         topicConfig,
+        groupAllowOverride,
         effectiveGroupAllow,
         hasGroupAllowOverride,
       } = eventAuthContext;
-      const effectiveDmAllow = normalizeAllowFromWithStore({
-        allowFrom,
+      // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
+      const dmAllowFrom = groupAllowOverride ?? allowFrom;
+      const effectiveDmAllow = normalizeDmAllowFromWithStore({
+        allowFrom: dmAllowFrom,
         storeAllowFrom,
         dmPolicy,
       });
@@ -1300,7 +1432,7 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      if (!event.isGroup && hasInboundMedia(event.msg)) {
+      if (!event.isGroup && (hasInboundMedia(event.msg) || hasReplyTargetMedia(event.msg))) {
         const dmAuthorized = await enforceTelegramDmAccess({
           isGroup: event.isGroup,
           dmPolicy,
@@ -1321,6 +1453,7 @@ export const registerTelegramHandlers = ({
         msg: event.msg,
         chatId: event.chatId,
         resolvedThreadId,
+        dmThreadId,
         storeAllowFrom,
         sendOversizeWarning: event.sendOversizeWarning,
         oversizeLogMessage: event.oversizeLogMessage,

@@ -9,10 +9,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
-import {
-  normalizeDeliverableOutboundChannel,
-  resolveOutboundChannelPlugin,
-} from "./channel-resolution.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
   deliverOutboundPayloads,
@@ -20,6 +17,7 @@ import {
   type OutboundSendDeps,
 } from "./deliver.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import { buildOutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
 
 export type MessageGatewayOptions = {
@@ -110,14 +108,12 @@ async function resolveRequiredChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
 }): Promise<string> {
-  if (params.channel?.trim()) {
-    const normalized = normalizeDeliverableOutboundChannel(params.channel);
-    if (!normalized) {
-      throw new Error(`Unknown channel: ${params.channel}`);
-    }
-    return normalized;
-  }
-  return (await resolveMessageChannelSelection({ cfg: params.cfg })).channel;
+  return (
+    await resolveMessageChannelSelection({
+      cfg: params.cfg,
+      channel: params.channel,
+    })
+  ).channel;
 }
 
 function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
@@ -212,11 +208,16 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       throw resolvedTarget.error;
     }
 
+    const outboundSession = buildOutboundSessionContext({
+      cfg,
+      agentId: params.agentId,
+      sessionKey: params.mirror?.sessionKey,
+    });
     const results = await deliverOutboundPayloads({
       cfg,
       channel: outboundChannel,
       to: resolvedTarget.to,
-      agentId: params.agentId,
+      session: outboundSession,
       accountId: params.accountId,
       payloads: normalizedPayloads,
       replyToId: params.replyToId,

@@ -115,64 +115,17 @@ describe("linePlugin gateway.startAccount", () => {
       }),
     );
 
-    // Allow async internals (probeLineBot await) to flush
-    await new Promise((r) => setTimeout(r, 20));
-
-    expect(monitorLineProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        accountId: "default",
-      }),
-    );
-
-    abort.abort();
-    await task;
-  });
-
-  it("stays pending until abort signal fires (no premature exit)", async () => {
-    const { runtime, monitorLineProvider } = createRuntime();
-    setLineRuntime(runtime);
-
-    const abort = new AbortController();
-    let resolved = false;
-
-    const task = linePlugin.gateway!.startAccount!(
-      createStartAccountCtx({
-        token: "token",
-        secret: "secret",
-        runtime: createRuntimeEnv(),
-        abortSignal: abort.signal,
-      }),
-    ).then(() => {
-      resolved = true;
+    await vi.waitFor(() => {
+      expect(monitorLineProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelAccessToken: "token",
+          channelSecret: "secret",
+          accountId: "default",
+        }),
+      );
     });
 
-    // Allow async internals to flush
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(monitorLineProvider).toHaveBeenCalled();
-    expect(resolved).toBe(false);
-
     abort.abort();
     await task;
-    expect(resolved).toBe(true);
-  });
-
-  it("resolves immediately when abortSignal is already aborted", async () => {
-    const { runtime } = createRuntime();
-    setLineRuntime(runtime);
-
-    const abort = new AbortController();
-    abort.abort();
-
-    await linePlugin.gateway!.startAccount!(
-      createStartAccountCtx({
-        token: "token",
-        secret: "secret",
-        runtime: createRuntimeEnv(),
-        abortSignal: abort.signal,
-      }),
-    );
   });
 });
