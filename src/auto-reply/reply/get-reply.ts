@@ -354,6 +354,12 @@ export async function getReplyFromConfig(
     workspaceDir,
   });
 
+  // Propagate the resolved heartbeat model override flag so downstream
+  // fallback logic can disable the global fallback chain.  See #32983.
+  const finalOpts = hasResolvedHeartbeatModelOverride
+    ? { ...resolvedOpts, hasResolvedHeartbeatModelOverride }
+    : resolvedOpts;
+
   return runPreparedReply({
     ctx,
     sessionCtx,
@@ -384,7 +390,7 @@ export async function getReplyFromConfig(
     perMessageQueueMode,
     perMessageQueueOptions,
     typing,
-    opts: resolvedOpts,
+    opts: finalOpts,
     defaultProvider,
     defaultModel,
     timeoutMs,

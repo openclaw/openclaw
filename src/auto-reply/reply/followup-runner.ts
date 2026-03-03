@@ -151,6 +151,13 @@ export function createFollowupRunner(params: {
             agentId: queued.run.agentId,
             sessionKey: queued.run.sessionKey,
           }),
+          // When a heartbeat model override was resolved (either from
+          // opts.heartbeatModelOverride or the backward-compat agentCfg path),
+          // disable the global fallback chain to prevent silent cost escalation.
+          // See #32983.
+          ...(opts?.isHeartbeat && opts?.hasResolvedHeartbeatModelOverride
+            ? { fallbacksOverride: [] }
+            : {}),
           run: (provider, model) => {
             const authProfile = resolveRunAuthProfile(queued.run, provider);
             return runEmbeddedPiAgent({

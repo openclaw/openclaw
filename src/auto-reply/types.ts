@@ -40,6 +40,12 @@ export type GetReplyOptions = {
   suppressTyping?: boolean;
   /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
   heartbeatModelOverride?: string;
+  /**
+   * Set internally by get-reply when a heartbeat model override was resolved
+   * (from opts.heartbeatModelOverride OR the backward-compat agentCfg path).
+   * Used downstream to disable the global model fallback chain for heartbeats.
+   */
+  hasResolvedHeartbeatModelOverride?: boolean;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
