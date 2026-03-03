@@ -164,7 +164,7 @@ export async function checkInboundAccessControl(params: {
         resolvedAccountId: account.accountId,
       };
     }
-    if (access.decision === "pairing" && !isSamePhone) {
+    if (access.decision === "pairing" && !isSamePhone && !params.isFromMe) {
       const candidate = params.from;
       if (suppressPairingReply) {
         logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
@@ -199,7 +199,7 @@ export async function checkInboundAccessControl(params: {
         resolvedAccountId: account.accountId,
       };
     }
-    if (access.decision !== "allow") {
+    if (access.decision !== "allow" && !params.isFromMe) {
       logVerbose(`Blocked unauthorized sender ${params.from} (dmPolicy=${dmPolicy})`);
       return {
         allowed: false,
