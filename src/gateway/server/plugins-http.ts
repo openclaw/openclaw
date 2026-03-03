@@ -1,12 +1,29 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import {
+  resolvePluginRoutePathContext,
+  type PluginRoutePathContext,
+} from "./plugins-http/path-context.js";
+import { findMatchingPluginHttpRoutes } from "./plugins-http/route-match.js";
+
+export {
+  isProtectedPluginRoutePathFromContext,
+  resolvePluginRoutePathContext,
+  type PluginRoutePathContext,
+} from "./plugins-http/path-context.js";
+export {
+  findRegisteredPluginHttpRoute,
+  isRegisteredPluginHttpRoutePath,
+} from "./plugins-http/route-match.js";
+export { shouldEnforceGatewayAuthForPluginPath } from "./plugins-http/route-auth.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 export type PluginHttpRequestHandler = (
   req: IncomingMessage,
   res: ServerResponse,
+  pathContext?: PluginRoutePathContext,
 ) => Promise<boolean>;
 
 export function createGatewayPluginRequestHandler(params: {
@@ -14,40 +31,31 @@ export function createGatewayPluginRequestHandler(params: {
   log: SubsystemLogger;
 }): PluginHttpRequestHandler {
   const { registry, log } = params;
-  return async (req, res) => {
+  return async (req, res, providedPathContext) => {
     const routes = registry.httpRoutes ?? [];
-    const handlers = registry.httpHandlers ?? [];
-    if (routes.length === 0 && handlers.length === 0) {
+    if (routes.length === 0) {
       return false;
     }
 
-    if (routes.length > 0) {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const route = routes.find((entry) => entry.path === url.pathname);
-      if (route) {
-        try {
-          await route.handler(req, res);
-          return true;
-        } catch (err) {
-          log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
-          if (!res.headersSent) {
-            res.statusCode = 500;
-            res.setHeader("Content-Type", "text/plain; charset=utf-8");
-            res.end("Internal Server Error");
-          }
-          return true;
-        }
-      }
+    const pathContext =
+      providedPathContext ??
+      (() => {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        return resolvePluginRoutePathContext(url.pathname);
+      })();
+    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
+    if (matchedRoutes.length === 0) {
+      return false;
     }
 
-    for (const entry of handlers) {
+    for (const route of matchedRoutes) {
       try {
-        const handled = await entry.handler(req, res);
-        if (handled) {
+        const handled = await route.handler(req, res);
+        if (handled !== false) {
           return true;
         }
       } catch (err) {
-        log.warn(`plugin http handler failed (${entry.pluginId}): ${String(err)}`);
+        log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
         if (!res.headersSent) {
           res.statusCode = 500;
           res.setHeader("Content-Type", "text/plain; charset=utf-8");
