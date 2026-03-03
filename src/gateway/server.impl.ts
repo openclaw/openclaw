@@ -105,6 +105,7 @@ import {
   getPresenceVersion,
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
+  setHealthRuntimeSnapshotProvider,
 } from "./server/health-state.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { ensureGatewayStartupAuth } from "./startup-auth.js";
@@ -595,6 +596,7 @@ export async function startGatewayServer(
   });
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
+  setHealthRuntimeSnapshotProvider(getRuntimeSnapshot);
 
   if (!minimalTestGateway) {
     const machineDisplayName = await getMachineDisplayName();
@@ -988,6 +990,7 @@ export async function startGatewayServer(
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
+      setHealthRuntimeSnapshotProvider(null);
       await close(opts);
     },
   };

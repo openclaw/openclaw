@@ -1293,6 +1293,12 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     parent?: Record<string, unknown>,
     channelName?: string,
   ) => {
+    const effectiveEnabled =
+      (account.enabled as boolean | undefined) ?? (parent?.enabled as boolean | undefined) ?? true;
+    if (!effectiveEnabled) {
+      return;
+    }
+
     const dmEntry = account.dm;
     const dm =
       dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)

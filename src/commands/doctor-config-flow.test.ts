@@ -126,6 +126,25 @@ describe("doctor config flow", () => {
     ).toBe(true);
   });
 
+  it("does not warn for disabled channels with empty allowlists", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        whatsapp: {
+          enabled: false,
+          groupPolicy: "allowlist",
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.whatsapp.groupPolicy is "allowlist"') &&
+          line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+  });
+
   it("drops unknown keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
