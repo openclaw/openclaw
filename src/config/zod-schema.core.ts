@@ -411,7 +411,7 @@ export const TtsConfigSchema = z
       .optional(),
     minimax: z
       .object({
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
         voiceId: z.string().optional(),
