@@ -40,6 +40,7 @@ function readRoomId(params: Record<string, unknown>, required = true): string {
 export async function handleMatrixAction(
   params: Record<string, unknown>,
   cfg: CoreConfig,
+  accountId?: string | null,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const isActionEnabled = createActionGate(cfg.channels?.matrix?.actions);
@@ -60,7 +61,7 @@ export async function handleMatrixAction(
         });
         return jsonResult({ ok: true, removed: result.removed });
       }
-      await reactMatrixMessage(roomId, messageId, emoji);
+      await reactMatrixMessage(roomId, messageId, emoji, { accountId: accountId ?? undefined });
       return jsonResult({ ok: true, added: emoji });
     }
     const reactions = await listMatrixReactions(roomId, messageId);
@@ -82,10 +83,13 @@ export async function handleMatrixAction(
         const replyToId =
           readStringParam(params, "replyToId") ?? readStringParam(params, "replyTo");
         const threadId = readStringParam(params, "threadId");
+        const audioAsVoice = params.audioAsVoice === true;
         const result = await sendMatrixMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,
+          accountId: accountId ?? undefined,
+          audioAsVoice: audioAsVoice || undefined,
         });
         return jsonResult({ ok: true, result });
       }
