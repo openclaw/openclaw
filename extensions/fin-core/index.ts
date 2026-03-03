@@ -2,15 +2,18 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import { AgentEventSqliteStore } from "./src/agent-event-sqlite-store.js";
+import { DailyBriefGenerator } from "./src/daily-brief.js";
+import type { BriefDataSource } from "./src/daily-brief.js";
 import type { DataGatheringDeps } from "./src/data-gathering.js";
 import { ExchangeHealthStore } from "./src/exchange-health-store.js";
 import { ExchangeRegistry } from "./src/exchange-registry.js";
+import { NotificationRouter, WebhookChannel } from "./src/notification-router.js";
 import { RiskController } from "./src/risk-controller.js";
 import { registerHttpRoutes } from "./src/route-handlers.js";
 import { registerSseRoutes } from "./src/sse-handlers.js";
 import { loadDashboardTemplates } from "./src/template-renderer.js";
 import { registerPaperTools, registerStrategyTools, registerTradingTools } from "./src/tools/index.js";
-import type { RuntimeServices } from "./src/types-http.js";
+import type { PaperEngineLike, RuntimeServices, StrategyRegistryLike } from "./src/types-http.js";
 import type { ExchangeConfig, TradingRiskConfig } from "./src/types.js";
 
 export type { AdapterOrderParams, UnifiedExchangeAdapter } from "./src/adapters/adapter-interface.js";
@@ -20,12 +23,17 @@ export { FutuAdapter } from "./src/adapters/futu-adapter.js";
 export { OpenCtpAdapter } from "./src/adapters/openctp-adapter.js";
 export { createAdapter } from "./src/adapters/adapter-factory.js";
 export { isMarketOpen, resolveMarket, validateLotSize, getMarketTimezone, getEarlyCloseTime } from "./src/market-rules.js";
-export { isHoliday, isHalfDay, getHolidays } from "./src/holiday-calendar.js";
+export { isHoliday, isHalfDay, getHolidays, getLatestHolidayYear, isHolidayDataStale, isMakeupTradingDay } from "./src/holiday-calendar.js";
 export { AgentEventSqliteStore } from "./src/agent-event-sqlite-store.js";
 export { AgentEventStore } from "./src/agent-event-store.js";
 export { ExchangeHealthStore } from "./src/exchange-health-store.js";
 export { ExchangeRegistry } from "./src/exchange-registry.js";
 export { RiskController } from "./src/risk-controller.js";
+export { ApprovalExecutor } from "./src/approval-executor.js";
+export { NotificationRouter, WebhookChannel } from "./src/notification-router.js";
+export { DailyBriefGenerator } from "./src/daily-brief.js";
+export type { DailyBrief, BriefDataSource } from "./src/daily-brief.js";
+export type { NotificationChannel, NotificationEvent } from "./src/notification-router.js";
 export * from "./src/types.js";
 
 const DEFAULT_RISK_CONFIG: TradingRiskConfig = {
@@ -141,6 +149,64 @@ const finCorePlugin = {
       pluginEntries,
     };
 
+    // ── Daily Brief Generator ──
+
+    const briefDataSource: BriefDataSource = {
+      async getRecentEvents(limit: number) {
+        return eventStore.listEvents().slice(0, limit);
+      },
+      async getPortfolioSummary() {
+        const paperEngine = runtime.services?.get?.("fin-paper-engine") as
+          | PaperEngineLike
+          | undefined;
+        if (!paperEngine) return null;
+        const accounts = paperEngine.listAccounts();
+        if (accounts.length === 0) return null;
+        const snapshots = paperEngine.getSnapshots(accounts[0]!.id);
+        const latest = snapshots[snapshots.length - 1];
+        return {
+          totalEquity: latest?.equity ?? accounts[0]!.equity,
+          dailyPnl: latest?.dailyPnl ?? 0,
+        };
+      },
+      async getStrategies() {
+        const stratReg = runtime.services?.get?.("fin-strategy-registry") as
+          | StrategyRegistryLike
+          | undefined;
+        if (!stratReg) return [];
+        return stratReg.list().map((s) => ({
+          name: s.name,
+          level: s.level,
+          status: s.status ?? "unknown",
+          pnl: s.lastBacktest?.totalReturn ?? 0,
+        }));
+      },
+    };
+    const briefGenerator = new DailyBriefGenerator(briefDataSource);
+
+    // ── Notification Router ──
+
+    const notificationRouter = new NotificationRouter();
+    const webhookUrls = (financialConfig as Record<string, unknown> | undefined)?.webhookUrls as
+      | string[]
+      | undefined;
+    if (webhookUrls && webhookUrls.length > 0) {
+      notificationRouter.registerChannel(new WebhookChannel(webhookUrls));
+    }
+
+    api.registerService({
+      id: "fin-notification-router",
+      start: () => {},
+      instance: notificationRouter,
+    } as Parameters<typeof api.registerService>[0]);
+
+    // Hook notification router into event creation — push to all channels on new events.
+    eventStore.subscribe((event) => {
+      notificationRouter
+        .notify({ id: event.id, type: event.type, title: event.title, detail: event.detail, timestamp: event.timestamp })
+        .catch(() => {});
+    });
+
     // ── Register all HTTP routes (API + dashboards) ──
 
     registerHttpRoutes({
@@ -151,6 +217,7 @@ const finCorePlugin = {
       riskController,
       runtime,
       templates,
+      briefGenerator,
     });
 
     // ── Register SSE streams ──

@@ -20,7 +20,9 @@ import type { ExchangeHealthStore } from "./exchange-health-store.js";
 import type { RiskController } from "./risk-controller.js";
 import { registerAiChatRoute } from "./routes-ai-chat.js";
 import { registerAlertRoutes } from "./routes-alerts.js";
+import { registerBriefRoutes } from "./routes-brief.js";
 import { registerStrategyRoutes } from "./routes-strategies.js";
+import type { DailyBriefGenerator } from "./daily-brief.js";
 import type { DashboardTemplates } from "./template-renderer.js";
 import { renderDashboard, renderUnifiedDashboard } from "./template-renderer.js";
 import type {
@@ -40,6 +42,7 @@ export type RouteHandlerDeps = {
   riskController: RiskController;
   runtime: RuntimeServices;
   templates: DashboardTemplates;
+  briefGenerator?: DailyBriefGenerator;
 };
 
 export function registerHttpRoutes(deps: RouteHandlerDeps): void {
@@ -443,6 +446,11 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
 
   // ── AI Chat ──
   registerAiChatRoute(api, runtime);
+
+  // ── Daily Brief ──
+  if (deps.briefGenerator) {
+    registerBriefRoutes(api, deps.briefGenerator);
+  }
 
   // ── Emergency Stop ──
   api.registerHttpRoute({

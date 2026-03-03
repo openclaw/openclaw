@@ -693,6 +693,9 @@ describe("fin-core plugin", () => {
       "/api/v1/finance/risk/evaluate",
       // AI chat
       "/api/v1/finance/ai/chat",
+      // Daily brief
+      "/api/v1/finance/agent/brief",
+      "/api/v1/finance/agent/brief/cached",
     ];
 
     for (const path of expectedRoutes) {
@@ -1571,5 +1574,82 @@ describe("fin-core plugin", () => {
 
     expect(output.statusCode).toBe(302);
     expect(output.headers["Location"]).toBe("/dashboard/overview");
+  });
+
+  // ── Daily Brief ──
+
+  it("POST /agent/brief generates a daily brief", async () => {
+    const { api, services, routes } = createFakeApi();
+    plugin.register(api);
+    injectFullMockServices(services);
+
+    const route = routes.get("/api/v1/finance/agent/brief");
+    expect(route).toBeDefined();
+
+    const recorder = createResponseRecorder();
+    (recorder.res as Record<string, unknown>).write = () => true;
+    await route?.({}, recorder.res);
+    const output = recorder.read();
+
+    expect(output.statusCode).toBe(200);
+    const data = JSON.parse(output.body);
+    expect(data.brief).toBeDefined();
+    expect(data.brief.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(data.brief.summary).toBeDefined();
+    expect(data.brief.portfolio).toBeDefined();
+    expect(data.brief.marketStatus).toBeDefined();
+    expect(data.brief.generatedAt).toBeGreaterThan(0);
+  });
+
+  it("GET /agent/brief/cached returns null before first generate", async () => {
+    const { api, routes } = createFakeApi();
+    plugin.register(api);
+
+    const route = routes.get("/api/v1/finance/agent/brief/cached");
+    expect(route).toBeDefined();
+
+    const recorder = createResponseRecorder();
+    (recorder.res as Record<string, unknown>).write = () => true;
+    await route?.({}, recorder.res);
+    const output = recorder.read();
+
+    expect(output.statusCode).toBe(200);
+    const data = JSON.parse(output.body);
+    expect(data.brief).toBeNull();
+  });
+
+  it("GET /agent/brief/cached returns last brief after generate", async () => {
+    const { api, services, routes } = createFakeApi();
+    plugin.register(api);
+    injectFullMockServices(services);
+
+    // Generate first
+    const genRoute = routes.get("/api/v1/finance/agent/brief");
+    const genRec = createResponseRecorder();
+    (genRec.res as Record<string, unknown>).write = () => true;
+    await genRoute?.({}, genRec.res);
+
+    // Now fetch cached
+    const cachedRoute = routes.get("/api/v1/finance/agent/brief/cached");
+    const cachedRec = createResponseRecorder();
+    (cachedRec.res as Record<string, unknown>).write = () => true;
+    await cachedRoute?.({}, cachedRec.res);
+
+    const data = JSON.parse(cachedRec.read().body);
+    expect(data.brief).toBeDefined();
+    expect(data.brief.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  // ── Notification Router Service ──
+
+  it("registers fin-notification-router service", () => {
+    const { api, services } = createFakeApi();
+    plugin.register(api);
+
+    expect(services.has("fin-notification-router")).toBe(true);
+    const router = services.get("fin-notification-router") as {
+      listChannels: () => Array<{ id: string; name: string; enabled: boolean }>;
+    };
+    expect(router.listChannels).toBeDefined();
   });
 });
