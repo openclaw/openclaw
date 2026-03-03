@@ -70,6 +70,18 @@ function hasRateLimitTpmHint(raw: string): boolean {
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
 }
 
+function isTemplateOrJinjaError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("jinja") ||
+    lower.includes("chat template") ||
+    lower.includes("raise_exception") ||
+    lower.includes("no user query found in messages") ||
+    /\btemplate\s*(render|compil|pars|execut)\w*\s*(error|fail)/i.test(message) ||
+    /\b(template_?error|jinja_?error)\b/i.test(message)
+  );
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -82,6 +94,10 @@ export function isContextOverflowError(errorMessage?: string): boolean {
   }
 
   if (isReasoningConstraintErrorMessage(errorMessage)) {
+    return false;
+  }
+
+  if (isTemplateOrJinjaError(errorMessage)) {
     return false;
   }
 
@@ -131,6 +147,10 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   }
 
   if (isReasoningConstraintErrorMessage(errorMessage)) {
+    return false;
+  }
+
+  if (isTemplateOrJinjaError(errorMessage)) {
     return false;
   }
 

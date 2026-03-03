@@ -301,6 +301,27 @@ describe("isContextOverflowError", () => {
       expect(isContextOverflowError(sample)).toBe(false);
     }
   });
+
+  it("does not classify Jinja template errors as context overflow", () => {
+    expect(isContextOverflowError("No user query found in messages")).toBe(false);
+    expect(isContextOverflowError("jinja2.exceptions.TemplateError: No user query found")).toBe(
+      false,
+    );
+    expect(isContextOverflowError("Chat template error: raise_exception('No user query')")).toBe(
+      false,
+    );
+  });
+
+  it("excludes template errors even when overflow keywords are present", () => {
+    expect(
+      isContextOverflowError(
+        "jinja2.exceptions.TemplateError: context length exceeded in template",
+      ),
+    ).toBe(false);
+    expect(
+      isContextOverflowError("Chat template error: request size exceeds model context window"),
+    ).toBe(false);
+  });
 });
 
 describe("error classifiers", () => {
@@ -389,6 +410,22 @@ describe("isLikelyContextOverflowError", () => {
     for (const sample of samples) {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
+  });
+
+  it("does not classify template errors as likely context overflow", () => {
+    expect(isLikelyContextOverflowError("No user query found in messages")).toBe(false);
+    expect(isLikelyContextOverflowError("Jinja template compilation failed")).toBe(false);
+  });
+
+  it("excludes template errors even when hint keywords are present", () => {
+    expect(
+      isLikelyContextOverflowError(
+        "context window limit hit: no user query found in messages",
+      ),
+    ).toBe(false);
+    expect(
+      isLikelyContextOverflowError("prompt too long: jinja template render failed"),
+    ).toBe(false);
   });
 });
 
