@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { TtsConfig } from "../config/types.tts.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -72,6 +73,8 @@ export function createOpenClawTools(options?: {
   senderIsOwner?: boolean;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
+  /** Per-agent TTS overrides (from agent config). */
+  agentTts?: TtsConfig;
 }): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
   const imageTool = options?.agentDir?.trim()
@@ -144,6 +147,7 @@ export function createOpenClawTools(options?: {
     createTtsTool({
       agentChannel: options?.agentChannel,
       config: options?.config,
+      agentTts: options?.agentTts,
     }),
     createGatewayTool({
       agentSessionKey: options?.agentSessionKey,

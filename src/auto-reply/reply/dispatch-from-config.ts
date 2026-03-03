@@ -1,6 +1,7 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../../config/sessions.js";
+import type { TtsConfig } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -71,6 +72,8 @@ const resolveSessionStoreEntry = (
 ): {
   sessionKey?: string;
   entry?: SessionEntry;
+  agentId?: string;
+  agentTts?: TtsConfig;
 } => {
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
@@ -79,16 +82,21 @@ const resolveSessionStoreEntry = (
     return {};
   }
   const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const agentTts = cfg.agents?.list?.find((agent) => agent.id === agentId)?.tts;
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   try {
     const store = loadSessionStore(storePath);
     return {
       sessionKey,
       entry: store[sessionKey.toLowerCase()] ?? store[sessionKey],
+      agentId,
+      agentTts,
     };
   } catch {
     return {
       sessionKey,
+      agentId,
+      agentTts,
     };
   }
 };
@@ -165,6 +173,7 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   const sessionStoreEntry = resolveSessionStoreEntry(ctx, cfg);
+  const agentTts = sessionStoreEntry.agentTts;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
@@ -331,6 +340,7 @@ export async function dispatchReplyFromConfig(params: {
       sessionKey,
       inboundAudio,
       sessionTtsAuto,
+      agentTts,
       ttsChannel,
       shouldRouteToOriginating,
       originatingChannel,
@@ -381,6 +391,7 @@ export async function dispatchReplyFromConfig(params: {
             const ttsPayload = await maybeApplyTtsToPayload({
               payload,
               cfg,
+              agentTts,
               channel: ttsChannel,
               kind: "tool",
               inboundAudio,
@@ -417,6 +428,7 @@ export async function dispatchReplyFromConfig(params: {
             const ttsPayload = await maybeApplyTtsToPayload({
               payload,
               cfg,
+              agentTts,
               channel: ttsChannel,
               kind: "block",
               inboundAudio,
@@ -447,6 +459,7 @@ export async function dispatchReplyFromConfig(params: {
       const ttsReply = await maybeApplyTtsToPayload({
         payload: reply,
         cfg,
+        agentTts,
         channel: ttsChannel,
         kind: "final",
         inboundAudio,
@@ -479,7 +492,7 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
-    const ttsMode = resolveTtsConfig(cfg).mode ?? "final";
+    const ttsMode = resolveTtsConfig(cfg, agentTts).mode ?? "final";
     // Generate TTS-only reply after block streaming completes (when there's no final reply).
     // This handles the case where block streaming succeeds and drops final payloads,
     // but we still want TTS audio to be generated from the accumulated block content.
@@ -493,6 +506,7 @@ export async function dispatchReplyFromConfig(params: {
         const ttsSyntheticReply = await maybeApplyTtsToPayload({
           payload: { text: accumulatedBlockText },
           cfg,
+          agentTts,
           channel: ttsChannel,
           kind: "final",
           inboundAudio,

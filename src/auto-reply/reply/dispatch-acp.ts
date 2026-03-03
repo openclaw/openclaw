@@ -9,7 +9,7 @@ import {
 } from "../../acp/runtime/session-identity.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { TtsAutoMode } from "../../config/types.tts.js";
+import type { TtsAutoMode, TtsConfig } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -150,6 +150,7 @@ export async function tryDispatchAcpReply(params: {
   sessionKey?: string;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
+  agentTts?: TtsConfig;
   ttsChannel?: string;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
@@ -181,6 +182,7 @@ export async function tryDispatchAcpReply(params: {
     dispatcher: params.dispatcher,
     inboundAudio: params.inboundAudio,
     sessionTtsAuto: params.sessionTtsAuto,
+    agentTts: params.agentTts,
     ttsChannel: params.ttsChannel,
     shouldRouteToOriginating: params.shouldRouteToOriginating,
     originatingChannel: params.originatingChannel,
@@ -257,13 +259,14 @@ export async function tryDispatchAcpReply(params: {
     });
 
     await projector.flush(true);
-    const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
+    const ttsMode = resolveTtsConfig(params.cfg, params.agentTts).mode ?? "final";
     const accumulatedBlockText = delivery.getAccumulatedBlockText();
     if (ttsMode === "final" && delivery.getBlockCount() > 0 && accumulatedBlockText.trim()) {
       try {
         const ttsSyntheticReply = await maybeApplyTtsToPayload({
           payload: { text: accumulatedBlockText },
           cfg: params.cfg,
+          agentTts: params.agentTts,
           channel: params.ttsChannel,
           kind: "final",
           inboundAudio: params.inboundAudio,
