@@ -1253,7 +1253,7 @@ Docs: https://docs.openclaw.ai
 - iOS/Gateway: wake disconnected iOS nodes via APNs before `nodes.invoke` and auto-reconnect gateway sessions on silent push wake to reduce invoke failures while the app is backgrounded. (#20332) Thanks @mbelinky.
 - Gateway/CLI: add paired-device hygiene flows with `device.pair.remove`, plus `openclaw devices remove` and guarded `openclaw devices clear --yes [--pending]` commands for removing paired entries and optionally rejecting pending requests. (#20057) Thanks @mbelinky.
 - Mattermost: add opt-in native slash command support with registration lifecycle, callback route/token validation, multi-account token routing, and callback URL/path configuration (`channels.mattermost.commands.*`). (#16515) Thanks @echo931.
-- Mattermost: harden native slash callback auth-bypass behavior for configurable callback paths, add callback validation coverage, and clarify callback reachability/allowlist docs. (#32467) Thanks @mukhtharcm.
+- Mattermost: harden native slash callback auth-bypass behavior for configurable callback paths, add callback validation coverage, and clarify callback reachability/allowlist docs. (#32467) Thanks @mukhtharcm and @echo931.
 - iOS/APNs: add push registration and notification-signing configuration for node delivery. (#20308) Thanks @mbelinky.
 - Gateway/APNs: add a push-test pipeline for APNs delivery validation in gateway flows. (#20307) Thanks @mbelinky.
 - Security/Audit: add `gateway.http.no_auth` findings when `gateway.auth.mode="none"` leaves Gateway HTTP APIs reachable, with loopback warning and remote-exposure critical severity, plus regression coverage and docs updates.
