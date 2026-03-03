@@ -1304,7 +1304,6 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
-  exaNumResults?: number;
   exaHighlightsMaxChars?: number;
 }): Promise<Record<string, unknown>> {
   const providerSpecificKey =
@@ -1315,7 +1314,7 @@ async function runWebSearch(params: {
         : params.provider === "kimi"
           ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
           : params.provider === "exa"
-            ? `${params.exaNumResults ?? DEFAULT_EXA_NUM_RESULTS}:${params.exaHighlightsMaxChars ?? DEFAULT_EXA_HIGHLIGHTS_MAX_CHARS}`
+            ? `${params.count}:${params.exaHighlightsMaxChars ?? DEFAULT_EXA_HIGHLIGHTS_MAX_CHARS}`
             : "";
   const cacheKey = normalizeCacheKey(
     `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
@@ -1445,7 +1444,7 @@ async function runWebSearch(params: {
     const { results, citations } = await runExaSearch({
       query: params.query,
       apiKey: params.apiKey,
-      numResults: params.exaNumResults ?? DEFAULT_EXA_NUM_RESULTS,
+      numResults: params.count,
       highlightsMaxChars: params.exaHighlightsMaxChars ?? DEFAULT_EXA_HIGHLIGHTS_MAX_CHARS,
       timeoutSeconds: params.timeoutSeconds,
     });
@@ -1607,7 +1606,9 @@ export function createWebSearchTool(options?: {
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
       const count =
-        readNumberParam(params, "count", { integer: true }) ?? search?.maxResults ?? undefined;
+        readNumberParam(params, "count", { integer: true }) ??
+        search?.maxResults ??
+        (provider === "exa" ? resolveExaNumResults(exaConfig) : undefined);
       const country = readStringParam(params, "country");
       if (country && provider !== "brave" && provider !== "perplexity") {
         return jsonResult({
@@ -1765,7 +1766,6 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
-        exaNumResults: resolveExaNumResults(exaConfig),
         exaHighlightsMaxChars: resolveExaHighlightsMaxChars(exaConfig),
       });
       return jsonResult(result);
