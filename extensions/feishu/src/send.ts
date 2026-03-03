@@ -35,13 +35,18 @@ function parseInteractiveCardContent(parsed: unknown): string {
     return "[Interactive Card]";
   }
 
-  const candidate = parsed as { elements?: unknown };
-  if (!Array.isArray(candidate.elements)) {
+  const candidate = parsed as { elements?: unknown; body?: { elements?: unknown } };
+  const elements = Array.isArray(candidate.elements)
+    ? candidate.elements
+    : Array.isArray(candidate.body?.elements)
+      ? candidate.body.elements
+      : null;
+  if (!elements) {
     return "[Interactive Card]";
   }
 
   const texts: string[] = [];
-  for (const element of candidate.elements) {
+  for (const element of elements) {
     if (!element || typeof element !== "object") {
       continue;
     }

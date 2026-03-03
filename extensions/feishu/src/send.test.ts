@@ -69,6 +69,43 @@ describe("getMessageFeishu", () => {
     );
   });
 
+  it("extracts text content from interactive card body elements", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_card_body",
+            chat_id: "oc_card_body",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                schema: "2.0",
+                body: {
+                  elements: [{ tag: "markdown", content: "card body markdown" }],
+                },
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_card_body",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_card_body",
+        chatId: "oc_card_body",
+        contentType: "interactive",
+        content: "card body markdown",
+      }),
+    );
+  });
+
   it("extracts text content from post messages", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
