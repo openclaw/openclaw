@@ -28,10 +28,13 @@ vi.mock("./targets.js", () => ({
   resolveReceiveIdType: resolveReceiveIdTypeMock,
 }));
 
+const getAudioDurationMsMock = vi.hoisted(() => vi.fn());
+
 vi.mock("./runtime.js", () => ({
   getFeishuRuntime: () => ({
     media: {
       loadWebMedia: loadWebMediaMock,
+      getAudioDurationMs: getAudioDurationMsMock,
     },
   }),
 }));
@@ -56,6 +59,8 @@ function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
 describe("sendMediaFeishu msg_type routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+
+    getAudioDurationMsMock.mockResolvedValue(undefined);
 
     resolveFeishuAccountMock.mockReturnValue({
       configured: true,
@@ -225,6 +230,59 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     const callData = messageReplyMock.mock.calls[0][0].data;
     expect(callData).not.toHaveProperty("reply_in_thread");
+  });
+
+  it("passes duration to uploadFileFeishu for local-path opus TTS audio (#33043)", async () => {
+    getAudioDurationMsMock.mockResolvedValue(12345);
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("opus-audio"),
+      fileName: "tts.opus",
+      kind: "audio",
+      contentType: "audio/ogg",
+    });
+
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaUrl: "/tmp/openclaw-tts/audio.opus",
+    });
+
+    expect(getAudioDurationMsMock).toHaveBeenCalledWith("/tmp/openclaw-tts/audio.opus");
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ file_type: "opus", duration: 12345 }),
+      }),
+    );
+  });
+
+  it("omits duration when getAudioDurationMs returns undefined (ffprobe unavailable)", async () => {
+    getAudioDurationMsMock.mockResolvedValue(undefined);
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("opus-audio"),
+      fileName: "tts.opus",
+      kind: "audio",
+      contentType: "audio/ogg",
+    });
+
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaUrl: "/tmp/openclaw-tts/audio.opus",
+    });
+
+    const uploadCall = fileCreateMock.mock.calls[0][0];
+    expect(uploadCall.data).not.toHaveProperty("duration");
+  });
+
+  it("does not probe duration for opus sent via mediaBuffer (no local path)", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("audio"),
+      fileName: "voice.opus",
+    });
+
+    expect(getAudioDurationMsMock).not.toHaveBeenCalled();
   });
 
   it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {
