@@ -11,7 +11,7 @@ describe("embeddings-ollama", () => {
           headers: { "content-type": "application/json" },
         }),
     );
-    globalThis.fetch = fetchMock;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     const { provider } = await createOllamaEmbeddingProvider({
       config: {} as OpenClawConfig,
@@ -36,7 +36,7 @@ describe("embeddings-ollama", () => {
           headers: { "content-type": "application/json" },
         }),
     );
-    globalThis.fetch = fetchMock;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     const { provider } = await createOllamaEmbeddingProvider({
       config: {
