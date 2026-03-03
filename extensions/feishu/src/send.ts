@@ -315,6 +315,16 @@ export async function getMessageFeishu(params: {
 
     const msgType = item.msg_type ?? "text";
     const rawContent = item.body?.content ?? "";
+
+    // DEBUG: log raw card body to diagnose extraction issues
+    // Remove before merging
+    if (msgType === "interactive") {
+      console.log(
+        `[feishu DEBUG] quoted interactive card body.content (${rawContent.length} chars):`,
+        rawContent.slice(0, 500),
+      );
+    }
+
     const content = parseQuotedMessageContent(rawContent, msgType);
 
     return {
