@@ -44,12 +44,29 @@ export class OpenCtpAdapter implements UnifiedExchangeAdapter {
   }
 
   async placeOrder(params: AdapterOrderParams): Promise<OrderResult> {
+    let orderType = params.type;
+    let limitPrice = params.price;
+
+    // CTP does not support true market orders — convert to aggressive limit
+    if (params.type === "market") {
+      const quote = await this.fetchTicker(params.symbol);
+      const lastPrice = quote.last;
+      if (lastPrice <= 0) {
+        throw new Error(`Cannot convert market order: no valid quote for ${params.symbol}`);
+      }
+      // Offset 0.5% toward the favorable direction to ensure fill
+      limitPrice = params.side === "buy"
+        ? Math.round(lastPrice * 1.005 * 100) / 100
+        : Math.round(lastPrice * 0.995 * 100) / 100;
+      orderType = "limit";
+    }
+
     const data = await this.request<CtpOrderResponse>("POST", "/order", {
       symbol: params.symbol,
       side: params.side,
-      type: params.type,
+      type: orderType,
       qty: params.amount,
-      limitPrice: params.price,
+      limitPrice,
       timeInForce: params.timeInForce ?? "day",
     });
 
@@ -58,10 +75,10 @@ export class OpenCtpAdapter implements UnifiedExchangeAdapter {
       exchangeId: this.exchangeId,
       symbol: params.symbol,
       side: params.side,
-      type: params.type,
+      type: params.type, // Return original type to keep conversion transparent
       amount: params.amount,
       filledAmount: data.filledQty ?? 0,
-      price: params.price ?? data.filledPrice ?? 0,
+      price: limitPrice ?? data.filledPrice ?? 0,
       avgFillPrice: data.filledPrice || undefined,
       status: mapCtpStatus(data.status ?? ""),
       timestamp: data.timestamp ?? Date.now(),
@@ -156,9 +173,15 @@ export class OpenCtpAdapter implements UnifiedExchangeAdapter {
   // ── internal ──
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    // Inject CTP authentication headers when credentials are configured
+    if (this.ctpBrokerId) headers["X-CTP-BrokerID"] = this.ctpBrokerId;
+    if (this.ctpAppId) headers["X-CTP-AppID"] = this.ctpAppId;
+    if (this.ctpAuthCode) headers["X-CTP-AuthCode"] = this.ctpAuthCode;
+
     const res = await fetch(`${this.bridgeUrl}${path}`, {
       method,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
+      headers,
       body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(10_000),
     });

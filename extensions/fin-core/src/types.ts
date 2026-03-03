@@ -163,3 +163,18 @@ export function inferMarketType(exchangeOrConfig: ExchangeId | ExchangeConfig): 
 export function isCryptoExchange(id: string): id is CryptoExchangeId {
   return CRYPTO_EXCHANGES.has(id);
 }
+
+/** Result of processing an approval action. */
+export type ApprovalResult = {
+  eventId: string;
+  action: "approved" | "rejected" | "expired";
+  order?: OrderResult;
+  error?: string;
+};
+
+/** Result of sending a notification through a channel. */
+export type NotifyResult = {
+  channel: string;
+  success: boolean;
+  error?: string;
+};

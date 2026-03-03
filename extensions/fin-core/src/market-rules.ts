@@ -4,7 +4,7 @@
  * Includes holiday calendar integration for accurate open/close detection.
  */
 import type { MarketType } from "./types.js";
-import { isHalfDay, isHoliday } from "./holiday-calendar.js";
+import { isHalfDay, isHoliday, isMakeupTradingDay } from "./holiday-calendar.js";
 
 // ── Types ──
 
@@ -86,9 +86,11 @@ export function isMarketOpen(market: MarketType, timestamp?: number): boolean {
 
   const date = new Date(timestamp ?? Date.now());
 
-  // Weekend check
+  // Weekend check — with makeup day bypass for CN A-share
   const dayInTz = getLocalDayOfWeek(date, def.timezone);
-  if (dayInTz === 0 || dayInTz === 6) return false;
+  if (dayInTz === 0 || dayInTz === 6) {
+    if (!isMakeupTradingDay(market, date)) return false;
+  }
 
   // Holiday check
   if (isHoliday(market, date)) return false;
@@ -131,23 +133,28 @@ export function getMarketTimezone(market: MarketType): string {
   return MARKET_REGISTRY[market]?.timezone ?? "UTC";
 }
 
-/** Validate lot size for a given market and side. */
+/**
+ * Validate lot size for a given market and side.
+ * @param lotSizeOverride — override the default lot size (e.g. HK stocks have variable board lots)
+ */
 export function validateLotSize(
   market: MarketType,
   side: "buy" | "sell",
   quantity: number,
+  lotSizeOverride?: number,
 ): { valid: boolean; reason?: string } {
   const def = MARKET_REGISTRY[market];
   if (!def) return { valid: true };
 
   const rule = def.lotSize;
-  if (rule.minLot === 0) return { valid: true };
+  const effectiveLot = lotSizeOverride ?? rule.minLot;
+  if (effectiveLot === 0) return { valid: true };
 
   // Only buy orders need multiple check (sell can be odd lots)
-  if (side === "buy" && rule.buyMustBeMultiple && quantity % rule.minLot !== 0) {
+  if (side === "buy" && rule.buyMustBeMultiple && quantity % effectiveLot !== 0) {
     return {
       valid: false,
-      reason: `${market} buy quantity must be a multiple of ${rule.minLot}, got ${quantity}`,
+      reason: `${market} buy quantity must be a multiple of ${effectiveLot}, got ${quantity}`,
     };
   }
 

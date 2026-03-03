@@ -111,6 +111,36 @@ describe("isMarketOpen", () => {
     expect(isMarketOpen("cn-a-share", springFestival)).toBe(false);
   });
 
+  // ── Makeup trading days (周末补班) ──
+
+  it("CN A-share open on makeup Saturday (2026-02-14 Spring Festival makeup)", () => {
+    // 2026-02-14 is a Saturday, 10:00 CST = 02:00 UTC — makeup trading day
+    const makeupSat = Date.UTC(2026, 1, 14, 2, 0);
+    expect(isMarketOpen("cn-a-share", makeupSat)).toBe(true);
+  });
+
+  it("CN A-share open on makeup Sunday (2026-02-15 Spring Festival makeup)", () => {
+    // 2026-02-15 is a Sunday, 10:00 CST = 02:00 UTC — makeup trading day
+    const makeupSun = Date.UTC(2026, 1, 15, 2, 0);
+    expect(isMarketOpen("cn-a-share", makeupSun)).toBe(true);
+  });
+
+  it("CN A-share closed on regular Saturday even during session hours", () => {
+    // 2026-03-07 Saturday, 10:00 CST = 02:00 UTC — NOT a makeup day
+    const regularSat = Date.UTC(2026, 2, 7, 2, 0);
+    expect(isMarketOpen("cn-a-share", regularSat)).toBe(false);
+  });
+
+  it("CN A-share makeup day respects session hours", () => {
+    // 2026-02-14 Saturday (makeup), 12:00 CST = 04:00 UTC — lunch break
+    const makeupLunch = Date.UTC(2026, 1, 14, 4, 0);
+    expect(isMarketOpen("cn-a-share", makeupLunch)).toBe(false);
+
+    // 2026-02-14 Saturday (makeup), 14:00 CST = 06:00 UTC — afternoon session
+    const makeupAfternoon = Date.UTC(2026, 1, 14, 6, 0);
+    expect(isMarketOpen("cn-a-share", makeupAfternoon)).toBe(true);
+  });
+
   // ── Holiday integration ──
 
   it("US market closed on Thanksgiving", () => {
@@ -200,5 +230,39 @@ describe("validateLotSize", () => {
   it("CN A-share sell can be odd lots", () => {
     expect(validateLotSize("cn-a-share", "sell", 50)).toEqual({ valid: true });
     expect(validateLotSize("cn-a-share", "sell", 1)).toEqual({ valid: true });
+  });
+
+  // ── lotSizeOverride (HK variable board lots) ──
+
+  it("HK equity with lotSizeOverride=500: buy 500 is valid", () => {
+    expect(validateLotSize("hk-equity", "buy", 500, 500)).toEqual({ valid: true });
+    expect(validateLotSize("hk-equity", "buy", 1000, 500)).toEqual({ valid: true });
+  });
+
+  it("HK equity with lotSizeOverride=500: buy 300 is invalid", () => {
+    const result = validateLotSize("hk-equity", "buy", 300, 500);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain("multiple of 500");
+  });
+
+  it("HK equity with lotSizeOverride=500: buy 100 is invalid", () => {
+    const result = validateLotSize("hk-equity", "buy", 100, 500);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain("multiple of 500");
+  });
+
+  it("HK equity sell ignores lotSizeOverride", () => {
+    expect(validateLotSize("hk-equity", "sell", 50, 500)).toEqual({ valid: true });
+  });
+
+  it("lotSizeOverride does not affect markets without buyMustBeMultiple", () => {
+    expect(validateLotSize("us-equity", "buy", 7, 100)).toEqual({ valid: true });
+  });
+
+  it("without lotSizeOverride, HK defaults to 100", () => {
+    expect(validateLotSize("hk-equity", "buy", 200)).toEqual({ valid: true });
+    const result = validateLotSize("hk-equity", "buy", 50);
+    expect(result.valid).toBe(false);
+    expect(result.reason).toContain("multiple of 100");
   });
 });

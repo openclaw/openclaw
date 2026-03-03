@@ -135,7 +135,18 @@ describe("OpenCtpAdapter", () => {
       expect(body.limitPrice).toBe(1800.5);
     });
 
-    it("places a market sell order", async () => {
+    it("places a market sell order (converts to aggressive limit)", async () => {
+      // First call: fetchTicker to get quote
+      mockFetch.mockResolvedValueOnce(
+        mockJsonResponse({
+          last: 1800.0,
+          bid: 1799.5,
+          ask: 1800.5,
+          volume: 5000000,
+          timestamp: 1709500000000,
+        }),
+      );
+      // Second call: placeOrder with converted limit price
       mockFetch.mockResolvedValueOnce(
         mockJsonResponse({
           orderId: "CTP-ORD-002",
@@ -157,6 +168,10 @@ describe("OpenCtpAdapter", () => {
       expect(result.status).toBe("closed");
       expect(result.filledAmount).toBe(100);
       expect(result.avgFillPrice).toBe(1795.0);
+      // Type should remain "market" (transparent to caller)
+      expect(result.type).toBe("market");
+      // Should have made 2 fetch calls (quote + order)
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
     it("throws on order rejection", async () => {
@@ -339,6 +354,10 @@ describe("OpenCtpAdapter", () => {
   describe("CTP status mapping", () => {
     it("maps submitted/partial to open", async () => {
       for (const status of ["submitted", "partial", "未成交", "部分成交"]) {
+        // Market orders now need a quote call first
+        mockFetch.mockResolvedValueOnce(
+          mockJsonResponse({ last: 1800, bid: 1799.5, ask: 1800.5, timestamp: Date.now() }),
+        );
         mockFetch.mockResolvedValueOnce(
           mockJsonResponse({ orderId: "o1", status, filledQty: 0, filledPrice: 0, timestamp: Date.now() }),
         );
@@ -353,6 +372,9 @@ describe("OpenCtpAdapter", () => {
     it("maps filled/全部成交 to closed", async () => {
       for (const status of ["filled", "全部成交"]) {
         mockFetch.mockResolvedValueOnce(
+          mockJsonResponse({ last: 1800, bid: 1799.5, ask: 1800.5, timestamp: Date.now() }),
+        );
+        mockFetch.mockResolvedValueOnce(
           mockJsonResponse({ orderId: "o1", status, filledQty: 100, filledPrice: 1800, timestamp: Date.now() }),
         );
         const adapter = createAdapter();
@@ -365,6 +387,9 @@ describe("OpenCtpAdapter", () => {
 
     it("maps cancelled/已撤单 to canceled", async () => {
       for (const status of ["cancelled", "已撤单"]) {
+        mockFetch.mockResolvedValueOnce(
+          mockJsonResponse({ last: 1800, bid: 1799.5, ask: 1800.5, timestamp: Date.now() }),
+        );
         mockFetch.mockResolvedValueOnce(
           mockJsonResponse({ orderId: "o1", status, filledQty: 0, filledPrice: 0, timestamp: Date.now() }),
         );
@@ -379,6 +404,9 @@ describe("OpenCtpAdapter", () => {
     it("maps rejected/已废单 to rejected", async () => {
       for (const status of ["rejected", "已废单"]) {
         mockFetch.mockResolvedValueOnce(
+          mockJsonResponse({ last: 1800, bid: 1799.5, ask: 1800.5, timestamp: Date.now() }),
+        );
+        mockFetch.mockResolvedValueOnce(
           mockJsonResponse({ orderId: "o1", status, filledQty: 0, filledPrice: 0, timestamp: Date.now() }),
         );
         const adapter = createAdapter();
@@ -387,6 +415,171 @@ describe("OpenCtpAdapter", () => {
         });
         expect(result.status).toBe("rejected");
       }
+    });
+  });
+
+  describe("CTP auth headers", () => {
+    it("includes X-CTP-BrokerID, X-CTP-AppID, X-CTP-AuthCode in requests", async () => {
+      mockFetch.mockResolvedValueOnce(mockJsonResponse({ balance: 100000, available: 80000 }));
+
+      const adapter = createAdapter();
+      await adapter.fetchBalance();
+
+      const [, init] = mockFetch.mock.calls[0];
+      const headers = init?.headers as Record<string, string>;
+      expect(headers["X-CTP-BrokerID"]).toBe("9999");
+      expect(headers["X-CTP-AppID"]).toBe("simnow_client_test");
+      expect(headers["X-CTP-AuthCode"]).toBe("0000000000000000");
+      expect(headers["Content-Type"]).toBe("application/json");
+    });
+
+    it("omits empty auth headers when credentials are not provided", async () => {
+      mockFetch.mockResolvedValueOnce(mockJsonResponse({ balance: 50000, available: 50000 }));
+
+      const adapter = new OpenCtpAdapter(
+        "ctp-minimal",
+        true,
+        "tcp://127.0.0.1:10130",
+        "",   // empty brokerId
+      );
+      await adapter.fetchBalance();
+
+      const [, init] = mockFetch.mock.calls[0];
+      const headers = init?.headers as Record<string, string>;
+      expect(headers["X-CTP-BrokerID"]).toBeUndefined();
+      expect(headers["X-CTP-AppID"]).toBeUndefined();
+      expect(headers["X-CTP-AuthCode"]).toBeUndefined();
+    });
+
+    it("sends auth headers on every request type", async () => {
+      // Test with fetchTicker (GET request)
+      mockFetch.mockResolvedValueOnce(
+        mockJsonResponse({ last: 1800, bid: 1799, ask: 1801, volume: 1000, timestamp: Date.now() }),
+      );
+
+      const adapter = createAdapter();
+      await adapter.fetchTicker("600519.SS");
+
+      const [, init] = mockFetch.mock.calls[0];
+      const headers = init?.headers as Record<string, string>;
+      expect(headers["X-CTP-BrokerID"]).toBe("9999");
+    });
+  });
+
+  describe("market order → aggressive limit conversion", () => {
+    it("market buy converts to limit at lastPrice * 1.005", async () => {
+      // Quote response
+      mockFetch.mockResolvedValueOnce(
+        mockJsonResponse({ last: 1000.0, bid: 999.5, ask: 1000.5, volume: 500000, timestamp: Date.now() }),
+      );
+      // Order response
+      mockFetch.mockResolvedValueOnce(
+        mockJsonResponse({ orderId: "MKT-001", status: "submitted", filledQty: 0, filledPrice: 0, timestamp: Date.now() }),
+      );
+
+      const adapter = createAdapter();
+      const result = await adapter.placeOrder({
+        symbol: "601398.SS",
+        side: "buy",
+        type: "market",
+        amount: 100,
+      });
+
+      // Verify 2 fetch calls: quote + order
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      // First call should be GET quote
+      const [quoteUrl] = mockFetch.mock.calls[0];
+      expect(quoteUrl).toContain("/quote/601398.SS");
+
+      // Second call should be POST order with limit type and aggressive price
+      const [orderUrl, orderInit] = mockFetch.mock.calls[1];
+      expect(orderUrl).toContain("/order");
+      const body = JSON.parse(orderInit?.body as string);
+      expect(body.type).toBe("limit");
+      expect(body.limitPrice).toBe(1005.0); // 1000 * 1.005
+
+      // Result type should remain "market" (transparent)
+      expect(result.type).toBe("market");
+      expect(result.price).toBe(1005.0);
+    });
+
+    it("market sell converts to limit at lastPrice * 0.995", async () => {
+      mockFetch.mockResolvedValueOnce(
+        mockJsonResponse({ last: 2000.0, bid: 1999.0, ask: 2001.0, volume: 300000, timestamp: Date.now() }),
+      );
+      mockFetch.mockResolvedValueOnce(
+        mockJsonResponse({ orderId: "MKT-002", status: "submitted", filledQty: 0, filledPrice: 0, timestamp: Date.now() }),
+      );
+
+      const adapter = createAdapter();
+      const result = await adapter.placeOrder({
+        symbol: "000858.SZ",
+        side: "sell",
+        type: "market",
+        amount: 200,
+      });
+
+      const [, orderInit] = mockFetch.mock.calls[1];
+      const body = JSON.parse(orderInit?.body as string);
+      expect(body.type).toBe("limit");
+      expect(body.limitPrice).toBe(1990.0); // 2000 * 0.995
+
+      expect(result.type).toBe("market");
+      expect(result.price).toBe(1990.0);
+    });
+
+    it("limit orders are NOT converted (pass through directly)", async () => {
+      mockFetch.mockResolvedValueOnce(
+        mockJsonResponse({ orderId: "LMT-001", status: "submitted", filledQty: 0, filledPrice: 0, timestamp: Date.now() }),
+      );
+
+      const adapter = createAdapter();
+      await adapter.placeOrder({
+        symbol: "600519.SS",
+        side: "buy",
+        type: "limit",
+        amount: 100,
+        price: 1800.5,
+      });
+
+      // Only 1 fetch call (no quote needed for limit)
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1]?.body as string);
+      expect(body.type).toBe("limit");
+      expect(body.limitPrice).toBe(1800.5);
+    });
+
+    it("throws when quote returns zero price", async () => {
+      mockFetch.mockResolvedValueOnce(
+        mockJsonResponse({ last: 0, bid: 0, ask: 0, volume: 0, timestamp: Date.now() }),
+      );
+
+      const adapter = createAdapter();
+      await expect(
+        adapter.placeOrder({ symbol: "600519.SS", side: "buy", type: "market", amount: 100 }),
+      ).rejects.toThrow(/no valid quote/);
+    });
+
+    it("market order price is rounded to 2 decimal places", async () => {
+      mockFetch.mockResolvedValueOnce(
+        mockJsonResponse({ last: 5.23, bid: 5.22, ask: 5.24, volume: 100000, timestamp: Date.now() }),
+      );
+      mockFetch.mockResolvedValueOnce(
+        mockJsonResponse({ orderId: "MKT-003", status: "submitted", filledQty: 0, filledPrice: 0, timestamp: Date.now() }),
+      );
+
+      const adapter = createAdapter();
+      await adapter.placeOrder({
+        symbol: "601398.SS",
+        side: "buy",
+        type: "market",
+        amount: 100,
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[1][1]?.body as string);
+      // 5.23 * 1.005 = 5.25615 → rounded to 5.26
+      expect(body.limitPrice).toBe(5.26);
     });
   });
 });
