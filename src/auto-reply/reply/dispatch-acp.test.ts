@@ -49,6 +49,18 @@ const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
 
+const boundDeliveryRouterMocks = vi.hoisted(() => ({
+  resolveDestination: vi.fn(
+    (
+      _input: unknown,
+    ): { binding: SessionBindingRecord | null; mode: "bound" | "fallback"; reason: string } => ({
+      binding: null,
+      mode: "fallback",
+      reason: "no-active-binding",
+    }),
+  ),
+}));
+
 vi.mock("../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => managerMocks,
 }));
@@ -81,6 +93,12 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
 vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
     listBySession: (sessionKey: string) => bindingServiceMocks.listBySession(sessionKey),
+  }),
+}));
+
+vi.mock("../../infra/outbound/bound-delivery-router.js", () => ({
+  createBoundDeliveryRouter: () => ({
+    resolveDestination: (input: unknown) => boundDeliveryRouterMocks.resolveDestination(input),
   }),
 }));
 
@@ -227,6 +245,12 @@ describe("tryDispatchAcpReply", () => {
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
+    boundDeliveryRouterMocks.resolveDestination.mockReset();
+    boundDeliveryRouterMocks.resolveDestination.mockReturnValue({
+      binding: null,
+      mode: "fallback" as const,
+      reason: "no-active-binding",
+    });
   });
 
   it("routes ACP block output to originating channel", async () => {
@@ -371,5 +395,73 @@ describe("tryDispatchAcpReply", () => {
         text: expect.stringContaining("ACP_DISPATCH_DISABLED"),
       }),
     );
+  });
+
+  it("routes ACP output to Discord thread via binding resolution", async () => {
+    setReadyAcpResolution();
+    boundDeliveryRouterMocks.resolveDestination.mockReturnValue({
+      binding: {
+        bindingId: "bind-1",
+        targetSessionKey: sessionKey,
+        targetKind: "subagent",
+        conversation: {
+          channel: "discord",
+          accountId: "acct-discord-1",
+          conversationId: "thread-99999",
+        },
+        status: "active",
+        boundAt: Date.now(),
+      },
+      mode: "bound" as const,
+      reason: "single-active-binding",
+    });
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "routed to thread", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "test binding",
+      dispatcher,
+      shouldRouteToOriginating: false,
+    });
+
+    expect(result?.counts.block).toBe(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "thread-99999",
+      }),
+    );
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("falls through to dispatcher when no binding exists", async () => {
+    setReadyAcpResolution();
+    boundDeliveryRouterMocks.resolveDestination.mockReturnValue({
+      binding: null,
+      mode: "fallback" as const,
+      reason: "no-active-binding",
+    });
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "no binding", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "test no binding",
+      dispatcher,
+      shouldRouteToOriginating: false,
+    });
+
+    expect(routeMocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).toHaveBeenCalled();
+    expect(result).not.toBeNull();
   });
 });
