@@ -35,13 +35,21 @@ function parseInteractiveCardContent(parsed: unknown): string {
     return "[Interactive Card]";
   }
 
-  const candidate = parsed as { elements?: unknown };
-  if (!Array.isArray(candidate.elements)) {
+  const candidate = parsed as { elements?: unknown; body?: { elements?: unknown } };
+  // Support both schema 1.0 (top-level elements) and schema 2.0 (body.elements).
+  const elements = Array.isArray(candidate.elements)
+    ? candidate.elements
+    : Array.isArray(
+          (candidate.body as { elements?: unknown } | undefined)?.elements,
+        )
+      ? ((candidate.body as { elements: unknown[] }).elements)
+      : null;
+  if (!elements) {
     return "[Interactive Card]";
   }
 
   const texts: string[] = [];
-  for (const element of candidate.elements) {
+  for (const element of elements) {
     if (!element || typeof element !== "object") {
       continue;
     }
