@@ -264,6 +264,10 @@ function normalizePayloadForChannelDelivery(
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const normalizedText =
     channelId === "whatsapp" ? rawText.replace(/^(?:[ \t]*\r?\n)+/, "") : rawText;
+  const trimmedText = normalizedText.trim();
+  if (trimmedText === "NO_REPLY" || trimmedText === "NO" || trimmedText === "None") {
+    return null;
+  }
   if (!normalizedText.trim()) {
     if (!hasMedia && !hasChannelData) {
       return null;
