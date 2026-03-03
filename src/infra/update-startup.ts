@@ -66,6 +66,33 @@ const AUTO_STABLE_DELAY_HOURS_DEFAULT = 6;
 const AUTO_STABLE_JITTER_HOURS_DEFAULT = 12;
 const AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT = 1;
 
+function normalizeSemverForPromotionAlias(version: string): {
+  base: string;
+  hasPrerelease: boolean;
+} | null {
+  const normalized = version.trim().replace(/^v/i, "");
+  if (!normalized) {
+    return null;
+  }
+  const [core, ...rest] = normalized.split("-");
+  if (!core || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(core)) {
+    return null;
+  }
+  return {
+    base: core,
+    hasPrerelease: rest.length > 0,
+  };
+}
+
+function isStablePromotionAlias(currentVersion: string, latestVersion: string): boolean {
+  const current = normalizeSemverForPromotionAlias(currentVersion);
+  const latest = normalizeSemverForPromotionAlias(latestVersion);
+  if (!current || !latest) {
+    return false;
+  }
+  return current.base === latest.base && current.hasPrerelease && !latest.hasPrerelease;
+}
+
 function shouldSkipCheck(allowInTests: boolean): boolean {
   if (allowInTests) {
     return false;
@@ -156,6 +183,9 @@ function setUpdateAvailableCache(params: {
 function resolvePersistedUpdateAvailable(state: UpdateCheckState): UpdateAvailable | null {
   const latestVersion = state.lastAvailableVersion?.trim();
   if (!latestVersion) {
+    return null;
+  }
+  if (isStablePromotionAlias(VERSION, latestVersion)) {
     return null;
   }
   const cmp = compareSemverStrings(VERSION, latestVersion);
@@ -381,7 +411,9 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  const cmp = compareSemverStrings(VERSION, resolved.version);
+  const stablePromotionAlias =
+    channel === "stable" && isStablePromotionAlias(VERSION, resolved.version);
+  const cmp = stablePromotionAlias ? 0 : compareSemverStrings(VERSION, resolved.version);
   if (cmp != null && cmp < 0) {
     const nextAvailable: UpdateAvailable = {
       currentVersion: VERSION,
