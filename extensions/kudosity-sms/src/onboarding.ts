@@ -19,18 +19,33 @@ const CHANNEL_ID = "kudosity-sms";
 const CHANNEL_KEY = "kudosity-sms";
 const DEFAULT_ACCOUNT_ID = "default";
 
+// ─── Config Shape ────────────────────────────────────────────────────────────
+
+/** Narrow type for the Kudosity SMS section within OpenClaw's config. */
+interface KudositySmsChannelConfig {
+  apiKey?: string;
+  sender?: string;
+  enabled?: boolean;
+}
+
+/** OpenClaw config with optional nested channel structure. */
+interface ConfigWithChannels {
+  channels?: Record<string, KudositySmsChannelConfig | undefined>;
+  [key: string]: unknown;
+}
+
 // ─── Status Check ────────────────────────────────────────────────────────────
 
-function getChannelSection(cfg: any): any {
-  return cfg?.channels?.[CHANNEL_KEY] ?? {};
+function getChannelSection(cfg: unknown): KudositySmsChannelConfig {
+  return (cfg as ConfigWithChannels)?.channels?.[CHANNEL_KEY] ?? {};
 }
 
-function getApiKey(cfg: any): string {
-  return (getChannelSection(cfg).apiKey as string) || process.env.KUDOSITY_API_KEY || "";
+function getApiKey(cfg: unknown): string {
+  return getChannelSection(cfg).apiKey || process.env.KUDOSITY_API_KEY || "";
 }
 
-function getSender(cfg: any): string {
-  return (getChannelSection(cfg).sender as string) || process.env.KUDOSITY_SENDER || "";
+function getSender(cfg: unknown): string {
+  return getChannelSection(cfg).sender || process.env.KUDOSITY_SENDER || "";
 }
 
 // ─── Onboarding Adapter ──────────────────────────────────────────────────────
@@ -189,12 +204,13 @@ export const kudositySmsOnboarding: ChannelOnboardingAdapter = {
     );
 
     // Return the full updated config object with nested channel structure
+    const prev = cfg as ConfigWithChannels;
     const next = {
-      ...(cfg as any),
+      ...prev,
       channels: {
-        ...(cfg as any).channels,
+        ...prev.channels,
         [CHANNEL_KEY]: {
-          ...(cfg as any).channels?.[CHANNEL_KEY],
+          ...prev.channels?.[CHANNEL_KEY],
           enabled: true,
           apiKey: apiKey.trim(),
           sender: sender.trim(),
@@ -213,17 +229,18 @@ export const kudositySmsOnboarding: ChannelOnboardingAdapter = {
   /**
    * Disable the Kudosity SMS channel by removing config keys.
    */
-  disable(cfg) {
-    const updated = { ...(cfg as any) };
-    const section = { ...updated.channels?.[CHANNEL_KEY] };
+  disable(cfg: unknown) {
+    const prev = cfg as ConfigWithChannels;
+    const section = { ...prev.channels?.[CHANNEL_KEY] };
     delete section.apiKey;
     delete section.sender;
-    delete section.webhookSecret;
     section.enabled = false;
-    updated.channels = {
-      ...updated.channels,
-      [CHANNEL_KEY]: section,
+    return {
+      ...prev,
+      channels: {
+        ...prev.channels,
+        [CHANNEL_KEY]: section,
+      },
     };
-    return updated;
   },
 };

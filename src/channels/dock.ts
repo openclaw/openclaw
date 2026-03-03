@@ -553,6 +553,12 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveToolPolicy: resolveLineGroupToolPolicy,
     },
   },
+  "kudosity-sms": {
+    id: "kudosity-sms",
+    capabilities: {
+      chatTypes: ["direct"],
+    },
+  },
 };
 
 function buildDockFromPlugin(plugin: ChannelPlugin): ChannelDock {
