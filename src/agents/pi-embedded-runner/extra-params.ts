@@ -15,6 +15,11 @@ const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as cons
 // Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
+const NATIVE_REASONING_EFFORT_PROVIDERS = new Set([
+  "openai",
+  "openai-codex",
+  "azure-openai-responses",
+]);
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -964,4 +969,26 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI Responses models and auto-enable
   // server-side compaction for compatible OpenAI Responses payloads.
   agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+
+  // Strip reasoning_effort for providers that don't natively support it.
+  // pi-ai may inject reasoning_effort based on model.reasoning flag, but custom
+  // providers and some built-in providers use different thinking formats.
+  // Only direct OpenAI-compatible providers accept this parameter.
+  // See: openclaw/openclaw#33272
+  if (!NATIVE_REASONING_EFFORT_PROVIDERS.has(provider)) {
+    log.debug(`stripping reasoning_effort for unsupported provider ${provider}/${modelId}`);
+    const underlyingForReasoningStrip = agent.streamFn ?? streamSimple;
+    agent.streamFn = (model, context, options) => {
+      const originalOnPayload = options?.onPayload;
+      return underlyingForReasoningStrip(model, context, {
+        ...options,
+        onPayload: (payload) => {
+          if (payload && typeof payload === "object") {
+            delete (payload as Record<string, unknown>).reasoning_effort;
+          }
+          originalOnPayload?.(payload);
+        },
+      });
+    };
+  }
 }
