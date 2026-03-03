@@ -203,6 +203,21 @@ describe("discord message actions", () => {
     expect(actions).toContain("emoji-upload");
     expect(actions).toContain("sticker-upload");
     expect(actions).toContain("channel-create");
+    expect(actions).not.toContain("self-profile");
+  });
+
+  it("lists self-profile action only when gate is enabled", () => {
+    const disabledCfg = { channels: { discord: { token: "d0" } } } as OpenClawConfig;
+    const enabledCfg = {
+      channels: { discord: { token: "d0", actions: { selfProfile: true } } },
+    } as OpenClawConfig;
+
+    expect(discordMessageActions.listActions?.({ cfg: disabledCfg }) ?? []).not.toContain(
+      "self-profile",
+    );
+    expect(discordMessageActions.listActions?.({ cfg: enabledCfg }) ?? []).toContain(
+      "self-profile",
+    );
   });
 
   it("respects disabled channel actions", async () => {
@@ -395,6 +410,29 @@ describe("handleDiscordMessageAction", () => {
         archived: true,
         locked: false,
         autoArchiveDuration: 1440,
+      },
+    },
+    {
+      name: "forwards self-profile update payload",
+      input: {
+        action: "self-profile" as const,
+        params: {
+          guildId: "guild-1",
+          userId: "bot-1",
+          nickname: "Bot",
+          statusMessage: "Working",
+          buffer: "Zm9v",
+          contentType: "image/png",
+        },
+      },
+      expected: {
+        action: "updateSelfProfile",
+        guildId: "guild-1",
+        userId: "bot-1",
+        nickname: "Bot",
+        statusMessage: "Working",
+        buffer: "Zm9v",
+        contentType: "image/png",
       },
     },
   ] as const;
