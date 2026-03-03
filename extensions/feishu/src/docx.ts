@@ -17,6 +17,7 @@ import {
   deleteTableColumns,
   mergeTableCells,
 } from "./docx-table-ops.js";
+import { downloadMessageResourceFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
   createFeishuToolClient,
@@ -1376,6 +1377,29 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       p.filename,
                     ),
                   );
+                case "download_message_file": {
+                  const runtime = getFeishuRuntime();
+                  const result = await downloadMessageResourceFeishu({
+                    cfg: api.config,
+                    messageId: p.message_id,
+                    fileKey: p.file_key,
+                    type: p.file_type === "image" ? "image" : "file",
+                    accountId: defaultAccountId,
+                  });
+                  const mimeType = await runtime.media.detectMime({ buffer: result.buffer });
+                  const saved = await runtime.channel.media.saveMediaBuffer(
+                    result.buffer,
+                    mimeType,
+                    "inbound",
+                    getMediaMaxBytes(p, defaultAccountId),
+                  );
+                  return json({
+                    success: true,
+                    file_path: saved.path,
+                    content_type: saved.contentType,
+                    size_bytes: result.buffer.length,
+                  });
+                }
                 case "color_text":
                   return json(await updateColorText(client, p.doc_token, p.block_id, p.content));
                 case "insert_table_row":

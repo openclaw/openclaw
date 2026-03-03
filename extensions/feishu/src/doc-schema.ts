@@ -167,6 +167,23 @@ export const FeishuDocSchema = Type.Union([
     ),
     filename: Type.Optional(Type.String({ description: "Optional filename override" })),
   }),
+  // Download a file attachment from a Feishu message
+  Type.Object({
+    action: Type.Literal("download_message_file"),
+    message_id: Type.String({
+      description:
+        "Feishu message ID containing the file (starts with 'om_'). Visible in the message context or inbound metadata.",
+    }),
+    file_key: Type.String({
+      description:
+        "File key from the message body (file_key field). Use list_blocks or read the quoted message body to obtain it.",
+    }),
+    file_type: Type.Optional(
+      Type.Union([Type.Literal("file"), Type.Literal("image")], {
+        description: "Resource type: 'file' (default) or 'image'.",
+      }),
+    ),
+  }),
   // Text color / style
   Type.Object({
     action: Type.Literal("color_text"),

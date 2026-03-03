@@ -189,6 +189,24 @@ Rules:
 - optional `filename` override
 - optional `parent_block_id`
 
+### Download File from Feishu Message
+
+Download a file attachment from a Feishu message (e.g. a forwarded `.md`, `.pdf`, or `.docx` file) to a local path for further processing.
+
+```json
+{
+  "action": "download_message_file",
+  "message_id": "om_xxx",
+  "file_key": "file_v3_xxx"
+}
+```
+
+- `message_id`: starts with `om_`, visible in the inbound message context
+- `file_key`: from the message body JSON (`file_key` field); use `list_blocks` or check the quoted message body
+- `file_type`: optional, `"file"` (default) or `"image"`
+
+Returns `file_path` (local path), `content_type`, and `size_bytes`. Pass `file_path` to `write` or `append` as needed.
+
 ## Reading Workflow
 
 1. Start with `action: "read"` - get plain text + statistics
