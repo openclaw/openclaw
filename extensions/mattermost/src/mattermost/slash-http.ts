@@ -159,12 +159,13 @@ async function authorizeSlashInvocation(params: {
       })
       .catch(() => []),
   );
-  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveMattermostEffectiveAllowFromLists({
-    allowFrom: configAllowFrom,
-    groupAllowFrom: configGroupAllowFrom,
-    storeAllowFrom,
-    dmPolicy,
-  });
+  const { effectiveAllowFrom, effectiveGroupAllowFrom, configuredGroupAllowFrom } =
+    resolveMattermostEffectiveAllowFromLists({
+      allowFrom: configAllowFrom,
+      groupAllowFrom: configGroupAllowFrom,
+      storeAllowFrom,
+      dmPolicy,
+    });
 
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
     cfg,
@@ -173,9 +174,10 @@ async function authorizeSlashInvocation(params: {
   const hasControlCommand = core.channel.text.hasControlCommand(commandText, cfg);
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const commandDmAllowFrom = kind === "direct" ? effectiveAllowFrom : configAllowFrom;
+  // Use configuredGroupAllowFrom (without pairing store) for command authorization
   const commandGroupAllowFrom =
     kind === "direct"
-      ? effectiveGroupAllowFrom
+      ? configuredGroupAllowFrom
       : configGroupAllowFrom.length > 0
         ? configGroupAllowFrom
         : configAllowFrom;

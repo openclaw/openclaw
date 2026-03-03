@@ -33,6 +33,8 @@ export function resolveMattermostEffectiveAllowFromLists(params: {
 }): {
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
+  /** Group allowlist without pairing store (for command authorization). */
+  configuredGroupAllowFrom: string[];
 } {
   return resolveEffectiveAllowFromLists({
     allowFrom: normalizeMattermostAllowList(params.allowFrom ?? []),

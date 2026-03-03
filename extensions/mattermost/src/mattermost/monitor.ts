@@ -550,6 +550,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
     const effectiveAllowFrom = accessDecision.effectiveAllowFrom;
     const effectiveGroupAllowFrom = accessDecision.effectiveGroupAllowFrom;
+    // Use configuredGroupAllowFrom (without pairing store) for command authorization
+    const configuredGroupAllowFrom = accessDecision.configuredGroupAllowFrom;
     const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
       cfg,
       surface: "mattermost",
@@ -567,7 +569,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const groupAllowedForCommands = isMattermostSenderAllowed({
       senderId,
       senderName,
-      allowFrom: effectiveGroupAllowFrom,
+      allowFrom: configuredGroupAllowFrom,
       allowNameMatching,
     });
     const commandGate = resolveControlCommandGate({
@@ -575,7 +577,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       authorizers: [
         { configured: commandDmAllowFrom.length > 0, allowed: senderAllowedForCommands },
         {
-          configured: effectiveGroupAllowFrom.length > 0,
+          configured: configuredGroupAllowFrom.length > 0,
           allowed: groupAllowedForCommands,
         },
       ],
