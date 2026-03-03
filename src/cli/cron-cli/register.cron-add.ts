@@ -70,7 +70,11 @@ export function registerCronAddCommand(cron: Command) {
       .option("--disabled", "Create job disabled", false)
       .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
       .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
-      .option("--max-runs-per-day <n>", "Max successful runs per calendar day (skip if exceeded)", parseInt)
+      .option(
+        "--max-runs-per-day <n>",
+        "Max successful runs per calendar day (skip if exceeded)",
+        parseInt,
+      )
       .option("--agent <id>", "Agent id for this job")
       .option("--session <target>", "Session target (main|isolated)")
       .option("--session-key <key>", "Session key for job routing (e.g. agent:my-agent:my-session)")
