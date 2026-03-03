@@ -23,6 +23,7 @@ export async function applyAuthChoiceBytePlus(
     tokenProvider: "byteplus",
     secretInputMode: requestedSecretInputMode,
     config: params.config,
+    agentDir: params.agentDir,
     expectedProviders: ["byteplus"],
     provider: "byteplus",
     envLabel: "BYTEPLUS_API_KEY",

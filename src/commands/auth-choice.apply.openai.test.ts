@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
 import {
@@ -160,5 +162,114 @@ describe("applyAuthChoiceOpenAI", () => {
     }>(agentDir);
     expect(parsed.profiles?.["openai:default"]?.key).toBe("sk-openai-seeded");
     expect(parsed.profiles?.["openai:default"]?.keyRef).toBeUndefined();
+  });
+
+  it("prompts for a new key when the user declines reusing existing OpenAI credentials", async () => {
+    const agentDir = await setupTempState();
+    delete process.env.OPENAI_API_KEY;
+
+    const runtime = createExitThrowingRuntime();
+    const seedPrompter = createWizardPrompter({}, { defaultSelect: "" });
+    const seeded = await applyAuthChoiceOpenAI({
+      authChoice: "apiKey",
+      config: {},
+      prompter: seedPrompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "openai",
+        token: "sk-openai-old",
+      },
+    });
+    expect(seeded).not.toBeNull();
+
+    const confirm = vi.fn(async () => false);
+    const text = vi.fn(async () => "sk-openai-new");
+    const reconfigurePrompter = createWizardPrompter(
+      { confirm, text },
+      { defaultSelect: "plaintext" },
+    );
+    const result = await applyAuthChoiceOpenAI({
+      authChoice: "openai-api-key",
+      config: seeded?.config ?? {},
+      prompter: reconfigurePrompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result).not.toBeNull();
+    expect(confirm).toHaveBeenCalled();
+    expect(text).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Enter OpenAI API key" }),
+    );
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(agentDir);
+    expect(parsed.profiles?.["openai:default"]?.key).toBe("sk-openai-new");
+    expect(parsed.profiles?.["openai:default"]?.keyRef).toBeUndefined();
+  });
+
+  it("reuses credentials from the configured agentDir instead of default agent store", async () => {
+    const defaultAgentDir = await setupTempState();
+    delete process.env.OPENAI_API_KEY;
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    expect(stateDir).toBeTruthy();
+    const secondaryAgentDir = path.join(String(stateDir), "agents", "secondary", "agent");
+    await fs.mkdir(secondaryAgentDir, { recursive: true });
+
+    const runtime = createExitThrowingRuntime();
+    const seedPrompter = createWizardPrompter({}, { defaultSelect: "" });
+
+    await applyAuthChoiceOpenAI({
+      authChoice: "apiKey",
+      config: {},
+      prompter: seedPrompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "openai",
+        token: "sk-openai-default",
+      },
+      agentDir: defaultAgentDir,
+    });
+
+    const seededSecondary = await applyAuthChoiceOpenAI({
+      authChoice: "apiKey",
+      config: {},
+      prompter: seedPrompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "openai",
+        token: "sk-openai-secondary",
+      },
+      agentDir: secondaryAgentDir,
+    });
+    expect(seededSecondary).not.toBeNull();
+
+    const confirm = vi.fn(async () => true);
+    const text = vi.fn(async () => "should-not-be-used");
+    const reconfigurePrompter = createWizardPrompter(
+      { confirm, text },
+      { defaultSelect: "plaintext" },
+    );
+    await applyAuthChoiceOpenAI({
+      authChoice: "openai-api-key",
+      config: seededSecondary?.config ?? {},
+      prompter: reconfigurePrompter,
+      runtime,
+      setDefaultModel: true,
+      agentDir: secondaryAgentDir,
+    });
+
+    expect(confirm).toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+
+    const parsedSecondary = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(secondaryAgentDir);
+    expect(parsedSecondary.profiles?.["openai:default"]?.key).toBe("sk-openai-secondary");
+    expect(parsedSecondary.profiles?.["openai:default"]?.keyRef).toBeUndefined();
   });
 });

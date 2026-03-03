@@ -39,6 +39,7 @@ export async function applyAuthChoiceMiniMax(
       tokenProvider: params.opts?.tokenProvider,
       secretInputMode: requestedSecretInputMode,
       config: nextConfig,
+      agentDir: params.agentDir,
       expectedProviders: ["minimax", "minimax-cn"],
       provider: "minimax",
       envLabel: "MINIMAX_API_KEY",

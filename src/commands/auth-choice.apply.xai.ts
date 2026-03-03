@@ -30,6 +30,7 @@ export async function applyAuthChoiceXAI(
     tokenProvider: "xai",
     secretInputMode: requestedSecretInputMode,
     config: nextConfig,
+    agentDir: params.agentDir,
     expectedProviders: ["xai"],
     provider: "xai",
     envLabel: "XAI_API_KEY",

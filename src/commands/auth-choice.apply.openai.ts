@@ -55,6 +55,7 @@ export async function applyAuthChoiceOpenAI(
       tokenProvider: params.opts?.tokenProvider,
       secretInputMode: requestedSecretInputMode,
       config: nextConfig,
+      agentDir: params.agentDir,
       expectedProviders: ["openai"],
       provider: "openai",
       envLabel: "OPENAI_API_KEY",

@@ -91,11 +91,13 @@ function resolveRefFallbackInput(params: {
 async function resolveExistingProviderApiKey(params: {
   config: OpenClawConfig;
   provider: string;
+  agentDir?: string;
 }): Promise<{ apiKey: string; source: string } | null> {
   try {
     const resolved = await resolveApiKeyForProvider({
       provider: params.provider,
       cfg: params.config,
+      agentDir: params.agentDir,
     });
     if (typeof resolved.apiKey !== "string" || resolved.apiKey.trim().length === 0) {
       return null;
@@ -452,6 +454,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   tokenProvider: string | undefined;
   secretInputMode?: SecretInputMode;
   config: OpenClawConfig;
+  agentDir?: string;
   expectedProviders: string[];
   provider: string;
   envLabel: string;
@@ -481,6 +484,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
 
   return await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
+    agentDir: params.agentDir,
     provider: params.provider,
     envLabel: params.envLabel,
     promptMessage: params.promptMessage,
@@ -494,6 +498,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
 
 export async function ensureApiKeyFromEnvOrPrompt(params: {
   config: OpenClawConfig;
+  agentDir?: string;
   provider: string;
   envLabel: string;
   promptMessage: string;
@@ -532,14 +537,15 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
   const existingApiKey = await resolveExistingProviderApiKey({
     config: params.config,
     provider: params.provider,
+    agentDir: params.agentDir,
   });
-  const existingCredentialLabel =
-    existingApiKey &&
-    (existingApiKey.source.startsWith("env:") || existingApiKey.source.startsWith("shell env:"))
-      ? params.envLabel
-      : `${params.provider} credentials`;
 
   if (existingApiKey && selectedMode === "plaintext") {
+    const existingCredentialLabel =
+      existingApiKey.source.startsWith("env:") ||
+      existingApiKey.source.startsWith("shell env:")
+        ? params.envLabel
+        : `${params.provider} credentials`;
     const useExisting = await params.prompter.confirm({
       message: `Use existing ${existingCredentialLabel} (${existingApiKey.source}, ${formatApiKeyPreview(existingApiKey.apiKey)})?`,
       initialValue: true,
