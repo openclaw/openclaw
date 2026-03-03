@@ -10,6 +10,7 @@ import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "openclaw/plugin-s
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
+  isDangerousNameMatchingEnabled,
   logTypingFailure,
   resolveControlCommandGate,
 } from "openclaw/plugin-sdk";
@@ -23,6 +24,11 @@ import {
   sendMattermostTyping,
   type MattermostChannel,
 } from "./client.js";
+import {
+  isMattermostSenderAllowed,
+  normalizeMattermostAllowList,
+  resolveMattermostEffectiveAllowFromLists,
+} from "./monitor-auth.js";
 import { sendMessageMattermost } from "./send.js";
 import {
   parseSlashCommandPayload,
@@ -70,46 +76,6 @@ function sendJsonResponse(
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
-}
-
-/**
- * Normalize a single allowlist entry, matching the websocket monitor behaviour.
- * Strips `mattermost:`, `user:`, and `@` prefixes, and preserves the `*` wildcard.
- */
-function normalizeAllowEntry(entry: string): string {
-  const trimmed = entry.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed === "*") {
-    return "*";
-  }
-  return trimmed
-    .replace(/^(mattermost|user):/i, "")
-    .replace(/^@/, "")
-    .toLowerCase();
-}
-
-function normalizeAllowList(entries: Array<string | number>): string[] {
-  const normalized = entries.map((entry) => normalizeAllowEntry(String(entry))).filter(Boolean);
-  return Array.from(new Set(normalized));
-}
-
-function isSenderAllowed(params: { senderId: string; senderName: string; allowFrom: string[] }) {
-  const { senderId, senderName, allowFrom } = params;
-  if (allowFrom.length === 0) {
-    return false;
-  }
-  if (allowFrom.includes("*")) {
-    return true;
-  }
-
-  const normalizedId = normalizeAllowEntry(senderId);
-  const normalizedName = senderName ? normalizeAllowEntry(senderName) : "";
-
-  return allowFrom.some(
-    (entry) => entry === normalizedId || (normalizedName && entry === normalizedName),
-  );
 }
 
 type SlashInvocationAuth = {
@@ -181,10 +147,11 @@ async function authorizeSlashInvocation(params: {
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
   const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
 
-  const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
-  const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
-  const storeAllowFrom = normalizeAllowList(
+  const configAllowFrom = normalizeMattermostAllowList(account.config.allowFrom ?? []);
+  const configGroupAllowFrom = normalizeMattermostAllowList(account.config.groupAllowFrom ?? []);
+  const storeAllowFrom = normalizeMattermostAllowList(
     await core.channel.pairing
       .readAllowFromStore({
         channel: "mattermost",
@@ -192,13 +159,12 @@ async function authorizeSlashInvocation(params: {
       })
       .catch(() => []),
   );
-  const effectiveAllowFrom = Array.from(new Set([...configAllowFrom, ...storeAllowFrom]));
-  const effectiveGroupAllowFrom = Array.from(
-    new Set([
-      ...(configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom),
-      ...storeAllowFrom,
-    ]),
-  );
+  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveMattermostEffectiveAllowFromLists({
+    allowFrom: configAllowFrom,
+    groupAllowFrom: configGroupAllowFrom,
+    storeAllowFrom,
+    dmPolicy,
+  });
 
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
     cfg,
@@ -206,24 +172,33 @@ async function authorizeSlashInvocation(params: {
   });
   const hasControlCommand = core.channel.text.hasControlCommand(commandText, cfg);
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const commandDmAllowFrom = kind === "direct" ? effectiveAllowFrom : configAllowFrom;
+  const commandGroupAllowFrom =
+    kind === "direct"
+      ? effectiveGroupAllowFrom
+      : configGroupAllowFrom.length > 0
+        ? configGroupAllowFrom
+        : configAllowFrom;
 
-  const senderAllowedForCommands = isSenderAllowed({
+  const senderAllowedForCommands = isMattermostSenderAllowed({
     senderId,
     senderName,
-    allowFrom: effectiveAllowFrom,
+    allowFrom: commandDmAllowFrom,
+    allowNameMatching,
   });
-  const groupAllowedForCommands = isSenderAllowed({
+  const groupAllowedForCommands = isMattermostSenderAllowed({
     senderId,
     senderName,
-    allowFrom: effectiveGroupAllowFrom,
+    allowFrom: commandGroupAllowFrom,
+    allowNameMatching,
   });
 
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
-      { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
+      { configured: commandDmAllowFrom.length > 0, allowed: senderAllowedForCommands },
       {
-        configured: effectiveGroupAllowFrom.length > 0,
+        configured: commandGroupAllowFrom.length > 0,
         allowed: groupAllowedForCommands,
       },
     ],
@@ -661,16 +636,22 @@ async function handleSlashCommandAsync(params: {
       onReplyStart: typingCallbacks.onReplyStart,
     });
 
-  await core.channel.reply.dispatchReplyFromConfig({
-    ctx: ctxPayload,
-    cfg,
+  await core.channel.reply.withReplyDispatcher({
     dispatcher,
-    replyOptions: {
-      ...replyOptions,
-      disableBlockStreaming:
-        typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-      onModelSelected,
+    onSettled: () => {
+      markDispatchIdle();
     },
+    run: () =>
+      core.channel.reply.dispatchReplyFromConfig({
+        ctx: ctxPayload,
+        cfg,
+        dispatcher,
+        replyOptions: {
+          ...replyOptions,
+          disableBlockStreaming:
+            typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+          onModelSelected,
+        },
+      }),
   });
-  markDispatchIdle();
 }

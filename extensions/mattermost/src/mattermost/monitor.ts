@@ -299,49 +299,59 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       });
 
       const allRegistered: import("./slash-commands.js").MattermostRegisteredCommand[] = [];
+      let teamRegistrationFailures = 0;
 
-      try {
-        for (const team of teams) {
+      for (const team of teams) {
+        try {
           const registered = await registerSlashCommands({
             client,
             teamId: team.id,
+            creatorUserId: botUserId,
             callbackUrl,
             commands: dedupedCommands,
             log: (msg) => runtime.log?.(msg),
           });
           allRegistered.push(...registered);
+        } catch (err) {
+          teamRegistrationFailures += 1;
+          runtime.error?.(
+            `mattermost: failed to register slash commands for team ${team.id}: ${String(err)}`,
+          );
         }
-      } catch (err) {
-        // If we partially succeeded (some teams had commands created) but later failed,
-        // clean up the created commands so we don't strand registrations that will 503.
-        await cleanupSlashCommands({
-          client,
-          commands: allRegistered,
+      }
+
+      if (allRegistered.length === 0) {
+        runtime.error?.(
+          "mattermost: native slash commands enabled but no commands could be registered; keeping slash callbacks inactive",
+        );
+      } else {
+        if (teamRegistrationFailures > 0) {
+          runtime.error?.(
+            `mattermost: slash command registration completed with ${teamRegistrationFailures} team error(s)`,
+          );
+        }
+
+        // Build trigger→originalName map for accurate command name resolution
+        const triggerMap = new Map<string, string>();
+        for (const cmd of dedupedCommands) {
+          if (cmd.originalName) {
+            triggerMap.set(cmd.trigger, cmd.originalName);
+          }
+        }
+
+        activateSlashCommands({
+          account,
+          commandTokens: allRegistered.map((cmd) => cmd.token).filter(Boolean),
+          registeredCommands: allRegistered,
+          triggerMap,
+          api: { cfg, runtime },
           log: (msg) => runtime.log?.(msg),
         });
-        throw err;
+
+        runtime.log?.(
+          `mattermost: slash commands registered (${allRegistered.length} commands across ${teams.length} teams, callback=${callbackUrl})`,
+        );
       }
-
-      // Build trigger→originalName map for accurate command name resolution
-      const triggerMap = new Map<string, string>();
-      for (const cmd of dedupedCommands) {
-        if (cmd.originalName) {
-          triggerMap.set(cmd.trigger, cmd.originalName);
-        }
-      }
-
-      activateSlashCommands({
-        account,
-        commandTokens: allRegistered.map((cmd) => cmd.token).filter(Boolean),
-        registeredCommands: allRegistered,
-        triggerMap,
-        api: { cfg, runtime },
-        log: (msg) => runtime.log?.(msg),
-      });
-
-      runtime.log?.(
-        `mattermost: slash commands registered (${allRegistered.length} commands across ${teams.length} teams, callback=${callbackUrl})`,
-      );
     } catch (err) {
       runtime.error?.(`mattermost: failed to register slash commands: ${String(err)}`);
     }

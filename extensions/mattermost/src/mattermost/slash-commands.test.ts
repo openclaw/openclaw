@@ -81,6 +81,7 @@ describe("slash-commands", () => {
             id: "cmd-1",
             token: "tok-1",
             team_id: "team-1",
+            creator_id: "bot-user",
             trigger: "oc_status",
             method: "P",
             url: "http://gateway/callback",
@@ -95,6 +96,7 @@ describe("slash-commands", () => {
     const result = await registerSlashCommands({
       client,
       teamId: "team-1",
+      creatorUserId: "bot-user",
       callbackUrl: "http://gateway/callback",
       commands: [
         {
@@ -108,6 +110,47 @@ describe("slash-commands", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.managed).toBe(false);
     expect(result[0]?.id).toBe("cmd-1");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips foreign command trigger collisions instead of mutating non-owned commands", async () => {
+    const request = vi.fn(async (path: string, init?: { method?: string }) => {
+      if (path.startsWith("/commands?team_id=")) {
+        return [
+          {
+            id: "cmd-foreign-1",
+            token: "tok-foreign-1",
+            team_id: "team-1",
+            creator_id: "another-bot-user",
+            trigger: "oc_status",
+            method: "P",
+            url: "http://foreign/callback",
+            auto_complete: true,
+          },
+        ];
+      }
+      if (init?.method === "POST" || init?.method === "PUT" || init?.method === "DELETE") {
+        throw new Error("should not mutate foreign commands");
+      }
+      throw new Error(`unexpected request path: ${path}`);
+    });
+    const client = { request } as unknown as MattermostClient;
+
+    const result = await registerSlashCommands({
+      client,
+      teamId: "team-1",
+      creatorUserId: "bot-user",
+      callbackUrl: "http://gateway/callback",
+      commands: [
+        {
+          trigger: "oc_status",
+          description: "status",
+          autoComplete: true,
+        },
+      ],
+    });
+
+    expect(result).toHaveLength(0);
     expect(request).toHaveBeenCalledTimes(1);
   });
 });

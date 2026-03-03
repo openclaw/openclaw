@@ -239,11 +239,16 @@ export async function updateMattermostCommand(
 export async function registerSlashCommands(params: {
   client: MattermostClient;
   teamId: string;
+  creatorUserId: string;
   callbackUrl: string;
   commands: MattermostCommandSpec[];
   log?: (msg: string) => void;
 }): Promise<MattermostRegisteredCommand[]> {
-  const { client, teamId, callbackUrl, commands, log } = params;
+  const { client, teamId, creatorUserId, callbackUrl, commands, log } = params;
+  const normalizedCreatorUserId = creatorUserId.trim();
+  if (!normalizedCreatorUserId) {
+    throw new Error("creatorUserId is required for slash command reconciliation");
+  }
 
   // Fetch existing commands to avoid duplicates
   let existing: MattermostCommandResponse[] = [];
@@ -257,12 +262,38 @@ export async function registerSlashCommands(params: {
     throw err;
   }
 
-  const existingByTrigger = new Map(existing.map((cmd) => [cmd.trigger, cmd]));
+  const existingByTrigger = new Map<string, MattermostCommandResponse[]>();
+  for (const cmd of existing) {
+    const list = existingByTrigger.get(cmd.trigger) ?? [];
+    list.push(cmd);
+    existingByTrigger.set(cmd.trigger, list);
+  }
 
   const registered: MattermostRegisteredCommand[] = [];
 
   for (const spec of commands) {
-    const existingCmd = existingByTrigger.get(spec.trigger);
+    const existingForTrigger = existingByTrigger.get(spec.trigger) ?? [];
+    const ownedCommands = existingForTrigger.filter(
+      (cmd) => cmd.creator_id?.trim() === normalizedCreatorUserId,
+    );
+    const foreignCommands = existingForTrigger.filter(
+      (cmd) => cmd.creator_id?.trim() !== normalizedCreatorUserId,
+    );
+
+    if (ownedCommands.length === 0 && foreignCommands.length > 0) {
+      log?.(
+        `mattermost: trigger /${spec.trigger} already used by non-OpenClaw command(s); skipping to avoid mutating external integrations`,
+      );
+      continue;
+    }
+
+    if (ownedCommands.length > 1) {
+      log?.(
+        `mattermost: multiple owned commands found for /${spec.trigger}; using the first and leaving extras untouched`,
+      );
+    }
+
+    const existingCmd = ownedCommands[0];
 
     // Already registered with the correct callback URL
     if (existingCmd && existingCmd.url === callbackUrl) {
@@ -307,7 +338,7 @@ export async function registerSlashCommands(params: {
         log?.(
           `mattermost: failed to update command /${spec.trigger} (id=${existingCmd.id}): ${String(err)}`,
         );
-        // Fallback: try delete+recreate (safe for the oc_* namespace).
+        // Fallback: try delete+recreate for commands owned by this bot user.
         try {
           await deleteMattermostCommand(client, existingCmd.id);
           log?.(`mattermost: deleted stale command /${spec.trigger} (id=${existingCmd.id})`);
