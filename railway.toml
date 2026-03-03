@@ -3,7 +3,8 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "sh -c 'OPENCLAW_NO_RESPAWN=1 node openclaw.mjs gateway --allow-unconfigured --bind lan --auth none --port ${PORT:-8080}'"
+startCommand = "sh -c 'OPENCLAW_NO_RESPAWN=1 node openclaw.mjs gateway --allow-unconfigured --bind lan --auth trusted-proxy --port ${PORT:-8080}'"
+healthcheckPath = "/healthz"
 healthcheckTimeout = 120
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
