@@ -523,7 +523,7 @@ function broadcastChatError(params: {
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
-  "chat.history": async ({ params, respond, context }) => {
+  "chat.history": async ({ params, respond, context, client }) => {
     if (!validateChatHistoryParams(params)) {
       respond(
         false,
@@ -539,6 +539,16 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       limit?: number;
     };
+
+    // Track session association for session-scoped chat event delivery.
+    if (client && sessionKey) {
+      const wsClient = client as unknown as { chatSessionKeys?: Set<string> };
+      if (!wsClient.chatSessionKeys) {
+        wsClient.chatSessionKeys = new Set();
+      }
+      wsClient.chatSessionKeys.add(sessionKey);
+    }
+
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
     const rawMessages =
@@ -683,6 +693,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       idempotencyKey: string;
     };
+    // Track session association for session-scoped chat event delivery.
+    // After the first chat.send, this connection will only receive chat
+    // events for sessions it has interacted with (unless it holds admin scope).
+    if (client && p.sessionKey) {
+      const wsClient = client as unknown as { chatSessionKeys?: Set<string> };
+      if (!wsClient.chatSessionKeys) {
+        wsClient.chatSessionKeys = new Set();
+      }
+      wsClient.chatSessionKeys.add(p.sessionKey);
+    }
+
     const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
     if (!sanitizedMessageResult.ok) {
       respond(
