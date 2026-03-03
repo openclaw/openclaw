@@ -30,6 +30,7 @@ import { useIsMobile } from "../hooks/use-mobile";
 import { ObjectFilterBar } from "../components/workspace/object-filter-bar";
 import { type FilterGroup, type SortRule, type SavedView, emptyFilterGroup, serializeFilters } from "@/lib/object-filters";
 import { UnicodeSpinner } from "../components/unicode-spinner";
+import { resolveActiveViewSyncDecision } from "./object-view-active-view";
 
 // --- Types ---
 
@@ -355,13 +356,11 @@ function WorkspacePageInner() {
   // Live-reactive tree via SSE watcher (with browse-mode support)
   const {
     tree, loading: treeLoading, exists: workspaceExists, refresh: refreshTree,
-    reconnect: reconnectWorkspace,
+    reconnect: reconnectWorkspaceWatcher,
     browseDir, setBrowseDir, parentDir: browseParentDir, workspaceRoot, openclawDir,
-    activeProfile,
+    activeProfile: workspaceProfile,
     showHidden, setShowHidden,
   } = useWorkspaceWatcher();
-
-  // handleProfileSwitch is defined below fetchSessions/fetchCronJobs (avoids TDZ)
 
   // Search index for @ mention fuzzy search (files + entries)
   const { search: searchIndex } = useSearchIndex();
@@ -498,21 +497,20 @@ function WorkspacePageInner() {
     });
   }, []);
 
+  const refreshContext = useCallback(async () => {
+    try {
+      const res = await fetch("/api/workspace/context");
+      const data = await res.json();
+      setContext(data);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   // Fetch workspace context on mount
   useEffect(() => {
-    let cancelled = false;
-    async function loadContext() {
-      try {
-        const res = await fetch("/api/workspace/context");
-        const data = await res.json();
-        if (!cancelled) {setContext(data);}
-      } catch {
-        // ignore
-      }
-    }
-    void loadContext();
-    return () => { cancelled = true; };
-  }, []);
+    void refreshContext();
+  }, [refreshContext]);
 
   // Fetch chat sessions
   const fetchSessions = useCallback(async () => {
@@ -535,6 +533,17 @@ function WorkspacePageInner() {
   const refreshSessions = useCallback(() => {
     setSidebarRefreshKey((k) => k + 1);
   }, []);
+
+  const handleProfileChanged = useCallback(() => {
+    setBrowseDir(null);
+    setActivePath(null);
+    setContent({ kind: "none" });
+    setChatSidebarPreview(null);
+    setShowChatSidebar(true);
+    reconnectWorkspaceWatcher();
+    refreshSessions();
+    void refreshContext();
+  }, [reconnectWorkspaceWatcher, refreshContext, refreshSessions, setBrowseDir]);
 
   const handleDeleteSession = useCallback(
     async (sessionId: string) => {
@@ -608,18 +617,6 @@ function WorkspacePageInner() {
     const id = setInterval(fetchCronJobs, 30_000);
     return () => clearInterval(id);
   }, [fetchCronJobs]);
-
-  // After profile switch or workspace creation, reconnect SSE + refresh all data
-  const handleProfileSwitch = useCallback(() => {
-    reconnectWorkspace();
-    void fetchSessions();
-    void fetchCronJobs();
-    setActivePath(null);
-    setContent({ kind: "none" });
-    setActiveSessionId(null);
-    setSubagents([]);
-    setActiveSubagentKey(null);
-  }, [reconnectWorkspace, fetchSessions, fetchCronJobs]);
 
   // Load content when path changes
   const loadContent = useCallback(
@@ -1324,10 +1321,10 @@ function WorkspacePageInner() {
             workspaceRoot={workspaceRoot}
             onGoToChat={() => { handleGoToChat(); setSidebarOpen(false); }}
             onExternalDrop={handleSidebarExternalDrop}
-            activeProfile={activeProfile}
-            onProfileSwitch={handleProfileSwitch}
             showHidden={showHidden}
             onToggleHidden={() => setShowHidden((v) => !v)}
+            activeProfile={workspaceProfile}
+            onProfileChanged={handleProfileChanged}
             mobile
             onClose={() => setSidebarOpen(false)}
           />
@@ -1361,12 +1358,12 @@ function WorkspacePageInner() {
               workspaceRoot={workspaceRoot}
               onGoToChat={handleGoToChat}
               onExternalDrop={handleSidebarExternalDrop}
-              activeProfile={activeProfile}
-              onProfileSwitch={handleProfileSwitch}
               showHidden={showHidden}
               onToggleHidden={() => setShowHidden((v) => !v)}
               width={leftSidebarWidth}
               onCollapse={() => setLeftSidebarCollapsed(true)}
+              activeProfile={workspaceProfile}
+              onProfileChanged={handleProfileChanged}
             />
           </div>
           )}
@@ -1508,6 +1505,8 @@ function WorkspacePageInner() {
                     task={activeSubagent.task}
                     label={activeSubagent.label}
                     onBack={handleBackFromSubagent}
+                    onSubagentClick={handleSubagentClickFromChat}
+                    onFilePathClick={handleFilePathClickFromChat}
                   />
                 ) : (
                 <ChatPanel
@@ -1632,6 +1631,7 @@ function WorkspacePageInner() {
                 <ContentRenderer
                   content={content}
                   workspaceExists={workspaceExists}
+                  expectedPath={workspaceRoot}
                   tree={tree}
                   activePath={activePath}
                   browseDir={browseDir}
@@ -1646,7 +1646,6 @@ function WorkspacePageInner() {
                   searchFn={searchIndex}
                   onSelectCronJob={handleSelectCronJob}
                   onBackToCronDashboard={handleBackToCronDashboard}
-                  onWorkspaceCreated={handleProfileSwitch}
                 />
               </div>
 
@@ -2010,6 +2009,7 @@ function ChatSidebarPreview({
 function ContentRenderer({
   content,
   workspaceExists,
+  expectedPath,
   tree,
   activePath,
   browseDir,
@@ -2024,10 +2024,10 @@ function ContentRenderer({
   searchFn,
   onSelectCronJob,
   onBackToCronDashboard,
-  onWorkspaceCreated,
 }: {
   content: ContentState;
   workspaceExists: boolean;
+  expectedPath?: string | null;
   tree: TreeNode[];
   activePath: string | null;
   /** Current browse directory (absolute path), or null in workspace mode. */
@@ -2044,8 +2044,6 @@ function ContentRenderer({
   searchFn: (query: string, limit?: number) => import("@/lib/search-index").SearchIndexItem[];
   onSelectCronJob: (jobId: string) => void;
   onBackToCronDashboard: () => void;
-  /** Called after a new workspace is created from the empty state. */
-  onWorkspaceCreated?: () => void;
 }) {
   switch (content.kind) {
     case "loading":
@@ -2183,7 +2181,7 @@ function ContentRenderer({
     case "none":
     default:
       if (tree.length === 0) {
-        return <EmptyState workspaceExists={workspaceExists} onWorkspaceCreated={onWorkspaceCreated} />;
+        return <EmptyState workspaceExists={workspaceExists} expectedPath={expectedPath} />;
       }
       return <WelcomeView tree={tree} onNodeSelect={onNodeSelect} />;
   }
@@ -2284,15 +2282,20 @@ function ObjectView({
   // Sync saved views when data changes (e.g. SSE refresh from AI editing .object.yaml)
   useEffect(() => {
     setSavedViews(data.savedViews ?? []);
-    if (data.activeView && data.activeView !== activeViewName) {
-      const view = (data.savedViews ?? []).find((v) => v.name === data.activeView);
-      if (view) {
-        setFilters(view.filters ?? emptyFilterGroup());
-        setViewColumns(view.columns);
-        setActiveViewName(view.name);
-        // Re-fetch with new filters from the view
-        void fetchEntries({ page: 1, filters: view.filters ?? emptyFilterGroup() });
-      }
+
+    const decision = resolveActiveViewSyncDecision({
+      savedViews: data.savedViews,
+      activeView: data.activeView,
+      currentActiveViewName: activeViewName,
+      currentFilters: filters,
+      currentViewColumns: viewColumns,
+    });
+    if (decision?.shouldApply) {
+      setFilters(decision.nextFilters);
+      setViewColumns(decision.nextColumns);
+      setActiveViewName(decision.nextActiveViewName);
+      // Re-fetch with filters from the synchronized active view.
+      void fetchEntries({ page: 1, filters: decision.nextFilters });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.savedViews, data.activeView]);
