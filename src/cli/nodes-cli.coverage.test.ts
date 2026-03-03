@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 type NodeInvokeCall = {
@@ -40,25 +41,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
         cwd?: unknown;
         agentId?: unknown;
       };
-      const argv = Array.isArray(params.command)
-        ? params.command.map((entry) => String(entry))
-        : [];
-      const rawCommand =
-        typeof params.rawCommand === "string" && params.rawCommand.trim().length > 0
-          ? params.rawCommand
-          : null;
-      return {
-        payload: {
-          cmdText: rawCommand ?? argv.join(" "),
-          plan: {
-            argv,
-            cwd: typeof params.cwd === "string" ? params.cwd : null,
-            rawCommand,
-            agentId: typeof params.agentId === "string" ? params.agentId : null,
-            sessionKey: null,
-          },
-        },
-      };
+      return buildSystemRunPreparePayload(params);
     }
     return {
       payload: {

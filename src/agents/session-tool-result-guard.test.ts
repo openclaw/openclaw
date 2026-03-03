@@ -26,6 +26,31 @@ function appendToolResultText(sm: SessionManager, text: string) {
   );
 }
 
+function appendAssistantToolCall(
+  sm: SessionManager,
+  params: { id: string; name: string; withArguments?: boolean },
+) {
+  const toolCall: {
+    type: "toolCall";
+    id: string;
+    name: string;
+    arguments?: Record<string, never>;
+  } = {
+    type: "toolCall",
+    id: params.id,
+    name: params.name,
+  };
+  if (params.withArguments !== false) {
+    toolCall.arguments = {};
+  }
+  sm.appendMessage(
+    asAppendMessage({
+      role: "assistant",
+      content: [toolCall],
+    }),
+  );
+}
+
 function getPersistedMessages(sm: SessionManager): AgentMessage[] {
   return sm
     .getEntries()
@@ -273,19 +298,8 @@ describe("installSessionToolResultGuard", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
 
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      }),
-    );
-
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_2", name: "read" }],
-      }),
-    );
+    appendAssistantToolCall(sm, { id: "call_1", name: "read" });
+    appendAssistantToolCall(sm, { id: "call_2", name: "read", withArguments: false });
 
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
@@ -297,19 +311,8 @@ describe("installSessionToolResultGuard", () => {
       allowedToolNames: ["read"],
     });
 
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      }),
-    );
-
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_2", name: "write", arguments: {} }],
-      }),
-    );
+    appendAssistantToolCall(sm, { id: "call_1", name: "read" });
+    appendAssistantToolCall(sm, { id: "call_2", name: "write" });
 
     expectPersistedRoles(sm, ["assistant"]);
     expect(guard.getPendingIds()).toEqual([]);
