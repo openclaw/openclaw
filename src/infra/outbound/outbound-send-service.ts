@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -92,12 +93,21 @@ export async function executeSendAction(params: {
   replyToId?: string;
   threadId?: string | number;
 }): Promise<{
-  handledBy: "plugin" | "core";
+  handledBy: "plugin" | "core" | "silent";
   payload: unknown;
   toolResult?: AgentToolResult<unknown>;
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
+
+  if (isSilentReplyText(params.message)) {
+    return {
+      handledBy: "silent",
+      payload: { ok: true, reason: SILENT_REPLY_TOKEN },
+      sendResult: { ok: true, delivered: false, discarded: true },
+    };
+  }
+
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,
     action: "send",
