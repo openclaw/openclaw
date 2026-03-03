@@ -546,7 +546,11 @@ export type ConfigIoDeps = {
   logger?: Pick<typeof console, "error" | "warn">;
 };
 
-function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
+function warnOnConfigMiskeys(
+  raw: unknown,
+  logger: Pick<typeof console, "warn">,
+  configPath?: string,
+): void {
   if (!raw || typeof raw !== "object") {
     return;
   }
@@ -557,8 +561,9 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
   if ("token" in (gateway as Record<string, unknown>)) {
     const msg =
       'Config uses "gateway.token". This key is ignored; use "gateway.auth.token" instead.';
-    if (!loggedConfigWarnings.has(msg)) {
-      loggedConfigWarnings.add(msg);
+    const key = configPath ? `${configPath}:${msg}` : msg;
+    if (!loggedConfigWarnings.has(key)) {
+      loggedConfigWarnings.add(key);
       logger.warn(msg);
     }
   }
@@ -576,7 +581,11 @@ function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
+function warnIfConfigFromFuture(
+  cfg: OpenClawConfig,
+  logger: Pick<typeof console, "warn">,
+  configPath?: string,
+): void {
   const touched = cfg.meta?.lastTouchedVersion;
   if (!touched) {
     return;
@@ -587,8 +596,9 @@ function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console
   }
   if (cmp < 0) {
     const msg = `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`;
-    if (!loggedConfigWarnings.has(msg)) {
-      loggedConfigWarnings.add(msg);
+    const key = configPath ? `${configPath}:${msg}` : msg;
+    if (!loggedConfigWarnings.has(key)) {
+      loggedConfigWarnings.add(key);
       logger.warn(msg);
     }
   }
@@ -707,7 +717,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         resolveConfigIncludesForRead(parsed, configPath, deps),
         deps.env,
       );
-      warnOnConfigMiskeys(resolvedConfig, deps.logger);
+      warnOnConfigMiskeys(resolvedConfig, deps.logger, configPath);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
         return {};
       }
@@ -742,7 +752,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           deps.logger.warn(`Config warnings:\\n${details}`);
         }
       }
-      warnIfConfigFromFuture(validated.config, deps.logger);
+      warnIfConfigFromFuture(validated.config, deps.logger, configPath);
       const cfg = applyTalkConfigNormalization(
         applyModelDefaults(
           applyCompactionDefaults(
@@ -959,7 +969,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         };
       }
 
-      warnIfConfigFromFuture(validated.config, deps.logger);
+      warnIfConfigFromFuture(validated.config, deps.logger, configPath);
       const snapshotConfig = normalizeConfigPaths(
         applyTalkApiKey(
           applyTalkConfigNormalization(
