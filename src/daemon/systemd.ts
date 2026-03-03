@@ -355,6 +355,12 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
     return false;
   }
+  // stdout may contain the real status text (e.g. "not-found") even when
+  // readSystemctlDetail() returns a generic error.message from execFile,
+  // because execFileUtf8 falls back to error.message when stderr is empty.
+  if (isSystemctlMissing(res.stdout) || isSystemdUnitNotEnabled(res.stdout)) {
+    return false;
+  }
   throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
 }
 
