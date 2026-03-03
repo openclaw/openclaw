@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
 /** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean }} ChangedScope */
@@ -80,7 +80,7 @@ export function listChangedPaths(base, head = "HEAD") {
   if (!base) {
     return [];
   }
-  const output = execSync(`git diff --name-only ${base} ${head}`, {
+  const output = execFileSync("git", ["diff", "--name-only", base, head], {
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
   });
