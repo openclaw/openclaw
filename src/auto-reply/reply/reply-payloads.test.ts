@@ -158,6 +158,17 @@ describe("shouldSuppressMessagingToolReplies", () => {
     expect(suppressed).toBe(false);
   });
 
+  it("does not suppress telegram topic-origin replies when explicit threadId is zero", () => {
+    const suppressed = shouldSuppressMessagingToolReplies({
+      messageProvider: "telegram",
+      originatingTo: "telegram:group:-100123:topic:77",
+      messagingToolSentTargets: [
+        { tool: "message", provider: "telegram", to: "-100123", threadId: "0" },
+      ],
+    });
+    expect(suppressed).toBe(false);
+  });
+
   it("suppresses telegram topic-origin replies when explicit scoped threadId matches origin topic", () => {
     const suppressed = shouldSuppressMessagingToolReplies({
       messageProvider: "telegram",

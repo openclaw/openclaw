@@ -190,6 +190,7 @@ function targetsMatchForSuppression(params: {
   const rawTargetThreadId =
     typeof params.targetThreadId === "string" ? params.targetThreadId.trim() : undefined;
   const explicitTargetThreadId = parseTelegramThreadId(rawTargetThreadId);
+  const hasExplicitTargetThreadId = rawTargetThreadId != null;
   if (rawTargetThreadId && explicitTargetThreadId == null) {
     // Explicit malformed topic/thread ids should not fall back to chat-level auto-threading.
     return false;
@@ -198,17 +199,20 @@ function targetsMatchForSuppression(params: {
   if (origin.chatId.trim().toLowerCase() !== target.chatId.trim().toLowerCase()) {
     return false;
   }
+  if (origin.messageThreadId && hasExplicitTargetThreadId) {
+    return origin.messageThreadId === explicitTargetThreadId;
+  }
   // Exact thread match is always in-scope.
-  if (origin.messageThreadId && targetThreadId) {
+  if (origin.messageThreadId && targetThreadId != null) {
     return origin.messageThreadId === targetThreadId;
   }
   // Telegram auto-threading can route chat-level sends into the active topic.
   // In that case the send target omits topic metadata and inherits the origin topic.
-  if (origin.messageThreadId && !targetThreadId) {
+  if (origin.messageThreadId && targetThreadId == null) {
     return true;
   }
   // Origin is non-topic; explicit topic sends are a different destination.
-  if (!origin.messageThreadId && targetThreadId) {
+  if (!origin.messageThreadId && targetThreadId != null) {
     return false;
   }
   return params.targetKey === params.originTarget;
