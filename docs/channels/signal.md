@@ -212,6 +212,72 @@ Groups:
 - Use `channels.signal.ignoreAttachments` to skip downloading media.
 - Group history context uses `channels.signal.historyLimit` (or `channels.signal.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 
+## Streaming and progressive delivery
+
+Signal has no message-edit API, so preview streaming (partial or block-edit modes used on other platforms) cannot work — once a message is sent it cannot be updated in place.
+
+**Block streaming** solves this by sending completed chunks as separate messages while the model is still generating. Each chunk is a self-contained piece of text, so the conversation reads naturally even though the full reply is not finished yet.
+
+Block streaming is off by default for Signal. Enable it explicitly:
+
+```json5
+{
+  channels: {
+    signal: {
+      blockStreaming: true,
+    },
+  },
+}
+```
+
+### Full configuration example
+
+```json5
+{
+  agents: {
+    defaults: {
+      blockStreamingDefault: "on",
+      blockStreamingBreak: "text_end",
+      blockStreamingChunk: { minChars: 800, maxChars: 1200 },
+      blockStreamingCoalesce: { idleMs: 1000 },
+      humanDelay: { mode: "natural" },
+    },
+  },
+  channels: {
+    signal: {
+      blockStreaming: true,
+    },
+  },
+}
+```
+
+### Break modes
+
+- `blockStreamingBreak: "text_end"` — emits each chunk as soon as a text block finishes. Good for responsive, conversational replies.
+- `blockStreamingBreak: "message_end"` — waits for the full model response, then splits into chunks if the reply exceeds the chunk size. Better for long-form answers where you want coherent paragraphs.
+
+### Coalescing
+
+Signal defaults to a higher coalesce floor (`minChars: 1500`) to prevent tiny-fragment spam on mobile. If the model produces a short text block, the gateway holds it and merges it into the next chunk until the minimum is reached.
+
+Tune up for fewer, larger messages or down for faster delivery:
+
+```json5
+{
+  channels: {
+    signal: {
+      blockStreamingCoalesce: { minChars: 2000 },
+    },
+  },
+}
+```
+
+### Human delay
+
+`humanDelay: { mode: "natural" }` adds 800–2500 ms pauses between block messages, matching a natural typing cadence. Without it, chunks arrive in rapid machine-gun bursts that can feel jarring on mobile.
+
+For the full streaming architecture (preview streaming, block streaming, and how they interact across channels), see [Streaming](/concepts/streaming).
+
 ## Typing + read receipts
 
 - **Typing indicators**: OpenClaw sends typing signals via `signal-cli sendTyping` and refreshes them while a reply is running.
