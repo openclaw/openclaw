@@ -21,11 +21,12 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = ["brave", "serper", "perplexity", "grok", "gemini", "kimi"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+const SERPER_SEARCH_ENDPOINT = "https://google.serper.dev/search";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
@@ -99,6 +100,17 @@ type BraveSearchResponse = {
   web?: {
     results?: BraveSearchResult[];
   };
+};
+
+type SerperSearchResult = {
+  title?: string;
+  link?: string;
+  snippet?: string;
+  date?: string;
+};
+
+type SerperSearchResponse = {
+  organic?: SerperSearchResult[];
 };
 
 type PerplexityConfig = {
@@ -296,6 +308,18 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   return fromConfig || fromEnv || undefined;
 }
 
+function resolveSerperApiKey(search?: WebSearchConfig): string | undefined {
+  if (search && typeof search === "object" && "serper" in search) {
+    const serper = search.serper as Record<string, unknown>;
+    const fromConfig = normalizeApiKey(serper?.apiKey);
+    if (fromConfig) {
+      return fromConfig;
+    }
+  }
+  const fromEnv = normalizeApiKey(process.env.SERPER_API_KEY);
+  return fromEnv || undefined;
+}
+
 function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
   if (provider === "perplexity") {
     return {
@@ -329,6 +353,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "serper") {
+    return {
+      error: "missing_serper_api_key",
+      message:
+        "web_search (serper) needs a Serper API key. Set SERPER_API_KEY in the Gateway environment, or configure tools.web.search.serper.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -353,6 +385,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   if (raw === "kimi") {
     return "kimi";
   }
+  if (raw === "serper") {
+    return "serper";
+  }
   if (raw === "brave") {
     return "brave";
   }
@@ -366,7 +401,14 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "brave";
     }
-    // 2. Gemini
+    // 2. Serper
+    if (resolveSerperApiKey(search)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "serper" from available API keys',
+      );
+      return "serper";
+    }
+    // 3. Gemini
     const geminiConfig = resolveGeminiConfig(search);
     if (resolveGeminiApiKey(geminiConfig)) {
       logVerbose(
@@ -1115,6 +1157,63 @@ async function runKimiSearch(params: {
   };
 }
 
+async function runSerperSearch(params: {
+  query: string;
+  count: number;
+  apiKey: string;
+  timeoutSeconds: number;
+  country?: string;
+  search_lang?: string;
+}): Promise<
+  Array<{ title: string; url: string; description: string; published?: string; siteName?: string }>
+> {
+  const body: Record<string, unknown> = {
+    q: params.query,
+    num: params.count,
+  };
+  if (params.country) {
+    body.gl = params.country.toLowerCase();
+  }
+  if (params.search_lang) {
+    body.hl = params.search_lang.toLowerCase();
+  }
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: SERPER_SEARCH_ENDPOINT,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-KEY": params.apiKey,
+        },
+        body: JSON.stringify(body),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "Serper");
+      }
+      const data = (await res.json()) as SerperSearchResponse;
+      const results = Array.isArray(data.organic) ? data.organic : [];
+      return results.map((entry) => {
+        const title = entry.title ?? "";
+        const url = entry.link ?? "";
+        const description = entry.snippet ?? "";
+        const rawSiteName = resolveSiteName(url);
+        return {
+          title: title ? wrapWebContent(title, "web_search") : "",
+          url,
+          description: description ? wrapWebContent(description, "web_search") : "",
+          published: entry.date || undefined,
+          siteName: rawSiteName || undefined,
+        };
+      });
+    },
+  );
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -1135,15 +1234,17 @@ async function runWebSearch(params: {
   kimiModel?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
-    params.provider === "brave"
-      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
-      : params.provider === "perplexity"
-        ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
-        : params.provider === "kimi"
-          ? `${params.provider}:${params.query}:${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-          : params.provider === "gemini"
-            ? `${params.provider}:${params.query}:${params.geminiModel ?? DEFAULT_GEMINI_MODEL}`
-            : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+    params.provider === "serper"
+      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}`
+      : params.provider === "brave"
+        ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
+        : params.provider === "perplexity"
+          ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
+          : params.provider === "kimi"
+            ? `${params.provider}:${params.query}:${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
+            : params.provider === "gemini"
+              ? `${params.provider}:${params.query}:${params.geminiModel ?? DEFAULT_GEMINI_MODEL}`
+              : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -1151,6 +1252,33 @@ async function runWebSearch(params: {
   }
 
   const start = Date.now();
+
+  if (params.provider === "serper") {
+    const mapped = await runSerperSearch({
+      query: params.query,
+      count: params.count,
+      apiKey: params.apiKey,
+      timeoutSeconds: params.timeoutSeconds,
+      country: params.country,
+      search_lang: params.search_lang,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: mapped.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: mapped,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
 
   if (params.provider === "perplexity") {
     const { content, citations } = await runPerplexitySearch({
@@ -1359,7 +1487,9 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : provider === "serper"
+              ? "Search the web using Serper (Google Search API). Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research."
+              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1378,7 +1508,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "serper"
+                  ? resolveSerperApiKey(search)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
