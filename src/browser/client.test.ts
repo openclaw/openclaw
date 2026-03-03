@@ -8,7 +8,13 @@ import {
   browserPdfSave,
   browserScreenshotAction,
 } from "./client-actions.js";
-import { browserOpenTab, browserSnapshot, browserStatus, browserTabs } from "./client.js";
+import {
+  browserOpenTab,
+  browserProfiles,
+  browserSnapshot,
+  browserStatus,
+  browserTabs,
+} from "./client.js";
 
 describe("browser client", () => {
   function stubSnapshotFetch(calls: string[]) {
@@ -50,6 +56,45 @@ describe("browser client", () => {
   it("adds useful timeout messaging for abort-like failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("aborted")));
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/timed out/i);
+  });
+
+  it("retries tabs once on timeout-like failures", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("aborted"))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          running: true,
+          tabs: [{ targetId: "t1", title: "T", url: "https://x" }],
+        }),
+      } as unknown as Response);
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      browserTabs("http://127.0.0.1:18791", {
+        retryDelayMs: 0,
+      }),
+    ).resolves.toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses timeout overrides for read calls", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("aborted")));
+
+    await expect(
+      browserTabs("http://127.0.0.1:18791", {
+        timeoutMs: 6789,
+        retryCount: 0,
+      }),
+    ).rejects.toThrow(/6789ms/i);
+    await expect(
+      browserProfiles("http://127.0.0.1:18791", {
+        timeoutMs: 4321,
+        retryCount: 0,
+      }),
+    ).rejects.toThrow(/4321ms/i);
   });
 
   it("surfaces non-2xx responses with body text", async () => {

@@ -84,6 +84,13 @@ function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   return { targetId, timeoutMs };
 }
 
+function readOptionalTimeoutMs(params: Record<string, unknown>) {
+  if (typeof params.timeoutMs !== "number" || !Number.isFinite(params.timeoutMs)) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(params.timeoutMs));
+}
+
 type BrowserProxyFile = {
   path: string;
   base64: string;
@@ -301,6 +308,7 @@ export function createBrowserTool(opts?: {
         target,
         sandboxBridgeUrl: opts?.sandboxBridgeUrl,
       });
+      const timeoutMs = readOptionalTimeoutMs(params);
 
       const resolvedTarget = target === "node" ? undefined : target;
       const baseUrl = nodeTarget
@@ -343,10 +351,11 @@ export function createBrowserTool(opts?: {
                 method: "GET",
                 path: "/",
                 profile,
+                timeoutMs,
               }),
             );
           }
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          return jsonResult(await browserStatus(baseUrl, { profile, timeoutMs }));
         case "start":
           if (proxyRequest) {
             await proxyRequest({
@@ -386,22 +395,24 @@ export function createBrowserTool(opts?: {
             const result = await proxyRequest({
               method: "GET",
               path: "/profiles",
+              timeoutMs,
             });
             return jsonResult(result);
           }
-          return jsonResult({ profiles: await browserProfiles(baseUrl) });
+          return jsonResult({ profiles: await browserProfiles(baseUrl, { timeoutMs }) });
         case "tabs":
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "GET",
               path: "/tabs",
               profile,
+              timeoutMs,
             });
             const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
             return formatTabsToolResult(tabs);
           }
           {
-            const tabs = await browserTabs(baseUrl, { profile });
+            const tabs = await browserTabs(baseUrl, { profile, timeoutMs });
             return formatTabsToolResult(tabs);
           }
         case "open": {

@@ -164,7 +164,28 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "profiles" });
 
-    expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(undefined);
+    expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(undefined, {
+      timeoutMs: undefined,
+    });
+  });
+
+  it("passes timeoutMs to status/profiles/tabs calls", async () => {
+    const tool = createBrowserTool();
+    const timeoutMs = 12_000;
+
+    await tool.execute?.("call-1", { action: "status", timeoutMs });
+    await tool.execute?.("call-1", { action: "profiles", timeoutMs });
+    await tool.execute?.("call-1", { action: "tabs", timeoutMs });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ timeoutMs }),
+    );
+    expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(undefined, { timeoutMs });
+    expect(browserClientMocks.browserTabs).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ timeoutMs }),
+    );
   });
 
   it("passes refs mode through to browser snapshot", async () => {
@@ -235,6 +256,25 @@ describe("browser tool snapshot maxChars", () => {
       }),
     );
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it("passes timeoutMs through node proxy requests", async () => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "tabs", target: "node", timeoutMs: 45_000 });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 45_000 },
+      expect.objectContaining({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          timeoutMs: 45_000,
+        }),
+      }),
+    );
+    expect(browserClientMocks.browserTabs).not.toHaveBeenCalled();
   });
 
   it("keeps sandbox bridge url when node proxy is available", async () => {
