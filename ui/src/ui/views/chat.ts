@@ -261,7 +261,9 @@ export function renderChat(props: ChatProps) {
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
-  const toolOutputLookup = buildToolCardOutputLookup(props.toolMessages);
+  const historyMessages = Array.isArray(props.messages) ? props.messages : [];
+  const toolMessages = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const toolOutputLookup = buildToolCardOutputLookup([...historyMessages, ...toolMessages]);
   const thread = html`
     <div
       class="chat-thread"
@@ -578,8 +580,13 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       continue;
     }
 
-    const role = normalized.role.toLowerCase();
-    if (!showInlineToolFlow && (role === "toolresult" || role === "tool_result")) {
+    const rawRole = typeof raw.role === "string" ? raw.role.toLowerCase() : "";
+    const isStandaloneToolMessage =
+      rawRole === "toolresult" ||
+      rawRole === "tool_result" ||
+      rawRole === "tool" ||
+      rawRole === "function";
+    if (!showInlineToolFlow && isStandaloneToolMessage) {
       continue;
     }
 

@@ -108,6 +108,63 @@ describe("chat view", () => {
     expect(threadText).not.toContain("LIVE TOOL DETAILS");
   });
 
+  it("uses hidden tool-stream output to enrich assistant exec cards when inline tool flow is off", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showThinking: true,
+          showInlineToolFlow: false,
+          sessions: {
+            ...createSessions(),
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: Date.now(),
+                reasoningLevel: "medium",
+              },
+            ],
+          },
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolcall",
+                  name: "exec",
+                  arguments: {
+                    command: "openclaw system --help",
+                    cwd: "C:\\Users\\test\\.openclaw\\workspace",
+                  },
+                },
+                {
+                  type: "toolresult",
+                  name: "exec",
+                  text: "Command: openclaw system --help\nWorking Dir: C:\\Users\\test\\.openclaw\\workspace",
+                },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+          toolMessages: [
+            {
+              role: "toolresult",
+              toolName: "exec",
+              content: [{ type: "text", text: "Usage: openclaw system [options] [command]\nSystem tools..." }],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const threadText = container.querySelector(".chat-thread")?.textContent ?? "";
+    expect(threadText).toContain("Usage: openclaw system [options] [command]");
+    expect(threadText).not.toContain("Working Dir: C:\\Users\\test\\.openclaw\\workspace");
+  });
+
   it("shows detailed tool flow inline when both thinking and inline flow are enabled", () => {
     const container = document.createElement("div");
     render(
@@ -311,6 +368,52 @@ describe("chat view", () => {
     const threadText = container.querySelector(".chat-thread")?.textContent ?? "";
     expect(threadText).toContain("history output");
     expect(threadText).toContain("live output");
+  });
+
+  it("hydrates command detail on live tool cards from history when output and args split across cards", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showInlineToolFlow: true,
+          messages: [
+            {
+              role: "assistant",
+              runId: "run-history",
+              toolCallId: "split-read-1",
+              content: [
+                {
+                  type: "toolcall",
+                  name: "read",
+                  arguments: { path: "workspace/memory/daily/2026-03-01.md" },
+                },
+              ],
+              timestamp: Date.now() - 10_000,
+            },
+          ],
+          toolMessages: [
+            {
+              role: "toolresult",
+              runId: "run-live",
+              toolName: "read",
+              toolCallId: "split-read-1",
+              content: [{ type: "text", text: "live file output" }],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const cards = container.querySelectorAll(".chat-tool-card");
+    expect(cards.length).toBe(2);
+    const details = Array.from(container.querySelectorAll(".chat-tool-card__detail")).map(
+      (node) => node.textContent ?? "",
+    );
+    expect(details).toHaveLength(2);
+    expect(details[0]).toContain("from workspace/memory/daily/2026-03-01.md");
+    expect(details[1]).toContain("from workspace/memory/daily/2026-03-01.md");
   });
 
   it("renders compacting indicator as a badge", () => {

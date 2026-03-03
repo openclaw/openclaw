@@ -332,6 +332,68 @@ describe("tool-cards", () => {
     expect(enriched[1]?.text).toBe("longer and richer read output body");
   });
 
+  it("hydrates missing command args from lookup when tool result card only has output", () => {
+    const resultOnlyCards = extractToolCards({
+      role: "toolresult",
+      toolName: "read",
+      toolCallId: "read-lookup-args-1",
+      content: [{ type: "text", text: "live output body" }],
+    });
+
+    const lookup = buildToolCardOutputLookup([
+      {
+        role: "assistant",
+        toolCallId: "read-lookup-args-1",
+        content: [{ type: "toolcall", name: "read", arguments: { path: "workspace/memory/daily.md" } }],
+      },
+    ]);
+
+    const enriched = enrichToolCardsWithLookup(resultOnlyCards, lookup);
+    expect(enriched[0]?.text).toBe("live output body");
+    expect(enriched[0]?.args).toEqual({ path: "workspace/memory/daily.md" });
+  });
+
+  it("keeps command args from history when live tool stream card carries empty args", () => {
+    const liveCards = extractToolCards({
+      role: "assistant",
+      toolCallId: "read-lookup-args-2",
+      content: [
+        { type: "toolcall", name: "read", arguments: {} },
+        { type: "toolresult", name: "read", text: "latest detailed output" },
+      ],
+    });
+
+    const lookup = buildToolCardOutputLookup([
+      {
+        role: "assistant",
+        toolCallId: "read-lookup-args-2",
+        content: [
+          {
+            type: "toolcall",
+            name: "read",
+            arguments: { path: "C:\\Users\\test\\.openclaw\\workspace\\memory\\daily\\2026-03-01.md" },
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        toolCallId: "read-lookup-args-2",
+        content: [
+          { type: "toolcall", name: "read", arguments: {} },
+          { type: "toolresult", name: "read", text: "latest detailed output" },
+        ],
+      },
+    ]);
+
+    const enriched = enrichToolCardsWithLookup(liveCards, lookup);
+    for (const card of enriched) {
+      expect(card.text).toBe("latest detailed output");
+      expect(card.args).toEqual({
+        path: "C:\\Users\\test\\.openclaw\\workspace\\memory\\daily\\2026-03-01.md",
+      });
+    }
+  });
+
   it("enriches by resource hint when signature and toolCallId are unavailable", () => {
     const terseCards = extractToolCards({
       role: "assistant",
@@ -395,5 +457,44 @@ describe("tool-cards", () => {
     const enriched = enrichToolCardsWithLookup(cards, lookup);
     expect(enriched[0]?.text).toBe("latest concise summary");
     expect(enriched[1]?.text).toBe("latest concise summary");
+  });
+
+  it("replaces metadata-only exec summary with richer lookup output on non-id match", () => {
+    const cards = extractToolCards({
+      role: "assistant",
+      content: [
+        {
+          type: "toolcall",
+          name: "exec",
+          arguments: { command: "openclaw system --help", cwd: "C:\\Users\\test\\.openclaw\\workspace" },
+        },
+        {
+          type: "toolresult",
+          name: "exec",
+          text: "Command: openclaw system --help\nWorking Dir: C:\\Users\\test\\.openclaw\\workspace",
+        },
+      ],
+    });
+
+    const lookup = buildToolCardOutputLookup([
+      {
+        role: "toolresult",
+        toolName: "exec",
+        content: [
+          {
+            type: "text",
+            text: "🦞 OpenClaw 2026.2.26\n\nUsage: openclaw system [options] [command]\n\nSystem tools...",
+          },
+        ],
+      },
+    ]);
+
+    const enriched = enrichToolCardsWithLookup(cards, lookup);
+    expect(enriched[0]?.text).toContain("Usage: openclaw system");
+    expect(enriched[1]?.text).toContain("Usage: openclaw system");
+    expect(enriched[0]?.args).toEqual({
+      command: "openclaw system --help",
+      cwd: "C:\\Users\\test\\.openclaw\\workspace",
+    });
   });
 });

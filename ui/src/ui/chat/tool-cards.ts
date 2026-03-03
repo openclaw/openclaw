@@ -16,16 +16,28 @@ type ToolSidebarContentInput = {
 };
 
 export type ToolCardOutputLookup = {
-  byToolCallId: Map<string, string>;
-  bySignature: Map<string, string>;
-  byResourceHint: Map<string, string>;
+  byToolCallId: Map<string, ToolLookupEntry>;
+  bySignature: Map<string, ToolLookupEntry>;
+  byResourceHint: Map<string, ToolLookupEntry>;
+  byToolName: Map<string, ToolLookupEntry>;
 };
 
-type ToolLookupSource = "toolCallId" | "signature" | "resourceHint";
+type ToolLookupSource = "toolCallId" | "signature" | "resourceHint" | "toolName";
 
 type ToolLookupMatch = {
   source: ToolLookupSource;
-  text: string;
+  text?: string;
+  args?: unknown;
+};
+
+type ToolLookupEntry = {
+  text?: string;
+  args?: unknown;
+};
+
+type ToolLookupCandidate = {
+  source: ToolLookupSource;
+  entry: ToolLookupEntry;
 };
 
 type ExtractToolCardsOptions = {
@@ -87,28 +99,34 @@ export function extractToolCards(
 
 export function buildToolCardOutputLookup(messages: unknown[]): ToolCardOutputLookup {
   const lookup: ToolCardOutputLookup = {
-    byToolCallId: new Map<string, string>(),
-    bySignature: new Map<string, string>(),
-    byResourceHint: new Map<string, string>(),
+    byToolCallId: new Map<string, ToolLookupEntry>(),
+    bySignature: new Map<string, ToolLookupEntry>(),
+    byResourceHint: new Map<string, ToolLookupEntry>(),
+    byToolName: new Map<string, ToolLookupEntry>(),
   };
   for (const message of messages) {
     const cards = extractToolCards(message);
     for (const card of cards) {
       const text = normalizeToolText(card.text);
-      if (!text) {
+      const args = normalizeToolArgs(card.args);
+      if (!text && !hasMeaningfulArgs(args)) {
         continue;
       }
       const toolCallId = normalizeToolCallId(card.toolCallId);
       if (toolCallId) {
-        lookup.byToolCallId.set(toolCallId, text);
+        upsertLookupEntry(lookup.byToolCallId, toolCallId, { text: text ?? undefined, args });
       }
       const signature = buildToolSignature(card.name, card.args);
       if (signature) {
-        lookup.bySignature.set(signature, text);
+        upsertLookupEntry(lookup.bySignature, signature, { text: text ?? undefined, args });
       }
       const resourceHint = buildResourceHint(card);
       if (resourceHint) {
-        lookup.byResourceHint.set(resourceHint, text);
+        upsertLookupEntry(lookup.byResourceHint, resourceHint, { text: text ?? undefined, args });
+      }
+      const toolName = normalizeToolName(card.name);
+      if (toolName) {
+        upsertLookupEntry(lookup.byToolName, toolName, { text: text ?? undefined, args });
       }
     }
   }
@@ -123,11 +141,18 @@ export function enrichToolCardsWithLookup(
     return cards;
   }
   return cards.map((card) => {
-    const candidate = resolveLookupText(card, lookup);
-    if (!candidate || !shouldApplyLookupText(card, candidate)) {
+    const candidate = resolveLookupMatch(card, lookup);
+    if (!candidate) {
       return card;
     }
-    return { ...card, text: candidate.text };
+    let next = card;
+    if (shouldApplyLookupText(next, candidate) && candidate.text) {
+      next = { ...next, text: candidate.text };
+    }
+    if (shouldApplyLookupArgs(next, candidate)) {
+      next = { ...next, args: candidate.args };
+    }
+    return next;
   });
 }
 
@@ -394,47 +419,82 @@ function normalizeToolText(value: string | undefined): string | null {
 }
 
 function shouldApplyLookupText(card: ToolCard, candidate: ToolLookupMatch): boolean {
+  if (!candidate.text) {
+    return false;
+  }
   const normalizedCurrent = normalizeToolText(card.text);
   if (!normalizedCurrent) {
     return true;
   }
-  return candidate.source === "toolCallId" && normalizedCurrent !== candidate.text;
+  if (candidate.source === "toolCallId") {
+    return normalizedCurrent !== candidate.text;
+  }
+  // Non-id matches (signature/resource hint) should usually keep current text to
+  // avoid stale overrides, except when current text is metadata-only summary.
+  return (
+    normalizedCurrent !== candidate.text &&
+    isLikelyMetadataOnlyToolText(normalizedCurrent) &&
+    !isLikelyMetadataOnlyToolText(candidate.text)
+  );
 }
 
-function resolveLookupText(
-  card: ToolCard,
-  lookup: ToolCardOutputLookup,
-): ToolLookupMatch | undefined {
+function shouldApplyLookupArgs(card: ToolCard, candidate: ToolLookupMatch): boolean {
+  if (!hasMeaningfulArgs(candidate.args)) {
+    return false;
+  }
+  if (!hasMeaningfulArgs(card.args)) {
+    return true;
+  }
+  return (
+    candidate.source === "toolCallId" &&
+    stableSerialize(stableNormalize(card.args)) !== stableSerialize(stableNormalize(candidate.args))
+  );
+}
+
+function resolveLookupMatch(card: ToolCard, lookup: ToolCardOutputLookup): ToolLookupMatch | undefined {
   const toolCallId = normalizeToolCallId(card.toolCallId);
-  if (toolCallId) {
-    const byId = lookup.byToolCallId.get(toolCallId);
-    if (byId) {
-      return { source: "toolCallId", text: byId };
-    }
-  }
+  const byId: ToolLookupCandidate | undefined = toolCallId
+    ? (() => {
+        const entry = lookup.byToolCallId.get(toolCallId);
+        return entry ? { source: "toolCallId", entry } : undefined;
+      })()
+    : undefined;
   const signature = buildToolSignature(card.name, card.args);
-  if (!signature) {
-    const resourceHint = buildResourceHint(card);
-    if (!resourceHint) {
-      return undefined;
-    }
-    const byResourceHint = lookup.byResourceHint.get(resourceHint);
-    return byResourceHint ? { source: "resourceHint", text: byResourceHint } : undefined;
-  }
-  const bySignature = lookup.bySignature.get(signature);
-  if (bySignature) {
-    return { source: "signature", text: bySignature };
-  }
   const resourceHint = buildResourceHint(card);
-  if (!resourceHint) {
+  const bySignature: ToolLookupCandidate | undefined = signature
+    ? (() => {
+        const entry = lookup.bySignature.get(signature);
+        return entry ? { source: "signature", entry } : undefined;
+      })()
+    : undefined;
+  const byResourceHint: ToolLookupCandidate | undefined = resourceHint
+    ? (() => {
+        const entry = lookup.byResourceHint.get(resourceHint);
+        return entry ? { source: "resourceHint", entry } : undefined;
+      })()
+    : undefined;
+  const toolName = normalizeToolName(card.name);
+  const byToolName: ToolLookupCandidate | undefined = toolName
+    ? (() => {
+        const entry = lookup.byToolName.get(toolName);
+        return entry ? { source: "toolName", entry } : undefined;
+      })()
+    : undefined;
+
+  const textCandidate = pickPreferredTextCandidate(byId, bySignature, byResourceHint, byToolName);
+  const argsCandidate = pickPreferredArgsCandidate(byId, bySignature, byResourceHint, byToolName);
+  if (!textCandidate && !argsCandidate) {
     return undefined;
   }
-  const byResourceHint = lookup.byResourceHint.get(resourceHint);
-  return byResourceHint ? { source: "resourceHint", text: byResourceHint } : undefined;
+  return {
+    source: textCandidate?.source ?? argsCandidate?.source ?? "toolCallId",
+    text: textCandidate?.entry.text,
+    args: argsCandidate?.entry.args ?? textCandidate?.entry.args,
+  };
 }
 
 function buildToolSignature(name: string, args: unknown): string {
-  const normalizedName = name.trim().toLowerCase();
+  const normalizedName = normalizeToolName(name);
   if (!normalizedName) {
     return "";
   }
@@ -491,7 +551,7 @@ function pickString(record: Record<string, unknown> | null, keys: string[]): str
 }
 
 function buildResourceHint(card: ToolCard): string {
-  const normalizedName = card.name.trim().toLowerCase();
+  const normalizedName = normalizeToolName(card.name);
   if (!normalizedName) {
     return "";
   }
@@ -575,6 +635,138 @@ function coerceArgs(value: unknown): unknown {
   } catch {
     return value;
   }
+}
+
+function hasMeaningfulArgs(value: unknown): boolean {
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>).length > 0;
+  }
+  return false;
+}
+
+function normalizeToolArgs(value: unknown): unknown | undefined {
+  return hasMeaningfulArgs(value) ? value : undefined;
+}
+
+function upsertLookupEntry(
+  map: Map<string, ToolLookupEntry>,
+  key: string,
+  incoming: ToolLookupEntry,
+) {
+  const existing = map.get(key);
+  if (!existing) {
+    map.set(key, incoming);
+    return;
+  }
+  map.set(key, {
+    text: incoming.text ?? existing.text,
+    args: incoming.args ?? existing.args,
+  });
+}
+
+function pickPreferredTextCandidate(
+  byId?: ToolLookupCandidate,
+  bySignature?: ToolLookupCandidate,
+  byResourceHint?: ToolLookupCandidate,
+  byToolName?: ToolLookupCandidate,
+): ToolLookupCandidate | undefined {
+  const preferables = [bySignature, byResourceHint, byToolName].filter(
+    (candidate): candidate is ToolLookupCandidate =>
+      typeof candidate?.entry.text === "string" && candidate.entry.text.trim().length > 0,
+  );
+  const nonMetadataPreferables = preferables.filter(
+    (candidate) => !isLikelyMetadataOnlyToolText(candidate.entry.text ?? ""),
+  );
+  if (byId?.entry.text) {
+    if (!isLikelyMetadataOnlyToolText(byId.entry.text)) {
+      return byId;
+    }
+    return pickBestTextCandidate(nonMetadataPreferables) ?? byId;
+  }
+  return pickBestTextCandidate(nonMetadataPreferables.length > 0 ? nonMetadataPreferables : preferables);
+}
+
+function pickPreferredArgsCandidate(
+  byId?: ToolLookupCandidate,
+  bySignature?: ToolLookupCandidate,
+  byResourceHint?: ToolLookupCandidate,
+  byToolName?: ToolLookupCandidate,
+): ToolLookupCandidate | undefined {
+  if (hasMeaningfulArgs(byId?.entry.args)) {
+    return byId;
+  }
+  if (hasMeaningfulArgs(bySignature?.entry.args)) {
+    return bySignature;
+  }
+  if (hasMeaningfulArgs(byResourceHint?.entry.args)) {
+    return byResourceHint;
+  }
+  if (hasMeaningfulArgs(byToolName?.entry.args)) {
+    return byToolName;
+  }
+  return undefined;
+}
+
+function normalizeToolName(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function isLikelyMetadataOnlyToolText(value: string): boolean {
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0 || lines.length > 8) {
+    return false;
+  }
+  const metadataLine = (line: string): boolean =>
+    /^(command|working dir|cwd|exit code|status|duration|signal|timed out|timeout):/i.test(line);
+  let metadataCount = 0;
+  for (const line of lines) {
+    if (metadataLine(line)) {
+      metadataCount += 1;
+      continue;
+    }
+    if (/^[-*]\s+(command|working dir|cwd|exit code|status|duration|signal|timed out|timeout):/i.test(line)) {
+      metadataCount += 1;
+      continue;
+    }
+    return false;
+  }
+  return metadataCount === lines.length;
+}
+
+function pickBestTextCandidate(candidates: ToolLookupCandidate[]): ToolLookupCandidate | undefined {
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  const scoreCandidate = (candidate: ToolLookupCandidate): number => {
+    const metadataScore = isLikelyMetadataOnlyToolText(candidate.entry.text ?? "") ? 0 : 10;
+    const sourceScore =
+      candidate.source === "signature"
+        ? 3
+        : candidate.source === "resourceHint"
+          ? 2
+          : candidate.source === "toolName"
+            ? 1
+            : 4;
+    return metadataScore + sourceScore;
+  };
+  return candidates.reduce((best, candidate) =>
+    scoreCandidate(candidate) > scoreCandidate(best) ? candidate : best,
+  );
 }
 
 function extractToolText(item: Record<string, unknown>): string | undefined {
