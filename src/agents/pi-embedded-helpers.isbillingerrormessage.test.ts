@@ -187,6 +187,11 @@ describe("isCloudflareOrHtmlErrorPage", () => {
     expect(isCloudflareOrHtmlErrorPage(htmlError)).toBe(true);
   });
 
+  it("detects statusless HTML pages", () => {
+    const htmlError = `<!DOCTYPE html><html><head><title>Cloudflare</title></head><body>down</body></html>`;
+    expect(isCloudflareOrHtmlErrorPage(htmlError)).toBe(true);
+  });
+
   it("does not flag non-HTML status lines", () => {
     expect(isCloudflareOrHtmlErrorPage("500 Internal Server Error")).toBe(false);
     expect(isCloudflareOrHtmlErrorPage("429 Too Many Requests")).toBe(false);

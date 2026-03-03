@@ -186,6 +186,7 @@ const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
 const TRANSIENT_HTTP_ERROR_CODES = new Set([500, 502, 503, 504, 521, 522, 523, 524, 529]);
+const MAX_UI_ERROR_CHARS = 200;
 const HTTP_ERROR_HINTS = [
   "error",
   "bad request",
@@ -220,6 +221,10 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
     return false;
+  }
+
+  if (HTML_ERROR_PREFIX_RE.test(trimmed) && /<\/html>/i.test(trimmed)) {
+    return true;
   }
 
   const status = extractLeadingHttpStatus(trimmed);
@@ -448,21 +453,27 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
 }
 
 export function formatRawAssistantErrorForUi(raw?: string): string {
+  const truncateUiError = (text: string): string =>
+    text.length > MAX_UI_ERROR_CHARS ? `${text.slice(0, MAX_UI_ERROR_CHARS)}…` : text;
+
   const trimmed = (raw ?? "").trim();
   if (!trimmed) {
     return "LLM request failed with an unknown error.";
   }
 
   const leadingStatus = extractLeadingHttpStatus(trimmed);
-  if (leadingStatus && isCloudflareOrHtmlErrorPage(trimmed)) {
-    return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
+  if (isCloudflareOrHtmlErrorPage(trimmed)) {
+    if (leadingStatus) {
+      return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
+    }
+    return "The AI service is temporarily unavailable. Please try again in a moment.";
   }
 
   const httpMatch = trimmed.match(HTTP_STATUS_PREFIX_RE);
   if (httpMatch) {
     const rest = httpMatch[2].trim();
     if (!rest.startsWith("{")) {
-      return `HTTP ${httpMatch[1]}: ${rest}`;
+      return `HTTP ${httpMatch[1]}: ${truncateUiError(rest)}`;
     }
   }
 
@@ -471,10 +482,10 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     const prefix = info.httpCode ? `HTTP ${info.httpCode}` : "LLM error";
     const type = info.type ? ` ${info.type}` : "";
     const requestId = info.requestId ? ` (request_id: ${info.requestId})` : "";
-    return `${prefix}${type}: ${info.message}${requestId}`;
+    return `${prefix}${type}: ${truncateUiError(info.message)}${requestId}`;
   }
 
-  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+  return truncateUiError(trimmed);
 }
 
 export function formatAssistantErrorText(
@@ -561,10 +572,10 @@ export function formatAssistantErrorText(
   }
 
   // Never return raw unhandled errors - log for debugging but return safe message
-  if (raw.length > 600) {
+  if (raw.length > MAX_UI_ERROR_CHARS) {
     log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
   }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+  return raw.length > MAX_UI_ERROR_CHARS ? `${raw.slice(0, MAX_UI_ERROR_CHARS)}…` : raw;
 }
 
 export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {

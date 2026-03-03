@@ -152,4 +152,23 @@ describe("formatRawAssistantErrorForUi", () => {
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
     );
   });
+
+  it("sanitizes statusless HTML error pages without leaking raw HTML", () => {
+    const htmlError = `<!DOCTYPE html>
+<html lang="en-US">
+  <head><title>Web server is down | example.com | Cloudflare</title></head>
+  <body>Ray ID: abc123</body>
+</html>`;
+
+    expect(formatRawAssistantErrorForUi(htmlError)).toBe(
+      "The AI service is temporarily unavailable. Please try again in a moment.",
+    );
+  });
+
+  it("caps long unstructured errors to 200 chars", () => {
+    const longError = `ERR: ${"x".repeat(400)}`;
+    const formatted = formatRawAssistantErrorForUi(longError);
+    expect(formatted.length).toBe(201);
+    expect(formatted.endsWith("…")).toBe(true);
+  });
 });
