@@ -59,14 +59,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
     userTokenSource: "none",
     config: {},
   };
-  const defaultMessageTemplate: SlackMessageEvent = {
+  const defaultMessageTemplate = Object.freeze({
     channel: "D123",
     channel_type: "im",
     user: "U1",
     text: "hi",
     ts: "1.000",
-  } as SlackMessageEvent;
-  const threadAccount: ResolvedSlackAccount = {
+  }) as SlackMessageEvent;
+  const threadAccount = Object.freeze({
     accountId: "default",
     enabled: true,
     botTokenSource: "config",
@@ -77,14 +77,15 @@ describe("slack prepareSlackMessage inbound contract", () => {
       thread: { initialHistoryLimit: 20 },
     },
     replyToMode: "all",
-  };
+  }) as ResolvedSlackAccount;
+  const defaultPrepareOpts = Object.freeze({ source: "message" }) as { source: "message" };
 
   async function prepareWithDefaultCtx(message: SlackMessageEvent) {
     return prepareSlackMessage({
       ctx: createDefaultSlackCtx(),
       account: defaultAccount,
       message,
-      opts: { source: "message" },
+      opts: defaultPrepareOpts,
     });
   }
 
@@ -101,7 +102,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ctx,
       account,
       message,
-      opts: { source: "message" },
+      opts: defaultPrepareOpts,
     });
   }
 
