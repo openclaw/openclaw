@@ -12,7 +12,7 @@ export async function probeGatewayStatus(opts: {
   configPath?: string;
 }) {
   try {
-    await withProgress(
+    const statusResponse = await withProgress(
       {
         label: "Checking gateway status...",
         indeterminate: true,
@@ -31,7 +31,7 @@ export async function probeGatewayStatus(opts: {
           ...(opts.configPath ? { configPath: opts.configPath } : {}),
         }),
     );
-    return { ok: true } as const;
+    return { ok: true, data: statusResponse } as const;
   } catch (err) {
     return {
       ok: false,

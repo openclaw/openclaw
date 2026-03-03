@@ -88,6 +88,7 @@ export type DaemonStatus = {
     ok: boolean;
     error?: string;
     url?: string;
+    version?: string;
   };
   extraServices: Array<{ label: string; detail: string; scope: string }>;
 };
@@ -291,7 +292,7 @@ export async function gatherDaemonStatus(
       })
     : undefined;
 
-  const rpc = opts.probe
+  const probeResult = opts.probe
     ? await probeGatewayStatus({
         url: probeUrl,
         token:
@@ -308,6 +309,17 @@ export async function gatherDaemonStatus(
         configPath: daemonConfigSummary.path,
       })
     : undefined;
+
+  const rpc =
+    probeResult && probeResult.ok
+      ? {
+          ok: true,
+          version:
+            (probeResult.data as { version?: string } | undefined)?.version ?? undefined,
+        }
+      : probeResult
+        ? { ok: false, error: probeResult.error }
+        : undefined;
 
   let lastError: string | undefined;
   if (loaded && runtime?.status === "running" && portStatus && portStatus.status !== "busy") {

@@ -15,6 +15,7 @@ import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
+import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   createCliStatusTextStyles,
@@ -169,6 +170,17 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   if (runtimeLine) {
     const runtimeColor = resolveRuntimeStatusColor(service.runtime?.status);
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
+  }
+
+  // Display gateway version (from RPC if available, otherwise CLI version)
+  const gatewayVersion = rpc?.version ?? VERSION;
+  const cliVersion = VERSION;
+  if (gatewayVersion === cliVersion) {
+    defaultRuntime.log(`${label("Version:")} ${infoText(gatewayVersion)}`);
+  } else {
+    defaultRuntime.log(
+      `${label("Version:")} gateway=${infoText(gatewayVersion)} | cli=${infoText(cliVersion)}`,
+    );
   }
 
   if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {
