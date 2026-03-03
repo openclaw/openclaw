@@ -1,7 +1,7 @@
 /* ════════════════════════════════════════════════════════════════
    OpenFinClaw — Trading Desk (Page-Specific CSS)
-   Injected via /*__PAGE_CSS__*/ placeholder.
-   Requires: unified-dashboard.css (injected via /*__SHARED_CSS__*/)
+   Injected via __PAGE_CSS__ placeholder.
+   Requires: unified-dashboard.css (injected via __SHARED_CSS__ placeholder)
    ════════════════════════════════════════════════════════════════ */
 
 /* ── Top bar nav links ── */

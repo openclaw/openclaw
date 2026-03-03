@@ -32,6 +32,9 @@ export default defineConfig({
     // Same rationale as unstubEnvs: avoid cross-test pollution under vmForks.
     unstubGlobals: true,
     pool: "forks",
+    forks: {
+      execArgv: ["--experimental-sqlite"],
+    },
     maxWorkers: isCI ? ciWorkers : localWorkers,
     include: [
       "src/**/*.test.ts",
