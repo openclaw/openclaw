@@ -184,7 +184,12 @@ function connect() {
   let authenticated = false;
 
   ws.on("message", (data) => {
-    const msg = JSON.parse(data);
+    let msg;
+    try {
+      msg = JSON.parse(data);
+    } catch {
+      return;
+    }
 
     if (msg.event === "connect.challenge") {
       const nonce = msg.payload.nonce;
