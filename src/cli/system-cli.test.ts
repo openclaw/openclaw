@@ -44,7 +44,7 @@ describe("system-cli", () => {
     expect(callGatewayFromCli).toHaveBeenCalledWith(
       "wake",
       expect.objectContaining({ text: "  hello world  " }),
-      { mode: "next-heartbeat", text: "hello world" },
+      { mode: "next-heartbeat", text: "hello world", sessionKey: undefined },
       { expectFinal: false },
     );
     expect(runtimeLogs).toEqual(["ok"]);
@@ -63,6 +63,40 @@ describe("system-cli", () => {
 
     expect(callGatewayFromCli).not.toHaveBeenCalled();
     expect(runtimeErrors[0]).toContain("--mode must be now or next-heartbeat");
+  });
+
+  it("passes --session-key to gateway call", async () => {
+    await runCli([
+      "system",
+      "event",
+      "--text",
+      "targeted",
+      "--session-key",
+      "agent:main:discord:channel:123",
+    ]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "wake",
+      expect.objectContaining({ text: "targeted" }),
+      {
+        mode: "next-heartbeat",
+        text: "targeted",
+        sessionKey: "agent:main:discord:channel:123",
+      },
+      { expectFinal: false },
+    );
+    expect(runtimeLogs).toEqual(["ok"]);
+  });
+
+  it("omits sessionKey when --session-key is not provided", async () => {
+    await runCli(["system", "event", "--text", "no key"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "wake",
+      expect.any(Object),
+      expect.objectContaining({ sessionKey: undefined }),
+      { expectFinal: false },
+    );
   });
 
   it.each([

@@ -58,11 +58,11 @@ describe("secret target registry", () => {
     };
 
     const supportedFromDocs = readMarkedCredentialList({
-      start: "[//]: # (secretref-supported-list-start)",
+      start: '[//]: # "secretref-supported-list-start"',
       end: "[//]: # (secretref-supported-list-end)",
     });
     const unsupportedFromDocs = readMarkedCredentialList({
-      start: "[//]: # (secretref-unsupported-list-start)",
+      start: '[//]: # "secretref-unsupported-list-start"',
       end: "[//]: # (secretref-unsupported-list-end)",
     });
 

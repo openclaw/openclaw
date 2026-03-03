@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
@@ -60,6 +60,11 @@ function expectLaunchdKickstartSupervised(params?: { launchJobLabel?: string }) 
 }
 
 describe("restartGatewayProcessWithFreshPid", () => {
+  beforeEach(() => {
+    // Ensure OPENCLAW_NO_RESPAWN is not inherited from the host environment.
+    delete process.env.OPENCLAW_NO_RESPAWN;
+  });
+
   it("returns disabled when OPENCLAW_NO_RESPAWN is set", () => {
     process.env.OPENCLAW_NO_RESPAWN = "1";
     const result = restartGatewayProcessWithFreshPid();
@@ -68,6 +73,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
   });
 
   it("returns supervised when launchd/systemd hints are present", () => {
+    delete process.env.OPENCLAW_LAUNCHD_LABEL;
     process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
@@ -107,7 +113,6 @@ describe("restartGatewayProcessWithFreshPid", () => {
   });
 
   it("spawns detached child with current exec argv", () => {
-    delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
     process.execArgv = ["--import", "tsx"];
     process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
@@ -148,7 +153,6 @@ describe("restartGatewayProcessWithFreshPid", () => {
   });
 
   it("returns failed when spawn throws", () => {
-    delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
 
     spawnMock.mockImplementation(() => {

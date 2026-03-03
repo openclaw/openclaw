@@ -7,10 +7,12 @@ import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import {
   normalizeHookDispatchSessionKey,
   type HookAgentDispatchPayload,
   type HooksConfigResolved,
+  type WakePayload,
 } from "../hooks.js";
 import { createHooksRequestHandler } from "../server-http.js";
 
@@ -25,11 +27,14 @@ export function createGatewayHooksRequestHandler(params: {
 }) {
   const { deps, getHooksConfig, bindHost, port, logHooks } = params;
 
-  const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
-    const sessionKey = resolveMainSessionKeyFromConfig();
+  const dispatchWakeHook = (value: WakePayload) => {
+    // Canonicalize session key so enqueue and heartbeat consumption use the same key
+    const sessionKey = value.sessionKey
+      ? toAgentStoreSessionKey({ agentId: "main", requestKey: value.sessionKey })
+      : resolveMainSessionKeyFromConfig();
     enqueueSystemEvent(value.text, { sessionKey });
     if (value.mode === "now") {
-      requestHeartbeatNow({ reason: "hook:wake" });
+      requestHeartbeatNow({ reason: "hook:wake", sessionKey });
     }
   };
 

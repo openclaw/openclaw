@@ -89,9 +89,44 @@ describe("gateway hooks helpers", () => {
   test("normalizeWakePayload trims + validates", () => {
     expect(normalizeWakePayload({ text: "  hi " })).toEqual({
       ok: true,
-      value: { text: "hi", mode: "now" },
+      value: { text: "hi", mode: "now", sessionKey: undefined },
     });
     expect(normalizeWakePayload({ text: "  ", mode: "now" }).ok).toBe(false);
+  });
+
+  test("normalizeWakePayload passes through sessionKey", () => {
+    const result = normalizeWakePayload({
+      text: "hello",
+      sessionKey: "agent:main:discord:channel:123",
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        text: "hello",
+        mode: "now",
+        sessionKey: "agent:main:discord:channel:123",
+      },
+    });
+  });
+
+  test("normalizeWakePayload trims sessionKey and ignores empty", () => {
+    const trimmed = normalizeWakePayload({ text: "hi", sessionKey: "  key:1  " });
+    expect(trimmed.ok).toBe(true);
+    if (trimmed.ok) {
+      expect(trimmed.value.sessionKey).toBe("key:1");
+    }
+
+    const empty = normalizeWakePayload({ text: "hi", sessionKey: "   " });
+    expect(empty.ok).toBe(true);
+    if (empty.ok) {
+      expect(empty.value.sessionKey).toBeUndefined();
+    }
+
+    const nonString = normalizeWakePayload({ text: "hi", sessionKey: 42 });
+    expect(nonString.ok).toBe(true);
+    if (nonString.ok) {
+      expect(nonString.value.sessionKey).toBeUndefined();
+    }
   });
 
   test("normalizeAgentPayload defaults + validates channel", () => {

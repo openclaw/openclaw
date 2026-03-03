@@ -6,6 +6,9 @@ import {
 } from "../../cron/run-log.js";
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import {
   ErrorCodes,
   errorShape,
@@ -37,9 +40,30 @@ export const cronHandlers: GatewayRequestHandlers = {
     const p = params as {
       mode: "now" | "next-heartbeat";
       text: string;
+      sessionKey?: string;
     };
-    const result = context.cron.wake({ mode: p.mode, text: p.text });
-    respond(true, result, undefined);
+    const rawSessionKey =
+      typeof p.sessionKey === "string" && p.sessionKey.trim() ? p.sessionKey.trim() : undefined;
+    const trimmedText = p.text.trim();
+    if (rawSessionKey) {
+      // Validate text is non-empty after trimming (match fan-out behavior)
+      if (!trimmedText) {
+        respond(true, { ok: false }, undefined);
+        return;
+      }
+      // Canonicalize the session key so enqueue and heartbeat consumption use the same key
+      // (heartbeat runner canonicalizes via toAgentStoreSessionKey internally)
+      const sessionKey = toAgentStoreSessionKey({ agentId: "main", requestKey: rawSessionKey });
+      enqueueSystemEvent(trimmedText, { sessionKey });
+      if (p.mode === "now") {
+        requestHeartbeatNow({ reason: "wake", sessionKey });
+      }
+      respond(true, { ok: true, mode: p.mode }, undefined);
+    } else {
+      // Fan-out: enqueue without sessionKey so all agents pick it up
+      const result = context.cron.wake({ mode: p.mode, text: p.text });
+      respond(true, result, undefined);
+    }
   },
   "cron.list": async ({ params, respond, context }) => {
     if (!validateCronListParams(params)) {

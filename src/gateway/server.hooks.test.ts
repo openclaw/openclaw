@@ -351,6 +351,109 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("wake with sessionKey targets custom session", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+    };
+    await withGatewayServer(async ({ port }) => {
+      const customKey = "agent:main:discord:channel:999";
+
+      const res = await postHook(port, "/hooks/wake", {
+        text: "Thread wake",
+        sessionKey: customKey,
+      });
+      expect(res.status).toBe(200);
+
+      // Event should NOT appear in the main session
+      expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+
+      // Event should appear in the custom session
+      const deadline = Date.now() + 2000;
+      let found: string[] = [];
+      while (Date.now() < deadline) {
+        found = peekSystemEvents(customKey);
+        if (found.length > 0) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(found.some((e) => e.includes("Thread wake"))).toBe(true);
+      drainSystemEvents(customKey);
+    });
+  });
+
+  test("wake with sessionKey rejected when allowRequestSessionKey is not enabled", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      const res = await postHook(port, "/hooks/wake", {
+        text: "Blocked wake",
+        sessionKey: "agent:main:dm:u99999",
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: string };
+      expect(body.error).toContain("hooks.allowRequestSessionKey");
+    });
+  });
+
+  test("wake with sessionKey rejected when it violates allowedSessionKeyPrefixes", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+    };
+    await withGatewayServer(async ({ port }) => {
+      const res = await postHook(port, "/hooks/wake", {
+        text: "Bad prefix wake",
+        sessionKey: "agent:main:dm:u99999",
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: string };
+      expect(body.error).toContain("hook:");
+    });
+  });
+
+  test("wake with valid sessionKey and matching prefix succeeds", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+    };
+    await withGatewayServer(async ({ port }) => {
+      const res = await postHook(port, "/hooks/wake", {
+        text: "Prefix wake",
+        sessionKey: "hook:my-session",
+      });
+      expect(res.status).toBe(200);
+
+      const deadline = Date.now() + 2000;
+      let found: string[] = [];
+      while (Date.now() < deadline) {
+        found = peekSystemEvents("agent:main:hook:my-session");
+        if (found.length > 0) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(found.some((e) => e.includes("Prefix wake"))).toBe(true);
+      drainSystemEvents("agent:main:hook:my-session");
+    });
+  });
+
+  test("wake without sessionKey targets main session", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      const res = await postHook(port, "/hooks/wake", { text: "Main wake" });
+      expect(res.status).toBe(200);
+      const events = await waitForSystemEvent();
+      expect(events.some((e) => e.includes("Main wake"))).toBe(true);
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
   test("throttles repeated hook auth failures and resets after success", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {

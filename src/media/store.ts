@@ -185,7 +185,9 @@ async function downloadToFile(
             }
           });
           pipeline(res, out)
-            .then(() => {
+            .then(async () => {
+              // Explicitly set permissions — createWriteStream mode is masked by process umask.
+              await fs.chmod(dest, MEDIA_FILE_MODE);
               const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
               const rawHeader = res.headers["content-type"];
               const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
@@ -288,6 +290,7 @@ export async function saveMediaSource(
     const id = ext ? `${baseId}${ext}` : baseId;
     const dest = path.join(dir, id);
     await fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE });
+    await fs.chmod(dest, MEDIA_FILE_MODE);
     return { id, path: dest, size: stat.size, contentType: mime };
   } catch (err) {
     if (err instanceof SafeOpenError) {
@@ -327,5 +330,6 @@ export async function saveMediaBuffer(
 
   const dest = path.join(dir, id);
   await fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE });
+  await fs.chmod(dest, MEDIA_FILE_MODE);
   return { id, path: dest, size: buffer.byteLength, contentType: mime };
 }
