@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 export type PendingActionStatus = "pending" | "approved" | "denied" | "expired";
 
 export type PendingAction = {
@@ -14,9 +16,32 @@ export type PendingAction = {
 
 export class PendingActionStore {
   private actions = new Map<string, PendingAction>();
+  private filePath?: string;
+
+  constructor(filePath?: string) {
+    this.filePath = filePath;
+    if (filePath && fs.existsSync(filePath)) {
+      try {
+        const content = fs.readFileSync(filePath, "utf-8");
+        const data = JSON.parse(content) as { actions: PendingAction[] };
+        for (const action of data.actions) {
+          this.actions.set(action.id, action);
+        }
+      } catch {
+        // File corrupt or unreadable — start fresh
+      }
+    }
+  }
+
+  private persist(): void {
+    if (!this.filePath) return;
+    const data = { actions: Array.from(this.actions.values()) };
+    fs.writeFileSync(this.filePath, JSON.stringify(data, null, 2));
+  }
 
   add(action: PendingAction): void {
     this.actions.set(action.id, action);
+    this.persist();
   }
 
   get(id: string): PendingAction | undefined {
@@ -25,6 +50,7 @@ export class PendingActionStore {
 
   remove(id: string): void {
     this.actions.delete(id);
+    this.persist();
   }
 
   getExpired(): PendingAction[] {
@@ -44,6 +70,7 @@ export class PendingActionStore {
 
   clear(): void {
     this.actions.clear();
+    this.persist();
   }
 
   getAll(): PendingAction[] {
