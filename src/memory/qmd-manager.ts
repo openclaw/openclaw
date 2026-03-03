@@ -1852,8 +1852,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     for (const collectionName of collectionNames) {
       const args = this.buildSearchArgs(command, query, limit);
       args.push("-c", collectionName);
+      // runQmd errors (missing collection, unsupported flags) must propagate
+      // for the caller's retry/repair/fallback logic.
       const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
-      const parsed = parseQmdQueryJson(result.stdout, result.stderr);
+      let parsed: QmdQueryResult[];
+      try {
+        parsed = parseQmdQueryJson(result.stdout, result.stderr);
+      } catch (err) {
+        log.warn(
+          `qmd ${command} parse failed for collection ${collectionName}, continuing with remaining collections: ${String(err)}`,
+        );
+        continue;
+      }
       for (const entry of parsed) {
         const normalizedDocId =
           typeof entry.docid === "string" && entry.docid.trim().length > 0
@@ -1890,15 +1900,27 @@ export class QmdMemoryManager implements MemorySearchManager {
   }): Promise<QmdQueryResult[]> {
     const bestByDocId = new Map<string, QmdQueryResult>();
     for (const collectionName of params.collectionNames) {
-      const parsed = await this.runQmdSearchViaMcporter({
-        mcporter: this.qmd.mcporter,
-        tool: params.tool,
-        query: params.query,
-        limit: params.limit,
-        minScore: params.minScore,
-        collection: collectionName,
-        timeoutMs: this.qmd.limits.timeoutMs,
-      });
+      let parsed: QmdQueryResult[];
+      try {
+        parsed = await this.runQmdSearchViaMcporter({
+          mcporter: this.qmd.mcporter,
+          tool: params.tool,
+          query: params.query,
+          limit: params.limit,
+          minScore: params.minScore,
+          collection: collectionName,
+          timeoutMs: this.qmd.limits.timeoutMs,
+        });
+      } catch (err) {
+        // Let missing-collection errors propagate for the caller's repair logic.
+        if (this.isMissingCollectionSearchError(err)) {
+          throw err;
+        }
+        log.warn(
+          `qmd mcporter search failed for collection ${collectionName}, continuing with remaining collections: ${String(err)}`,
+        );
+        continue;
+      }
       for (const entry of parsed) {
         if (typeof entry.docid !== "string" || !entry.docid.trim()) {
           continue;
