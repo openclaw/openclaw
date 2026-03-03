@@ -15,21 +15,6 @@ const CLI_EXIT_CODE_RE =
 const GENERIC_EXIT_CODE_RE =
   /(?:\b(?:exit|exited|terminated)\s*(?:with|code)?\s*\(?code\)?)\s*(\d+)|\bcode\s+(\d+)\b/i;
 
-function parseErrorCode(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-    const parsed = Number.parseInt(trimmed, 10);
-    return Number.isFinite(parsed) && String(parsed) === trimmed ? parsed : undefined;
-  }
-  return undefined;
-}
-
 function parseExitCodeFromMessage(raw: string): number | undefined {
   const normalized = raw.trim();
   if (!normalized) {
@@ -134,13 +119,6 @@ function getStatusCode(err: unknown): number | undefined {
   return undefined;
 }
 
-function getErrorName(err: unknown): string {
-  if (!err || typeof err !== "object") {
-    return "";
-  }
-  return "name" in err ? String(err.name) : "";
-}
-
 function getErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -189,11 +167,6 @@ function getErrorCode(err: unknown): string | undefined {
   }
 
   return undefined;
-}
-
-function getErrorCode(err: unknown): string | undefined {
-  const raw = getErrorCode(err);
-  return parseErrorCode(raw) !== undefined ? String(parseErrorCode(raw)) : undefined;
 }
 
 function getErrorMessage(err: unknown): string {

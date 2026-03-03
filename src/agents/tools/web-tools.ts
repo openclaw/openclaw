@@ -1,2 +1,2 @@
 export { createWebFetchTool, extractReadableContent, fetchFirecrawlContent } from "./web-fetch.js";
-export { createWebSearchTool, createWebSearchContextTool } from "./web-search.js";
+export { createWebSearchTool } from "./web-search.js";

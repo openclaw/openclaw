@@ -21,7 +21,6 @@ vi.mock("../tools/image-tool.js", () => ({
 
 vi.mock("../tools/web-tools.js", () => ({
   createWebSearchTool: () => null,
-  createWebSearchContextTool: () => null,
   createWebFetchTool: () => null,
 }));
 

@@ -17,7 +17,6 @@ import { doctorHandlers } from "./server-methods/doctor.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
-import { memoryIntelligenceHandlers } from "./server-methods/memory-intelligence.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { pushHandlers } from "./server-methods/push.js";
@@ -92,7 +91,6 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...sendHandlers,
   ...usageHandlers,
   ...budgetHandlers,
-  ...memoryIntelligenceHandlers,
   ...agentHandlers,
   ...agentsHandlers,
   ...browserHandlers,
