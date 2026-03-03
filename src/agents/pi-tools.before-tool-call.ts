@@ -24,6 +24,13 @@ const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
 
+function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
+  if (params.runId && params.runId.trim()) {
+    return `${params.runId}:${params.toolCallId}`;
+  }
+  return params.toolCallId;
+}
+
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
   if (!state.toolLoopWarningBuckets) {
     state.toolLoopWarningBuckets = new Map();
@@ -203,7 +210,8 @@ export function wrapToolWithBeforeToolCallHook(
         throw new Error(outcome.reason);
       }
       if (toolCallId) {
-        adjustedParamsByToolCallId.set(toolCallId, outcome.params);
+        const adjustedParamsKey = buildAdjustedParamsKey({ runId: ctx?.runId, toolCallId });
+        adjustedParamsByToolCallId.set(adjustedParamsKey, outcome.params);
         if (adjustedParamsByToolCallId.size > MAX_TRACKED_ADJUSTED_PARAMS) {
           const oldest = adjustedParamsByToolCallId.keys().next().value;
           if (oldest) {
@@ -246,14 +254,16 @@ export function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean
   return taggedTool[BEFORE_TOOL_CALL_WRAPPED] === true;
 }
 
-export function consumeAdjustedParamsForToolCall(toolCallId: string): unknown {
-  const params = adjustedParamsByToolCallId.get(toolCallId);
-  adjustedParamsByToolCallId.delete(toolCallId);
+export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
+  const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
+  const params = adjustedParamsByToolCallId.get(adjustedParamsKey);
+  adjustedParamsByToolCallId.delete(adjustedParamsKey);
   return params;
 }
 
 export const __testing = {
   BEFORE_TOOL_CALL_WRAPPED,
+  buildAdjustedParamsKey,
   adjustedParamsByToolCallId,
   runBeforeToolCallHook,
   isPlainObject,
