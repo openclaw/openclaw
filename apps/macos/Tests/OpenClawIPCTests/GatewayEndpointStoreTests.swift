@@ -126,6 +126,23 @@ import Testing
         #expect(token == "env-token")
     }
 
+    @Test func resolveGatewayPasswordPrefersEnvOverRemoteConfig() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "password": "config-password",
+                ],
+            ],
+        ]
+
+        let password = GatewayEndpointStore._testResolveGatewayPassword(
+            isRemote: true,
+            root: root,
+            env: ["OPENCLAW_GATEWAY_PASSWORD": "env-password"],
+            launchdSnapshot: nil)
+        #expect(password == "env-password")
+    }
+
     @Test func connectionModeResolverPrefersConfigModeOverDefaults() {
         let defaults = self.makeDefaults()
         defaults.set("remote", forKey: connectionModeKey)

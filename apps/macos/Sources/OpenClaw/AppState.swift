@@ -431,6 +431,8 @@ final class AppState {
             changed = Self.updateGatewayString(&remote, key: "sshIdentity", value: remoteIdentity) || changed
         }
 
+        // Keep token/password in openclaw.json for cross-surface parity with gateway/CLI config loading.
+        // This is intentionally plaintext today; follow-up hardening can move storage to Keychain.
         changed = Self.updateGatewayString(&remote, key: "token", value: remoteToken) || changed
         changed = Self.updateGatewayString(&remote, key: "password", value: remotePassword) || changed
 
