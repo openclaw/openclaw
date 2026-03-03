@@ -19,12 +19,19 @@ export async function execFileUtf8(
       }
 
       const e = error as { code?: unknown; message?: unknown };
+      const stdoutText = String(stdout ?? "");
       const stderrText = String(stderr ?? "");
       resolve({
-        stdout: String(stdout ?? ""),
+        stdout: stdoutText,
         stderr:
           stderrText ||
-          (typeof e.message === "string" ? e.message : typeof error === "string" ? error : ""),
+          (!stdoutText
+            ? typeof e.message === "string"
+              ? e.message
+              : typeof error === "string"
+                ? error
+                : ""
+            : ""),
         code: typeof e.code === "number" ? e.code : 1,
       });
     });
