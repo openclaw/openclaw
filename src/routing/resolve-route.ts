@@ -53,6 +53,7 @@ export type ResolvedAgentRoute = {
     | "binding.team"
     | "binding.account"
     | "binding.channel"
+    | "channel"
     | "default";
 };
 
@@ -158,6 +159,15 @@ function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): string 
     return resolved;
   }
   return lookup.fallbackDefaultAgentId;
+}
+
+/** Resolve agentId from channels.<channel>.agentId when set (e.g. feishu.agentId). */
+function getChannelAgentId(cfg: OpenClawConfig, channel: string): string | undefined {
+  const channelConfig = (cfg.channels as Record<string, { agentId?: string }> | undefined)?.[
+    channel
+  ];
+  const raw = channelConfig?.agentId;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
 function matchesChannel(
@@ -713,6 +723,15 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       }
       return choose(matched.binding.agentId, tier.matchedBy);
     }
+  }
+
+  // No binding matched: use channel-level agentId (e.g. channels.feishu.agentId) when set
+  const channelAgentId = getChannelAgentId(input.cfg, channel);
+  if (channelAgentId) {
+    if (shouldLogDebug) {
+      logDebug(`[routing] match: matchedBy=channel agentId=${channelAgentId}`);
+    }
+    return choose(channelAgentId, "channel");
   }
 
   return choose(resolveDefaultAgentId(input.cfg), "default");

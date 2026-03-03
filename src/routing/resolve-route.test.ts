@@ -27,6 +27,29 @@ describe("resolveAgentRoute", () => {
     expect(route.matchedBy).toBe("default");
   });
 
+  test("uses channels.<channel>.agentId when no binding matches (e.g. feishu)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: { agentId: "feishu-lite" },
+      },
+      agents: {
+        list: [
+          { id: "main" },
+          { id: "feishu-lite", tools: { allow: ["search"] } },
+        ],
+      },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: null,
+      peer: { kind: "direct", id: "user-123" },
+    });
+    expect(route.agentId).toBe("feishu-lite");
+    expect(route.sessionKey).toMatch(/^agent:feishu-lite:/);
+    expect(route.matchedBy).toBe("channel");
+  });
+
   test("dmScope controls direct-message session key isolation", () => {
     const cases = [
       { dmScope: "per-peer" as const, expected: "agent:main:direct:+15551234567" },

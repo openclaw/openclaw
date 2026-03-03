@@ -1343,6 +1343,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow Microsoft Teams to write config in response to channel events/commands (default: true).",
   "channels.modelByChannel":
     "Map provider -> channel id -> model override (values are provider/model or aliases).",
+  "channels.feishu.agentId":
+    "Default agent ID for this channel when no binding matches (e.g. feishu-lite). Sessions will use this agent and its tools.allow; applies to extension channels that support agentId.",
   ...IRC_FIELD_HELP,
   "channels.discord.commands.native": 'Override native commands for Discord (bool or "auto").',
   "channels.discord.commands.nativeSkills":
