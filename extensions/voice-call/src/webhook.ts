@@ -30,6 +30,7 @@ type WebhookResponsePayload = {
  */
 export class VoiceCallWebhookServer {
   private server: http.Server | null = null;
+  private listeningUrl: string | null = null;
   private config: VoiceCallConfig;
   private manager: CallManager;
   private provider: VoiceCallProvider;
@@ -195,7 +196,7 @@ export class VoiceCallWebhookServer {
     // This prevents EADDRINUSE when start() is called more than once on the
     // same instance (e.g. during config hot-reload or concurrent ensureRuntime).
     if (this.server?.listening) {
-      return `http://${bind}:${port}${webhookPath}`;
+      return this.listeningUrl ?? this.resolveListeningUrl(bind, webhookPath);
     }
 
     return new Promise((resolve, reject) => {
@@ -223,10 +224,16 @@ export class VoiceCallWebhookServer {
       this.server.on("error", reject);
 
       this.server.listen(port, bind, () => {
-        const url = `http://${bind}:${port}${webhookPath}`;
+        const url = this.resolveListeningUrl(bind, webhookPath);
+        this.listeningUrl = url;
         console.log(`[voice-call] Webhook server listening on ${url}`);
         if (this.mediaStreamHandler) {
-          console.log(`[voice-call] Media stream WebSocket on ws://${bind}:${port}${streamPath}`);
+          const address = this.server?.address();
+          const actualPort =
+            address && typeof address === "object" ? address.port : this.config.serve.port;
+          console.log(
+            `[voice-call] Media stream WebSocket on ws://${bind}:${actualPort}${streamPath}`,
+          );
         }
         resolve(url);
 
@@ -251,12 +258,24 @@ export class VoiceCallWebhookServer {
       if (this.server) {
         this.server.close(() => {
           this.server = null;
+          this.listeningUrl = null;
           resolve();
         });
       } else {
+        this.listeningUrl = null;
         resolve();
       }
     });
+  }
+
+  private resolveListeningUrl(bind: string, webhookPath: string): string {
+    const address = this.server?.address();
+    if (address && typeof address === "object") {
+      const host = address.address && address.address.length > 0 ? address.address : bind;
+      const normalizedHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+      return `http://${normalizedHost}:${address.port}${webhookPath}`;
+    }
+    return `http://${bind}:${this.config.serve.port}${webhookPath}`;
   }
 
   private getUpgradePathname(request: http.IncomingMessage): string | null {
