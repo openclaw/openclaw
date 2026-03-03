@@ -115,9 +115,8 @@ function buildDiscordCommandOptions(params: {
       };
     }
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
-    const isAcpActionArg = command.key === "acp" && arg.name === "action";
     const shouldAutocomplete =
-      isAcpActionArg ||
+      arg.preferAutocomplete === true ||
       (resolvedChoices.length > 0 &&
         (typeof arg.choices === "function" || resolvedChoices.length > 25));
     const autocomplete = shouldAutocomplete
