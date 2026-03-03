@@ -106,15 +106,16 @@ RUN set -eux; \
   arm64) GOGARCH=arm64 ;; \
   *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
   esac; \
-  if [ "$GOGCLI_TAG" = "latest" ]; then \
-  GOGCLI_TAG="$(curl -fsSI -H 'User-Agent: openclaw-docker-build' https://github.com/steipete/gogcli/releases/latest | awk 'tolower($1)==\"location:\" {print $2}' | tr -d '\r' | awk -F/ '{print $NF}' | tail -n1)"; \
-  if [ -z "$GOGCLI_TAG" ]; then \
+  tag="$GOGCLI_TAG"; \
+  if [ "$tag" = "latest" ]; then \
+  tag="$(curl -fsSI -H 'User-Agent: openclaw-docker-build' https://github.com/steipete/gogcli/releases/latest | awk 'tolower($1)==\"location:\" {print $2}' | tr -d '\r' | awk -F/ '{print $NF}' | tail -n1)"; \
+  if [ -z "$tag" ]; then \
     echo "WARN: Failed to resolve gogcli latest release tag; falling back to v0.11.0" >&2; \
-    GOGCLI_TAG="v0.11.0"; \
+    tag="v0.11.0"; \
   fi; \
   fi; \
-  ver="${GOGCLI_TAG#v}"; \
-  url="https://github.com/steipete/gogcli/releases/download/${GOGCLI_TAG}/gogcli_${ver}_linux_${GOGARCH}.tar.gz"; \
+  ver="${tag#v}"; \
+  url="https://github.com/steipete/gogcli/releases/download/$tag/gogcli_${ver}_linux_${GOGARCH}.tar.gz"; \
   echo "Downloading: $url"; \
   curl -fsSL "$url" -o /tmp/gogcli.tgz; \
   tar -xzf /tmp/gogcli.tgz -C /tmp; \
