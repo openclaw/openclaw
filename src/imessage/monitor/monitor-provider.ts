@@ -1,18 +1,17 @@
 import fs from "node:fs/promises";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
-import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../../auto-reply/inbound-debounce.js";
 import {
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "../../auto-reply/reply/history.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import {
+  createChannelInboundDebouncer,
+  shouldDebounceTextInbound,
+} from "../../channels/inbound-debounce-policy.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
@@ -153,9 +152,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
-  const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "imessage" });
-  const inboundDebouncer = createInboundDebouncer<{ message: IMessagePayload }>({
-    debounceMs: inboundDebounceMs,
+  const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<{
+    message: IMessagePayload;
+  }>({
+    cfg,
+    channel: "imessage",
     buildKey: (entry) => {
       const sender = entry.message.sender?.trim();
       if (!sender) {
@@ -168,14 +169,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return `imessage:${accountInfo.accountId}:${conversationId}:${sender}`;
     },
     shouldDebounce: (entry) => {
-      const text = entry.message.text?.trim() ?? "";
-      if (!text) {
-        return false;
-      }
-      if (entry.message.attachments && entry.message.attachments.length > 0) {
-        return false;
-      }
-      return !hasControlCommand(text, cfg);
+      return shouldDebounceTextInbound({
+        text: entry.message.text,
+        cfg,
+        hasMedia: Boolean(entry.message.attachments && entry.message.attachments.length > 0),
+      });
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
