@@ -804,7 +804,7 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "rate_limit";
   }
   if (isOverloadedErrorMessage(raw)) {
-    return "rate_limit";
+    return "timeout";
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return "format";
