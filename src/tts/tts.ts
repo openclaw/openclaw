@@ -253,8 +253,61 @@ function resolveModelOverridePolicy(
   };
 }
 
-export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
-  const raw: TtsConfig = cfg.messages?.tts ?? {};
+function mergeDefinedShallow<T extends Record<string, unknown>>(
+  base: T | undefined,
+  override: Partial<T> | undefined,
+): T | undefined {
+  if (!base && !override) {
+    return undefined;
+  }
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(override ?? {})) {
+    if (value !== undefined) {
+      merged[key] = value;
+    }
+  }
+  return merged as T;
+}
+
+function mergeTtsConfig(globalTts: TtsConfig, agentTts?: TtsConfig): TtsConfig {
+  if (!agentTts) {
+    return globalTts;
+  }
+  const merged: TtsConfig = mergeDefinedShallow({ ...globalTts }, agentTts) ?? {};
+
+  const modelOverrides = mergeDefinedShallow(globalTts.modelOverrides, agentTts.modelOverrides);
+  if (modelOverrides) {
+    merged.modelOverrides = modelOverrides;
+  }
+
+  const elevenlabs = mergeDefinedShallow(globalTts.elevenlabs, agentTts.elevenlabs);
+  if (elevenlabs) {
+    // Deep-merge voiceSettings so agent can override individual fields without losing global ones
+    const voiceSettings = mergeDefinedShallow(
+      globalTts.elevenlabs?.voiceSettings,
+      agentTts.elevenlabs?.voiceSettings,
+    );
+    if (voiceSettings) {
+      elevenlabs.voiceSettings = voiceSettings;
+    }
+    merged.elevenlabs = elevenlabs;
+  }
+
+  const openai = mergeDefinedShallow(globalTts.openai, agentTts.openai);
+  if (openai) {
+    merged.openai = openai;
+  }
+
+  const edge = mergeDefinedShallow(globalTts.edge, agentTts.edge);
+  if (edge) {
+    merged.edge = edge;
+  }
+
+  return merged;
+}
+
+export function resolveTtsConfig(cfg: OpenClawConfig, agentTts?: TtsConfig): ResolvedTtsConfig {
+  const raw: TtsConfig = mergeTtsConfig(cfg.messages?.tts ?? {}, agentTts);
   const providerSource = raw.provider ? "config" : "default";
   const edgeOutputFormat = raw.edge?.outputFormat?.trim();
   const auto = normalizeTtsAutoMode(raw.auto) ?? (raw.enabled ? "always" : "off");
@@ -549,11 +602,12 @@ function buildTtsFailureResult(errors: string[]): { success: false; error: strin
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
+  agentTts?: TtsConfig;
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
 }): Promise<TtsResult> {
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfig(params.cfg, params.agentTts);
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   const channelId = resolveChannelId(params.channel);
   const output = resolveOutputFormat(channelId);
@@ -716,9 +770,10 @@ export async function textToSpeech(params: {
 export async function textToSpeechTelephony(params: {
   text: string;
   cfg: OpenClawConfig;
+  agentTts?: TtsConfig;
   prefsPath?: string;
 }): Promise<TtsTelephonyResult> {
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfig(params.cfg, params.agentTts);
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
 
   if (params.text.length > config.maxTextLength) {
@@ -802,12 +857,13 @@ export async function textToSpeechTelephony(params: {
 export async function maybeApplyTtsToPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
+  agentTts?: TtsConfig;
   channel?: string;
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
 }): Promise<ReplyPayload> {
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfig(params.cfg, params.agentTts);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({
     config,
@@ -906,6 +962,7 @@ export async function maybeApplyTtsToPayload(params: {
   const result = await textToSpeech({
     text: textForAudio,
     cfg: params.cfg,
+    agentTts: params.agentTts,
     prefsPath,
     channel: params.channel,
     overrides: directives.overrides,

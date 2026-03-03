@@ -236,6 +236,95 @@ describe("tts", () => {
     });
   });
 
+  describe("resolveTtsConfig agent overrides", () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: {
+        tts: {
+          provider: "edge",
+          elevenlabs: {
+            voiceId: "global-voice-id",
+            modelId: "global-model-id",
+          },
+          openai: {
+            model: "tts-1",
+            voice: "alloy",
+          },
+        },
+      },
+    };
+
+    it("agent-level voiceId overrides global voiceId", () => {
+      const resolved = resolveTtsConfig(cfg, {
+        elevenlabs: {
+          voiceId: "agent-voice-id",
+        },
+      });
+
+      expect(resolved.elevenlabs.voiceId).toBe("agent-voice-id");
+      expect(resolved.elevenlabs.modelId).toBe("global-model-id");
+    });
+
+    it("agent-level provider overrides global provider", () => {
+      const resolved = resolveTtsConfig(cfg, {
+        provider: "openai",
+      });
+
+      expect(resolved.provider).toBe("openai");
+      expect(resolved.providerSource).toBe("config");
+    });
+
+    it("falls back to global values when agent fields are unset", () => {
+      const resolved = resolveTtsConfig(cfg, {
+        openai: {
+          voice: "nova",
+        },
+      });
+
+      expect(resolved.provider).toBe("edge");
+      expect(resolved.openai.voice).toBe("nova");
+      expect(resolved.openai.model).toBe("tts-1");
+      expect(resolved.elevenlabs.voiceId).toBe("global-voice-id");
+    });
+
+    it("keeps backward-compatible behavior when agent TTS is not provided", () => {
+      expect(resolveTtsConfig(cfg, undefined)).toEqual(resolveTtsConfig(cfg));
+    });
+
+    it("deep-merges elevenlabs voiceSettings without losing global fields", () => {
+      const cfgWithSettings: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            elevenlabs: {
+              voiceId: "global-voice",
+              voiceSettings: {
+                stability: 0.7,
+                similarityBoost: 0.8,
+                style: 0.3,
+                useSpeakerBoost: true,
+                speed: 1.0,
+              },
+            },
+          },
+        },
+      };
+      const resolved = resolveTtsConfig(cfgWithSettings, {
+        elevenlabs: {
+          voiceSettings: {
+            stability: 0.9,
+          },
+        },
+      });
+
+      expect(resolved.elevenlabs.voiceSettings.stability).toBe(0.9);
+      expect(resolved.elevenlabs.voiceSettings.similarityBoost).toBe(0.8);
+      expect(resolved.elevenlabs.voiceSettings.style).toBe(0.3);
+      expect(resolved.elevenlabs.voiceSettings.useSpeakerBoost).toBe(true);
+      expect(resolved.elevenlabs.voiceSettings.speed).toBe(1.0);
+    });
+  });
+
   describe("parseTtsDirectives", () => {
     it("extracts overrides and strips directives when enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });

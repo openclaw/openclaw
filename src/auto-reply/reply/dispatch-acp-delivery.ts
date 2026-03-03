@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { TtsAutoMode } from "../../config/types.tts.js";
+import type { TtsAutoMode, TtsConfig } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { maybeApplyTtsToPayload } from "../../tts/tts.js";
@@ -48,6 +48,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   dispatcher: ReplyDispatcher;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
+  agentTts?: TtsConfig;
   ttsChannel?: string;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
@@ -134,6 +135,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     const ttsPayload = await maybeApplyTtsToPayload({
       payload,
       cfg: params.cfg,
+      agentTts: params.agentTts,
       channel: params.ttsChannel,
       kind,
       inboundAudio: params.inboundAudio,

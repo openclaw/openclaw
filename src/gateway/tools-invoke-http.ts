@@ -246,12 +246,14 @@ export async function handleToolsInvokeHttpRequest(
     : undefined;
 
   // Build tool list (core + plugin tools).
+  const agentTts = cfg.agents?.list?.find((a) => a.id === agentId)?.tts;
   const allTools = createOpenClawTools({
     agentSessionKey: sessionKey,
     agentChannel: messageChannel ?? undefined,
     agentAccountId: accountId,
     agentTo,
     agentThreadId,
+    agentTts,
     config: cfg,
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,

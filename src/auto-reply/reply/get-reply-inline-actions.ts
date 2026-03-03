@@ -208,6 +208,7 @@ export async function handleInlineActions(params: {
         agentDir,
         workspaceDir,
         config: cfg,
+        agentTts: cfg.agents?.list?.find((a) => a.id === agentId)?.tts,
       });
       const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
