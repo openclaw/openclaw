@@ -14,6 +14,16 @@ let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
+let runtimeSnapshotOverlay: Record<string, unknown> | null = null;
+
+export function setRuntimeSnapshotOverlay(overlay: Record<string, unknown> | null) {
+  runtimeSnapshotOverlay = overlay;
+}
+
+export function getRuntimeSnapshotOverlay(): Record<string, unknown> | null {
+  return runtimeSnapshotOverlay;
+}
+
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
   const defaultAgentId = resolveDefaultAgentId(cfg);
@@ -24,14 +34,12 @@ export function buildGatewaySnapshot(): Snapshot {
   const uptimeMs = Math.round(process.uptime() * 1000);
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
   const updateAvailable = getUpdateAvailable() ?? undefined;
-  // Health is async; caller should await getHealthSnapshot and replace later if needed.
   const emptyHealth: unknown = {};
   return {
     presence,
     health: emptyHealth,
     stateVersion: { presence: presenceVersion, health: healthVersion },
     uptimeMs,
-    // Surface resolved paths so UIs can display the true config location.
     configPath: CONFIG_PATH,
     stateDir: STATE_DIR,
     sessionDefaults: {
@@ -70,6 +78,14 @@ export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
   if (!healthRefresh) {
     healthRefresh = (async () => {
       const snap = await getHealthSnapshot({ probe: opts?.probe });
+      if (runtimeSnapshotOverlay && snap.channels) {
+        for (const [channelId, channelData] of Object.entries(snap.channels)) {
+          const overlay = runtimeSnapshotOverlay[channelId];
+          if (overlay && typeof overlay === "object" && channelData) {
+            snap.channels[channelId] = { ...channelData, ...overlay };
+          }
+        }
+      }
       healthCache = snap;
       healthVersion += 1;
       if (broadcastHealthUpdate) {
