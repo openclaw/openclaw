@@ -225,7 +225,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
 
         if (hasText) {
-          const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+          const useCard =
+            renderMode === "card" ||
+            cardFormat === "legacy" ||
+            (renderMode === "auto" && shouldUseCard(text));
 
           if (info?.kind === "final" && streamingEnabled && useCard) {
             startStreaming();
