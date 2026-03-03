@@ -8,7 +8,7 @@ import { resolvePluginSkillDirs } from "./plugin-skills.js";
 
 type SkillsChangeEvent = {
   workspaceDir?: string;
-  reason: "watch" | "manual" | "remote-node";
+  reason: "watch" | "manual" | "remote-node" | "sandbox-bins";
   changedPath?: string;
 };
 
