@@ -48,7 +48,19 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Resolve npm dist-tag
+        id: dist-tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF#refs/tags/v}"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
-        run: pnpm publish --no-git-checks --ignore-scripts --access public
+        run: pnpm publish --no-git-checks --ignore-scripts --access public --tag ${{ steps.dist-tag.outputs.tag }}
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
