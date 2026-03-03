@@ -364,6 +364,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         params.log(
           `telegram: ${laneName} draft final text not emitted; falling back to standard send`,
         );
+        params.finalizedPreviewByLane[laneName] = true;
       }
 
       if (laneName === "answer") {
