@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { VERSION } from "../version.js";
@@ -79,7 +80,10 @@ function appendSubdir(base: string | undefined, subdir: string): string | undefi
 
 function addCommonUserBinDirs(dirs: string[], home: string): void {
   dirs.push(`${home}/.local/bin`);
-  dirs.push(`${home}/.npm-global/bin`);
+  const npmGlobalBinDir = `${home}/.npm-global/bin`;
+  if (fs.existsSync(npmGlobalBinDir)) {
+    dirs.push(npmGlobalBinDir);
+  }
   dirs.push(`${home}/bin`);
   dirs.push(`${home}/.volta/bin`);
   dirs.push(`${home}/.asdf/shims`);
@@ -174,7 +178,10 @@ export function resolveLinuxUserBinDirs(
   addCommonUserBinDirs(dirs, home);
 
   // Node version managers
-  dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
+  const nvmCurrentBinDir = `${home}/.nvm/current/bin`;
+  if (fs.existsSync(nvmCurrentBinDir)) {
+    dirs.push(nvmCurrentBinDir); // nvm with current symlink
+  }
   dirs.push(`${home}/.fnm/current/bin`); // fnm
   dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
 

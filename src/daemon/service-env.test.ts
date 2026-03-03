@@ -1,3 +1,4 @@
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -19,9 +20,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
     // Should include all common user bin directories
     expect(result).toContain("/home/testuser/.local/bin");
-    expect(result).toContain("/home/testuser/.npm-global/bin");
     expect(result).toContain("/home/testuser/bin");
-    expect(result).toContain("/home/testuser/.nvm/current/bin");
     expect(result).toContain("/home/testuser/.fnm/current/bin");
     expect(result).toContain("/home/testuser/.volta/bin");
     expect(result).toContain("/home/testuser/.asdf/shims");
@@ -105,7 +104,6 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
     // Should include common user bin directories
     expect(result).toContain("/Users/testuser/.local/bin");
-    expect(result).toContain("/Users/testuser/.npm-global/bin");
     expect(result).toContain("/Users/testuser/bin");
 
     // Should include version manager paths (macOS specific)
@@ -202,13 +200,35 @@ describe("buildMinimalServicePath", () => {
 
     // Verify user directories are included
     expect(parts).toContain("/home/alice/.local/bin");
-    expect(parts).toContain("/home/alice/.npm-global/bin");
-    expect(parts).toContain("/home/alice/.nvm/current/bin");
 
     // Verify system directories are also included
     expect(parts).toContain("/usr/local/bin");
     expect(parts).toContain("/usr/bin");
     expect(parts).toContain("/bin");
+  });
+
+  it("includes .npm-global/bin and .nvm/current/bin only when they exist", () => {
+    const home = mkdtempSync(path.join(os.tmpdir(), "openclaw-service-env-"));
+    try {
+      const withoutDirs = getMinimalServicePathParts({
+        platform: "linux",
+        home,
+      });
+      expect(withoutDirs).not.toContain(`${home}/.npm-global/bin`);
+      expect(withoutDirs).not.toContain(`${home}/.nvm/current/bin`);
+
+      mkdirSync(`${home}/.npm-global/bin`, { recursive: true });
+      mkdirSync(`${home}/.nvm/current/bin`, { recursive: true });
+
+      const withDirs = getMinimalServicePathParts({
+        platform: "linux",
+        home,
+      });
+      expect(withDirs).toContain(`${home}/.npm-global/bin`);
+      expect(withDirs).toContain(`${home}/.nvm/current/bin`);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("excludes Linux user directories when HOME is not in env", () => {
