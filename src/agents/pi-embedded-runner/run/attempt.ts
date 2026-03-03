@@ -587,6 +587,7 @@ type OrphanRecoverySessionManager = {
 export function recoverOrphanedUserMessagesForPrompt(params: {
   sessionManager: OrphanRecoverySessionManager;
   prompt: string;
+  rawPrompt?: string;
   replaceMessages: (messages: AgentMessage[]) => void;
 }): { prompt: string; recoveredCount: number; mergedCount: number } {
   const orphanedUserCarryForward: string[] = [];
@@ -619,16 +620,24 @@ export function recoverOrphanedUserMessagesForPrompt(params: {
     };
   }
 
+  const normalizedPromptCandidates = new Set<string>();
   const normalizedPrompt = params.prompt.trim();
+  if (normalizedPrompt) {
+    normalizedPromptCandidates.add(normalizedPrompt);
+  }
+  const normalizedRawPrompt = params.rawPrompt?.trim();
+  if (normalizedRawPrompt) {
+    normalizedPromptCandidates.add(normalizedRawPrompt);
+  }
   const carryForwardEntries = orphanedUserCarryForward
     .toReversed()
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
-  if (normalizedPrompt) {
+  if (normalizedPromptCandidates.size > 0) {
     // Drop only one prompt-echo entry to avoid transient retry duplication,
     // while preserving distinct repeated orphaned turns with identical text.
-    const promptEchoIndex = carryForwardEntries.findLastIndex(
-      (entry) => entry === normalizedPrompt,
+    const promptEchoIndex = carryForwardEntries.findLastIndex((entry) =>
+      normalizedPromptCandidates.has(entry),
     );
     if (promptEchoIndex >= 0) {
       carryForwardEntries.splice(promptEchoIndex, 1);
@@ -1505,6 +1514,7 @@ export async function runEmbeddedAttempt(
         const orphanRecovery = recoverOrphanedUserMessagesForPrompt({
           sessionManager,
           prompt: effectivePrompt,
+          rawPrompt: params.prompt,
           replaceMessages: (messages) => activeSession.agent.replaceMessages(messages),
         });
         effectivePrompt = orphanRecovery.prompt;

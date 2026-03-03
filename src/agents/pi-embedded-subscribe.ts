@@ -79,6 +79,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
+    hasUnknownMessagingToolTarget: false,
   };
   const usageTotals = {
     input: 0,
@@ -218,9 +219,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     });
     // Preserve legacy behavior when any successful send could not be routed
     // to an explicit target (for example providerless/invalid tool args).
-    const hasUnknownMessagingTargets =
-      messagingToolSentTargets.length < messagingToolSentTexts.length;
-    return suppressByRoute || hasUnknownMessagingTargets;
+    return suppressByRoute || state.hasUnknownMessagingToolTarget;
   };
   const trimMessagingToolSent = () => {
     if (messagingToolSentTexts.length > MAX_MESSAGING_SENT_TEXTS) {
@@ -612,6 +611,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTargets.clear();
     state.successfulCronAdds = 0;
     state.pendingMessagingMediaUrls.clear();
+    state.hasUnknownMessagingToolTarget = false;
     resetAssistantMessageState(0);
   };
 

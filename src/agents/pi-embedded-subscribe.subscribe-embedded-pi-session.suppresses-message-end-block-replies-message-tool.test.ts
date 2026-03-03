@@ -117,6 +117,30 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onBlockReply).not.toHaveBeenCalled();
   });
+  it("keeps unknown-target suppression after sent-text buffers trim", async () => {
+    const { emit, onBlockReply } = createBlockReplyHarness("message_end");
+
+    for (let i = 0; i < 200; i++) {
+      await emitMessageToolLifecycle({
+        emit,
+        toolCallId: `tool-message-known-overflow-${i}`,
+        to: "any;+;c9e1c78203f74195b1db32e57529fb6a",
+        message: `seed ${i}`,
+        result: "ok",
+      });
+    }
+
+    const messageText = "This is the answer.";
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-unknown-overflow",
+      message: messageText,
+      result: "ok",
+    });
+    emitAssistantMessageEnd(emit, messageText);
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
   it("does not suppress message_end replies when message tool reports error", async () => {
     const { emit, onBlockReply } = createBlockReplyHarness("message_end");
 

@@ -28,6 +28,7 @@ function createMockContext(overrides?: {
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
+      hasUnknownMessagingToolTarget: false,
     },
     log: { debug: vi.fn(), warn: vi.fn() },
     shouldEmitToolResult: vi.fn(() => false),

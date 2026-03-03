@@ -399,10 +399,8 @@ export function handleMessageEnd(
             accountId: ctx.params.accountId,
           })
         : true;
-      const hasUnknownMessagingTargets =
-        ctx.state.messagingToolSentTargets.length < ctx.state.messagingToolSentTexts.length;
       const shouldSuppressBlockReply = hasRoutingScope
-        ? suppressByRoute || hasUnknownMessagingTargets
+        ? suppressByRoute || ctx.state.hasUnknownMessagingToolTarget
         : suppressByRoute;
       if (
         shouldSuppressBlockReply &&

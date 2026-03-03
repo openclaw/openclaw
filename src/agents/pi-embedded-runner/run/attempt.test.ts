@@ -300,6 +300,40 @@ describe("recoverOrphanedUserMessagesForPrompt", () => {
     expect(result.prompt).toBe("retry me\n\nretry me");
     expect(replaceMessages).toHaveBeenCalledTimes(1);
   });
+
+  it("dedupes prompt echo against raw prompt when hooks prepend context", () => {
+    const sessionManager = createSessionManager(
+      [
+        {
+          id: "assistant",
+          type: "message",
+          message: { role: "assistant", content: [{ type: "text", text: "seed assistant" }] },
+        },
+        {
+          id: "u1",
+          type: "message",
+          parentId: "assistant",
+          message: { role: "user", content: [{ type: "text", text: "retry me" }] },
+        },
+      ],
+      "u1",
+    );
+
+    const replaceMessages = vi.fn();
+    const result = recoverOrphanedUserMessagesForPrompt({
+      sessionManager,
+      prompt: "[context from before_prompt_build]\n\nretry me",
+      rawPrompt: "retry me",
+      replaceMessages,
+    });
+
+    expect(result).toEqual({
+      prompt: "[context from before_prompt_build]\n\nretry me",
+      recoveredCount: 1,
+      mergedCount: 0,
+    });
+    expect(replaceMessages).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("resolveAttemptFsWorkspaceOnly", () => {
