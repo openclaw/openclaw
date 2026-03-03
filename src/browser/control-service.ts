@@ -1,3 +1,8 @@
+import {
+  resolveFirecrawlApiKey,
+  resolveFirecrawlBaseUrl,
+  resolveFirecrawlConfig,
+} from "../agents/tools/web-fetch.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBrowserConfig } from "./config.js";
@@ -14,9 +19,13 @@ export function getBrowserControlState(): BrowserServerState | null {
 }
 
 export function createBrowserControlContext() {
+  const cfg = loadConfig();
+  const firecrawl = resolveFirecrawlConfig(cfg.tools?.web?.fetch);
   return createBrowserRouteContext({
     getState: () => state,
     refreshConfigFromDisk: true,
+    firecrawlApiKey: resolveFirecrawlApiKey(firecrawl),
+    firecrawlBaseUrl: resolveFirecrawlBaseUrl(firecrawl),
   });
 }
 
@@ -26,7 +35,10 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
   }
 
   const cfg = loadConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const firecrawl = resolveFirecrawlConfig(cfg.tools?.web?.fetch);
+  const firecrawlApiKey = resolveFirecrawlApiKey(firecrawl);
+
+  const resolved = resolveBrowserConfig(cfg.browser, cfg, { firecrawlApiKey });
   if (!resolved.enabled) {
     return null;
   }

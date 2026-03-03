@@ -1,3 +1,7 @@
+import {
+  resolveFirecrawlApiKey,
+  resolveFirecrawlConfig,
+} from "../agents/tools/web-fetch.js";
 import { createConfigIO, loadConfig } from "../config/config.js";
 import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import type { BrowserServerState } from "./server-context.types.js";
@@ -28,7 +32,9 @@ export function refreshResolvedBrowserConfigFromDisk(params: {
     return;
   }
   const cfg = params.mode === "fresh" ? createConfigIO().loadConfig() : loadConfig();
-  const freshResolved = resolveBrowserConfig(cfg.browser, cfg);
+  const firecrawl = resolveFirecrawlConfig(cfg.tools?.web?.fetch);
+  const firecrawlApiKey = resolveFirecrawlApiKey(firecrawl);
+  const freshResolved = resolveBrowserConfig(cfg.browser, cfg, { firecrawlApiKey });
   applyResolvedConfig(params.current, freshResolved);
 }
 
