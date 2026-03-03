@@ -903,7 +903,7 @@ function isContentPolicyErrorMessage(raw: string): boolean {
   const hasPolicyViolation = lower.includes("policy violation");
   if (hasPolicyViolation) {
     const looksLikeAuth =
-      /(401|403)/.test(lower) ||
+      /\b(401|403)\b/.test(lower) ||
       lower.includes("unauthorized") ||
       lower.includes("forbidden") ||
       lower.includes("authentication") ||
