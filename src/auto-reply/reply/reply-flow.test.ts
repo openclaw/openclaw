@@ -1,9 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearInternalHooks,
+  registerInternalHook,
+  type InternalHookEvent,
+} from "../../hooks/internal-hooks.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { MsgContext } from "../templating.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { runWithReplyDispatchHookContext } from "./dispatch-hook-context.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { parseLineDirectives, hasLineDirectives } from "./line-directives.js";
@@ -1388,6 +1394,42 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
 
     vi.useRealTimers();
+  });
+
+  it("emits message:sent internal hook for delivered agent replies", async () => {
+    clearInternalHooks();
+    const handler = vi.fn();
+    registerInternalHook("message:sent", handler);
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    await runWithReplyDispatchHookContext(
+      {
+        sessionKey: "agent:main:discord:session-1",
+        channelId: "discord",
+        to: "channel:C123",
+      },
+      async () => {
+        dispatcher.sendFinalReply({ text: "reply from agent" });
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+      },
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const event = handler.mock.calls[0][0] as InternalHookEvent;
+    expect(event.type).toBe("message");
+    expect(event.action).toBe("sent");
+    expect(event.sessionKey).toBe("agent:main:discord:session-1");
+    expect(event.context).toMatchObject({
+      content: "reply from agent",
+      success: true,
+      channelId: "discord",
+      to: "channel:C123",
+      conversationId: "channel:C123",
+    });
+
+    clearInternalHooks();
   });
 });
 

@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
+import {
+  deriveReplyDispatchHookContext,
+  runWithReplyDispatchHookContext,
+} from "./reply/dispatch-hook-context.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   createReplyDispatcher,
@@ -40,17 +44,20 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
-  return await withReplyDispatcher({
-    dispatcher: params.dispatcher,
-    run: () =>
-      dispatchReplyFromConfig({
-        ctx: finalized,
-        cfg: params.cfg,
-        dispatcher: params.dispatcher,
-        replyOptions: params.replyOptions,
-        replyResolver: params.replyResolver,
-      }),
-  });
+  const hookContext = deriveReplyDispatchHookContext(finalized);
+  return await runWithReplyDispatchHookContext(hookContext, async () =>
+    withReplyDispatcher({
+      dispatcher: params.dispatcher,
+      run: () =>
+        dispatchReplyFromConfig({
+          ctx: finalized,
+          cfg: params.cfg,
+          dispatcher: params.dispatcher,
+          replyOptions: params.replyOptions,
+          replyResolver: params.replyResolver,
+        }),
+    }),
+  );
 }
 
 export async function dispatchInboundMessageWithBufferedDispatcher(params: {

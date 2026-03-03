@@ -1,7 +1,14 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  buildCanonicalSentMessageHookContext,
+  toInternalMessageSentContext,
+} from "../../hooks/message-hook-mappers.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { getReplyDispatchHookContext } from "./dispatch-hook-context.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
@@ -23,6 +30,7 @@ type ReplyDispatchDeliverer = (
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
+const log = createSubsystemLogger("reply-dispatcher");
 
 /** Generate a random delay within the configured range. */
 function getHumanDelay(config: HumanDelayConfig | undefined): number {
@@ -104,6 +112,37 @@ function normalizeReplyPayloadInternal(
   });
 }
 
+function emitAgentReplyMessageSent(params: { payload: ReplyPayload; success: boolean; error?: string }): void {
+  if (params.payload.isReasoning) {
+    return;
+  }
+  const hookContext = getReplyDispatchHookContext();
+  if (!hookContext) {
+    return;
+  }
+  const canonical = buildCanonicalSentMessageHookContext({
+    to: hookContext.to,
+    content: params.payload.text ?? "",
+    success: params.success,
+    error: params.error,
+    channelId: hookContext.channelId,
+    accountId: hookContext.accountId,
+    conversationId: hookContext.to,
+    isGroup: hookContext.isGroup,
+    groupId: hookContext.groupId,
+  });
+  void triggerInternalHook(
+    createInternalHookEvent(
+      "message",
+      "sent",
+      hookContext.sessionKey,
+      toInternalMessageSentContext(canonical),
+    ),
+  ).catch((err) => {
+    log.warn(`reply-dispatcher: message:sent internal hook failed: ${String(err)}`);
+  });
+}
+
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
@@ -158,8 +197,14 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
+        emitAgentReplyMessageSent({ payload: normalized, success: true });
       })
       .catch((err) => {
+        emitAgentReplyMessageSent({
+          payload: normalized,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
         options.onError?.(err, { kind });
       })
       .finally(() => {
