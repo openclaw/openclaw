@@ -61,6 +61,6 @@ jobs:
           fi
 
       - name: Publish to npm
-        run: pnpm publish --no-git-checks --ignore-scripts --access public --tag ${{ steps.dist-tag.outputs.tag }}
+        run: pnpm publish --no-git-checks --ignore-scripts --access public --tag "${{ steps.dist-tag.outputs.tag }}"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
