@@ -33,6 +33,20 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
+const areMediaUrlsEqual = (left?: string[], right?: string[]): boolean => {
+  const leftList = left ?? [];
+  const rightList = right ?? [];
+  if (leftList.length !== rightList.length) {
+    return false;
+  }
+  for (let i = 0; i < leftList.length; i += 1) {
+    if (leftList[i] !== rightList[i]) {
+      return false;
+    }
+  }
+  return true;
+};
+
 function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   if (!ctx.state.reasoningStreamOpen) {
     return;
@@ -186,13 +200,12 @@ export function handleMessageUpdate(
         shouldEmit = Boolean(deltaText || hasMedia || hasAudio);
       }
 
-      if (shouldEmit && cleanedText) {
-        syncSnapshotIntoTextBuffers(ctx, snapshot);
-      }
-      ctx.state.lastStreamedAssistant = snapshot;
-      ctx.state.lastStreamedAssistantCleaned = cleanedText;
-
       if (shouldEmit) {
+        if (cleanedText) {
+          syncSnapshotIntoTextBuffers(ctx, snapshot);
+        }
+        ctx.state.lastStreamedAssistant = snapshot;
+        ctx.state.lastStreamedAssistantCleaned = cleanedText;
         emitAgentEvent({
           runId: ctx.params.runId,
           stream: "assistant",
@@ -382,12 +395,14 @@ export function handleMessageEnd(
   let cleanedText = parsedText?.text ?? "";
   let mediaUrls = parsedText?.mediaUrls;
   let hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
+  let finalSnapshot = trimmedText;
 
   if (!cleanedText && !hasMedia && !ctx.params.enforceFinalTag) {
     const rawTrimmed = rawText.trim();
     const rawStrippedFinal = rawTrimmed.replace(/<\s*\/?\s*final\s*>/gi, "").trim();
     const rawCandidate = rawStrippedFinal || rawTrimmed;
     if (rawCandidate) {
+      finalSnapshot = rawCandidate;
       const parsedFallback = parseReplyDirectives(stripTrailingDirective(rawCandidate));
       cleanedText = parsedFallback.text ?? rawCandidate;
       mediaUrls = parsedFallback.mediaUrls;
@@ -395,22 +410,33 @@ export function handleMessageEnd(
     }
   }
 
-  const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+  const previousSnapshot = ctx.state.lastStreamedAssistant?.trim();
+  const previousParsed = previousSnapshot
+    ? parseReplyDirectives(stripTrailingDirective(previousSnapshot))
+    : null;
+  const previousCleaned = previousParsed?.text ?? ctx.state.lastStreamedAssistantCleaned;
+  const previousMediaUrls = previousParsed?.mediaUrls;
+  const hasPreviousAssistantSnapshot = Boolean(
+    ctx.state.emittedAssistantUpdate ||
+    previousSnapshot ||
+    ctx.state.lastStreamedAssistantCleaned !== undefined,
+  );
+  const sameMediaUrls = areMediaUrlsEqual(mediaUrls, previousMediaUrls);
+  const sameAssistantPayload =
+    hasPreviousAssistantSnapshot && cleanedText === (previousCleaned ?? "") && sameMediaUrls;
   let shouldEmitFinalAssistant = false;
   let finalDeltaText = cleanedText;
-  if (cleanedText || hasMedia) {
-    if (!ctx.state.emittedAssistantUpdate || !previousCleaned) {
+  if ((cleanedText || hasMedia) && !sameAssistantPayload) {
+    const previousCleanedValue = previousCleaned ?? "";
+    if (!ctx.state.emittedAssistantUpdate || !hasPreviousAssistantSnapshot) {
       shouldEmitFinalAssistant = true;
       finalDeltaText = cleanedText;
-    } else if (cleanedText.startsWith(previousCleaned)) {
-      finalDeltaText = cleanedText.slice(previousCleaned.length);
-      shouldEmitFinalAssistant = Boolean(finalDeltaText || hasMedia);
-    } else if (cleanedText !== previousCleaned) {
+    } else if (cleanedText.startsWith(previousCleanedValue)) {
+      finalDeltaText = cleanedText.slice(previousCleanedValue.length);
+      shouldEmitFinalAssistant = Boolean(finalDeltaText || (hasMedia && !sameMediaUrls));
+    } else if (cleanedText !== previousCleanedValue) {
       // When providers rewrite earlier text, emit the full reconciled text.
       finalDeltaText = cleanedText;
-      shouldEmitFinalAssistant = true;
-    } else if (hasMedia) {
-      finalDeltaText = "";
       shouldEmitFinalAssistant = true;
     }
   }
@@ -434,7 +460,7 @@ export function handleMessageEnd(
       },
     });
     ctx.state.emittedAssistantUpdate = true;
-    ctx.state.lastStreamedAssistant = cleanedText;
+    ctx.state.lastStreamedAssistant = finalSnapshot || cleanedText;
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
   }
 
