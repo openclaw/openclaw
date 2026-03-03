@@ -52,6 +52,101 @@ const EXTRA_TEXT_MIMES = [
   "text/javascript",
   "text/tab-separated-values",
 ];
+// Common binary file extensions that should never be injected as text into
+// prompt context, even when MIME detection fails or bytes look printable.
+const BINARY_FILE_EXTENSIONS = new Set([
+  // Archives & compressed
+  ".zip",
+  ".gz",
+  ".tar",
+  ".rar",
+  ".7z",
+  ".bz2",
+  ".xz",
+  ".zst",
+  ".lz4",
+  // Executables & libraries
+  ".exe",
+  ".dll",
+  ".so",
+  ".dylib",
+  ".msi",
+  ".app",
+  ".deb",
+  ".rpm",
+  // Microsoft Office (OLE compound & OOXML)
+  ".msg",
+  ".doc",
+  ".xls",
+  ".ppt",
+  ".docx",
+  ".xlsx",
+  ".pptx",
+  // Other binary document formats
+  ".odt",
+  ".ods",
+  ".odp",
+  ".rtf",
+  // Database / data
+  ".db",
+  ".sqlite",
+  ".sqlite3",
+  ".mdb",
+  ".accdb",
+  // Media (catch-all for when MIME detection misses)
+  ".mp3",
+  ".mp4",
+  ".wav",
+  ".flac",
+  ".ogg",
+  ".m4a",
+  ".aac",
+  ".wma",
+  ".avi",
+  ".mov",
+  ".mkv",
+  ".wmv",
+  ".flv",
+  ".webm",
+  ".m4v",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".bmp",
+  ".tiff",
+  ".tif",
+  ".webp",
+  ".ico",
+  ".svg",
+  ".psd",
+  ".ai",
+  ".eps",
+  // Disk images & firmware
+  ".iso",
+  ".img",
+  ".dmg",
+  // Java / .NET
+  ".jar",
+  ".class",
+  ".war",
+  ".ear",
+  // Misc binary
+  ".o",
+  ".obj",
+  ".pyc",
+  ".pyo",
+  ".wasm",
+]);
+
+function isBinaryFileExtension(name?: string): boolean {
+  if (!name) {
+    return false;
+  }
+  const ext = path.extname(name).toLowerCase();
+  return BINARY_FILE_EXTENSIONS.has(ext);
+}
+
 const TEXT_EXT_MIME = new Map<string, string>([
   [".csv", "text/csv"],
   [".tsv", "text/tab-separated-values"],
@@ -317,7 +412,19 @@ function isBinaryMediaMime(mime?: string): boolean {
     mime === "application/gzip" ||
     mime === "application/x-gzip" ||
     mime === "application/x-rar-compressed" ||
-    mime === "application/x-7z-compressed"
+    mime === "application/x-7z-compressed" ||
+    mime === "application/x-tar" ||
+    mime === "application/x-bzip2" ||
+    mime === "application/x-xz" ||
+    mime === "application/zstd" ||
+    mime === "application/x-msdos-program" ||
+    mime === "application/x-executable" ||
+    mime === "application/x-msi" ||
+    mime === "application/x-msdownload" ||
+    mime === "application/x-sqlite3" ||
+    mime === "application/x-iso9660-image" ||
+    mime === "application/wasm" ||
+    mime === "application/java-archive"
   ) {
     return true;
   }
@@ -379,6 +486,16 @@ async function extractFileBlocks(params: {
     const rawMime = bufferResult?.mime ?? attachment.mime;
     const normalizedRawMime = normalizeMimeType(rawMime);
     if (!forcedTextMimeResolved && isBinaryMediaMime(normalizedRawMime)) {
+      continue;
+    }
+    // Fallback: reject files with known binary extensions even when MIME
+    // detection fails (e.g. .msg files whose MIME is undefined or generic).
+    if (!forcedTextMimeResolved && isBinaryFileExtension(nameHint)) {
+      if (shouldLogVerbose()) {
+        logVerbose(
+          `media: file attachment skipped (binary extension) index=${attachment.index} name=${nameHint}`,
+        );
+      }
       continue;
     }
     const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);

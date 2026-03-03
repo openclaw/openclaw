@@ -1139,6 +1139,82 @@ describe("applyMediaUnderstanding", () => {
     expectFileNotApplied({ ctx, result, body: "<media:file>" });
   });
 
+  it("skips .msg binary attachments even when bytes look printable", async () => {
+    // Outlook .msg files are OLE compound documents whose headers can contain
+    // enough printable bytes to fool the text heuristic.
+    const printableOle = Buffer.from(
+      "D0CF11E0A1B1 This is a fake OLE compound document with printable ASCII text that could fool heuristics " +
+        "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(10),
+      "utf8",
+    );
+    const filePath = await createTempMediaFile({
+      fileName: "meeting-notes.msg",
+      content: printableOle,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: undefined,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("skips .exe binary attachments even when MIME is undetected", async () => {
+    const printableExe = Buffer.from(
+      "MZ This program cannot be run in DOS mode. " + "A".repeat(200),
+      "utf8",
+    );
+    const filePath = await createTempMediaFile({
+      fileName: "installer.exe",
+      content: printableExe,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: undefined,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("skips .zip binary attachments even when MIME is undetected", async () => {
+    const printableZip = Buffer.from("PK\x03\x04" + "A".repeat(200), "utf8");
+    const filePath = await createTempMediaFile({
+      fileName: "archive.zip",
+      content: printableZip,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: undefined,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("skips .docx binary attachments by extension", async () => {
+    const printableDocx = Buffer.from(
+      "PK\x03\x04[Content_Types].xml word/document.xml " + "text ".repeat(50),
+      "utf8",
+    );
+    const filePath = await createTempMediaFile({
+      fileName: "report.docx",
+      content: printableDocx,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: undefined,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
   it("keeps vendor +json attachments eligible for text extraction", async () => {
     const filePath = await createTempMediaFile({
       fileName: "payload.bin",
