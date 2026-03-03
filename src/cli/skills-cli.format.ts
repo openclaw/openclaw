@@ -67,13 +67,16 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
   const skills = opts.eligible ? report.skills.filter((s) => s.eligible) : report.skills;
 
   if (opts.json) {
+    // eslint-disable-next-line no-control-regex
+    const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
     const jsonReport = {
       workspaceDir: report.workspaceDir,
       managedSkillsDir: report.managedSkillsDir,
       skills: skills.map((s) => ({
         name: s.name,
         description: s.description,
-        emoji: s.emoji,
+        // Strip ANSI codes from emoji for JSON output
+        emoji: s.emoji ? s.emoji.replace(ANSI_PATTERN, "") : null,
         eligible: s.eligible,
         disabled: s.disabled,
         blockedByAllowlist: s.blockedByAllowlist,
