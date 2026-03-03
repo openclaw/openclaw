@@ -102,6 +102,15 @@ describe("redactSensitiveText", () => {
     expect(output).toBe(input);
   });
 
+  it("redacts large payloads with bounded regex passes", () => {
+    const input = `${"x".repeat(40_000)} OPENAI_API_KEY=sk-1234567890abcdef ${"y".repeat(40_000)}`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toContain("OPENAI_API_KEY=sk-123…cdef");
+  });
+
   it("skips redaction when mode is off", () => {
     const input = "OPENAI_API_KEY=sk-1234567890abcdef";
     const output = redactSensitiveText(input, {

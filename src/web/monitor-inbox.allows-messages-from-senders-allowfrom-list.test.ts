@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { monitorWebInbox } from "./inbound.js";
 import {
   DEFAULT_ACCOUNT_ID,
+  expectPairingPromptSent,
   getAuthDir,
   getSock,
   installWebMonitorInboxUnitTestHooks,
@@ -182,13 +183,7 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsertBlocked);
     await new Promise((resolve) => setImmediate(resolve));
     expect(onMessage).not.toHaveBeenCalled();
-    expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: expect.stringContaining("Your WhatsApp phone number: +999"),
-    });
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: expect.stringContaining("Pairing code: PAIRCODE"),
-    });
+    expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     const upsertBlockedAgain = {
       type: "notify",

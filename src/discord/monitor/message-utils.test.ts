@@ -30,6 +30,68 @@ function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;
 }
 
+function expectSinglePngDownload(params: {
+  result: unknown;
+  expectedUrl: string;
+  filePathHint: string;
+  expectedPath: string;
+  placeholder: "<media:image>" | "<media:sticker>";
+}) {
+  expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+  expect(fetchRemoteMedia).toHaveBeenCalledWith({
+    url: params.expectedUrl,
+    filePathHint: params.filePathHint,
+    maxBytes: 512,
+    fetchImpl: undefined,
+    ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+  });
+  expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+  expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
+  expect(params.result).toEqual([
+    {
+      path: params.expectedPath,
+      contentType: "image/png",
+      placeholder: params.placeholder,
+    },
+  ]);
+}
+
+function expectAttachmentImageFallback(params: { result: unknown; attachment: { url: string } }) {
+  expect(saveMediaBuffer).not.toHaveBeenCalled();
+  expect(params.result).toEqual([
+    {
+      path: params.attachment.url,
+      contentType: "image/png",
+      placeholder: "<media:image>",
+    },
+  ]);
+}
+
+function asForwardedSnapshotMessage(params: {
+  content: string;
+  embeds: Array<{ title?: string; description?: string }>;
+}) {
+  return asMessage({
+    content: "",
+    rawData: {
+      message_snapshots: [
+        {
+          message: {
+            content: params.content,
+            embeds: params.embeds,
+            attachments: [],
+            author: {
+              id: "u2",
+              username: "Bob",
+              discriminator: "0",
+            },
+          },
+        },
+      ],
+    },
+  });
+}
+
 describe("resolveDiscordMessageChannelId", () => {
   it.each([
     {
@@ -94,6 +156,7 @@ describe("resolveForwardedMediaList", () => {
       filePathHint: attachment.filename,
       maxBytes: 512,
       fetchImpl: undefined,
+      ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
     });
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
     expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
@@ -138,6 +201,27 @@ describe("resolveForwardedMediaList", () => {
     );
   });
 
+  it("keeps forwarded attachment metadata when download fails", async () => {
+    const attachment = {
+      id: "att-fallback",
+      url: "https://cdn.discordapp.com/attachments/1/fallback.png",
+      filename: "fallback.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveForwardedMediaList(
+      asMessage({
+        rawData: {
+          message_snapshots: [{ message: { attachments: [attachment] } }],
+        },
+      }),
+      512,
+    );
+
+    expectAttachmentImageFallback({ result, attachment });
+  });
+
   it("downloads forwarded stickers", async () => {
     const sticker = {
       id: "sticker-1",
@@ -162,22 +246,13 @@ describe("resolveForwardedMediaList", () => {
       512,
     );
 
-    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
-    expect(fetchRemoteMedia).toHaveBeenCalledWith({
-      url: "https://media.discordapp.net/stickers/sticker-1.png",
+    expectSinglePngDownload({
+      result,
+      expectedUrl: "https://media.discordapp.net/stickers/sticker-1.png",
       filePathHint: "wave.png",
-      maxBytes: 512,
-      fetchImpl: undefined,
+      expectedPath: "/tmp/sticker.png",
+      placeholder: "<media:sticker>",
     });
-    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
-    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
-    expect(result).toEqual([
-      {
-        path: "/tmp/sticker.png",
-        contentType: "image/png",
-        placeholder: "<media:sticker>",
-      },
-    ]);
   });
 
   it("returns empty when no snapshots are present", async () => {
@@ -230,22 +305,13 @@ describe("resolveMediaList", () => {
       512,
     );
 
-    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
-    expect(fetchRemoteMedia).toHaveBeenCalledWith({
-      url: "https://media.discordapp.net/stickers/sticker-2.png",
+    expectSinglePngDownload({
+      result,
+      expectedUrl: "https://media.discordapp.net/stickers/sticker-2.png",
       filePathHint: "hello.png",
-      maxBytes: 512,
-      fetchImpl: undefined,
+      expectedPath: "/tmp/sticker-2.png",
+      placeholder: "<media:sticker>",
     });
-    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
-    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
-    expect(result).toEqual([
-      {
-        path: "/tmp/sticker-2.png",
-        contentType: "image/png",
-        placeholder: "<media:sticker>",
-      },
-    ]);
   });
 
   it("forwards fetchImpl to sticker downloads", async () => {
@@ -276,29 +342,166 @@ describe("resolveMediaList", () => {
       expect.objectContaining({ fetchImpl: proxyFetch }),
     );
   });
+
+  it("keeps attachment metadata when download fails", async () => {
+    const attachment = {
+      id: "att-main-fallback",
+      url: "https://cdn.discordapp.com/attachments/1/main-fallback.png",
+      filename: "main-fallback.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+    );
+
+    expectAttachmentImageFallback({ result, attachment });
+  });
+
+  it("falls back to URL when saveMediaBuffer fails", async () => {
+    const attachment = {
+      id: "att-save-fail",
+      url: "https://cdn.discordapp.com/attachments/1/photo.png",
+      filename: "photo.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockRejectedValueOnce(new Error("disk full"));
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([
+      {
+        path: attachment.url,
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+    ]);
+  });
+
+  it("preserves downloaded attachments alongside failed ones", async () => {
+    const goodAttachment = {
+      id: "att-good",
+      url: "https://cdn.discordapp.com/attachments/1/good.png",
+      filename: "good.png",
+      content_type: "image/png",
+    };
+    const badAttachment = {
+      id: "att-bad",
+      url: "https://cdn.discordapp.com/attachments/1/bad.pdf",
+      filename: "bad.pdf",
+      content_type: "application/pdf",
+    };
+
+    fetchRemoteMedia
+      .mockResolvedValueOnce({
+        buffer: Buffer.from("image"),
+        contentType: "image/png",
+      })
+      .mockRejectedValueOnce(new Error("network timeout"));
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/good.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [goodAttachment, badAttachment],
+      }),
+      512,
+    );
+
+    expect(result).toEqual([
+      {
+        path: "/tmp/good.png",
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+      {
+        path: badAttachment.url,
+        contentType: "application/pdf",
+        placeholder: "<media:document>",
+      },
+    ]);
+  });
+
+  it("keeps sticker metadata when sticker download fails", async () => {
+    const sticker = {
+      id: "sticker-fallback",
+      name: "fallback",
+      format_type: StickerFormatType.PNG,
+    };
+    fetchRemoteMedia.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(
+      asMessage({
+        stickers: [sticker],
+      }),
+      512,
+    );
+
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual([
+      {
+        path: "https://media.discordapp.net/stickers/sticker-fallback.png",
+        contentType: "image/png",
+        placeholder: "<media:sticker>",
+      },
+    ]);
+  });
+});
+
+describe("Discord media SSRF policy", () => {
+  beforeEach(() => {
+    fetchRemoteMedia.mockClear();
+    saveMediaBuffer.mockClear();
+  });
+
+  it("passes ssrfPolicy with Discord CDN allowedHostnames and allowRfc2544BenchmarkRange", async () => {
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("img"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/a.png",
+      contentType: "image/png",
+    });
+
+    await resolveMediaList(
+      asMessage({
+        attachments: [{ id: "a1", url: "https://cdn.discordapp.com/a.png", filename: "a.png" }],
+      }),
+      1024,
+    );
+
+    const policy = fetchRemoteMedia.mock.calls[0][0].ssrfPolicy;
+    expect(policy).toEqual({
+      allowedHostnames: ["cdn.discordapp.com", "media.discordapp.net"],
+      allowRfc2544BenchmarkRange: true,
+    });
+  });
 });
 
 describe("resolveDiscordMessageText", () => {
   it("includes forwarded message snapshots in body text", () => {
     const text = resolveDiscordMessageText(
-      asMessage({
-        content: "",
-        rawData: {
-          message_snapshots: [
-            {
-              message: {
-                content: "forwarded hello",
-                embeds: [],
-                attachments: [],
-                author: {
-                  id: "u2",
-                  username: "Bob",
-                  discriminator: "0",
-                },
-              },
-            },
-          ],
-        },
+      asForwardedSnapshotMessage({
+        content: "forwarded hello",
+        embeds: [],
       }),
       { includeForwarded: true },
     );
@@ -370,24 +573,9 @@ describe("resolveDiscordMessageText", () => {
 
   it("joins forwarded snapshot embed title and description when content is empty", () => {
     const text = resolveDiscordMessageText(
-      asMessage({
+      asForwardedSnapshotMessage({
         content: "",
-        rawData: {
-          message_snapshots: [
-            {
-              message: {
-                content: "",
-                embeds: [{ title: "Forwarded title", description: "Forwarded details" }],
-                attachments: [],
-                author: {
-                  id: "u2",
-                  username: "Bob",
-                  discriminator: "0",
-                },
-              },
-            },
-          ],
-        },
+        embeds: [{ title: "Forwarded title", description: "Forwarded details" }],
       }),
       { includeForwarded: true },
     );

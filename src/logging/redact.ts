@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { PrivacyDetector } from "../privacy/detector.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
+import { replacePatternBounded } from "./redact-bounded.js";
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
@@ -98,7 +99,7 @@ function redactMatch(match: string, groups: string[]): string {
 function redactText(text: string, patterns: RegExp[]): string {
   let next = text;
   for (const pattern of patterns) {
-    next = next.replace(pattern, (...args: string[]) =>
+    next = replacePatternBounded(next, pattern, (...args: string[]) =>
       redactMatch(args[0], args.slice(1, args.length - 2)),
     );
   }

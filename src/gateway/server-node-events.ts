@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
-import { agentCommand } from "../commands/agent.js";
+import { agentCommandFromIngress } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -303,7 +303,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         clientRunId: `voice-${randomUUID()}`,
       });
 
-      void agentCommand(
+      void agentCommandFromIngress(
         {
           message: text,
           sessionId,
@@ -316,6 +316,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
             sourceChannel: "voice",
             sourceTool: "gateway.voice.transcript",
           },
+          senderIsOwner: false,
         },
         defaultRuntime,
         ctx.deps,
@@ -433,7 +434,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         );
       }
 
-      void agentCommand(
+      void agentCommandFromIngress(
         {
           message,
           images,
@@ -446,6 +447,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           timeout:
             typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
           messageChannel: "node",
+          senderIsOwner: false,
         },
         defaultRuntime,
         ctx.deps,
