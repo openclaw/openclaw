@@ -36,6 +36,8 @@ const SCHTASKS_ACTIONS = new Map<string, GatewayManagementAction>([
   ["/run", "restart"],
   ["/end", "stop"],
 ]);
+const PNPM_OPTIONS_WITH_VALUE = new Set(["-c", "--dir", "-f", "--filter"]);
+const PNPM_EXEC_OPTIONS_WITH_VALUE = new Set(["--package"]);
 const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
   "-H",
   "--host",
@@ -190,6 +192,78 @@ function isGatewayWindowsTaskName(token: string, env: NodeJS.ProcessEnv): boolea
   return normalized.startsWith("openclaw gateway");
 }
 
+function readPnpmCliArgv(argv: string[]): string[] | null {
+  const second = argv[1]?.trim();
+  if (second && normalizeExecutableToken(second) === "openclaw") {
+    return argv.slice(2);
+  }
+
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      break;
+    }
+    if (token.startsWith("-")) {
+      const lower = token.toLowerCase();
+      const [flag] = lower.split("=", 2);
+      if (!lower.includes("=") && PNPM_OPTIONS_WITH_VALUE.has(flag) && idx + 1 < argv.length) {
+        idx += 2;
+        continue;
+      }
+      idx += 1;
+      continue;
+    }
+    break;
+  }
+
+  if (idx >= argv.length) {
+    return null;
+  }
+
+  const commandToken = argv[idx]?.trim() ?? "";
+  if (normalizeExecutableToken(commandToken) === "openclaw") {
+    return argv.slice(idx + 1);
+  }
+  if (normalizeLower(commandToken) !== "exec") {
+    return null;
+  }
+
+  idx += 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      break;
+    }
+    if (token.startsWith("-")) {
+      const lower = token.toLowerCase();
+      const [flag] = lower.split("=", 2);
+      if (!lower.includes("=") && PNPM_EXEC_OPTIONS_WITH_VALUE.has(flag) && idx + 1 < argv.length) {
+        idx += 2;
+        continue;
+      }
+      idx += 1;
+      continue;
+    }
+    break;
+  }
+
+  if (idx < argv.length && normalizeExecutableToken(argv[idx]) === "openclaw") {
+    return argv.slice(idx + 1);
+  }
+  return null;
+}
+
 function readCliArgv(argv: string[]): string[] | null {
   if (argv.length === 0) {
     return null;
@@ -201,9 +275,8 @@ function readCliArgv(argv: string[]): string[] | null {
   }
 
   if (RUNNER_BINS.has(first)) {
-    const second = argv[1]?.trim();
-    if (second && normalizeExecutableToken(second) === "openclaw") {
-      return argv.slice(2);
+    if (first === "pnpm") {
+      return readPnpmCliArgv(argv);
     }
 
     let idx = 1;
@@ -329,7 +402,10 @@ function parseGatewayActionFromSystemctlArgv(
   }
 
   const targets = positionals.slice(1);
-  if (!targets.some((target) => isGatewaySystemdUnitToken(target, env))) {
+  if (targets.length !== 1) {
+    return null;
+  }
+  if (!isGatewaySystemdUnitToken(targets[0], env)) {
     return null;
   }
 

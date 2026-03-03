@@ -111,6 +111,36 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
+  it("detects pnpm exec wrapped restart commands", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "pnpm exec openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
+  it("detects pnpm -C exec wrapped restart commands", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "pnpm -C /tmp/openclaw exec openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
   it("marks chained restart commands as complex", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "openclaw gateway restart && echo ok",
@@ -174,6 +204,16 @@ describe("detectGatewayManagementExecCommand", () => {
   it("does not detect non-gateway systemctl commands", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "systemctl --user restart ssh.service",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect mixed-unit systemctl commands", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --user restart openclaw-gateway.service nginx.service",
       cwd: process.cwd(),
       env: process.env,
     });
