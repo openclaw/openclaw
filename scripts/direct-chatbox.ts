@@ -30,7 +30,7 @@ function sendChatbox(text: string) {
   const falseBuf = Buffer.alloc(falsePad);
   falseBuf.write("F", 0, "ascii");
 
-  const buffer = Buffer.concat([addressBuf, typeBuf, textBuf, trueBuf, falseBuf]);
+  const buffer = Buffer.concat([addressBuf, typeBuf, textBuf]);
 
   console.log(`Sending to VRChat Chatbox: ${text}`);
   socket.send(buffer, 0, buffer.length, 9000, "127.0.0.1", (err) => {

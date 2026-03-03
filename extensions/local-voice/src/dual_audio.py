@@ -24,9 +24,21 @@ def find_vbcable_device() -> int | None:
     devices = sd.query_devices()
     for i, dev in enumerate(devices):
         name = dev["name"].lower()
-        if ("cable" in name and "input" in name) or "vb-audio" in name:
+        if ("cable" in name and "input" in name) or "vb-audio" in name or "vdvad" in name:
             if dev["max_output_channels"] > 0:
+                logger.info("Found VB-Cable candidate: %s (index=%d)", dev["name"], i)
                 return i
+    return None
+
+
+def find_headset_device() -> int | None:
+    """Find the Parent's primary headset (G433)."""
+    devices = sd.query_devices()
+    for i, dev in enumerate(devices):
+        name = dev["name"].lower()
+        if "g433" in name and dev["max_output_channels"] > 0:
+            logger.info("Found Parent's Headset (G433): %s (index=%d)", dev["name"], i)
+            return i
     return None
 
 
@@ -59,27 +71,32 @@ def main() -> None:
         mono_data = data
 
     vbcable_idx = find_vbcable_device()
+    headset_idx = find_headset_device()
+
+    # Determine primary playback device (Headset if found, else default)
+    primary_idx = headset_idx if headset_idx is not None else None
+    primary_label = "Headset (G433)" if headset_idx is not None else "System Default"
 
     if vbcable_idx is not None:
-        logger.info("VB-Cable found at device index %d. Dual-output mode.", vbcable_idx)
+        logger.info("Starting dual-output mode: %s + VB-Cable", primary_label)
 
         # Play on both devices simultaneously using threads
-        t_default = threading.Thread(
+        t_primary = threading.Thread(
             target=play_on_device,
-            args=(data, samplerate, None, "default"),
+            args=(data, samplerate, primary_idx, primary_label),
         )
         t_vbcable = threading.Thread(
             target=play_on_device,
             args=(mono_data, samplerate, vbcable_idx, "VB-Cable"),
         )
 
-        t_default.start()
+        t_primary.start()
         t_vbcable.start()
-        t_default.join()
+        t_primary.join()
         t_vbcable.join()
     else:
-        logger.info("VB-Cable not found. Single-output mode (default device only).")
-        play_on_device(data, samplerate, None, "default")
+        logger.info("VB-Cable not found. Single-output mode: %s", primary_label)
+        play_on_device(data, samplerate, primary_idx, primary_label)
 
     print("DONE")
 

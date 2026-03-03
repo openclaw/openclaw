@@ -1,6 +1,6 @@
-tree f36bc83034248fc59aaa666eebeb382d401ffdca
-parent d66a05dc418e59a2f6e1a25eb752c6ed017138bb
-author Peter Steinberger <steipete@gmail.com> 1765254965 +0000
-committer Peter Steinberger <steipete@gmail.com> 1765254965 +0000
+tree 0c0f3268c665bf206e44b4ea22276835b27ce3b2
+parent afc09744b41ee320b49b8b96634054d2ff251134
+author Peter Steinberger <steipete@gmail.com> 1766442156 +0100
+committer Peter Steinberger <steipete@gmail.com> 1766442156 +0100
 
-Relay: force app to run relay via system node
+style(mac): pad session rows + thicken bars
