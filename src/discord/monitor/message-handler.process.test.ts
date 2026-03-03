@@ -292,7 +292,10 @@ describe("processDiscordMessage ack reactions", () => {
     expect(emojis).not.toContain("👨‍💻");
   });
 
-  it("shows stall emojis for long no-progress runs", async () => {
+  it("does not show stall emojis for long no-progress runs (stall disabled)", async () => {
+    // Note: Stall warnings are disabled by default. Long-running operations
+    // like code search often take >30s, and queue status (⏳) provides
+    // sufficient feedback without confusing stall warnings.
     vi.useFakeTimers();
     let releaseDispatch!: () => void;
     const dispatchGate = new Promise<void>((resolve) => {
@@ -315,8 +318,9 @@ describe("processDiscordMessage ack reactions", () => {
     const emojis = (
       sendMocks.reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
     ).map((call) => call[2]);
-    expect(emojis).toContain(DEFAULT_EMOJIS.stallSoft);
-    expect(emojis).toContain(DEFAULT_EMOJIS.stallHard);
+    // Stall warnings disabled - should NOT appear even after 30s
+    expect(emojis).not.toContain(DEFAULT_EMOJIS.stallSoft);
+    expect(emojis).not.toContain(DEFAULT_EMOJIS.stallHard);
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
   });
 

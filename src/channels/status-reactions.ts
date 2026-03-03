@@ -62,10 +62,10 @@ export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
 
 export const DEFAULT_TIMING: Required<StatusReactionTiming> = {
   debounceMs: 700,
-  stallSoftMs: 10_000,
-  stallHardMs: 30_000,
-  doneHoldMs: 2000,
-  errorHoldMs: 2000,
+  stallSoftMs: 600_000, // 10 minutes - effectively disabled
+  stallHardMs: 600_000, // 10 minutes - effectively disabled
+  doneHoldMs: 0, // Immediate clear - emoji disappearance signals completion
+  errorHoldMs: 0, // Immediate clear
 };
 
 export const CODING_TOOL_TOKENS: string[] = [
@@ -202,22 +202,21 @@ export function createStatusReactionController(params: {
 
   /**
    * Reset stall timers (called on each phase change).
+   * Note: Stall warnings are disabled by default for better UX.
+   * Long-running operations (e.g., code search) often take >30s,
+   * and queue status (⏳) provides sufficient feedback.
    */
   function resetStallTimers(): void {
+    // Stall warnings disabled - clear any existing timers
     if (stallSoftTimer) {
       clearTimeout(stallSoftTimer);
+      stallSoftTimer = null;
     }
     if (stallHardTimer) {
       clearTimeout(stallHardTimer);
+      stallHardTimer = null;
     }
-
-    stallSoftTimer = setTimeout(() => {
-      scheduleEmoji(emojis.stallSoft, { immediate: true, skipStallReset: true });
-    }, timing.stallSoftMs);
-
-    stallHardTimer = setTimeout(() => {
-      scheduleEmoji(emojis.stallHard, { immediate: true, skipStallReset: true });
-    }, timing.stallHardMs);
+    // Do not schedule new stall timers
   }
 
   /**
