@@ -59,7 +59,7 @@ import {
   type PluginHttpRequestHandler,
   type PluginRoutePathContext,
 } from "./server/plugins-http.js";
-import type { ReadinessChecker, ReadinessResult } from "./server/readiness.js";
+import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
@@ -174,36 +174,25 @@ function handleGatewayProbeRequest(
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
 
+  let statusCode: number;
+  let body: string;
+
   if (status === "ready" && getReadiness) {
-    let result: ReadinessResult;
     try {
-      result = getReadiness();
+      const result = getReadiness();
+      statusCode = result.ready ? 200 : 503;
+      body = JSON.stringify(result);
     } catch {
-      res.statusCode = 503;
-      if (method !== "HEAD") {
-        res.end(JSON.stringify({ ready: false, failing: ["internal"] }));
-      } else {
-        res.end();
-      }
-      return true;
+      statusCode = 503;
+      body = JSON.stringify({ ready: false, failing: ["internal"] });
     }
-    res.statusCode = result.ready ? 200 : 503;
-    if (method !== "HEAD") {
-      res.end(JSON.stringify(result));
-    } else {
-      res.end();
-    }
-    return true;
+  } else {
+    statusCode = 200;
+    body = JSON.stringify({ ok: true, status });
   }
 
-  if (method === "HEAD") {
-    res.statusCode = 200;
-    res.end();
-    return true;
-  }
-
-  res.statusCode = 200;
-  res.end(JSON.stringify({ ok: true, status }));
+  res.statusCode = statusCode;
+  res.end(method !== "HEAD" ? body : undefined);
   return true;
 }
 
