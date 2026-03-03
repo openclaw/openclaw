@@ -110,6 +110,18 @@ function setupTransientGetFileRetry() {
   return getFile;
 }
 
+function mockPdfFetchAndSave(fileName: string | undefined) {
+  fetchRemoteMedia.mockResolvedValueOnce({
+    buffer: Buffer.from("pdf-data"),
+    contentType: "application/pdf",
+    fileName,
+  });
+  saveMediaBuffer.mockResolvedValueOnce({
+    path: "/tmp/file_42---uuid.pdf",
+    contentType: "application/pdf",
+  });
+}
+
 function createFileTooBigError(): Error {
   return new Error("GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)");
 }
@@ -321,15 +333,7 @@ describe("resolveMedia original filename preservation", () => {
 
   it("falls back to fetched.fileName when telegram file_name is absent", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
-    fetchRemoteMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("pdf-data"),
-      contentType: "application/pdf",
-      fileName: "file_42.pdf",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/file_42---uuid.pdf",
-      contentType: "application/pdf",
-    });
+    mockPdfFetchAndSave("file_42.pdf");
 
     const ctx = makeCtx("document", getFile);
     const result = await resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
@@ -346,15 +350,7 @@ describe("resolveMedia original filename preservation", () => {
 
   it("falls back to filePath when neither telegram nor fetched fileName is available", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
-    fetchRemoteMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("pdf-data"),
-      contentType: "application/pdf",
-      fileName: undefined,
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/file_42---uuid.pdf",
-      contentType: "application/pdf",
-    });
+    mockPdfFetchAndSave(undefined);
 
     const ctx = makeCtx("document", getFile);
     const result = await resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);

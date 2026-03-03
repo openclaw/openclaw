@@ -26,10 +26,16 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
+vi.mock("../pairing/pairing-store.js", () => {
+  return {
+    readChannelAllowFromStore(...args: unknown[]) {
+      return readAllowFromStoreMock(...args);
+    },
+    upsertChannelPairingRequest(...args: unknown[]) {
+      return upsertPairingRequestMock(...args);
+    },
+  };
+});
 
 vi.mock("../media/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/store.js")>();
