@@ -39,7 +39,7 @@ function parseInteractiveCardContent(parsed: unknown): string {
   const elements = Array.isArray(candidate.elements)
     ? candidate.elements
     : Array.isArray(candidate.body?.elements)
-      ? candidate.body.elements
+      ? candidate.body?.elements
       : null;
   if (!elements) {
     return "[Interactive Card]";
