@@ -220,6 +220,43 @@ describe("models-config", () => {
     });
   });
 
+  it("prefers explicit config baseUrl over stale existing models.json baseUrl in merge mode", async () => {
+    await withTempHome(async () => {
+      await writeAgentModelsJson({
+        providers: {
+          moonshot: {
+            baseUrl: "https://api.moonshot.ai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "kimi-k2.5",
+                name: "Kimi K2.5",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1024,
+                maxTokens: 256,
+              },
+            ],
+          },
+        },
+      });
+
+      await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
+        const cfg = createMoonshotConfig({ contextWindow: 1024, maxTokens: 256 });
+        if (cfg.models?.providers?.moonshot) {
+          cfg.models.providers.moonshot.baseUrl = "https://api.moonshot.cn/v1";
+        }
+        await ensureOpenClawModelsJson(cfg);
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { baseUrl?: string }>;
+        }>();
+        expect(parsed.providers.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
+      });
+    });
+  });
+
   it("uses config apiKey/baseUrl when existing agent values are empty", async () => {
     await withTempHome(async () => {
       const parsed = await runCustomProviderMergeTest({

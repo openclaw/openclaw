@@ -141,8 +141,10 @@ async function resolveProvidersForModelsJson(params: {
 function mergeWithExistingProviderSecrets(params: {
   nextProviders: Record<string, ProviderConfig>;
   existingProviders: Record<string, NonNullable<ModelsConfig["providers"]>[string]>;
+  explicitProviders?: Record<string, ProviderConfig> | null;
 }): Record<string, ProviderConfig> {
   const { nextProviders, existingProviders } = params;
+  const explicitProviders = params.explicitProviders ?? {};
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(existingProviders)) {
     mergedProviders[key] = entry;
@@ -154,6 +156,15 @@ function mergeWithExistingProviderSecrets(params: {
           baseUrl?: string;
         })
       | undefined;
+    const explicit = explicitProviders[key] as
+      | {
+          baseUrl?: unknown;
+        }
+      | undefined;
+    const hasExplicitBaseUrl =
+      key === "moonshot" &&
+      typeof explicit?.baseUrl === "string" &&
+      explicit.baseUrl.trim().length > 0;
     if (!existing) {
       mergedProviders[key] = newEntry;
       continue;
@@ -162,7 +173,7 @@ function mergeWithExistingProviderSecrets(params: {
     if (typeof existing.apiKey === "string" && existing.apiKey) {
       preserved.apiKey = existing.apiKey;
     }
-    if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+    if (typeof existing.baseUrl === "string" && existing.baseUrl && !hasExplicitBaseUrl) {
       preserved.baseUrl = existing.baseUrl;
     }
     mergedProviders[key] = { ...newEntry, ...preserved };
@@ -174,6 +185,7 @@ async function resolveProvidersForMode(params: {
   mode: NonNullable<ModelsConfig["mode"]>;
   targetPath: string;
   providers: Record<string, ProviderConfig>;
+  explicitProviders?: Record<string, ProviderConfig> | null;
 }): Promise<Record<string, ProviderConfig>> {
   if (params.mode !== "merge") {
     return params.providers;
@@ -189,6 +201,7 @@ async function resolveProvidersForMode(params: {
   return mergeWithExistingProviderSecrets({
     nextProviders: params.providers,
     existingProviders,
+    explicitProviders: params.explicitProviders,
   });
 }
 
@@ -205,6 +218,7 @@ export async function ensureOpenClawModelsJson(
   agentDirOverride?: string,
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const cfg = config ?? loadConfig();
+  const explicitProviders = cfg.models?.providers ?? {};
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
 
   // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
@@ -225,6 +239,7 @@ export async function ensureOpenClawModelsJson(
     mode,
     targetPath,
     providers,
+    explicitProviders,
   });
 
   const normalizedProviders = normalizeProviders({
