@@ -69,6 +69,7 @@ describe("googlechatPlugin outbound sendMedia", () => {
         localRoots: ["/tmp/workspace"],
       }),
     );
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
     expect(uploadGoogleChatAttachmentMock).toHaveBeenCalledWith(
       expect.objectContaining({
         space: "spaces/AAA",
