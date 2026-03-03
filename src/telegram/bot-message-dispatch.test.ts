@@ -488,6 +488,42 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("does not skip message-start rotation when pre-rotation did not force a new message", async () => {
+    const answerDraftStream = createDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        // First message has only final text (no streamed partials), so answer lane
+        // reaches finalized state with hasStreamedMessage still false.
+        await dispatcherOptions.deliver({ text: "Message A final" }, { kind: "final" });
+        // Provider ordering bug: next message partial arrives before message-start.
+        await replyOptions?.onPartialReply?.({ text: "Message B early" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Message B partial" });
+        await dispatcherOptions.deliver({ text: "Message B final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    // Early pre-rotation could not force (no streamed partials yet), so the
+    // real assistant message_start must still rotate once.
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Message B early");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Message B partial");
+    const earlyUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[0];
+    const boundaryRotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    const secondUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    expect(earlyUpdateOrder).toBeLessThan(boundaryRotationOrder);
+    expect(boundaryRotationOrder).toBeLessThan(secondUpdateOrder);
+  });
+
   it("finalizes multi-message assistant stream to matching preview messages in order", async () => {
     const answerDraftStream = createSequencedDraftStream(1001);
     const reasoningDraftStream = createDraftStream();

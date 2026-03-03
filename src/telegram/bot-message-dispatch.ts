@@ -266,6 +266,7 @@ export const dispatchTelegramMessage = async ({
     lane.hasStreamedMessage = false;
   };
   const rotateAnswerLaneForNewAssistantMessage = () => {
+    let didForceNewMessage = false;
     if (answerLane.hasStreamedMessage) {
       const previewMessageId = answerLane.stream?.messageId();
       // Only archive previews that still need a matching final text update.
@@ -278,10 +279,12 @@ export const dispatchTelegramMessage = async ({
         });
       }
       answerLane.stream?.forceNewMessage();
+      didForceNewMessage = true;
     }
     resetDraftLaneState(answerLane);
     // New assistant message boundary: this lane now tracks a fresh preview lifecycle.
     finalizedPreviewByLane.answer = false;
+    return didForceNewMessage;
   };
   const updateDraftFromPartial = (lane: DraftLaneState, text: string | undefined) => {
     const laneStream = lane.stream;
@@ -313,8 +316,7 @@ export const dispatchTelegramMessage = async ({
       // Some providers can emit the first partial of a new assistant message before
       // onAssistantMessageStart() arrives. Rotate preemptively so we do not edit
       // the previously finalized preview message with the next message's text.
-      rotateAnswerLaneForNewAssistantMessage();
-      skipNextAnswerMessageStartRotation = true;
+      skipNextAnswerMessageStartRotation = rotateAnswerLaneForNewAssistantMessage();
     }
     for (const segment of split.segments) {
       if (segment.lane === "reasoning") {
