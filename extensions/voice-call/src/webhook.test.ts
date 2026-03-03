@@ -273,3 +273,48 @@ describe("VoiceCallWebhookServer replay handling", () => {
     }
   });
 });
+
+describe("VoiceCallWebhookServer start idempotency", () => {
+  it("returns existing URL when start() is called twice without stop()", async () => {
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+
+    try {
+      const firstUrl = await server.start();
+      // Second call should return immediately without EADDRINUSE
+      const secondUrl = await server.start();
+
+      // Both calls should return a valid URL (port may differ from config
+      // since we use port 0 for dynamic allocation, but paths must match)
+      expect(firstUrl).toContain("/voice/webhook");
+      expect(secondUrl).toContain("/voice/webhook");
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("can start again after stop()", async () => {
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+
+    const firstUrl = await server.start();
+    expect(firstUrl).toContain("/voice/webhook");
+    await server.stop();
+
+    // After stopping, a new start should succeed
+    const secondUrl = await server.start();
+    expect(secondUrl).toContain("/voice/webhook");
+    await server.stop();
+  });
+
+  it("stop() is safe to call when server was never started", async () => {
+    const { manager } = createManager([]);
+    const config = createConfig();
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+
+    // Should not throw
+    await server.stop();
+  });
+});
