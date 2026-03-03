@@ -9,6 +9,9 @@ const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const DRAFT_METHOD_UNAVAILABLE_RE =
   /(unknown method|method .*not (found|available|supported)|unsupported)/i;
 const DRAFT_CHAT_UNSUPPORTED_RE = /(can't be used|can be used only)/i;
+const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
+const BIDI_CONTROL_RE = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+const RTL_DIRECTION_MARK = "\u200F";
 
 type TelegramSendMessageDraft = (
   chatId: number,
@@ -51,6 +54,16 @@ function shouldFallbackFromDraftTransport(err: unknown): boolean {
     return false;
   }
   return DRAFT_METHOD_UNAVAILABLE_RE.test(text) || DRAFT_CHAT_UNSUPPORTED_RE.test(text);
+}
+
+function applyDraftDirectionalityHint(text: string, parseMode?: "HTML"): string {
+  if (parseMode === "HTML") {
+    return text;
+  }
+  if (!RTL_SCRIPT_RE.test(text) || BIDI_CONTROL_RE.test(text)) {
+    return text;
+  }
+  return `${RTL_DIRECTION_MARK}${text}`;
 }
 
 export type TelegramDraftStream = {
@@ -233,16 +246,20 @@ export function createTelegramDraftStream(params: {
     if (!renderedText) {
       return false;
     }
-    if (renderedText.length > maxChars) {
+    const transportText =
+      previewTransport === "draft"
+        ? applyDraftDirectionalityHint(renderedText, renderedParseMode)
+        : renderedText;
+    if (transportText.length > maxChars) {
       // Telegram text messages/edits cap at 4096 chars.
       // Stop streaming once we exceed the cap to avoid repeated API failures.
       streamState.stopped = true;
       params.warn?.(
-        `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,
+        `telegram stream preview stopped (text length ${transportText.length} > ${maxChars})`,
       );
       return false;
     }
-    if (renderedText === lastSentText && renderedParseMode === lastSentParseMode) {
+    if (transportText === lastSentText && renderedParseMode === lastSentParseMode) {
       return true;
     }
     const sendGeneration = generation;
@@ -254,14 +271,14 @@ export function createTelegramDraftStream(params: {
       }
     }
 
-    lastSentText = renderedText;
+    lastSentText = transportText;
     lastSentParseMode = renderedParseMode;
     try {
       let sent = false;
       if (previewTransport === "draft") {
         try {
           sent = await sendDraftTransportPreview({
-            renderedText,
+            renderedText: transportText,
             renderedParseMode,
             sendGeneration,
           });
@@ -275,14 +292,14 @@ export function createTelegramDraftStream(params: {
             "telegram stream preview: sendMessageDraft rejected by API; falling back to sendMessage/editMessageText",
           );
           sent = await sendMessageTransportPreview({
-            renderedText,
+            renderedText: transportText,
             renderedParseMode,
             sendGeneration,
           });
         }
       } else {
         sent = await sendMessageTransportPreview({
-          renderedText,
+          renderedText: transportText,
           renderedParseMode,
           sendGeneration,
         });

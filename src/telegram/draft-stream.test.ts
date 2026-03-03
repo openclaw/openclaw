@@ -133,6 +133,36 @@ describe("createTelegramDraftStream", () => {
     expect(api.deleteMessage).not.toHaveBeenCalled();
   });
 
+  it("prepends RLM for RTL draft previews without parse_mode", async () => {
+    const api = createMockDraftApi();
+    const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+
+    stream.update("שלום");
+    await vi.waitFor(() =>
+      expect(api.sendMessageDraft).toHaveBeenCalledWith(123, expect.any(Number), "\u200Fשלום", {
+        message_thread_id: 42,
+      }),
+    );
+  });
+
+  it("keeps rendered HTML draft previews unchanged", async () => {
+    const api = createMockDraftApi();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      thread: { id: 42, scope: "dm" },
+      renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
+    });
+
+    stream.update("שלום");
+    await vi.waitFor(() =>
+      expect(api.sendMessageDraft).toHaveBeenCalledWith(123, expect.any(Number), "<i>שלום</i>", {
+        message_thread_id: 42,
+        parse_mode: "HTML",
+      }),
+    );
+  });
+
   it("supports forcing message transport in dm threads", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, {
