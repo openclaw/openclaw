@@ -37,6 +37,9 @@ type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
+  // Set to true by whichever path (timer or drain) flushes this buffer first,
+  // so a timer callback that already fired cannot produce a duplicate dispatch.
+  flushed?: boolean;
 };
 
 export type InboundDebounceCreateParams<T> = {
@@ -61,6 +64,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   };
 
   const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
+    // Guard against duplicate processing: drain() and a timer callback that has
+    // already fired can both call flushBuffer for the same buffer; only the first
+    // path actually invokes onFlush.
+    if (buffer.flushed) {
+      return;
+    }
+    buffer.flushed = true;
     buffers.delete(key);
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
