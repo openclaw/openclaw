@@ -2,11 +2,10 @@ import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverReason,
   isAuthPermanentErrorMessage,
+  isTimeoutErrorMessage,
   type FailoverReason,
 } from "./pi-embedded-helpers.js";
 
-const TIMEOUT_HINT_RE =
-  /timeout|timed out|deadline exceeded|context deadline exceeded|connection error|network error|network request failed|fetch failed|socket hang up|econnrefused|econnreset|econnaborted|enotfound|eai_again|stop reason:\s*(?:abort|error)|reason:\s*(?:abort|error)|unhandled stop reason:\s*(?:abort|error)/i;
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
 export class FailoverError extends Error {
@@ -125,7 +124,7 @@ function hasTimeoutHint(err: unknown): boolean {
     return true;
   }
   const message = getErrorMessage(err);
-  return Boolean(message && TIMEOUT_HINT_RE.test(message));
+  return Boolean(message && isTimeoutErrorMessage(message));
 }
 
 export function isTimeoutError(err: unknown): boolean {
