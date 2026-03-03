@@ -3,6 +3,7 @@ import { isRestartEnabled } from "../config/commands.js";
 import { loadConfig } from "../config/config.js";
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import {
+  LEGACY_GATEWAY_WINDOWS_TASK_NAMES,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -169,6 +170,9 @@ function collectGatewayWindowsTaskNames(env: NodeJS.ProcessEnv): Set<string> {
   const names = new Set<string>();
   names.add(resolveGatewayWindowsTaskName().toLowerCase());
   names.add(resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE).toLowerCase());
+  for (const legacy of LEGACY_GATEWAY_WINDOWS_TASK_NAMES) {
+    names.add(legacy.toLowerCase());
+  }
 
   const configured = normalizeLower(env.OPENCLAW_WINDOWS_TASK_NAME);
   if (configured) {
@@ -185,11 +189,33 @@ function isGatewayWindowsTaskName(token: string, env: NodeJS.ProcessEnv): boolea
   }
 
   const known = collectGatewayWindowsTaskNames(env);
-  if (known.has(normalized)) {
-    return true;
-  }
+  return known.has(normalized);
+}
 
-  return normalized.startsWith("openclaw gateway");
+function hasSystemctlRemoteScope(argv: string[]): boolean {
+  for (let idx = 1; idx < argv.length; idx += 1) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (token === "--") {
+      break;
+    }
+    const lower = token.toLowerCase();
+    if (
+      token === "-H" ||
+      token === "-M" ||
+      (token.startsWith("-H") && token.length > 2) ||
+      (token.startsWith("-M") && token.length > 2) ||
+      lower === "--host" ||
+      lower.startsWith("--host=") ||
+      lower === "--machine" ||
+      lower.startsWith("--machine=")
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function readPnpmCliArgv(argv: string[]): string[] | null {
@@ -388,6 +414,9 @@ function parseGatewayActionFromSystemctlArgv(
   env: NodeJS.ProcessEnv,
 ): GatewayManagementAction | null {
   if (normalizeExecutableToken(argv[0] ?? "") !== "systemctl") {
+    return null;
+  }
+  if (hasSystemctlRemoteScope(argv)) {
     return null;
   }
 

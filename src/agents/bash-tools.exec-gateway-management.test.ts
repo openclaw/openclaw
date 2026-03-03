@@ -201,6 +201,16 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
+  it("does not detect prefixed schtasks task names", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: 'schtasks /Run /TN "OpenClaw Gateway Backup"',
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
   it("does not detect non-gateway systemctl commands", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "systemctl --user restart ssh.service",
@@ -214,6 +224,26 @@ describe("detectGatewayManagementExecCommand", () => {
   it("does not detect mixed-unit systemctl commands", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "systemctl --user restart openclaw-gateway.service nginx.service",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect remote-scope systemctl commands", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --host remote.example restart openclaw-gateway.service",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect short remote-scope systemctl commands", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl -Hremote.example restart openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
     });
