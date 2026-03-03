@@ -2,6 +2,7 @@
 set -euo pipefail
 
 PID_FILE="${OPENCLAW_KEEPAWAKE_PID_FILE:-$HOME/.openclaw/run/keepawake.pid}"
+KEEPAWAKE_FLAGS="${OPENCLAW_KEEPAWAKE_FLAGS:--imsu}"
 
 usage() {
   cat <<'USAGE'
@@ -14,6 +15,10 @@ Commands:
   off      Stop keep-awake background process
   status   Show current keep-awake status
   restart  Restart keep-awake background process
+
+Environment:
+  OPENCLAW_KEEPAWAKE_FLAGS  caffeinate flags (default: -imsu)
+                            Use -dimsu to keep displays awake too.
 USAGE
 }
 
@@ -50,10 +55,13 @@ start_awake() {
     return 0
   fi
 
-  caffeinate -dimsu >/dev/null 2>&1 &
+  local -a flags
+  # Allow override for special cases (for example keeping displays on).
+  read -r -a flags <<<"$KEEPAWAKE_FLAGS"
+  caffeinate "${flags[@]}" >/dev/null 2>&1 &
   pid="$!"
   echo "$pid" >"$PID_FILE"
-  echo "keep-awake on (pid $pid)"
+  echo "keep-awake on (pid $pid, flags: $KEEPAWAKE_FLAGS)"
 }
 
 stop_awake() {

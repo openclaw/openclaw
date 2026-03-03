@@ -231,7 +231,8 @@ scripts/openclaw-keepawake.sh off
 
 Details:
 
-- Uses `caffeinate -dimsu` in the background.
+- Uses `caffeinate -imsu` in the background (allows display sleep).
+- Set `OPENCLAW_KEEPAWAKE_FLAGS=-dimsu` if you want displays to stay on.
 - Stores PID at `~/.openclaw/run/keepawake.pid`.
 - Requires macOS (`caffeinate` command).
 
