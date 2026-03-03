@@ -142,6 +142,21 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
+  it("detects npx wrapped restart commands", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "npx openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toEqual({
+      action: "restart",
+      source: "openclaw-cli",
+      hard: false,
+      complex: false,
+    });
+  });
+
   it("detects pnpm exec wrapped restart commands", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "pnpm exec openclaw gateway restart",
@@ -230,6 +245,36 @@ describe("detectGatewayManagementExecCommand", () => {
   it("does not detect gateway restart commands with unsupported flags", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "openclaw gateway restart --bogus",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect pnpm-wrapped commands with unknown pnpm flags", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "pnpm --bogus openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect npx-wrapped commands with unknown npx flags", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "npx --bogus openclaw gateway restart",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect npm exec wrapped commands with unknown npm flags", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "npm exec --bogus openclaw gateway restart",
       cwd: process.cwd(),
       env: process.env,
     });

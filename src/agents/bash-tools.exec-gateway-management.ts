@@ -278,11 +278,22 @@ function readPnpmCliArgv(argv: string[]): string[] | null {
     if (token.startsWith("-")) {
       const lower = token.toLowerCase();
       const [flag] = lower.split("=", 2);
-      if (!lower.includes("=") && PNPM_OPTIONS_WITH_VALUE.has(flag) && idx + 1 < argv.length) {
-        idx += 2;
-        continue;
+      if (!PNPM_OPTIONS_WITH_VALUE.has(flag)) {
+        return null;
       }
-      idx += 1;
+      if (lower.includes("=")) {
+        const inlineValue = lower.slice(flag.length + 1).trim();
+        if (!inlineValue) {
+          return null;
+        }
+        idx += 1;
+      } else {
+        const next = argv[idx + 1]?.trim() ?? "";
+        if (!next || next === FLAG_TERMINATOR) {
+          return null;
+        }
+        idx += 2;
+      }
       continue;
     }
     break;
@@ -314,11 +325,22 @@ function readPnpmCliArgv(argv: string[]): string[] | null {
     if (token.startsWith("-")) {
       const lower = token.toLowerCase();
       const [flag] = lower.split("=", 2);
-      if (!lower.includes("=") && PNPM_EXEC_OPTIONS_WITH_VALUE.has(flag) && idx + 1 < argv.length) {
-        idx += 2;
-        continue;
+      if (!PNPM_EXEC_OPTIONS_WITH_VALUE.has(flag)) {
+        return null;
       }
-      idx += 1;
+      if (lower.includes("=")) {
+        const inlineValue = lower.slice(flag.length + 1).trim();
+        if (!inlineValue) {
+          return null;
+        }
+        idx += 1;
+      } else {
+        const next = argv[idx + 1]?.trim() ?? "";
+        if (!next || next === FLAG_TERMINATOR) {
+          return null;
+        }
+        idx += 2;
+      }
       continue;
     }
     break;
@@ -357,8 +379,7 @@ function readCliArgv(argv: string[]): string[] | null {
         break;
       }
       if (token.startsWith("-")) {
-        idx += 1;
-        continue;
+        return null;
       }
       break;
     }
@@ -384,8 +405,7 @@ function readCliArgv(argv: string[]): string[] | null {
         break;
       }
       if (token.startsWith("-")) {
-        idx += 1;
-        continue;
+        return null;
       }
       break;
     }
