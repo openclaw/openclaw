@@ -8,6 +8,7 @@ import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import type { SkillSnapshot } from "../../skills.js";
+import type { ToolWritePathPolicy } from "../../tool-write-path-policy.js";
 
 // Simplified tool definition for client-provided tools (OpenResponses hosted tools)
 export type ClientToolDefinition = {
@@ -63,6 +64,8 @@ export type RunEmbeddedPiAgentParams = {
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
+  /** Optional allow/deny path policy for write/edit/apply_patch tools. */
+  writePathPolicy?: ToolWritePathPolicy;
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;

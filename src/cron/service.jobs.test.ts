@@ -169,6 +169,29 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("merges payload.paths updates for existing agentTurn jobs", () => {
+    const job = createIsolatedAgentTurnJob("job-path-policy", {
+      mode: "announce",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      paths: { allow: ["reports/**"] },
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        paths: { deny: ["notes/**"] },
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.paths).toEqual({ deny: ["notes/**"] });
+    }
+  });
+
   it("applies payload.lightContext when replacing payload kind via patch", () => {
     const job = createIsolatedAgentTurnJob("job-light-context-switch", {
       mode: "announce",
@@ -188,6 +211,28 @@ describe("applyJobPatch", () => {
     expect(payload.kind).toBe("agentTurn");
     if (payload.kind === "agentTurn") {
       expect(payload.lightContext).toBe(true);
+    }
+  });
+
+  it("applies payload.paths when replacing payload kind via patch", () => {
+    const job = createIsolatedAgentTurnJob("job-path-policy-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "ping" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        paths: { allow: ["cron/**"], deny: ["notes/**"] },
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.paths).toEqual({ allow: ["cron/**"], deny: ["notes/**"] });
     }
   });
 

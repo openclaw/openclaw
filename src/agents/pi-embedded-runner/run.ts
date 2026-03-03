@@ -736,6 +736,7 @@ export async function runEmbeddedPiAgent(
             sessionFile: params.sessionFile,
             workspaceDir: resolvedWorkspace,
             agentDir,
+            writePathPolicy: params.writePathPolicy,
             config: params.config,
             skillsSnapshot: params.skillsSnapshot,
             prompt,

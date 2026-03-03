@@ -10,6 +10,7 @@ import { applyUpdateHunk } from "./apply-patch-update.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { assertToolWritePathAllowed, type ToolWritePathPolicy } from "./tool-write-path-policy.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
 const END_PATCH_MARKER = "*** End Patch";
@@ -73,6 +74,8 @@ type ApplyPatchOptions = {
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
+  /** Additional per-run allow/deny policy for mutating paths. */
+  writePathPolicy?: ToolWritePathPolicy;
   signal?: AbortSignal;
 };
 
@@ -83,7 +86,12 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
+  options: {
+    cwd?: string;
+    sandbox?: SandboxApplyPatchConfig;
+    workspaceOnly?: boolean;
+    writePathPolicy?: ToolWritePathPolicy;
+  } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
@@ -111,6 +119,7 @@ export function createApplyPatchTool(
         cwd,
         sandbox,
         workspaceOnly,
+        writePathPolicy: options.writePathPolicy,
         signal,
       });
 
@@ -302,10 +311,17 @@ async function resolvePatchPath(
         allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
       });
     }
-    return {
+    const result = {
       resolved: resolved.hostPath,
       display: resolved.relativePath || resolved.hostPath,
     };
+    assertToolWritePathAllowed({
+      policy: options.writePathPolicy,
+      workspaceRoot: options.cwd,
+      candidatePath: result.resolved,
+      cwd: options.cwd,
+    });
+    return result;
   }
 
   const workspaceOnly = options.workspaceOnly !== false;
@@ -320,10 +336,17 @@ async function resolvePatchPath(
         })
       ).resolved
     : resolvePathFromInput(filePath, options.cwd);
-  return {
+  const result = {
     resolved,
     display: toDisplayPath(resolved, options.cwd),
   };
+  assertToolWritePathAllowed({
+    policy: options.writePathPolicy,
+    workspaceRoot: options.cwd,
+    candidatePath: result.resolved,
+    cwd: options.cwd,
+  });
+  return result;
 }
 
 function assertBoundaryRead(

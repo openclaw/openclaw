@@ -609,6 +609,9 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
   }
+  if ("paths" in patch) {
+    next.paths = normalizeCronAgentTurnPaths(patch.paths);
+  }
   if (typeof patch.timeoutSeconds === "number") {
     next.timeoutSeconds = patch.timeoutSeconds;
   }
@@ -691,6 +694,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     message: patch.message,
     model: patch.model,
     thinking: patch.thinking,
+    paths: normalizeCronAgentTurnPaths(patch.paths),
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
@@ -704,6 +708,38 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
 function normalizeOptionalTrimmedString(value: unknown): string | undefined {
   const trimmed = typeof value === "string" ? value.trim() : "";
   return trimmed ? trimmed : undefined;
+}
+
+function normalizeCronAgentTurnPaths(
+  value: unknown,
+): Extract<CronPayload, { kind: "agentTurn" }>["paths"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const normalizeList = (list: unknown): string[] | undefined => {
+    if (!Array.isArray(list)) {
+      return undefined;
+    }
+    const normalized = list
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    if (normalized.length === 0) {
+      return undefined;
+    }
+    return [...new Set(normalized)];
+  };
+
+  const allow = normalizeList(record.allow);
+  const deny = normalizeList(record.deny);
+  if (!allow && !deny) {
+    return undefined;
+  }
+  return {
+    ...(allow ? { allow } : {}),
+    ...(deny ? { deny } : {}),
+  };
 }
 
 function mergeCronDelivery(

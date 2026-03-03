@@ -24,6 +24,7 @@ import {
 } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { normalizeToolWritePathPolicy } from "../../agents/tool-write-path-policy.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import {
@@ -330,6 +331,7 @@ export async function runCronIsolatedAgentTurn(params: {
   });
 
   const agentPayload = params.job.payload.kind === "agentTurn" ? params.job.payload : null;
+  const writePathPolicy = normalizeToolWritePathPolicy(agentPayload?.paths);
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const deliveryRequested = deliveryPlan.requested;
 
@@ -496,6 +498,7 @@ export async function runCronIsolatedAgentTurn(params: {
           sessionFile,
           agentDir,
           workspaceDir,
+          writePathPolicy,
           config: cfgWithAgentDefaults,
           skillsSnapshot,
           prompt: commandBody,

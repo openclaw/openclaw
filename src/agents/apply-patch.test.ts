@@ -312,6 +312,61 @@ describe("applyPatch", () => {
     });
   });
 
+  it("enforces writePathPolicy allow patterns", async () => {
+    await withTempDir(async (dir) => {
+      const deniedPatch = `*** Begin Patch
+*** Add File: blocked.txt
++blocked
+*** End Patch`;
+
+      await expect(
+        applyPatch(deniedPatch, {
+          cwd: dir,
+          workspaceOnly: false,
+          writePathPolicy: { allow: ["notes/**"] },
+        }),
+      ).rejects.toThrow(/not allowed by cron payload\.paths\.allow/i);
+
+      const allowedPatch = `*** Begin Patch
+*** Add File: notes/allowed.txt
++ok
+*** End Patch`;
+      await applyPatch(allowedPatch, {
+        cwd: dir,
+        workspaceOnly: false,
+        writePathPolicy: { allow: ["notes/**"] },
+      });
+
+      expect(await fs.readFile(path.join(dir, "notes", "allowed.txt"), "utf8")).toBe("ok\n");
+      await expect(fs.stat(path.join(dir, "blocked.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+
+  it("enforces writePathPolicy deny patterns before allow patterns", async () => {
+    await withTempDir(async (dir) => {
+      const deniedPatch = `*** Begin Patch
+*** Add File: notes/private.txt
++blocked
+*** End Patch`;
+      await expect(
+        applyPatch(deniedPatch, {
+          cwd: dir,
+          workspaceOnly: false,
+          writePathPolicy: {
+            allow: ["notes/**"],
+            deny: ["notes/private/**", "notes/private.txt"],
+          },
+        }),
+      ).rejects.toThrow(/payload\.paths\.deny pattern/i);
+
+      await expect(fs.stat(path.join(dir, "notes", "private.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+
   it("allows deleting a symlink itself even if it points outside cwd", async () => {
     await withTempDir(async (dir) => {
       const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));

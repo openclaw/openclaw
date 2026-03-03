@@ -377,6 +377,42 @@ describe("normalizeCronJobCreate", () => {
     expect(payload.allowUnsafeExternalContent).toBe(true);
   });
 
+  it("normalizes payload.paths allow/deny lists", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "payload paths",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: {
+        kind: "agentTurn",
+        message: "hello",
+        paths: {
+          allow: [" notes/** ", "", "notes/**"],
+          deny: ["notes/conversations/**", "  "],
+        },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    const paths = payload.paths as Record<string, unknown>;
+    expect(paths.allow).toEqual(["notes/**"]);
+    expect(paths.deny).toEqual(["notes/conversations/**"]);
+  });
+
+  it("maps top-level legacy paths into payload.paths for agentTurn jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "legacy root paths",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello" },
+      paths: {
+        allow: ["reports/**"],
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    const paths = payload.paths as Record<string, unknown>;
+    expect(paths.allow).toEqual(["reports/**"]);
+    expect((normalized as { paths?: unknown }).paths).toBeUndefined();
+  });
+
   it("preserves timeoutSeconds=0 for no-timeout agentTurn payloads", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy no-timeout",
@@ -441,6 +477,18 @@ describe("normalizeCronJobPatch", () => {
     expect(payload.kind).toBeUndefined();
     expect(payload.channel).toBe("telegram");
     expect(payload.to).toBe("+15550001111");
+  });
+
+  it("infers agentTurn kind for paths-only payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        paths: { deny: ["notes/**"] },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.paths).toEqual({ deny: ["notes/**"] });
   });
 
   it("preserves null sessionKey patches and trims string values", () => {
