@@ -79,6 +79,10 @@ const whatsappChunkConfig: OpenClawConfig = {
   channels: { whatsapp: { textChunkLimit: 4000 } },
 };
 
+type DeliverOutboundArgs = Parameters<typeof deliverOutboundPayloads>[0];
+type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
+type DeliverSession = DeliverOutboundArgs["session"];
+
 async function deliverWhatsAppPayload(params: {
   sendWhatsApp: NonNullable<
     NonNullable<Parameters<typeof deliverOutboundPayloads>[0]["deps"]>["sendWhatsApp"]
@@ -92,6 +96,24 @@ async function deliverWhatsAppPayload(params: {
     to: "+1555",
     payloads: [params.payload],
     deps: { sendWhatsApp: params.sendWhatsApp },
+  });
+}
+
+async function deliverTelegramPayload(params: {
+  sendTelegram: NonNullable<NonNullable<DeliverOutboundArgs["deps"]>["sendTelegram"]>;
+  payload: DeliverOutboundPayload;
+  cfg?: OpenClawConfig;
+  accountId?: string;
+  session?: DeliverSession;
+}) {
+  return deliverOutboundPayloads({
+    cfg: params.cfg ?? telegramChunkConfig,
+    channel: "telegram",
+    to: "123",
+    payloads: [params.payload],
+    deps: { sendTelegram: params.sendTelegram },
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(params.session ? { session: params.session } : {}),
   });
 }
 
@@ -125,6 +147,42 @@ async function deliverSingleWhatsAppForHookTest(params?: { sessionKey?: string }
     payloads: [{ text: "hello" }],
     deps: { sendWhatsApp },
     ...(params?.sessionKey ? { session: { key: params.sessionKey } } : {}),
+  });
+}
+
+async function runBestEffortPartialFailureDelivery() {
+  const sendWhatsApp = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("fail"))
+    .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
+  const onError = vi.fn();
+  const cfg: OpenClawConfig = {};
+  const results = await deliverOutboundPayloads({
+    cfg,
+    channel: "whatsapp",
+    to: "+1555",
+    payloads: [{ text: "a" }, { text: "b" }],
+    deps: { sendWhatsApp },
+    bestEffort: true,
+    onError,
+  });
+  return { sendWhatsApp, onError, results };
+}
+
+function expectSuccessfulWhatsAppInternalHookPayload(
+  expected: Partial<{
+    content: string;
+    messageId: string;
+    isGroup: boolean;
+    groupId: string;
+  }>,
+) {
+  return expect.objectContaining({
+    to: "+1555",
+    success: true,
+    channelId: "whatsapp",
+    conversationId: "+1555",
+    ...expected,
   });
 }
 
@@ -217,13 +275,10 @@ describe("deliverOutboundPayloads", () => {
   it("passes explicit accountId to sendTelegram", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
-    await deliverOutboundPayloads({
-      cfg: telegramChunkConfig,
-      channel: "telegram",
-      to: "123",
+    await deliverTelegramPayload({
+      sendTelegram,
       accountId: "default",
-      payloads: [{ text: "hi" }],
-      deps: { sendTelegram },
+      payload: { text: "hi" },
     });
 
     expect(sendTelegram).toHaveBeenCalledWith(
@@ -236,17 +291,12 @@ describe("deliverOutboundPayloads", () => {
   it("preserves HTML text for telegram sendPayload channelData path", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
-    await deliverOutboundPayloads({
-      cfg: telegramChunkConfig,
-      channel: "telegram",
-      to: "123",
-      payloads: [
-        {
-          text: "<b>hello</b>",
-          channelData: { telegram: { buttons: [] } },
-        },
-      ],
-      deps: { sendTelegram },
+    await deliverTelegramPayload({
+      sendTelegram,
+      payload: {
+        text: "<b>hello</b>",
+        channelData: { telegram: { buttons: [] } },
+      },
     });
 
     expect(sendTelegram).toHaveBeenCalledTimes(1);
@@ -260,13 +310,10 @@ describe("deliverOutboundPayloads", () => {
   it("scopes media local roots to the active agent workspace when agentId is provided", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
-    await deliverOutboundPayloads({
-      cfg: telegramChunkConfig,
-      channel: "telegram",
-      to: "123",
+    await deliverTelegramPayload({
+      sendTelegram,
       session: { agentId: "work" },
-      payloads: [{ text: "hi", mediaUrl: "file:///tmp/f.png" }],
-      deps: { sendTelegram },
+      payload: { text: "hi", mediaUrl: "file:///tmp/f.png" },
     });
 
     expect(sendTelegram).toHaveBeenCalledWith(
@@ -282,12 +329,9 @@ describe("deliverOutboundPayloads", () => {
   it("includes OpenClaw tmp root in telegram mediaLocalRoots", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
-    await deliverOutboundPayloads({
-      cfg: telegramChunkConfig,
-      channel: "telegram",
-      to: "123",
-      payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
-      deps: { sendTelegram },
+    await deliverTelegramPayload({
+      sendTelegram,
+      payload: { text: "hi", mediaUrl: "https://example.com/x.png" },
     });
 
     expect(sendTelegram).toHaveBeenCalledWith(
@@ -613,22 +657,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("continues on errors when bestEffort is enabled", async () => {
-    const sendWhatsApp = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("fail"))
-      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
-    const onError = vi.fn();
-    const cfg: OpenClawConfig = {};
-
-    const results = await deliverOutboundPayloads({
-      cfg,
-      channel: "whatsapp",
-      to: "+1555",
-      payloads: [{ text: "a" }, { text: "b" }],
-      deps: { sendWhatsApp },
-      bestEffort: true,
-      onError,
-    });
+    const { sendWhatsApp, onError, results } = await runBestEffortPartialFailureDelivery();
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
     expect(onError).toHaveBeenCalledTimes(1);
@@ -650,12 +679,8 @@ describe("deliverOutboundPayloads", () => {
       "message",
       "sent",
       "agent:main:main",
-      expect.objectContaining({
-        to: "+1555",
+      expectSuccessfulWhatsAppInternalHookPayload({
         content: "abcd",
-        success: true,
-        channelId: "whatsapp",
-        conversationId: "+1555",
         messageId: "w2",
         isGroup: true,
         groupId: "whatsapp:group:123",
@@ -679,14 +704,7 @@ describe("deliverOutboundPayloads", () => {
       "message",
       "sent",
       "agent:main:main",
-      expect.objectContaining({
-        to: "+1555",
-        content: "hello",
-        success: true,
-        channelId: "whatsapp",
-        conversationId: "+1555",
-        messageId: "w1",
-      }),
+      expectSuccessfulWhatsAppInternalHookPayload({ content: "hello", messageId: "w1" }),
     );
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
@@ -711,22 +729,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("calls failDelivery instead of ackDelivery on bestEffort partial failure", async () => {
-    const sendWhatsApp = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("fail"))
-      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
-    const onError = vi.fn();
-    const cfg: OpenClawConfig = {};
-
-    await deliverOutboundPayloads({
-      cfg,
-      channel: "whatsapp",
-      to: "+1555",
-      payloads: [{ text: "a" }, { text: "b" }],
-      deps: { sendWhatsApp },
-      bestEffort: true,
-      onError,
-    });
+    const { onError } = await runBestEffortPartialFailureDelivery();
 
     // onError was called for the first payload's failure.
     expect(onError).toHaveBeenCalledTimes(1);
