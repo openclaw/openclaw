@@ -226,7 +226,10 @@ async function shouldProcessLineEvent(
       allowTextCommands: true,
       hasControlCommand: hasControlCommand(rawText, cfg),
     });
-    return { allowed: true, commandAuthorized: commandGate.commandAuthorized };
+    return {
+      allowed: true,
+      commandAuthorized: isNonTextLineMessageEvent(event) ? true : commandGate.commandAuthorized,
+    };
   }
 
   if (dmPolicy === "disabled") {
@@ -263,7 +266,10 @@ async function shouldProcessLineEvent(
     allowTextCommands: true,
     hasControlCommand: hasControlCommand(rawText, cfg),
   });
-  return { allowed: true, commandAuthorized: commandGate.commandAuthorized };
+  return {
+    allowed: true,
+    commandAuthorized: isNonTextLineMessageEvent(event) ? true : commandGate.commandAuthorized,
+  };
 }
 
 /** Extract raw text from a LINE message or postback event for command detection. */
@@ -279,6 +285,12 @@ function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
     return event.postback?.data?.trim() ?? "";
   }
   return "";
+}
+
+function isNonTextLineMessageEvent(
+  event: MessageEvent | PostbackEvent,
+): event is MessageEvent & { message: Exclude<MessageEvent["message"], { type: "text" }> } {
+  return event.type === "message" && event.message.type !== "text";
 }
 
 async function handleMessageEvent(event: MessageEvent, context: LineHandlerContext): Promise<void> {

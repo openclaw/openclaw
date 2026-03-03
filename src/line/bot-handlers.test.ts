@@ -288,6 +288,7 @@ describe("handleLineWebhookEvents", () => {
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
     expect(buildLineMessageContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        commandAuthorized: true,
         allMedia: [
           {
             path: "/tmp/line-media-file.pdf",

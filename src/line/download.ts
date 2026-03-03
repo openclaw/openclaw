@@ -9,6 +9,8 @@ interface DownloadResult {
   size: number;
 }
 
+const AUDIO_BRANDS = new Set(["m4a ", "m4b ", "m4p ", "m4r ", "f4a ", "f4b "]);
+
 export async function downloadLineMedia(
   messageId: string,
   channelAccessToken: string,
@@ -91,8 +93,7 @@ function detectContentType(buffer: Buffer): string {
       // ISO BMFF containers share `ftyp`; use major brand to separate common
       // M4A audio payloads from video mp4 containers.
       const majorBrand = buffer.toString("ascii", 8, 12).toLowerCase();
-      const audioBrands = new Set(["m4a ", "m4b ", "m4p ", "m4r ", "f4a ", "f4b "]);
-      if (audioBrands.has(majorBrand)) {
+      if (AUDIO_BRANDS.has(majorBrand)) {
         return "audio/mp4";
       }
       return "video/mp4";
