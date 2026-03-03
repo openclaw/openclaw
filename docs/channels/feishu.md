@@ -365,6 +365,8 @@ After approval, you can chat normally.
 
 When `requireMention: true`, enabling `firstMessageInTopicTrigger` lets OpenClaw auto-reply to the first message of each topic (where `root_id` and `parent_id` are both empty), while still ignoring most non-mention follow-up messages.
 
+> Note: This is intended for topic/thread-style groups. In regular non-topic groups, most messages may not carry `root_id`/`parent_id`, so enabling this flag can effectively relax mention-gating more broadly than expected.
+
 ```json5
 {
   channels: {

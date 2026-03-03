@@ -371,6 +371,8 @@ openclaw pairing approve feishu <配对码>
 
 当 `requireMention: true` 时，开启 `firstMessageInTopicTrigger` 后，OpenClaw 会在每个 topic 的首条消息（`root_id` 与 `parent_id` 都为空）自动触发回复；其余大多数未 @ 的后续消息仍会被忽略，避免打扰。
 
+> 注意：该开关主要用于 topic/thread 话题群。在普通非话题群中，多数消息可能都不带 `root_id`/`parent_id`，开启后可能会比预期更广泛地放宽 @ 提及门槛。
+
 ```json5
 {
   channels: {
