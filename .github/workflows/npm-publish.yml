@@ -14,12 +14,22 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: false
+
+      - name: Validate tag matches package.json version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF#refs/tags/v}"
+          pkg_version="$(node -p 'require("./package.json").version')"
+          if [[ "$tag_version" != "$pkg_version" ]]; then
+            echo "::error::Tag version ($tag_version) does not match package.json version ($pkg_version)"
+            exit 1
+          fi
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -33,25 +43,12 @@ jobs:
       - name: Build
         run: pnpm run build
 
-      - name: Resolve version from tag
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag_version="${GITHUB_REF#refs/tags/v}"
-          pkg_version="$(node -p 'require("./package.json").version')"
-          if [[ "$tag_version" != "$pkg_version" ]]; then
-            echo "::error::Tag version ($tag_version) does not match package.json version ($pkg_version)"
-            exit 1
-          fi
-          echo "version=$tag_version" >> "$GITHUB_OUTPUT"
-
       - name: Configure npm authentication
         run: echo "//registry.npmjs.org/:_authToken=\${NPM_TOKEN}" > "$HOME/.npmrc"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish to npm
-        run: pnpm publish --no-git-checks --access public
+        run: pnpm publish --no-git-checks --ignore-scripts --access public
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
