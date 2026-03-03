@@ -4,6 +4,11 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { deliverReplies } from "./delivery.js";
 
 const loadWebMedia = vi.fn();
+const messageHookRunner = vi.hoisted(() => ({
+  hasHooks: vi.fn<(name: string) => boolean>(() => false),
+  runMessageSending: vi.fn(),
+  runMessageSent: vi.fn(),
+}));
 const baseDeliveryParams = {
   chatId: "123",
   token: "tok",
@@ -20,6 +25,10 @@ type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 
 vi.mock("../../web/media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => messageHookRunner,
 }));
 
 vi.mock("grammy", () => ({
@@ -99,6 +108,10 @@ function createVoiceFailureHarness(params: {
 describe("deliverReplies", () => {
   beforeEach(() => {
     loadWebMedia.mockClear();
+    messageHookRunner.hasHooks.mockReset();
+    messageHookRunner.hasHooks.mockReturnValue(false);
+    messageHookRunner.runMessageSending.mockReset();
+    messageHookRunner.runMessageSent.mockReset();
   });
 
   it("skips audioAsVoice-only payloads without logging an error", async () => {
@@ -111,6 +124,29 @@ describe("deliverReplies", () => {
     });
 
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("reports message_sent success=false when hooks blank out a text-only reply", async () => {
+    messageHookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "" });
+
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, content: "" }),
+      expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+    );
   });
 
   it("invokes onVoiceRecording before sending a voice note", async () => {

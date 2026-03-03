@@ -33,6 +33,7 @@ const CAPTION_TOO_LONG_RE = /caption is too long/i;
 type DeliveryProgress = {
   hasReplied: boolean;
   hasDelivered: boolean;
+  deliveredCount: number;
 };
 
 type ChunkTextFn = (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
@@ -85,6 +86,7 @@ function markReplyApplied(progress: DeliveryProgress, replyToId?: number): void 
 
 function markDelivered(progress: DeliveryProgress): void {
   progress.hasDelivered = true;
+  progress.deliveredCount += 1;
 }
 
 async function deliverTextReply(params: {
@@ -445,6 +447,7 @@ export async function deliverReplies(params: {
   const progress: DeliveryProgress = {
     hasReplied: false,
     hasDelivered: false,
+    deliveredCount: 0,
   };
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
@@ -489,6 +492,7 @@ export async function deliverReplies(params: {
     const contentForSentHook = reply.text || "";
 
     try {
+      const deliveredCountBeforeReply = progress.deliveredCount;
       const replyToId =
         params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
       const mediaList = reply.mediaUrls?.length
@@ -537,11 +541,12 @@ export async function deliverReplies(params: {
       }
 
       if (hasMessageSentHooks) {
+        const deliveredThisReply = progress.deliveredCount > deliveredCountBeforeReply;
         void hookRunner?.runMessageSent(
           {
             to: params.chatId,
             content: contentForSentHook,
-            success: true,
+            success: deliveredThisReply,
           },
           {
             channelId: "telegram",
