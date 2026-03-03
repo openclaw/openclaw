@@ -18,6 +18,12 @@ describe("isRoleOrderingConflictError", () => {
     ).toBe(true);
   });
 
+  it("does not match mixed quote delimiters in role ordering errors", () => {
+    expect(
+      isRoleOrderingConflictError("ValueError: Unexpected role 'user\" after role \"tool'"),
+    ).toBe(false);
+  });
+
   it("does not match unrelated errors", () => {
     expect(isRoleOrderingConflictError("network timeout")).toBe(false);
   });

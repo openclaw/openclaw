@@ -70,7 +70,7 @@ export type AgentRunLoopResult =
   | { kind: "final"; payload: ReplyPayload };
 
 export function isRoleOrderingConflictError(message: string): boolean {
-  return /incorrect role information|roles must alternate|unexpected role ['"]\w+['"] after role ['"]\w+['"]/i.test(
+  return /incorrect role information|roles must alternate|unexpected role (['"])\w+\1 after role (['"])\w+\2/i.test(
     message,
   );
 }
