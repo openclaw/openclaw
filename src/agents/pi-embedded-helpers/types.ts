@@ -9,4 +9,5 @@ export type FailoverReason =
   | "timeout"
   | "model_not_found"
   | "session_expired"
+  | "json_parse_error"
   | "unknown";
