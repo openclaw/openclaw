@@ -183,7 +183,7 @@ describe("gateway server channels", () => {
         probeAccount: async () => {
           throw new Error("probe unreachable");
         },
-        buildAccountSnapshot: async ({ account, probe, audit }) => ({
+        buildAccountSnapshot: async ({ probe, audit }) => ({
           accountId: "default",
           enabled: true,
           configured: true,
