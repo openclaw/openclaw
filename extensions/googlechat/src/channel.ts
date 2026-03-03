@@ -421,7 +421,16 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         chatId: space,
       };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId, threadId }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      replyToId,
+      threadId,
+    }) => {
       if (!mediaUrl) {
         throw new Error("Google Chat mediaUrl is required.");
       }
@@ -443,9 +452,9 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
           (cfg.channels?.["googlechat"] as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
         accountId,
       });
-      const loaded = await runtime.channel.media.fetchRemoteMedia({
-        url: mediaUrl,
+      const loaded = await runtime.media.loadWebMedia(mediaUrl, {
         maxBytes: maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
+        localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
       });
       const upload = await uploadGoogleChatAttachment({
         account,
