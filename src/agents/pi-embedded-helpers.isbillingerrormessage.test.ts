@@ -423,7 +423,14 @@ describe("isFailoverErrorMessage", () => {
   });
 
   it("matches abort stop-reason timeout variants", () => {
-    const samples = ["Unhandled stop reason: abort", "stop reason: abort", "reason: abort"];
+    const samples = [
+      "Unhandled stop reason: abort",
+      "Unhandled stop reason: error",
+      "stop reason: abort",
+      "stop reason: error",
+      "reason: abort",
+      "reason: error",
+    ];
     for (const sample of samples) {
       expect(isTimeoutErrorMessage(sample)).toBe(true);
       expect(classifyFailoverReason(sample)).toBe("timeout");
@@ -461,6 +468,11 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("invalid api key")).toBe("auth");
     expect(classifyFailoverReason("no credentials found")).toBe("auth");
     expect(classifyFailoverReason("no api key found")).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        'No API key found for provider "openai". Auth store: /tmp/openclaw-agent-abc/auth-profiles.json (agentDir: /tmp/openclaw-agent-abc).',
+      ),
+    ).toBe("auth");
     expect(classifyFailoverReason("You have insufficient permissions for this operation.")).toBe(
       "auth",
     );

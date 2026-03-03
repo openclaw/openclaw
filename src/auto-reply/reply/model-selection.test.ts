@@ -68,6 +68,28 @@ describe("createModelSelectionState parent inheritance", () => {
     });
   }
 
+  async function resolveStateWithParent(params: {
+    cfg: OpenClawConfig;
+    parentKey: string;
+    sessionKey: string;
+    parentEntry: ReturnType<typeof makeEntry>;
+    sessionEntry?: ReturnType<typeof makeEntry>;
+    parentSessionKey?: string;
+  }) {
+    const sessionEntry = params.sessionEntry ?? makeEntry();
+    const sessionStore = {
+      [params.parentKey]: params.parentEntry,
+      [params.sessionKey]: sessionEntry,
+    };
+    return resolveState({
+      cfg: params.cfg,
+      sessionEntry,
+      sessionStore,
+      sessionKey: params.sessionKey,
+      parentSessionKey: params.parentSessionKey,
+    });
+  }
+
   it("inherits parent override from explicit parentSessionKey", async () => {
     const cfg = {} as OpenClawConfig;
     const parentKey = "agent:main:discord:channel:c1";
@@ -76,17 +98,11 @@ describe("createModelSelectionState parent inheritance", () => {
       providerOverride: "openai",
       modelOverride: "gpt-4o",
     });
-    const sessionEntry = makeEntry();
-    const sessionStore = {
-      [parentKey]: parentEntry,
-      [sessionKey]: sessionEntry,
-    };
-
-    const state = await resolveState({
+    const state = await resolveStateWithParent({
       cfg,
-      sessionEntry,
-      sessionStore,
+      parentKey,
       sessionKey,
+      parentEntry,
       parentSessionKey: parentKey,
     });
 
@@ -102,17 +118,11 @@ describe("createModelSelectionState parent inheritance", () => {
       providerOverride: "openai",
       modelOverride: "gpt-4o",
     });
-    const sessionEntry = makeEntry();
-    const sessionStore = {
-      [parentKey]: parentEntry,
-      [sessionKey]: sessionEntry,
-    };
-
-    const state = await resolveState({
+    const state = await resolveStateWithParent({
       cfg,
-      sessionEntry,
-      sessionStore,
+      parentKey,
       sessionKey,
+      parentEntry,
     });
 
     expect(state.provider).toBe("openai");
@@ -131,15 +141,11 @@ describe("createModelSelectionState parent inheritance", () => {
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-5",
     });
-    const sessionStore = {
-      [parentKey]: parentEntry,
-      [sessionKey]: sessionEntry,
-    };
-
-    const state = await resolveState({
+    const state = await resolveStateWithParent({
       cfg,
+      parentKey,
+      parentEntry,
       sessionEntry,
-      sessionStore,
       sessionKey,
     });
 
@@ -163,17 +169,11 @@ describe("createModelSelectionState parent inheritance", () => {
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-5",
     });
-    const sessionEntry = makeEntry();
-    const sessionStore = {
-      [parentKey]: parentEntry,
-      [sessionKey]: sessionEntry,
-    };
-
-    const state = await resolveState({
+    const state = await resolveStateWithParent({
       cfg,
-      sessionEntry,
-      sessionStore,
+      parentKey,
       sessionKey,
+      parentEntry,
     });
 
     expect(state.provider).toBe(defaultProvider);

@@ -47,6 +47,11 @@ function isReasoningConstraintErrorMessage(raw: string): boolean {
   );
 }
 
+function hasRateLimitTpmHint(raw: string): boolean {
+  const lower = raw.toLowerCase();
+  return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -54,7 +59,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
   const lower = errorMessage.toLowerCase();
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  if (lower.includes("tpm") || lower.includes("tokens per minute")) {
+  if (hasRateLimitTpmHint(errorMessage)) {
     return false;
   }
 
@@ -103,8 +108,7 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   }
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  const lower = errorMessage.toLowerCase();
-  if (lower.includes("tpm") || lower.includes("tokens per minute")) {
+  if (hasRateLimitTpmHint(errorMessage)) {
     return false;
   }
 
@@ -622,7 +626,7 @@ const ERROR_PATTERNS = {
     "quota exceeded",
     "resource_exhausted",
     "usage limit",
-    "tpm",
+    /\btpm\b/i,
     "tokens per minute",
   ],
   overloaded: [
@@ -637,9 +641,9 @@ const ERROR_PATTERNS = {
     "deadline exceeded",
     "context deadline exceeded",
     /without sending (?:any )?chunks?/i,
-    /\bstop reason:\s*abort\b/i,
-    /\breason:\s*abort\b/i,
-    /\bunhandled stop reason:\s*abort\b/i,
+    /\bstop reason:\s*(?:abort|error)\b/i,
+    /\breason:\s*(?:abort|error)\b/i,
+    /\bunhandled stop reason:\s*(?:abort|error)\b/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
@@ -656,6 +660,8 @@ const ERROR_PATTERNS = {
     "key has been revoked",
     "account has been deactivated",
     /could not (?:authenticate|validate).*(?:api[_ ]?key|credentials)/i,
+    "permission_error",
+    "not allowed for this organization",
   ],
   auth: [
     /invalid[_ ]?api[_ ]?key/,
@@ -879,12 +885,36 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   return false;
 }
 
+function isCliSessionExpiredErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("session not found") ||
+    lower.includes("session does not exist") ||
+    lower.includes("session expired") ||
+    lower.includes("session invalid") ||
+    lower.includes("conversation not found") ||
+    lower.includes("conversation does not exist") ||
+    lower.includes("conversation expired") ||
+    lower.includes("conversation invalid") ||
+    lower.includes("no such session") ||
+    lower.includes("invalid session") ||
+    lower.includes("session id not found") ||
+    lower.includes("conversation id not found")
+  );
+}
+
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
   }
   if (isImageSizeError(raw)) {
     return null;
+  }
+  if (isCliSessionExpiredErrorMessage(raw)) {
+    return "session_expired";
   }
   if (isModelNotFoundErrorMessage(raw)) {
     return "model_not_found";

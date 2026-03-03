@@ -19,6 +19,7 @@ vi.mock("./doctor-memory-search.js", () => ({
 
 vi.mock("./doctor-platform-notes.js", () => ({
   noteDeprecatedLegacyEnvVars: vi.fn(),
+  noteStartupOptimizationHints: vi.fn(),
   noteMacLaunchAgentOverrides: vi.fn().mockResolvedValue(undefined),
   noteMacLaunchctlGatewayEnvOverrides: vi.fn().mockResolvedValue(undefined),
 }));
@@ -47,4 +48,8 @@ vi.mock("./doctor-ui.js", () => ({
 
 vi.mock("./doctor-workspace-status.js", () => ({
   noteWorkspaceStatus: vi.fn(),
+}));
+
+vi.mock("./oauth-tls-preflight.js", () => ({
+  noteOpenAIOAuthTlsPrerequisites: vi.fn().mockResolvedValue(undefined),
 }));

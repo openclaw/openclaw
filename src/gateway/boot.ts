@@ -177,6 +177,7 @@ export async function runBootOnce(params: {
         sessionKey,
         sessionId,
         deliver: false,
+        senderIsOwner: true,
       },
       bootRuntime,
       params.deps,

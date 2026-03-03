@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 
 /**
@@ -56,26 +56,27 @@ function setSnapshot(resolved: OpenClawConfig, config: OpenClawConfig) {
   mockReadConfigFileSnapshot.mockResolvedValueOnce(buildSnapshot({ resolved, config }));
 }
 
+function setSnapshotOnce(snapshot: ConfigFileSnapshot) {
+  mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+}
+
 let registerConfigCli: typeof import("./config-cli.js").registerConfigCli;
+let sharedProgram: Command;
 
 async function runConfigCommand(args: string[]) {
-  const program = new Command();
-  program.exitOverride();
-  registerConfigCli(program);
-  await program.parseAsync(args, { from: "user" });
+  await sharedProgram.parseAsync(args, { from: "user" });
 }
 
 describe("config cli", () => {
   beforeAll(async () => {
     ({ registerConfigCli } = await import("./config-cli.js"));
+    sharedProgram = new Command();
+    sharedProgram.exitOverride();
+    registerConfigCli(sharedProgram);
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
   });
 
   describe("config set - issue #6070", () => {
@@ -141,6 +142,24 @@ describe("config cli", () => {
       expect(written.gateway?.port).toBe(18789);
       expect(written.gateway?.auth).toEqual({ mode: "token" });
     });
+
+    it("auto-seeds a valid Ollama provider when setting only models.providers.ollama.apiKey", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "models.providers.ollama.apiKey", '"ollama-local"']);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.models?.providers?.ollama).toEqual({
+        baseUrl: "http://127.0.0.1:11434",
+        api: "ollama",
+        models: [],
+        apiKey: "ollama-local",
+      });
+    });
   });
 
   describe("config get", () => {
@@ -157,6 +176,148 @@ describe("config cli", () => {
       await runConfigCommand(["config", "get", "gateway.auth.token"]);
 
       expect(mockLog).toHaveBeenCalledWith("__OPENCLAW_REDACTED__");
+    });
+  });
+
+  describe("config validate", () => {
+    it("prints success and exits 0 when config is valid", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "validate"]);
+
+      expect(mockExit).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
+      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining("Config valid:"));
+    });
+
+    it("prints issues and exits 1 when config is invalid", async () => {
+      setSnapshotOnce({
+        path: "/tmp/custom-openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        resolved: {},
+        valid: false,
+        config: {},
+        issues: [
+          {
+            path: "agents.defaults.suppressToolErrorWarnings",
+            message: "Unrecognized key(s) in object",
+          },
+        ],
+        warnings: [],
+        legacyIssues: [],
+      });
+
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Config invalid at"));
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("agents.defaults.suppressToolErrorWarnings"),
+      );
+      expect(mockLog).not.toHaveBeenCalled();
+    });
+
+    it("returns machine-readable JSON with --json for invalid config", async () => {
+      setSnapshotOnce({
+        path: "/tmp/custom-openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        resolved: {},
+        valid: false,
+        config: {},
+        issues: [{ path: "gateway.bind", message: "Invalid enum value" }],
+        warnings: [],
+        legacyIssues: [],
+      });
+
+      await expect(runConfigCommand(["config", "validate", "--json"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      const raw = mockLog.mock.calls.at(0)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as {
+        valid: boolean;
+        path: string;
+        issues: Array<{ path: string; message: string }>;
+      };
+      expect(payload.valid).toBe(false);
+      expect(payload.path).toBe("/tmp/custom-openclaw.json");
+      expect(payload.issues).toEqual([{ path: "gateway.bind", message: "Invalid enum value" }]);
+      expect(mockError).not.toHaveBeenCalled();
+    });
+
+    it("preserves allowed-values metadata in --json output", async () => {
+      setSnapshotOnce({
+        path: "/tmp/custom-openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        resolved: {},
+        valid: false,
+        config: {},
+        issues: [
+          {
+            path: "update.channel",
+            message: 'Invalid input (allowed: "stable", "beta", "dev")',
+            allowedValues: ["stable", "beta", "dev"],
+            allowedValuesHiddenCount: 0,
+          },
+        ],
+        warnings: [],
+        legacyIssues: [],
+      });
+
+      await expect(runConfigCommand(["config", "validate", "--json"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      const raw = mockLog.mock.calls.at(0)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as {
+        valid: boolean;
+        path: string;
+        issues: Array<{
+          path: string;
+          message: string;
+          allowedValues?: string[];
+          allowedValuesHiddenCount?: number;
+        }>;
+      };
+      expect(payload.valid).toBe(false);
+      expect(payload.path).toBe("/tmp/custom-openclaw.json");
+      expect(payload.issues).toEqual([
+        {
+          path: "update.channel",
+          message: 'Invalid input (allowed: "stable", "beta", "dev")',
+          allowedValues: ["stable", "beta", "dev"],
+        },
+      ]);
+      expect(mockError).not.toHaveBeenCalled();
+    });
+
+    it("prints file-not-found and exits 1 when config file is missing", async () => {
+      setSnapshotOnce({
+        path: "/tmp/openclaw.json",
+        exists: false,
+        raw: null,
+        parsed: {},
+        resolved: {},
+        valid: true,
+        config: {},
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      });
+
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Config file not found:"));
+      expect(mockLog).not.toHaveBeenCalled();
     });
   });
 
@@ -268,6 +429,29 @@ describe("config cli", () => {
       expect(mockWriteConfigFile.mock.calls[0]?.[1]).toEqual({
         unsetPaths: [["tools", "alsoAllow"]],
       });
+    });
+  });
+
+  describe("config file", () => {
+    it("prints the active config file path", async () => {
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "file"]);
+
+      expect(mockLog).toHaveBeenCalledWith("/tmp/openclaw.json");
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("handles config file path with home directory", async () => {
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      const snapshot = buildSnapshot({ resolved, config: resolved });
+      snapshot.path = "/home/user/.openclaw/openclaw.json";
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+
+      await runConfigCommand(["config", "file"]);
+
+      expect(mockLog).toHaveBeenCalledWith("/home/user/.openclaw/openclaw.json");
     });
   });
 });

@@ -95,6 +95,14 @@ function parseSignalAllowEntry(entry: string): SignalAllowEntry | null {
   return { kind: "phone", e164: normalizeE164(stripped) };
 }
 
+export function normalizeSignalAllowRecipient(entry: string): string | undefined {
+  const parsed = parseSignalAllowEntry(entry);
+  if (!parsed || parsed.kind === "any") {
+    return undefined;
+  }
+  return parsed.kind === "phone" ? parsed.e164 : parsed.raw;
+}
+
 export function isSignalSenderAllowed(sender: SignalSender, allowFrom: string[]): boolean {
   if (allowFrom.length === 0) {
     return false;
