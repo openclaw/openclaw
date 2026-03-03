@@ -123,6 +123,7 @@ describe("before_tool_call hook integration", () => {
       agentId: "main",
       sessionKey: "main",
       sessionId: "ephemeral-main",
+      runId: "run-main",
     });
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
@@ -132,12 +133,16 @@ describe("before_tool_call hook integration", () => {
       {
         toolName: "read",
         params: {},
+        runId: "run-main",
+        toolCallId: "call-5",
       },
       {
         toolName: "read",
         agentId: "main",
         sessionKey: "main",
         sessionId: "ephemeral-main",
+        runId: "run-main",
+        toolCallId: "call-5",
       },
     );
   });
