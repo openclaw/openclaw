@@ -5,6 +5,7 @@ export type ChannelHealthSnapshot = {
   configured?: boolean;
   busy?: boolean;
   activeRuns?: number;
+  lastRunActivityAt?: number | null;
   lastEventAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;
@@ -15,6 +16,7 @@ export type ChannelHealthEvaluationReason =
   | "unmanaged"
   | "not-running"
   | "busy"
+  | "stuck"
   | "startup-connect-grace"
   | "disconnected"
   | "stale-socket";
@@ -36,6 +38,8 @@ function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
   return snapshot.enabled !== false && snapshot.configured !== false;
 }
 
+const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
+
 export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
   policy: ChannelHealthPolicy,
@@ -50,8 +54,18 @@ export function evaluateChannelHealth(
     typeof snapshot.activeRuns === "number" && Number.isFinite(snapshot.activeRuns)
       ? Math.max(0, Math.trunc(snapshot.activeRuns))
       : 0;
-  if (snapshot.busy === true || activeRuns > 0) {
-    return { healthy: true, reason: "busy" };
+  const isBusy = snapshot.busy === true || activeRuns > 0;
+  if (isBusy) {
+    const lastRunActivityAt =
+      typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
+        ? snapshot.lastRunActivityAt
+        : null;
+    const runActivityAge =
+      lastRunActivityAt == null ? Number.POSITIVE_INFINITY : Math.max(0, policy.now - lastRunActivityAt);
+    if (runActivityAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
+      return { healthy: true, reason: "busy" };
+    }
+    return { healthy: false, reason: "stuck" };
   }
   if (snapshot.lastStartAt != null) {
     const upDuration = policy.now - snapshot.lastStartAt;

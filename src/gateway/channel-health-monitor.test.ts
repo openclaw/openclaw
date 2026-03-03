@@ -241,10 +241,30 @@ describe("channel-health-monitor", () => {
           lastStartAt: now - 300_000,
           activeRuns: 2,
           busy: true,
+          lastRunActivityAt: now - 30_000,
         },
       },
     });
     await expectNoRestart(manager);
+  });
+
+  it("restarts busy channels when run activity is stale", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          lastStartAt: now - 300_000,
+          activeRuns: 1,
+          busy: true,
+          lastRunActivityAt: now - 26 * 60_000,
+        },
+      },
+    });
+    await expectRestartedChannel(manager, "discord");
   });
 
   it("skips recently-started channels while they are still connecting", async () => {

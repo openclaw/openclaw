@@ -148,4 +148,50 @@ describe("createDiscordMessageHandler queue behavior", () => {
       );
     });
   });
+
+  it("preserves non-debounced message ordering by awaiting debouncer enqueue", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const firstPreflight = createDeferred<void>();
+    const processedMessageIds: string[] = [];
+
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: { channel_id: string; message?: { id?: string } } }) => {
+        const messageId = params.data.message?.id ?? "unknown";
+        if (messageId === "m-1") {
+          await firstPreflight.promise;
+        }
+        return {
+          ...createPreflightContext(params.data.channel_id),
+          messageId,
+        };
+      },
+    );
+
+    processDiscordMessageMock.mockImplementation(async (ctx: { messageId?: string }) => {
+      processedMessageIds.push(ctx.messageId ?? "unknown");
+    });
+
+    const handler = createDiscordMessageHandler(createHandlerParams());
+
+    const sequentialDispatch = (async () => {
+      await handler(createMessageData("m-1") as never, {} as never);
+      await handler(createMessageData("m-2") as never, {} as never);
+    })();
+
+    await vi.waitFor(() => {
+      expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    firstPreflight.resolve();
+    await sequentialDispatch;
+
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    });
+    expect(processedMessageIds).toEqual(["m-1", "m-2"]);
+  });
 });
