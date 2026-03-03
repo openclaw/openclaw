@@ -459,7 +459,12 @@ export async function deliverReplies(params: {
   });
   for (const originalReply of params.replies) {
     let reply = originalReply;
-    const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
+    const mediaList = reply.mediaUrls?.length
+      ? reply.mediaUrls
+      : reply.mediaUrl
+        ? [reply.mediaUrl]
+        : [];
+    const hasMedia = mediaList.length > 0;
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
@@ -475,6 +480,11 @@ export async function deliverReplies(params: {
         {
           to: params.chatId,
           content: rawContent,
+          metadata: {
+            channel: "telegram",
+            mediaUrls: mediaList,
+            threadId: params.thread?.id,
+          },
         },
         {
           channelId: "telegram",
@@ -495,11 +505,6 @@ export async function deliverReplies(params: {
       const deliveredCountBeforeReply = progress.deliveredCount;
       const replyToId =
         params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
-      const mediaList = reply.mediaUrls?.length
-        ? reply.mediaUrls
-        : reply.mediaUrl
-          ? [reply.mediaUrl]
-          : [];
       const telegramData = reply.channelData?.telegram as
         | { buttons?: TelegramInlineButtons }
         | undefined;

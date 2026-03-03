@@ -149,6 +149,34 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("passes media metadata to message_sending hooks", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+
+    const runtime = createRuntime(false);
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 2, chat: { id: "123" } });
+    const bot = createBot({ sendPhoto });
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [{ text: "caption", mediaUrl: "https://example.com/photo.jpg" }],
+      runtime,
+      bot,
+    });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "123",
+        content: "caption",
+        metadata: expect.objectContaining({
+          channel: "telegram",
+          mediaUrls: ["https://example.com/photo.jpg"],
+        }),
+      }),
+      expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+    );
+  });
+
   it("invokes onVoiceRecording before sending a voice note", async () => {
     const events: string[] = [];
     const runtime = createRuntime(false);
