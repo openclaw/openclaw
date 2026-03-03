@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 
-export const runEmbeddedPiAgentMock = vi.fn();
+export const runEmbeddedPiAgentMock: (...args: unknown[]) => unknown = vi.fn();
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
