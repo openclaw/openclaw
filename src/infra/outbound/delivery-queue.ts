@@ -164,10 +164,6 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
  * the entry is moved to failed/ immediately instead of being retried.
  */
 export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
-  if (isPermanentDeliveryError(error)) {
-    await moveToFailed(id, stateDir);
-    return;
-  }
   const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
   const raw = await fs.promises.readFile(filePath, "utf-8");
   const entry: QueuedDelivery = JSON.parse(raw);
@@ -180,6 +176,13 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
     mode: 0o600,
   });
   await fs.promises.rename(tmp, filePath);
+
+  // Permanent errors (e.g. HTTP 4xx) will never succeed on retry — move to
+  // failed/ immediately after persisting diagnostic fields so operators can
+  // inspect lastError/lastAttemptAt in the failed entry.
+  if (isPermanentDeliveryError(error)) {
+    await moveToFailed(id, stateDir);
+  }
 }
 
 /** Load all pending delivery entries from the queue directory. */

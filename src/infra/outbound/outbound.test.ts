@@ -189,7 +189,7 @@ describe("delivery-queue", () => {
       expect(entry.lastError).toBe("connection refused");
     });
 
-    it("moves entry to failed/ immediately for permanent errors", async () => {
+    it("moves entry to failed/ immediately for permanent errors with diagnostic fields", async () => {
       const id = await enqueueDelivery(
         {
           channel: "telegram",
@@ -205,6 +205,12 @@ describe("delivery-queue", () => {
       const failedDir = path.join(queueDir, "failed");
       expect(fs.existsSync(path.join(queueDir, `${id}.json`))).toBe(false);
       expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+
+      // Verify diagnostic fields are persisted so operators can inspect the cause.
+      const failedEntry = JSON.parse(fs.readFileSync(path.join(failedDir, `${id}.json`), "utf-8"));
+      expect(failedEntry.lastError).toBe("400: Bad Request: message is too long");
+      expect(failedEntry.lastAttemptAt).toBeGreaterThan(0);
+      expect(failedEntry.retryCount).toBe(1);
     });
   });
 
