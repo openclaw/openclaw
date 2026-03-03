@@ -102,20 +102,24 @@ function sanitizeCardText(s: string): string {
 }
 
 /**
- * Iterative BFS extraction of visible text from a Feishu interactive card.
- * Bounded by CARD_MAX_NODES, CARD_MAX_OUTPUT_CHARS, and CARD_MAX_QUEUED_ARRAYS
- * to guard against deeply-nested or wide attacker-influenced card payloads (DoS).
- * Uses an index-based queue to avoid O(n²) cost from Array.shift().
+ * Iterative DFS extraction of visible text from a Feishu interactive card.
+ * Uses a LIFO stack (push/pop) so nested content is emitted in document order —
+ * a FIFO queue would emit nested blocks after later siblings, inverting layout.
+ *
+ * Bounded by CARD_MAX_NODES (total elements visited, including column entries),
+ * CARD_MAX_OUTPUT_CHARS, and CARD_MAX_QUEUED_ARRAYS to prevent DoS from
+ * deeply-nested or wide attacker-influenced card payloads.
  */
 function extractCardTextElements(root: unknown[]): string[] {
   const out: string[] = [];
-  const queue: unknown[][] = [root];
-  let qi = 0; // index-based dequeue — avoids O(n²) from shift()
+  // LIFO stack: push children in reverse so first child is processed first.
+  const stack: unknown[][] = [root];
   let seenNodes = 0;
   let outChars = 0;
 
-  while (qi < queue.length && seenNodes < CARD_MAX_NODES && outChars < CARD_MAX_OUTPUT_CHARS) {
-    const nodes = queue[qi++];
+  while (stack.length > 0 && seenNodes < CARD_MAX_NODES && outChars < CARD_MAX_OUTPUT_CHARS) {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const nodes = stack.pop()!;
     for (const element of nodes) {
       if (++seenNodes > CARD_MAX_NODES) break;
       if (!element || typeof element !== "object") continue;
@@ -131,7 +135,7 @@ function extractCardTextElements(root: unknown[]): string[] {
       };
 
       const enqueue = (arr: unknown[]) => {
-        if (queue.length < CARD_MAX_QUEUED_ARRAYS) queue.push(arr);
+        if (stack.length < CARD_MAX_QUEUED_ARRAYS) stack.push(arr);
       };
 
       if (tag === "div" && el.text && typeof el.text === "object") {
@@ -148,14 +152,21 @@ function extractCardTextElements(root: unknown[]): string[] {
       } else if (tag === "note" && Array.isArray(el.elements)) {
         enqueue(el.elements as unknown[]);
       } else if (tag === "column_set" && Array.isArray(el.columns)) {
-        for (const col of el.columns as unknown[]) {
+        // Each column entry counts against seenNodes regardless of whether it
+        // has extractable elements — this bounds the scan cost for wide arrays
+        // containing mostly empty/malformed column objects.
+        // Push in reverse so that popping (LIFO) processes columns in original order.
+        const cols = el.columns as unknown[];
+        for (let i = cols.length - 1; i >= 0; i--) {
+          if (++seenNodes > CARD_MAX_NODES) break;
+          const col = cols[i];
           if (
             col &&
             typeof col === "object" &&
             Array.isArray((col as Record<string, unknown>).elements)
           ) {
             enqueue((col as Record<string, unknown>).elements as unknown[]);
-            if (queue.length >= CARD_MAX_QUEUED_ARRAYS) break; // fanout cap
+            if (stack.length >= CARD_MAX_QUEUED_ARRAYS) break; // hard fanout cap
           }
         }
       }
