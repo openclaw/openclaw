@@ -614,6 +614,50 @@ describe("deliverOutboundPayloads", () => {
     expect(chunker).toHaveBeenNthCalledWith(1, text, 4000);
   });
 
+  it("falls back to sendText when plugin outbound omits sendMedia", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "mx-text-only",
+      roomId: "r1",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "caption", mediaUrl: "https://example.com/pic.png" }],
+    });
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "!room",
+        text: "caption",
+        mediaUrl: undefined,
+      }),
+    );
+    expect(results).toEqual([
+      expect.objectContaining({
+        channel: "matrix",
+        messageId: "mx-text-only",
+      }),
+    ]);
+  });
+
   it("uses iMessage media maxBytes from agent fallback", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1" });
     setActivePluginRegistry(

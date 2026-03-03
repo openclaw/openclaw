@@ -143,12 +143,18 @@ function createPluginHandler(
   params: ChannelHandlerParams & { outbound?: ChannelOutboundAdapter },
 ): ChannelHandler | null {
   const outbound = params.outbound;
-  if (!outbound?.sendText || !outbound?.sendMedia) {
+  if (!outbound?.sendText) {
     return null;
   }
   const baseCtx = createChannelOutboundContextBase(params);
   const sendText = outbound.sendText;
-  const sendMedia = outbound.sendMedia;
+  const sendMedia =
+    outbound.sendMedia ??
+    (async (ctx: ChannelOutboundContext) =>
+      await sendText({
+        ...ctx,
+        mediaUrl: undefined,
+      }));
   const chunker = outbound.chunker ?? null;
   const chunkerMode = outbound.chunkerMode;
   const resolveCtx = (overrides?: {
