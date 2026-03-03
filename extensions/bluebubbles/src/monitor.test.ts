@@ -69,12 +69,16 @@ const mockMatchesMentionWithExplicit = vi.fn(
   },
 );
 const mockResolveRequireMention = vi.fn(() => false);
-const mockResolveGroupPolicy = vi.fn(() => "open");
+const mockResolveGroupPolicy = vi.fn(() => "open" as const);
 type DispatchReplyParams = Parameters<
   PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"]
 >[0];
+const EMPTY_DISPATCH_RESULT = {
+  queuedFinal: false,
+  counts: { tool: 0, block: 0, final: 0 },
+} as const;
 const mockDispatchReplyWithBufferedBlockDispatcher = vi.fn(
-  async (_params: DispatchReplyParams): Promise<void> => undefined,
+  async (_params: DispatchReplyParams) => EMPTY_DISPATCH_RESULT,
 );
 const mockHasControlCommand = vi.fn(() => false);
 const mockResolveCommandAuthorizedFromAuthorizers = vi.fn(() => false);
@@ -86,16 +90,14 @@ const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
 });
 const mockResolveStorePath = vi.fn(() => "/tmp/sessions.json");
 const mockReadSessionUpdatedAt = vi.fn(() => undefined);
-const mockResolveEnvelopeFormatOptions = vi.fn(() => ({
-  template: "channel+name+time",
-}));
+const mockResolveEnvelopeFormatOptions = vi.fn(() => ({}));
 const mockFormatAgentEnvelope = vi.fn((opts: { body: string }) => opts.body);
 const mockFormatInboundEnvelope = vi.fn((opts: { body: string }) => opts.body);
 const mockChunkMarkdownText = vi.fn((text: string) => [text]);
 const mockChunkByNewline = vi.fn((text: string) => (text ? [text] : []));
 const mockChunkTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockChunkMarkdownTextWithMode = vi.fn((text: string) => (text ? [text] : []));
-const mockResolveChunkMode = vi.fn(() => "length");
+const mockResolveChunkMode = vi.fn(() => "length" as const);
 const mockFetchBlueBubblesHistory = vi.mocked(fetchBlueBubblesHistory);
 
 function createMockRuntime(): PluginRuntime {
@@ -1765,6 +1767,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.onReplyStart?.();
+        return EMPTY_DISPATCH_RESULT;
       });
 
       const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
@@ -1815,6 +1818,7 @@ describe("BlueBubbles webhook monitor", () => {
         await params.dispatcherOptions.onReplyStart?.();
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
         await params.dispatcherOptions.onIdle?.();
+        return EMPTY_DISPATCH_RESULT;
       });
 
       const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
@@ -1860,7 +1864,9 @@ describe("BlueBubbles webhook monitor", () => {
         },
       };
 
-      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async () => undefined);
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        async () => EMPTY_DISPATCH_RESULT,
+      );
 
       const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
       const res = createMockResponse();
@@ -1882,6 +1888,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+        return EMPTY_DISPATCH_RESULT;
       });
 
       const account = createMockAccount();
@@ -1933,6 +1940,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+        return EMPTY_DISPATCH_RESULT;
       });
 
       const account = createMockAccount();
@@ -2005,6 +2013,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+        return EMPTY_DISPATCH_RESULT;
       });
 
       const account = createMockAccount();
