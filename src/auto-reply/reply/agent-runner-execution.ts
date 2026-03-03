@@ -184,6 +184,7 @@ export async function runAgentTurnWithFallback(params: {
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
+      const modelFallbackStart = performance.now();
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
         run: (provider, model) => {
@@ -465,6 +466,9 @@ export async function runAgentTurnWithFallback(params: {
             code: attempt.code ? String(attempt.code) : undefined,
           }))
         : [];
+      logVerbose(
+        `[PERF] runWithModelFallback (provider=${fallbackResult.provider}, model=${fallbackResult.model}): ${(performance.now() - modelFallbackStart).toFixed(2)}ms`,
+      );
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
