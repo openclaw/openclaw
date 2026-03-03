@@ -27,11 +27,11 @@
     <key>ThrottleInterval</key>
     <integer>10</integer>
 
-    <!-- Redirect stdout/stderr to log file -->
+    <!-- Redirect stdout/stderr to private log directory (not world-readable /tmp) -->
     <key>StandardOutPath</key>
-    <string>/tmp/com.openclaw.chrome-cleanup.out.log</string>
+    <string>/Users/USERNAME_PLACEHOLDER/.openclaw/logs/chrome-cleanup.launchd.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/com.openclaw.chrome-cleanup.err.log</string>
+    <string>/Users/USERNAME_PLACEHOLDER/.openclaw/logs/chrome-cleanup.launchd.err.log</string>
 
     <!-- Run as the current user (LaunchAgent, not LaunchDaemon) -->
     <key>RunAtLoad</key>

@@ -22,7 +22,7 @@ echo "[Test 2] Script executes (status mode)..."
 if bash scripts/chrome-cleanup.sh status >/dev/null 2>&1; then
     echo "  ✓ PASS: Script executed successfully"
 else
-    echo "  ℹ INFO: Status returned non-zero (expected if no Chrome running)"
+    echo "  ⚠ WARN: Status returned non-zero (may indicate script error or no Chrome running)"
 fi
 
 # Test 3: Config file exists
