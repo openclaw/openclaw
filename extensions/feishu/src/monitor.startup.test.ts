@@ -235,9 +235,11 @@ describe("Feishu monitor startup preflight", () => {
     });
 
     const cfg = buildMultiAccountWebsocketConfig(["solo"]);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     await monitorFeishuProvider({
       config: cfg,
       accountId: "solo",
+      runtime,
       abortSignal: abortController.signal,
     });
 
@@ -245,6 +247,9 @@ describe("Feishu monitor startup preflight", () => {
     // not have run because the abort was detected after prefetch.
     expect(probeFeishuMock).toHaveBeenCalledTimes(1);
     expect(botOpenIds.has("solo")).toBe(false);
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("abort signal received during startup prefetch"),
+    );
   });
 
   it("stops sequential preflight when aborted during probe", async () => {

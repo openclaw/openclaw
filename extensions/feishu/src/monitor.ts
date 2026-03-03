@@ -47,6 +47,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
       abortSignal: opts.abortSignal,
     });
     if (opts.abortSignal?.aborted) {
+      log("feishu: abort signal received during startup prefetch; stopping startup");
       return;
     }
     return monitorSingleAccount({
