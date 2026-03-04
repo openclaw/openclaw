@@ -296,6 +296,7 @@ describe("Ollama provider", () => {
 
     expect(providers?.ollama).toBeDefined();
     expect(providers?.ollama?.baseUrl).toBe("http://127.0.0.1:11434");
+    expect(providers?.ollama?.api).toBe("ollama");
     expect(providers?.ollama?.apiKey).toBe("ollama-local"); // Falls back to default
     expect(providers?.ollama?.models).toEqual([]);
   });
