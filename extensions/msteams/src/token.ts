@@ -1,4 +1,9 @@
-import type { MSTeamsConfig } from "openclaw/plugin-sdk";
+import type { MSTeamsConfig } from "openclaw/plugin-sdk/compat";
+import {
+  hasConfiguredSecretInput,
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "./secret-input.js";
 
 export type MSTeamsCredentials = {
   appId: string;
@@ -6,10 +11,26 @@ export type MSTeamsCredentials = {
   tenantId: string;
 };
 
+export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
+  return Boolean(
+    normalizeSecretInputString(cfg?.appId) &&
+    hasConfiguredSecretInput(cfg?.appPassword) &&
+    normalizeSecretInputString(cfg?.tenantId),
+  );
+}
+
 export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentials | undefined {
-  const appId = cfg?.appId?.trim() || process.env.MSTEAMS_APP_ID?.trim();
-  const appPassword = cfg?.appPassword?.trim() || process.env.MSTEAMS_APP_PASSWORD?.trim();
-  const tenantId = cfg?.tenantId?.trim() || process.env.MSTEAMS_TENANT_ID?.trim();
+  const appId =
+    normalizeSecretInputString(cfg?.appId) ||
+    normalizeSecretInputString(process.env.MSTEAMS_APP_ID);
+  const appPassword =
+    normalizeResolvedSecretInputString({
+      value: cfg?.appPassword,
+      path: "channels.msteams.appPassword",
+    }) || normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD);
+  const tenantId =
+    normalizeSecretInputString(cfg?.tenantId) ||
+    normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID);
 
   if (!appId || !appPassword || !tenantId) {
     return undefined;

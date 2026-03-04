@@ -4,8 +4,8 @@ import Testing
 
 @Suite(.serialized)
 struct NixModeStableSuiteTests {
-    @Test func resolvesFromStableSuiteForAppBundles() {
-        let suite = UserDefaults(suiteName: launchdLabel)!
+    @Test func resolvesFromStableSuiteForAppBundles() throws {
+        let suite = try #require(UserDefaults(suiteName: launchdLabel))
         let key = "openclaw.nixMode"
         let prev = suite.object(forKey: key)
         defer {
@@ -14,7 +14,7 @@ struct NixModeStableSuiteTests {
 
         suite.set(true, forKey: key)
 
-        let standard = UserDefaults(suiteName: "NixModeStableSuiteTests.\(UUID().uuidString)")!
+        let standard = try #require(UserDefaults(suiteName: "NixModeStableSuiteTests.\(UUID().uuidString)"))
         #expect(!standard.bool(forKey: key))
 
         let resolved = ProcessInfo.resolveNixMode(
@@ -25,8 +25,8 @@ struct NixModeStableSuiteTests {
         #expect(resolved)
     }
 
-    @Test func ignoresStableSuiteOutsideAppBundles() {
-        let suite = UserDefaults(suiteName: launchdLabel)!
+    @Test func ignoresStableSuiteOutsideAppBundles() throws {
+        let suite = try #require(UserDefaults(suiteName: launchdLabel))
         let key = "openclaw.nixMode"
         let prev = suite.object(forKey: key)
         defer {
@@ -34,7 +34,7 @@ struct NixModeStableSuiteTests {
         }
 
         suite.set(true, forKey: key)
-        let standard = UserDefaults(suiteName: "NixModeStableSuiteTests.\(UUID().uuidString)")!
+        let standard = try #require(UserDefaults(suiteName: "NixModeStableSuiteTests.\(UUID().uuidString)"))
 
         let resolved = ProcessInfo.resolveNixMode(
             environment: [:],

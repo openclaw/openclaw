@@ -118,6 +118,58 @@ function normalizeSchemaNode(
   };
 }
 
+function isSecretRefVariant(entry: JsonSchema): boolean {
+  if (schemaType(entry) !== "object") {
+    return false;
+  }
+  const source = entry.properties?.source;
+  const provider = entry.properties?.provider;
+  const id = entry.properties?.id;
+  if (!source || !provider || !id) {
+    return false;
+  }
+  return (
+    typeof source.const === "string" &&
+    schemaType(provider) === "string" &&
+    schemaType(id) === "string"
+  );
+}
+
+function isSecretRefUnion(entry: JsonSchema): boolean {
+  const variants = entry.oneOf ?? entry.anyOf;
+  if (!variants || variants.length === 0) {
+    return false;
+  }
+  return variants.every((variant) => isSecretRefVariant(variant));
+}
+
+function normalizeSecretInputUnion(
+  schema: JsonSchema,
+  path: Array<string | number>,
+  remaining: JsonSchema[],
+  nullable: boolean,
+): ConfigSchemaAnalysis | null {
+  const stringIndex = remaining.findIndex((entry) => schemaType(entry) === "string");
+  if (stringIndex < 0) {
+    return null;
+  }
+  const nonString = remaining.filter((_, index) => index !== stringIndex);
+  if (nonString.length !== 1 || !isSecretRefUnion(nonString[0])) {
+    return null;
+  }
+  return normalizeSchemaNode(
+    {
+      ...schema,
+      ...remaining[stringIndex],
+      nullable,
+      anyOf: undefined,
+      oneOf: undefined,
+      allOf: undefined,
+    },
+    path,
+  );
+}
+
 function normalizeUnion(
   schema: JsonSchema,
   path: Array<string | number>,
@@ -159,6 +211,13 @@ function normalizeUnion(
       continue;
     }
     remaining.push(entry);
+  }
+
+  // Config secrets accept either a raw key string or a structured secret ref object.
+  // The form only supports editing the string path for now.
+  const secretInput = normalizeSecretInputUnion(schema, path, remaining, nullable);
+  if (secretInput) {
+    return secretInput;
   }
 
   if (literals.length > 0 && remaining.length === 0) {

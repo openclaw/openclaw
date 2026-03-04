@@ -1,4 +1,4 @@
-import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+import type { DmPolicy, GroupPolicy, SecretInput } from "openclaw/plugin-sdk/compat";
 export type { DmPolicy, GroupPolicy };
 
 export type ReplyToMode = "off" | "first" | "all";
@@ -49,6 +49,8 @@ export type MatrixConfig = {
   enabled?: boolean;
   /** Multi-account configuration keyed by account ID. */
   accounts?: Record<string, MatrixAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
   /** Matrix homeserver URL (https://matrix.example.org). */
   homeserver?: string;
   /** Matrix user id (@user:server). */
@@ -56,7 +58,7 @@ export type MatrixConfig = {
   /** Matrix access token. */
   accessToken?: string;
   /** Matrix password (used only to fetch access token). */
-  password?: string;
+  password?: SecretInput;
   /** Optional device name when logging in via password. */
   deviceName?: string;
   /** Initial sync limit for startup (default: @vector-im/matrix-bot-sdk default). */
@@ -110,7 +112,7 @@ export type CoreConfig = {
   };
   messages?: {
     ackReaction?: string;
-    ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
+    ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
   };
   [key: string]: unknown;
 };

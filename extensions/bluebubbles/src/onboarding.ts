@@ -4,7 +4,7 @@ import type {
   OpenClawConfig,
   DmPolicy,
   WizardPrompter,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import {
   DEFAULT_ACCOUNT_ID,
   addWildcardAllowFrom,
@@ -12,12 +12,13 @@ import {
   mergeAllowFromEntries,
   normalizeAccountId,
   promptAccountId,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import {
   listBlueBubblesAccountIds,
   resolveBlueBubblesAccount,
   resolveDefaultBlueBubblesAccountId,
 } from "./accounts.js";
+import { hasConfiguredSecretInput, normalizeSecretInputString } from "./secret-input.js";
 import { parseBlueBubblesAllowTarget } from "./targets.js";
 import { normalizeBlueBubblesServerUrl } from "./types.js";
 
@@ -222,8 +223,11 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
     }
 
     // Prompt for password
-    let password = resolvedAccount.config.password?.trim();
-    if (!password) {
+    const existingPassword = resolvedAccount.config.password;
+    const existingPasswordText = normalizeSecretInputString(existingPassword);
+    const hasConfiguredPassword = hasConfiguredSecretInput(existingPassword);
+    let password: unknown = existingPasswordText;
+    if (!hasConfiguredPassword) {
       await prompter.note(
         [
           "Enter the BlueBubbles server password.",
@@ -247,6 +251,8 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
           validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
         });
         password = String(entered).trim();
+      } else if (!existingPasswordText) {
+        password = existingPassword;
       }
     }
 

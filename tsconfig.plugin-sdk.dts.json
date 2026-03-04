@@ -10,6 +10,20 @@
     "rootDir": "src",
     "tsBuildInfoFile": "dist/plugin-sdk/.tsbuildinfo"
   },
-  "include": ["src/plugin-sdk/index.ts", "src/plugin-sdk/account-id.ts", "src/types/**/*.d.ts"],
+  "include": [
+    "src/plugin-sdk/index.ts",
+    "src/plugin-sdk/core.ts",
+    "src/plugin-sdk/compat.ts",
+    "src/plugin-sdk/telegram.ts",
+    "src/plugin-sdk/discord.ts",
+    "src/plugin-sdk/slack.ts",
+    "src/plugin-sdk/signal.ts",
+    "src/plugin-sdk/imessage.ts",
+    "src/plugin-sdk/whatsapp.ts",
+    "src/plugin-sdk/line.ts",
+    "src/plugin-sdk/account-id.ts",
+    "src/plugin-sdk/keyed-async-queue.ts",
+    "src/types/**/*.d.ts"
+  ],
   "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
 }

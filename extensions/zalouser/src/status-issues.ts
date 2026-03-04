@@ -1,4 +1,4 @@
-import type { ChannelAccountSnapshot, ChannelStatusIssue } from "openclaw/plugin-sdk";
+import type { ChannelAccountSnapshot, ChannelStatusIssue } from "openclaw/plugin-sdk/compat";
 
 type ZalouserAccountStatus = {
   accountId?: unknown;
@@ -27,14 +27,6 @@ function readZalouserAccountStatus(value: ChannelAccountSnapshot): ZalouserAccou
   };
 }
 
-function isMissingZca(lastError?: string): boolean {
-  if (!lastError) {
-    return false;
-  }
-  const lower = lastError.toLowerCase();
-  return lower.includes("zca") && (lower.includes("not found") || lower.includes("enoent"));
-}
-
 export function collectZalouserStatusIssues(
   accounts: ChannelAccountSnapshot[],
 ): ChannelStatusIssue[] {
@@ -51,26 +43,15 @@ export function collectZalouserStatusIssues(
     }
 
     const configured = account.configured === true;
-    const lastError = asString(account.lastError)?.trim();
 
     if (!configured) {
-      if (isMissingZca(lastError)) {
-        issues.push({
-          channel: "zalouser",
-          accountId,
-          kind: "runtime",
-          message: "zca CLI not found in PATH.",
-          fix: "Install zca-cli and ensure it is on PATH for the Gateway process.",
-        });
-      } else {
-        issues.push({
-          channel: "zalouser",
-          accountId,
-          kind: "auth",
-          message: "Not authenticated (no zca session).",
-          fix: "Run: openclaw channels login --channel zalouser",
-        });
-      }
+      issues.push({
+        channel: "zalouser",
+        accountId,
+        kind: "auth",
+        message: "Not authenticated (no saved Zalo session).",
+        fix: "Run: openclaw channels login --channel zalouser",
+      });
       continue;
     }
 
