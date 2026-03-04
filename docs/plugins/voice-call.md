@@ -230,7 +230,10 @@ streaming speech on calls. You can override it under the plugin config with the
 Notes:
 
 - **Edge TTS is ignored for voice calls** (telephony audio needs PCM; Edge output is unreliable).
-- Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
+- Core TTS is used when streaming is enabled:
+  - Twilio: media-stream WebSocket playback
+  - Vonage: hosted-audio URL playback via `/stream` (requires reachable `publicUrl`)
+- If streaming playback is unavailable, calls fall back to provider-native voices.
 
 ### More examples
 

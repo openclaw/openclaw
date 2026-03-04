@@ -1,6 +1,6 @@
 import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
-import { convertPcmToMulaw8k } from "./telephony-audio.js";
+import { convertPcmToMulaw8k, pcm16MonoToWav } from "./telephony-audio.js";
 
 export type TelephonyTtsRuntime = {
   textToSpeechTelephony: (params: {
@@ -18,6 +18,10 @@ export type TelephonyTtsRuntime = {
 
 export type TelephonyTtsProvider = {
   synthesizeForTelephony: (text: string) => Promise<Buffer>;
+};
+
+export type HostedAudioTtsProvider = {
+  synthesizeForHostedPlayback: (text: string) => Promise<{ audio: Buffer; contentType: string }>;
 };
 
 const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
@@ -42,6 +46,33 @@ export function createTelephonyTtsProvider(params: {
       }
 
       return convertPcmToMulaw8k(result.audioBuffer, result.sampleRate);
+    },
+  };
+}
+
+export function createHostedAudioTtsProvider(params: {
+  coreConfig: CoreConfig;
+  ttsOverride?: VoiceCallTtsConfig;
+  runtime: TelephonyTtsRuntime;
+}): HostedAudioTtsProvider {
+  const { coreConfig, ttsOverride, runtime } = params;
+  const mergedConfig = applyTtsOverride(coreConfig, ttsOverride);
+
+  return {
+    synthesizeForHostedPlayback: async (text: string) => {
+      const result = await runtime.textToSpeechTelephony({
+        text,
+        cfg: mergedConfig,
+      });
+
+      if (!result.success || !result.audioBuffer || !result.sampleRate) {
+        throw new Error(result.error ?? "TTS conversion failed");
+      }
+
+      return {
+        audio: pcm16MonoToWav(result.audioBuffer, result.sampleRate),
+        contentType: "audio/wav",
+      };
     },
   };
 }

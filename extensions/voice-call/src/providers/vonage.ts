@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import type { VonageConfig, WebhookSecurityConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
+import type { HostedAudioTtsProvider } from "../telephony-tts.js";
 import type {
   GetCallStatusInput,
   GetCallStatusResult,
@@ -26,12 +27,19 @@ export interface VonageProviderOptions {
   skipVerification?: boolean;
   ringTimeoutSec?: number;
   webhookSecurity?: WebhookSecurityConfig;
+  streamingEnabled?: boolean;
 }
 
 type ReplayCache = {
   seenUntil: Map<string, number>;
   calls: number;
 };
+
+type MediaUrlPublisher = (params: {
+  audio: Buffer;
+  contentType: string;
+  ttlMs?: number;
+}) => string | null;
 
 const REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const replayCache: ReplayCache = {
@@ -171,6 +179,8 @@ export class VonageProvider implements VoiceCallProvider {
   private readonly baseUrl = "https://api.nexmo.com/v1";
   private callIdToWebhookUrl = new Map<string, string>();
   private providerCallIdToCallId = new Map<string, string>();
+  private hostedAudioTtsProvider: HostedAudioTtsProvider | null = null;
+  private mediaUrlPublisher: MediaUrlPublisher | null = null;
 
   constructor(config: VonageConfig, options: VonageProviderOptions = {}) {
     if (!config.applicationId) {
@@ -190,6 +200,29 @@ export class VonageProvider implements VoiceCallProvider {
       .toString();
     this.signatureSecret = config.signatureSecret;
     this.options = options;
+  }
+
+  setHostedAudioTtsProvider(provider: HostedAudioTtsProvider): void {
+    this.hostedAudioTtsProvider = provider;
+  }
+
+  setMediaUrlPublisher(publisher: MediaUrlPublisher): void {
+    this.mediaUrlPublisher = publisher;
+  }
+
+  async interruptPlayback(providerCallId: string): Promise<void> {
+    await Promise.all([
+      this.apiRequest<void>({
+        method: "DELETE",
+        endpoint: `/calls/${encodeURIComponent(providerCallId)}/stream`,
+        allowNotFound: true,
+      }).catch(() => undefined),
+      this.apiRequest<void>({
+        method: "DELETE",
+        endpoint: `/calls/${encodeURIComponent(providerCallId)}/talk`,
+        allowNotFound: true,
+      }).catch(() => undefined),
+    ]);
   }
 
   private readPrivateKeyFromPath(path?: string): string | undefined {
@@ -548,6 +581,42 @@ export class VonageProvider implements VoiceCallProvider {
   }
 
   async playTts(input: PlayTtsInput): Promise<void> {
+    if (
+      this.options.streamingEnabled &&
+      this.hostedAudioTtsProvider &&
+      this.mediaUrlPublisher &&
+      this.options.publicUrl
+    ) {
+      try {
+        const hostedAudio = await this.hostedAudioTtsProvider.synthesizeForHostedPlayback(
+          input.text,
+        );
+        const mediaUrl = this.mediaUrlPublisher({
+          audio: hostedAudio.audio,
+          contentType: hostedAudio.contentType,
+          ttlMs: 120_000,
+        });
+
+        if (mediaUrl) {
+          await this.apiRequest<void>({
+            method: "PUT",
+            endpoint: `/calls/${encodeURIComponent(input.providerCallId)}/stream`,
+            body: {
+              stream_url: [mediaUrl],
+              loop: 1,
+            },
+          });
+          return;
+        }
+      } catch (err) {
+        console.warn(
+          `[voice-call] Vonage stream playback failed; falling back to talk: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
     await this.apiRequest<void>({
       method: "PUT",
       endpoint: `/calls/${encodeURIComponent(input.providerCallId)}/talk`,

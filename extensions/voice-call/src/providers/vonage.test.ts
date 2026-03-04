@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { VonageProvider } from "./vonage.js";
 
 function base64url(input: Buffer | string): string {
@@ -75,5 +75,48 @@ describe("VonageProvider", () => {
 
     expect(parsed.providerResponseHeaders?.["Content-Type"]).toBe("application/json");
     expect(parsed.providerResponseBody).toContain("conversation");
+  });
+
+  it("uses hosted-audio stream playback when configured", async () => {
+    const provider = new VonageProvider(
+      {
+        applicationId: "app-id",
+        privateKey: privateKeyPem,
+        signatureSecret: "secret",
+      },
+      {
+        publicUrl: "https://example.com/plugins/voice-call/webhook",
+        streamingEnabled: true,
+      },
+    );
+
+    const apiSpy = vi
+      .spyOn(
+        provider as unknown as { apiRequest: (...args: unknown[]) => Promise<unknown> },
+        "apiRequest",
+      )
+      .mockResolvedValue({ status: "ok" });
+
+    provider.setHostedAudioTtsProvider({
+      synthesizeForHostedPlayback: async () => ({
+        audio: Buffer.from("audio"),
+        contentType: "audio/wav",
+      }),
+    });
+    provider.setMediaUrlPublisher(() => "https://example.com/plugins/voice-call/webhook/media/abc");
+
+    await provider.playTts({
+      callId: "call-1",
+      providerCallId: "provider-call-id",
+      text: "Hello",
+      locale: "en-US",
+    });
+
+    expect(apiSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "PUT",
+        endpoint: "/calls/provider-call-id/stream",
+      }),
+    );
   });
 });
