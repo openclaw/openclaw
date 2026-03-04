@@ -185,7 +185,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("suppresses internal block payload delivery", async () => {
+  it("suppresses internal block payload delivery in deliver (no onIdle)", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -200,6 +200,43 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("sends buffered blocks on onIdle when streaming-card cannot be used (#34093)", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_msg",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "Hello " }, { kind: "block" });
+    await options.deliver({ text: "Hello world" }, { kind: "block" });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+
+    await options.onIdle?.();
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "oc_chat",
+        text: "Hello world",
+      }),
+    );
+    expect(streamingInstances).toHaveLength(0);
   });
 
   it("uses streaming session for auto mode markdown payloads", async () => {
