@@ -18,6 +18,51 @@ import { getHandoverRuntime } from "./iris-handover-runtime.js";
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
 const HANDOVER_TIMEZONE = "America/Manaus";
+
+// ---------------------------------------------------------------------------
+// OAuth-safe env shim for Anthropic SDK
+// ---------------------------------------------------------------------------
+// The upstream `complete()` function reads ANTHROPIC_API_KEY and passes it as
+// `apiKey` to the SDK. When the env var is actually an OAuth token (sk-ant-oat*),
+// the SDK sends it in X-Api-Key header instead of Authorization: Bearer → 401.
+// This shim temporarily swaps env vars so the SDK uses the correct auth method.
+// ---------------------------------------------------------------------------
+
+function isOAuthToken(key: string): boolean {
+  return key.startsWith("sk-ant-oat");
+}
+
+/**
+ * If ANTHROPIC_API_KEY contains an OAuth token, temporarily swap it to
+ * ANTHROPIC_AUTH_TOKEN (which the SDK reads as Bearer auth). Returns a
+ * restore function that MUST be called after the API call completes.
+ */
+function shimOAuthEnvIfNeeded(): () => void {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey || !isOAuthToken(apiKey)) {
+    return () => {}; // no-op restore
+  }
+
+  // Swap: move OAuth token to the correct env var
+  const savedApiKey = apiKey;
+  const savedAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  process.env.ANTHROPIC_AUTH_TOKEN = savedApiKey;
+  delete process.env.ANTHROPIC_API_KEY;
+
+  console.log(
+    `[iris-handover] OAuth shim: swapped ANTHROPIC_API_KEY → ANTHROPIC_AUTH_TOKEN for Bearer auth`,
+  );
+
+  // Return restore function
+  return () => {
+    process.env.ANTHROPIC_API_KEY = savedApiKey;
+    if (savedAuthToken !== undefined) {
+      process.env.ANTHROPIC_AUTH_TOKEN = savedAuthToken;
+    } else {
+      delete process.env.ANTHROPIC_AUTH_TOKEN;
+    }
+  };
+}
 const HANDOVER_PROMPT_CONTEXT_SHARE = 0.35;
 const MIN_CONVERSATION_CHARS = 12_000;
 const DAILY_LOG_MAX_CHARS = 2_000;
@@ -234,6 +279,9 @@ export default function irisHandoverExtension(api: ExtensionAPI): void {
         },
       };
     }
+
+    // Shim OAuth env if ANTHROPIC_API_KEY is actually an OAuth token
+    const restoreOAuthEnv = shimOAuthEnvIfNeeded();
 
     try {
       const runtime = getHandoverRuntime(ctx.sessionManager);
@@ -479,6 +527,7 @@ export default function irisHandoverExtension(api: ExtensionAPI): void {
           `  Tokens before compaction: ${preparation.tokensBefore ?? "unknown"}`,
       );
 
+      restoreOAuthEnv();
       return {
         compaction: {
           summary,
@@ -488,6 +537,7 @@ export default function irisHandoverExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
+      restoreOAuthEnv();
       console.warn(
         `[iris-handover] Handover generation failed, falling back to vanilla: ${
           error instanceof Error ? error.message : String(error)
