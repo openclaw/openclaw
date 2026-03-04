@@ -180,23 +180,37 @@ export async function withRouteTabContext<T>(
 
     // Now enrich and flush the intercepted response body.
     if (jsonCalled) {
-      // Resolve live URL *after* the handler ran, so navigating actions
-      // report the post-action URL.  Try Playwright first (actual page
-      // state), fall back to tab metadata URL.
+      // Only resolve the live URL when the response is eligible for
+      // enrichment (ok: true). Skip the Playwright CDP lookup for error
+      // responses to avoid unnecessary connection latency.
       let postRunUrl: string | undefined;
-      try {
-        const pwMod = await getPwAiModuleBase({ mode: "soft" });
-        if (pwMod?.getPageForTargetId) {
-          const page = await pwMod.getPageForTargetId({
-            cdpUrl: profileCtx.profile.cdpUrl,
-            targetId: tab.targetId,
-          });
-          if (page) {
-            postRunUrl = page.url();
+      const isEligible =
+        interceptedBody &&
+        typeof interceptedBody === "object" &&
+        !Array.isArray(interceptedBody) &&
+        (interceptedBody as Record<string, unknown>).ok === true &&
+        (interceptedBody as Record<string, unknown>).url === undefined;
+      if (isEligible) {
+        // Resolve live URL *after* the handler ran, so navigating actions
+        // report the post-action URL.  Try Playwright first (actual page
+        // state), fall back to tab metadata URL.
+        // Note: cross-site navigations that trigger a renderer swap may
+        // invalidate tab.targetId; in that case getPageForTargetId returns
+        // null and we fall back to the (possibly stale) tab.url.
+        try {
+          const pwMod = await getPwAiModuleBase({ mode: "soft" });
+          if (pwMod?.getPageForTargetId) {
+            const page = await pwMod.getPageForTargetId({
+              cdpUrl: profileCtx.profile.cdpUrl,
+              targetId: tab.targetId,
+            });
+            if (page) {
+              postRunUrl = page.url();
+            }
           }
+        } catch {
+          // Playwright unavailable — fall back to tab.url
         }
-      } catch {
-        // Playwright unavailable — fall back to tab.url
       }
       enrichTabResponseBody(interceptedBody, tab, postRunUrl);
       // Restore res.json before flushing so that if originalJson throws
