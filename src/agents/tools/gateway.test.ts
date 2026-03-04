@@ -44,6 +44,22 @@ describe("gateway tool defaults", () => {
     expect(opts.url).toBeUndefined();
   });
 
+  it("uses OPENCLAW_GATEWAY_TOKEN by default when no override is provided", () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    const opts = resolveGatewayOptions();
+    expect(opts.token).toBe("env-token");
+  });
+
+  it("falls back to config gateway.auth.token by default when env is unset", () => {
+    configState.value = {
+      gateway: {
+        auth: { token: "config-token" },
+      },
+    };
+    const opts = resolveGatewayOptions();
+    expect(opts.token).toBe("config-token");
+  });
+
   it("accepts allowlisted gatewayUrl overrides (SSRF hardening)", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
     await callGatewayTool(

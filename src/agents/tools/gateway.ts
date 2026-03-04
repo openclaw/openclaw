@@ -129,7 +129,11 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
         target: validatedOverride.target,
         explicitToken,
       })
-    : explicitToken;
+    : (explicitToken ??
+      resolveGatewayCredentialsFromConfig({
+        cfg,
+        env: process.env,
+      }).token);
   const timeoutMs =
     typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
       ? Math.max(1, Math.floor(opts.timeoutMs))
