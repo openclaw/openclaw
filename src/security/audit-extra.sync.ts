@@ -376,7 +376,9 @@ function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): bool
   }
   // web_research always requires an API key to be internet-capable;
   // without one createWebResearchTool only returns a missing-key error.
-  const apiKey = cfg.tools?.web?.research?.apiKey || env.YDC_API_KEY;
+  // Normalize to match runtime behavior (trims whitespace-only values).
+  const raw = cfg.tools?.web?.research?.apiKey || env.YDC_API_KEY;
+  const apiKey = typeof raw === "string" ? raw.trim() : "";
   return Boolean(apiKey);
 }
 
