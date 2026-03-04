@@ -14,6 +14,14 @@ describe("isXaiProvider", () => {
     expect(isXaiProvider("openrouter", "x-ai/grok-4.1-fast")).toBe(true);
   });
 
+  it("matches venice when model id is a grok variant", () => {
+    expect(isXaiProvider("venice", "grok-4.1-fast")).toBe(true);
+  });
+
+  it("does not match venice with non-grok model id", () => {
+    expect(isXaiProvider("venice", "llama-3.3-70b")).toBe(false);
+  });
+
   it("does not match openrouter with non-xai model id", () => {
     expect(isXaiProvider("openrouter", "openai/gpt-4o")).toBe(false);
   });

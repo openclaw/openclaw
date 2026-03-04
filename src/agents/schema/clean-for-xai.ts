@@ -45,11 +45,16 @@ export function stripXaiUnsupportedKeywords(schema: unknown): unknown {
 
 export function isXaiProvider(modelProvider?: string, modelId?: string): boolean {
   const provider = modelProvider?.toLowerCase() ?? "";
+  const normalizedModelId = modelId?.toLowerCase() ?? "";
   if (provider.includes("xai") || provider.includes("x-ai")) {
     return true;
   }
+  // Venice proxies Grok models with provider "venice" and model ids like "grok-*".
+  if (provider === "venice" && normalizedModelId.startsWith("grok-")) {
+    return true;
+  }
   // OpenRouter proxies to xAI when the model id starts with "x-ai/"
-  if (provider === "openrouter" && modelId?.toLowerCase().startsWith("x-ai/")) {
+  if (provider === "openrouter" && normalizedModelId.startsWith("x-ai/")) {
     return true;
   }
   return false;
