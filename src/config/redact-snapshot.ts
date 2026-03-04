@@ -9,6 +9,7 @@ const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
 const ENV_SECRET_REF_ID_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
 const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const EXEC_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+const FILE_SECRET_REF_ID_INLINE_SECRET_PATTERN = /[{}"\n\r]|-----BEGIN [A-Z0-9 ]+-----/i;
 
 function isSensitivePath(path: string): boolean {
   if (path.endsWith("[]")) {
@@ -38,7 +39,9 @@ function isSchemaValidSecretRef(value: unknown): boolean {
     case "env":
       return ENV_SECRET_REF_ID_PATTERN.test(value.id);
     case "file":
-      return isValidFileSecretRefId(value.id);
+      return (
+        isValidFileSecretRefId(value.id) && !FILE_SECRET_REF_ID_INLINE_SECRET_PATTERN.test(value.id)
+      );
     case "exec":
       return EXEC_SECRET_REF_ID_PATTERN.test(value.id);
     default:

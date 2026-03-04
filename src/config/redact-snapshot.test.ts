@@ -174,6 +174,28 @@ describe("redactConfigSnapshot", () => {
     });
   });
 
+  it("keeps file SecretRef metadata visible at whole-object sensitive paths", () => {
+    const snapshot = makeSnapshot({
+      channels: {
+        googlechat: {
+          serviceAccount: {
+            source: "file",
+            provider: "default",
+            id: "/providers/googlechat/serviceAccount",
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    expect(channels.googlechat.serviceAccount).toEqual({
+      source: "file",
+      provider: "default",
+      id: "/providers/googlechat/serviceAccount",
+    });
+  });
+
   it("keeps env-shaped payloads redacted when the secret ref id is invalid", () => {
     const snapshot = makeSnapshot({
       channels: {
@@ -182,6 +204,24 @@ describe("redactConfigSnapshot", () => {
             source: "env",
             provider: "default",
             id: '{"private_key":"inline-secret"}',
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    expect(channels.googlechat.serviceAccount).toBe(REDACTED_SENTINEL);
+  });
+
+  it("keeps file-shaped payloads redacted when the file secret ref id looks inline", () => {
+    const snapshot = makeSnapshot({
+      channels: {
+        googlechat: {
+          serviceAccount: {
+            source: "file",
+            provider: "default",
+            id: '/{"private_key":"inline-secret"}',
           },
         },
       },
