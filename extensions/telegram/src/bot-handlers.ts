@@ -721,7 +721,7 @@ export const registerTelegramHandlers = ({
         hasGroupAllowOverride,
         groupConfig,
         topicConfig,
-      })
+      }).skip
     ) {
       return { allowed: false, reason: "group-policy" };
     }
