@@ -17,6 +17,7 @@ export interface LineBotOptions {
   runtime?: RuntimeEnv;
   config?: OpenClawConfig;
   mediaMaxMb?: number;
+  botUserId?: string;
   onMessage?: (ctx: LineInboundContext) => Promise<void>;
 }
 
@@ -55,6 +56,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
       mediaMaxBytes,
       processMessage,
       replayCache,
+      botUserId: opts.botUserId,
     });
   };
 

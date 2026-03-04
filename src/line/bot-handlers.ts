@@ -9,6 +9,7 @@ import type {
 } from "@line/bot-sdk";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
+import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -64,6 +65,7 @@ export interface LineHandlerContext {
   mediaMaxBytes: number;
   processMessage: (ctx: LineInboundContext) => Promise<void>;
   replayCache?: LineWebhookReplayCache;
+  botUserId?: string;
 }
 
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
@@ -222,6 +224,52 @@ function resolveLineGroupConfig(params: {
   return groups["*"];
 }
 
+function resolveLineRequireMention(params: {
+  config: ResolvedLineAccount["config"];
+  groupId?: string;
+  roomId?: string;
+}): boolean {
+  return resolveLineGroupConfig(params)?.requireMention ?? false;
+}
+
+function resolveLineMentionMetadata(event: MessageEvent, botUserId?: string): {
+  canDetectMention: boolean;
+  wasMentioned: boolean;
+  hasAnyMention: boolean;
+} {
+  if (event.message.type !== "text") {
+    return {
+      canDetectMention: false,
+      wasMentioned: false,
+      hasAnyMention: false,
+    };
+  }
+  if (!botUserId?.trim()) {
+    return {
+      canDetectMention: false,
+      wasMentioned: false,
+      hasAnyMention: false,
+    };
+  }
+  const mentionees =
+    (event.message as MessageEvent["message"] & {
+      mention?: { mentionees?: Array<{ type?: string; userId?: string }> };
+    }).mention?.mentionees ?? [];
+  const hasAnyMention = mentionees.length > 0;
+  const normalizedBotUserId = botUserId.trim();
+  const wasMentioned = mentionees.some((entry) => {
+    if (entry?.type === "all") {
+      return true;
+    }
+    return entry?.type === "user" && entry.userId === normalizedBotUserId;
+  });
+  return {
+    canDetectMention: true,
+    wasMentioned,
+    hasAnyMention,
+  };
+}
+
 async function sendLinePairingReply(params: {
   senderId: string;
   replyToken?: string;
@@ -360,6 +408,28 @@ async function shouldProcessLineEvent(
       allowTextCommands: true,
       hasControlCommand: hasControlCommand(rawText, cfg),
     });
+
+    if (event.type === "message") {
+      const requireMention = resolveLineRequireMention({
+        config: account.config,
+        groupId,
+        roomId,
+      });
+      const mentionMeta = resolveLineMentionMetadata(event, context.botUserId);
+      const mentionGate = resolveMentionGatingWithBypass({
+        isGroup: true,
+        requireMention,
+        canDetectMention: mentionMeta.canDetectMention,
+        wasMentioned: mentionMeta.wasMentioned,
+        hasAnyMention: mentionMeta.hasAnyMention,
+        allowTextCommands: true,
+        hasControlCommand: hasControlCommand(rawText, cfg),
+        commandAuthorized: commandGate.commandAuthorized,
+      });
+      if (mentionGate.shouldSkip) {
+        return denied;
+      }
+    }
     return { allowed: true, commandAuthorized: commandGate.commandAuthorized };
   }
 

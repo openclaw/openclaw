@@ -28,6 +28,7 @@ import {
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
+import { probeLineBot } from "./probe.js";
 
 export interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -151,12 +152,20 @@ export async function monitorLineProvider(
   });
 
   // Create the bot
+  let botUserId: string | undefined;
+  try {
+    const probe = await probeLineBot(token, 2500);
+    botUserId = probe.ok ? probe.bot?.userId?.trim() || undefined : undefined;
+  } catch {
+    botUserId = undefined;
+  }
   const bot = createLineBot({
     channelAccessToken: token,
     channelSecret: secret,
     accountId,
     runtime,
     config,
+    botUserId,
     onMessage: async (ctx) => {
       if (!ctx) {
         return;
