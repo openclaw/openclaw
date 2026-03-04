@@ -49,6 +49,44 @@ function isOptionalAttachments(value: unknown): value is IMessagePayload["attach
   });
 }
 
+const CAMEL_TO_SNAKE: ReadonlyArray<[string, string]> = [
+  ["isFromMe", "is_from_me"],
+  ["isGroup", "is_group"],
+  ["chatId", "chat_id"],
+  ["chatGuid", "chat_guid"],
+  ["chatName", "chat_name"],
+  ["chatIdentifier", "chat_identifier"],
+  ["replyToId", "reply_to_id"],
+  ["replyToText", "reply_to_text"],
+  ["replyToSender", "reply_to_sender"],
+  ["createdAt", "created_at"],
+  ["mimeType", "mime_type"],
+  ["originalPath", "original_path"],
+];
+
+/**
+ * Some imsg CLI versions send camelCase keys (e.g. `isFromMe`) instead of
+ * the snake_case variants (`is_from_me`) that IMessagePayload declares.
+ * Copy any camelCase value into the expected snake_case slot when the
+ * snake_case key is absent so downstream filters see a consistent shape.
+ */
+function normalizeCamelCaseKeys(record: Record<string, unknown>): void {
+  for (const [camel, snake] of CAMEL_TO_SNAKE) {
+    if (record[camel] !== undefined && record[snake] === undefined) {
+      record[snake] = record[camel];
+    }
+  }
+
+  const attachments = record.attachments;
+  if (Array.isArray(attachments)) {
+    for (const att of attachments) {
+      if (isRecord(att)) {
+        normalizeCamelCaseKeys(att);
+      }
+    }
+  }
+}
+
 export function parseIMessageNotification(raw: unknown): IMessagePayload | null {
   if (!isRecord(raw)) {
     return null;
@@ -58,6 +96,7 @@ export function parseIMessageNotification(raw: unknown): IMessagePayload | null 
     return null;
   }
 
+  normalizeCamelCaseKeys(maybeMessage);
   const message: IMessagePayload = maybeMessage;
   if (
     !isOptionalNumber(message.id) ||
