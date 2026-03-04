@@ -98,4 +98,23 @@ describe("txt2img_aly", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0]?.[1]?.body).toContain("1328*1328");
   });
+
+  it("rejects unknown parameters fields", async () => {
+    const tool = createTxt2ImgAlyTool({ apiKey: "k", baseUrl: "https://api.example" });
+    const result = await tool.execute("call", {
+      model: "qwen-image-max",
+      input_: {
+        messages: [
+          {
+            role: "user",
+            content: [{ text: "a cat" }],
+          },
+        ],
+      },
+      parameters: { foo: "bar" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("unknown fields");
+  });
 });

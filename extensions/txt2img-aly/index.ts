@@ -1,13 +1,22 @@
 import type { AnyAgentTool, OpenClawPluginApi } from "../../src/plugins/types.js";
 
+type AlySize = "1664*928" | "1472*1104" | "1328*1328" | "1104*1472" | "928*1664";
+
 type AlyParameters = {
   negative_prompt?: string;
-  size?: "1664*928" | "1472*1104" | "1328*1328" | "1104*1472" | "928*1664";
+  size?: AlySize;
   n?: 1;
   seed?: number;
 };
 
-const ALLOWED_SIZES = new Set(["1664*928", "1472*1104", "1328*1328", "1104*1472", "928*1664"]);
+const ALLOWED_SIZES = new Set<AlySize>([
+  "1664*928",
+  "1472*1104",
+  "1328*1328",
+  "1104*1472",
+  "928*1664",
+]);
+const ALLOWED_PARAMETER_KEYS = new Set(["negative_prompt", "size", "n", "seed"]);
 
 function fail(message: string): never {
   throw new Error(message);
@@ -63,6 +72,11 @@ function parseParameters(raw: unknown): AlyParameters | undefined {
   }
 
   const input = parsed as Record<string, unknown>;
+  const unknownKeys = Object.keys(input).filter((key) => !ALLOWED_PARAMETER_KEYS.has(key));
+  if (unknownKeys.length > 0) {
+    fail(`parameters has unknown fields: ${unknownKeys.join(", ")}`);
+  }
+
   const out: AlyParameters = {};
 
   if (input.negative_prompt !== undefined && input.negative_prompt !== null) {
@@ -76,10 +90,10 @@ function parseParameters(raw: unknown): AlyParameters | undefined {
   }
 
   if (input.size !== undefined && input.size !== null) {
-    if (typeof input.size !== "string" || !ALLOWED_SIZES.has(input.size)) {
+    if (typeof input.size !== "string" || !ALLOWED_SIZES.has(input.size as AlySize)) {
       fail("parameters.size must be one of 1664*928, 1472*1104, 1328*1328, 1104*1472, 928*1664");
     }
-    out.size = input.size as AlyParameters["size"];
+    out.size = input.size as AlySize;
   }
 
   if (input.n !== undefined && input.n !== null) {
@@ -178,62 +192,90 @@ export function createTxt2ImgAlyTool(options?: {
 
   return {
     name: "txt2img_aly",
-    description: "基于文本生成图片。",
+    description: "基于文本生成图片。在各类生成任务中表现优于 txt2img。",
     parameters: {
+      type: "object",
       properties: {
         model: {
-          description: "模型名称，例如 qwen-image-max",
           type: "string",
+          description: "模型名称，例如 qwen-image-max",
         },
         input_: {
+          type: "object",
+          description: "输入基本信息",
           properties: {
             messages: {
+              type: "array",
               description: "请求内容数组，仅支持单轮对话",
+              minItems: 1,
+              maxItems: 1,
               items: {
+                type: "object",
                 properties: {
                   role: {
+                    type: "string",
                     const: "user",
                     description: "消息角色，必须为 user",
-                    type: "string",
                   },
                   content: {
+                    type: "array",
                     description: "消息内容数组，仅允许一个 text",
+                    minItems: 1,
+                    maxItems: 1,
                     items: {
+                      type: "object",
                       properties: {
                         text: {
+                          type: "string",
                           description:
                             "正向提示词，用于描述期望生成的图像内容、风格和构图。支持中英文，最长800字符。",
                           maxLength: 800,
-                          type: "string",
                         },
                       },
                       required: ["text"],
-                      type: "object",
+                      additionalProperties: false,
                     },
-                    maxItems: 1,
-                    minItems: 1,
-                    type: "array",
                   },
                 },
                 required: ["role", "content"],
-                type: "object",
+                additionalProperties: false,
               },
-              maxItems: 1,
-              minItems: 1,
-              type: "array",
             },
           },
           required: ["messages"],
-          type: "object",
-          description: "输入基本信息",
+          additionalProperties: false,
         },
         parameters: {
           type: "object",
           description: "图像生成参数",
+          properties: {
+            negative_prompt: {
+              type: "string",
+              description: "反向提示词，最长500字符",
+              maxLength: 500,
+            },
+            size: {
+              type: "string",
+              description: "输出图像分辨率",
+              enum: Array.from(ALLOWED_SIZES),
+            },
+            n: {
+              type: "integer",
+              description: "生成图像数量，仅支持1",
+              const: 1,
+            },
+            seed: {
+              type: "integer",
+              description: "随机种子，范围[0,2147483647]",
+              minimum: 0,
+              maximum: 2147483647,
+            },
+          },
+          additionalProperties: false,
         },
       },
       required: ["model", "input_"],
-      type: "object",
+      additionalProperties: false,
     },
 
     async execute(_id, params) {
