@@ -5,7 +5,6 @@ import { agentCommandFromIngress } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -15,7 +14,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { getHeader, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import { resolveGatewayRequestContext } from "./http-utils.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -241,8 +240,6 @@ export async function handleOpenAiHttpRequest(
 
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
-  const messageChannel =
-    normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel") ?? "") ?? "webchat";
   const commandInput = buildAgentCommandInput({
     prompt,
     sessionKey,
