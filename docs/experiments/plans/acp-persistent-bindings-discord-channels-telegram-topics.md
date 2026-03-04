@@ -48,9 +48,7 @@ Current thread-bound ACP behavior is optimized for ephemeral Discord thread work
   - `/acp bind [session|agent] [--persist]`
   - `/acp unbind [--persist]`
   - `/acp status` includes whether binding is `persistent` or `temporary`.
-- In bound conversations, `/new` and `/reset` should preserve the binding contract:
-  - either reset the bound ACP session in place, or
-  - recreate and rebind transparently.
+- In bound conversations, `/new` and `/reset` reset the bound ACP session in place and keep the binding attached.
 
 ### 3) Conversation identity
 
