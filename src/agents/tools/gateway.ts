@@ -123,13 +123,22 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
         })
       : undefined;
   const explicitToken = trimToUndefined(opts?.gatewayToken);
+  // Fallback to env token if no explicit token provided - this fixes agent tool calls
+  // failing with "device-required" when gateway.auth.mode="token" and env var is set
+  const envToken = !explicitToken
+    ? resolveGatewayCredentialsFromConfig({
+        cfg,
+        env: process.env,
+        modeOverride: validatedOverride?.target,
+      }).token
+    : undefined;
   const token = validatedOverride
     ? resolveGatewayOverrideToken({
         cfg,
         target: validatedOverride.target,
         explicitToken,
       })
-    : explicitToken;
+    : (explicitToken ?? envToken);
   const timeoutMs =
     typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
       ? Math.max(1, Math.floor(opts.timeoutMs))
