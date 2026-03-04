@@ -278,7 +278,8 @@ export function handleMessageEnd(
     (assistantMessage.content as Array<{ type?: string }>).some(
       (block) => block?.type === "toolCall",
     );
-  const userFacingRawText = hasToolCalls ? "" : rawText;
+  const userFacingRawText =
+    hasToolCalls && ctx.state.emittedAssistantUpdate ? "" : rawText;
 
   const text = resolveSilentReplyFallbackText({
     text: ctx.stripBlockTags(userFacingRawText, { thinking: false, final: false }),
@@ -334,7 +335,14 @@ export function handleMessageEnd(
 
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
-  ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
+  const stopReason = (assistantMessage as { stopReason?: string }).stopReason;
+  const isToolUseRound = stopReason === "toolUse";
+  ctx.finalizeAssistantTexts({
+    text,
+    addedDuringMessage,
+    chunkerHasBuffered,
+    discardThisMessage: isToolUseRound,
+  });
 
   const onBlockReply = ctx.params.onBlockReply;
   const shouldEmitReasoning = Boolean(

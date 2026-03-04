@@ -113,6 +113,7 @@ export type EmbeddedPiSubscribeContext = {
     text: string;
     addedDuringMessage: boolean;
     chunkerHasBuffered: boolean;
+    discardThisMessage?: boolean;
   }) => void;
   trimMessagingToolSent: () => void;
   ensureCompactionPromise: () => void;
