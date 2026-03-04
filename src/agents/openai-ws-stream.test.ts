@@ -521,6 +521,36 @@ describe("convertMessagesToInputItems", () => {
   it("returns empty array for empty messages", () => {
     expect(convertMessagesToInputItems([])).toEqual([]);
   });
+
+  it("ignores malformed entries in user content arrays", () => {
+    const items = convertMessagesToInputItems([
+      {
+        role: "user",
+        content: [null, { type: "text", text: "Hello!" }],
+        timestamp: 0,
+      } as unknown as Parameters<typeof convertMessagesToInputItems>[0][number],
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ type: "message", role: "user", content: "Hello!" });
+  });
+
+  it("ignores malformed entries in assistant content arrays", () => {
+    const items = convertMessagesToInputItems([
+      {
+        role: "assistant",
+        content: [null, { type: "text", text: "Hi." }],
+        stopReason: "stop",
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {},
+        timestamp: 0,
+      } as unknown as Parameters<typeof convertMessagesToInputItems>[0][number],
+    ]);
+    const messageItem = items.find((i) => i.type === "message");
+    expect(messageItem).toBeDefined();
+    expect(messageItem).toMatchObject({ role: "assistant", content: "Hi." });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
