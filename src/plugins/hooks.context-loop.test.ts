@@ -34,7 +34,7 @@ describe("context_assembled hook", () => {
     messages: [fakeMsg("user", "hi")],
     messageCount: 1,
     imageCount: 0,
-    iteration: 0,
+    iteration: 1,
   };
 
   it("fires handler with correct event shape", async () => {
@@ -48,7 +48,7 @@ describe("context_assembled hook", () => {
     expect(event).toMatchObject({
       systemPrompt: "You are helpful.",
       messageCount: 1,
-      iteration: 0,
+      iteration: 1,
     });
     expect(ctx).toBe(agentCtx);
   });
