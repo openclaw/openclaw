@@ -2,8 +2,18 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
+import type { ImageContent } from "../commands/agent/types.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
+import {
+  DEFAULT_INPUT_IMAGE_MAX_BYTES,
+  DEFAULT_INPUT_IMAGE_MIMES,
+  DEFAULT_INPUT_MAX_REDIRECTS,
+  DEFAULT_INPUT_TIMEOUT_MS,
+  extractImageContentFromSource,
+  type InputImageLimits,
+  type InputImageSource,
+} from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
@@ -37,12 +47,22 @@ type OpenAiChatCompletionRequest = {
   user?: unknown;
 };
 
+const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
+const IMAGE_ONLY_USER_MESSAGE = "User sent image(s) with no text.";
+const DEFAULT_OPENAI_IMAGE_LIMITS: InputImageLimits = {
+  allowUrl: true,
+  allowedMimes: new Set(DEFAULT_INPUT_IMAGE_MIMES),
+  maxBytes: DEFAULT_INPUT_IMAGE_MAX_BYTES,
+  maxRedirects: DEFAULT_INPUT_MAX_REDIRECTS,
+  timeoutMs: DEFAULT_INPUT_TIMEOUT_MS,
+};
+
 function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
 function buildAgentCommandInput(params: {
-  prompt: { message: string; extraSystemPrompt?: string };
+  prompt: { message: string; extraSystemPrompt?: string; images?: ImageContent[] };
   sessionKey: string;
   runId: string;
   messageChannel: string;
@@ -50,6 +70,7 @@ function buildAgentCommandInput(params: {
   return {
     message: params.prompt.message,
     extraSystemPrompt: params.prompt.extraSystemPrompt,
+    images: params.prompt.images,
     sessionKey: params.sessionKey,
     runId: params.runId,
     deliver: false as const,
@@ -123,6 +144,88 @@ function extractTextContent(content: unknown): string {
   return "";
 }
 
+function resolveImageUrlPart(part: unknown): string | undefined {
+  if (!part || typeof part !== "object") {
+    return undefined;
+  }
+  const imageUrl = (part as { image_url?: unknown }).image_url;
+  if (typeof imageUrl === "string") {
+    const trimmed = imageUrl.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (!imageUrl || typeof imageUrl !== "object") {
+    return undefined;
+  }
+  const rawUrl = (imageUrl as { url?: unknown }).url;
+  if (typeof rawUrl !== "string") {
+    return undefined;
+  }
+  const trimmed = rawUrl.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function extractImageUrls(content: unknown): string[] {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  const urls: string[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    if ((part as { type?: unknown }).type !== "image_url") {
+      continue;
+    }
+    const url = resolveImageUrlPart(part);
+    if (url) {
+      urls.push(url);
+    }
+  }
+  return urls;
+}
+
+function parseImageUrlToSource(url: string): InputImageSource {
+  const dataUriMatch = /^data:([^;]+);base64,(.+)$/is.exec(url);
+  if (dataUriMatch) {
+    return {
+      type: "base64",
+      mediaType: dataUriMatch[1],
+      data: dataUriMatch[2],
+    };
+  }
+  return { type: "url", url };
+}
+
+function resolveLatestUserImageUrls(messagesUnknown: unknown): string[] {
+  const messages = asMessages(messagesUnknown);
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const role = typeof msg.role === "string" ? msg.role.trim() : "";
+    if (role !== "user") {
+      continue;
+    }
+    return extractImageUrls(msg.content);
+  }
+  return [];
+}
+
+async function resolveImagesForRequest(messagesUnknown: unknown): Promise<ImageContent[]> {
+  const urls = resolveLatestUserImageUrls(messagesUnknown);
+  if (urls.length === 0) {
+    return [];
+  }
+  const images: ImageContent[] = [];
+  for (const url of urls) {
+    const source = parseImageUrlToSource(url);
+    const image = await extractImageContentFromSource(source, DEFAULT_OPENAI_IMAGE_LIMITS);
+    images.push(image);
+  }
+  return images;
+}
+
 function buildAgentPrompt(messagesUnknown: unknown): {
   message: string;
   extraSystemPrompt?: string;
@@ -138,16 +241,25 @@ function buildAgentPrompt(messagesUnknown: unknown): {
     }
     const role = typeof msg.role === "string" ? msg.role.trim() : "";
     const content = extractTextContent(msg.content).trim();
-    if (!role || !content) {
+    const hasImage = extractImageUrls(msg.content).length > 0;
+    if (!role) {
       continue;
     }
     if (role === "system" || role === "developer") {
-      systemParts.push(content);
+      if (content) {
+        systemParts.push(content);
+      }
       continue;
     }
 
     const normalizedRole = role === "function" ? "tool" : role;
     if (normalizedRole !== "user" && normalizedRole !== "assistant" && normalizedRole !== "tool") {
+      continue;
+    }
+
+    const messageContent =
+      normalizedRole === "user" && !content && hasImage ? IMAGE_ONLY_USER_MESSAGE : content;
+    if (!messageContent) {
       continue;
     }
 
@@ -163,7 +275,7 @@ function buildAgentPrompt(messagesUnknown: unknown): {
 
     conversationEntries.push({
       role: normalizedRole,
-      entry: { sender, body: content },
+      entry: { sender, body: messageContent },
     });
   }
 
@@ -205,7 +317,7 @@ export async function handleOpenAiHttpRequest(
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
-    maxBodyBytes: opts.maxBodyBytes ?? 1024 * 1024,
+    maxBodyBytes: opts.maxBodyBytes ?? DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
   });
   if (handled === false) {
     return false;
@@ -228,7 +340,21 @@ export async function handleOpenAiHttpRequest(
     useMessageChannelHeader: true,
   });
   const prompt = buildAgentPrompt(payload.messages);
-  if (!prompt.message) {
+  let images: ImageContent[] = [];
+  try {
+    images = await resolveImagesForRequest(payload.messages);
+  } catch (err) {
+    logWarn(`openai-compat: invalid image_url content: ${String(err)}`);
+    sendJson(res, 400, {
+      error: {
+        message: "Invalid image_url content in `messages`.",
+        type: "invalid_request_error",
+      },
+    });
+    return true;
+  }
+
+  if (!prompt.message && images.length === 0) {
     sendJson(res, 400, {
       error: {
         message: "Missing user message in `messages`.",
@@ -241,7 +367,11 @@ export async function handleOpenAiHttpRequest(
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
   const commandInput = buildAgentCommandInput({
-    prompt,
+    prompt: {
+      message: prompt.message,
+      extraSystemPrompt: prompt.extraSystemPrompt,
+      images: images.length > 0 ? images : undefined,
+    },
     sessionKey,
     runId,
     messageChannel,
