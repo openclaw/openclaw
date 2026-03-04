@@ -96,7 +96,7 @@ export function createDraftStreamLoop(params: {
       }
     },
     waitForInFlight: async () => {
-      if (inFlightPromise) {
+      while (inFlightPromise) {
         await inFlightPromise;
       }
     },
