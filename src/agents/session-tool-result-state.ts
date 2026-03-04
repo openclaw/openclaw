@@ -1,5 +1,41 @@
 export type PendingToolCall = { id: string; name?: string };
 
+/**
+ * Extract tool name from a toolCallId by removing common prefixes and separators.
+ * Handles formats like:
+ * - functions.read:0 -> read
+ * - functions.read0 -> read
+ * - functionsread3 -> read
+ * - toolCall_abc123 -> abc123
+ */
+export function extractToolNameFromId(id: string): string | undefined {
+  if (!id || typeof id !== "string") {
+    return undefined;
+  }
+
+  // Trim whitespace and check if empty
+  const trimmed = id.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  // Remove common prefixes: "functions.", "toolCall_", "toolUse_", "functionCall_"
+  let normalized = trimmed
+    .replace(/^(functions\.|toolCall_|toolUse_|functionCall_)/i, "")
+    // Remove index suffix after ":" or "_" or numeric suffix
+    .replace(/:\d+$/, "")
+    .replace(/_\d+$/, "")
+    // Remove trailing digits only (e.g., "read1" -> "read")
+    .replace(/(\D+)\d+$/, "$1");
+
+  // If we extracted something meaningful, return it
+  if (normalized && normalized.length > 0 && normalized.length < 64) {
+    return normalized;
+  }
+
+  return undefined;
+}
+
 export type PendingToolCallState = {
   size: () => number;
   entries: () => IterableIterator<[string, string | undefined]>;
@@ -19,9 +55,70 @@ export function createPendingToolCallState(): PendingToolCallState {
   return {
     size: () => pending.size,
     entries: () => pending.entries(),
-    getToolName: (id: string) => pending.get(id),
+    getToolName: (id: string) => {
+      // First try exact match
+      const exactMatch = pending.get(id);
+      if (exactMatch) {
+        return exactMatch;
+      }
+
+      // Try fuzzy matching: check if the incoming ID contains or is contained by any stored ID
+      // This handles formats like "functionsread3" vs "functions.read:0"
+      const lowerId = id.toLowerCase();
+      for (const [storedId, storedName] of pending.entries()) {
+        const lowerStoredId = storedId.toLowerCase();
+
+        // Check if stored ID is contained in the incoming ID (e.g., "functions.read:0" in "functionsread3")
+        if (lowerId.includes(lowerStoredId) || lowerStoredId.includes(lowerId)) {
+          return storedName;
+        }
+
+        // Also check if the tool name (from stored name or extracted from stored ID) matches
+        const storedToolName =
+          storedName?.toLowerCase() || extractToolNameFromId(storedId)?.toLowerCase();
+        if (storedToolName) {
+          const extractedIdName = extractToolNameFromId(id)?.toLowerCase();
+          if (
+            extractedIdName &&
+            (extractedIdName === storedToolName || lowerId.includes(storedToolName))
+          ) {
+            return storedName;
+          }
+        }
+      }
+
+      return undefined;
+    },
     delete: (id: string) => {
-      pending.delete(id);
+      // First try exact match
+      if (pending.has(id)) {
+        pending.delete(id);
+        return;
+      }
+
+      // Try fuzzy matching: same logic as getToolName
+      const lowerId = id.toLowerCase();
+      for (const [storedId, storedName] of pending.entries()) {
+        const lowerStoredId = storedId.toLowerCase();
+
+        if (lowerId.includes(lowerStoredId) || lowerStoredId.includes(lowerId)) {
+          pending.delete(storedId);
+          return;
+        }
+
+        const storedToolName =
+          storedName?.toLowerCase() || extractToolNameFromId(storedId)?.toLowerCase();
+        if (storedToolName) {
+          const extractedIdName = extractToolNameFromId(id)?.toLowerCase();
+          if (
+            extractedIdName &&
+            (extractedIdName === storedToolName || lowerId.includes(storedToolName))
+          ) {
+            pending.delete(storedId);
+            return;
+          }
+        }
+      }
     },
     clear: () => {
       pending.clear();
