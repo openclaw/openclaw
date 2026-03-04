@@ -94,6 +94,16 @@ export function resolveLastToRaw(params: {
     }
   }
 
+  // Fix #34182: When channel changes (e.g., iMessage → Web UI), don't use the old
+  // persistedLastTo from a different channel, as it causes replies to be sent to
+  // the wrong recipient (the previous channel's sender instead of Web UI).
+  if (params.persistedLastTo && originatingChannel && persistedChannel) {
+    if (originatingChannel !== persistedChannel) {
+      // Channel changed - don't use old persistedLastTo from different channel
+      return params.originatingToRaw || params.toRaw;
+    }
+  }
+
   return params.originatingToRaw || params.toRaw || params.persistedLastTo;
 }
 
