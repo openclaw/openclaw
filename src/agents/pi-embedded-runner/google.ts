@@ -439,10 +439,10 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
-  const droppedThinking = policy.dropThinkingBlocks
+  const thinkingSignaturesSanitized = policy.stripThinkingSignatures
     ? stripThinkingSignatures(sanitizedImages)
     : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
+  const sanitizedToolCalls = sanitizeToolCallInputs(thinkingSignaturesSanitized, {
     allowedToolNames: params.allowedToolNames,
   });
   const repairedTools = policy.repairToolUseResultPairing

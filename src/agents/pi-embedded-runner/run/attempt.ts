@@ -1081,7 +1081,7 @@ export async function runEmbeddedAttempt(
       // Copilot/Claude can reject persisted thinking signatures (for example,
       // thinkingSignature:"reasoning_text") on follow-up provider calls.
       // Wrap the stream function so every outbound request sees signature-sanitized messages.
-      if (transcriptPolicy.dropThinkingBlocks) {
+      if (transcriptPolicy.stripThinkingSignatures) {
         const inner = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {
           const ctx = context as unknown as { messages?: unknown };

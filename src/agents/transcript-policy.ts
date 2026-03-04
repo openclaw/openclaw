@@ -14,8 +14,7 @@ export type TranscriptPolicy = {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;
   };
-  sanitizeThinkingSignatures: boolean;
-  dropThinkingBlocks: boolean;
+  stripThinkingSignatures: boolean;
   applyGoogleTurnOrdering: boolean;
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
@@ -99,7 +98,7 @@ export function resolveTranscriptPolicy(params: {
   // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
   // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").
   // Enable thinking-signature sanitization for these sessions.
-  const dropThinkingBlocks = isCopilotClaude;
+  const stripThinkingSignatures = isCopilotClaude;
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
@@ -125,8 +124,7 @@ export function resolveTranscriptPolicy(params: {
     repairToolUseResultPairing,
     preserveSignatures: false,
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
-    sanitizeThinkingSignatures: false,
-    dropThinkingBlocks,
+    stripThinkingSignatures,
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
     validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
