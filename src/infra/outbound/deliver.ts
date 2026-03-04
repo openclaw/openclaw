@@ -184,9 +184,9 @@ function createPluginHandler(
             text: caption,
             mediaUrl,
           })
-      : async (caption) =>
+      : async (caption, _mediaUrl, overrides) =>
           sendText({
-            ...resolveCtx(),
+            ...resolveCtx(overrides),
             text: caption ? `[Media] ${caption}` : "[Media attached]",
           }),
   };
