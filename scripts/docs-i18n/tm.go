@@ -97,6 +97,7 @@ func (tm *TranslationMemory) Save() error {
 	if err != nil {
 		return err
 	}
+	defer file.Close()
 
 	keys := make([]string, 0, len(tm.entries))
 	for key := range tm.entries {
@@ -109,23 +110,16 @@ func (tm *TranslationMemory) Save() error {
 		entry := tm.entries[key]
 		payload, err := json.Marshal(entry)
 		if err != nil {
-			_ = file.Close()
 			return err
 		}
 		if _, err := writer.Write(payload); err != nil {
-			_ = file.Close()
 			return err
 		}
 		if _, err := writer.WriteString("\n"); err != nil {
-			_ = file.Close()
 			return err
 		}
 	}
 	if err := writer.Flush(); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, tm.path)
