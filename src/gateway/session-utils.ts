@@ -821,6 +821,13 @@ export function resolveSessionModelIdentityRef(
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
   agentId?: string,
 ): { provider?: string; model: string } {
+  // Honour model override first (mirrors resolveSessionModelRef priority).
+  const storedModelOverride = entry?.modelOverride?.trim();
+  if (storedModelOverride) {
+    const resolved = resolveSessionModelRef(cfg, entry, agentId);
+    return { provider: resolved.provider, model: resolved.model };
+  }
+
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
   if (runtimeModel) {
