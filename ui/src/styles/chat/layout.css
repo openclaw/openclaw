@@ -262,8 +262,8 @@
 /* Compose input row - horizontal layout */
 .chat-compose__row {
   display: flex;
+  gap: 8px;
   align-items: stretch;
-  gap: 12px;
   flex: 1;
 }
 
@@ -272,6 +272,7 @@
 }
 
 .chat-compose__field {
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
@@ -304,22 +305,190 @@
   cursor: not-allowed;
 }
 
+/* Stacked buttons - vertical layout beside input */
 .chat-compose__actions {
-  flex-shrink: 0;
   display: flex;
-  align-items: stretch;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+  width: 80px;
 }
 
 .chat-compose .chat-compose__actions .btn {
-  padding: 0 16px;
-  font-size: 13px;
-  height: 40px;
-  min-height: 40px;
-  max-height: 40px;
-  line-height: 1;
+  width: 100%;
+  font-size: 12px;
+  padding: 6px 8px;
+  height: auto;
+  min-height: unset;
+  max-height: unset;
+  line-height: 1.2;
   white-space: nowrap;
   box-sizing: border-box;
+}
+
+/* Session tabs - chip bar */
+.chat-session-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.chat-session-tabs__label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+.chat-session-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.chat-session-chip:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chat-session-chip.active {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: var(--info);
+  color: var(--info);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.3);
+}
+
+/* Autosuggest menu - positioned above textarea */
+.chat-compose__field .rpc-suggestions {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--panel-strong);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  z-index: 100;
+}
+
+.rpc-suggestion {
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 150ms ease-out;
+}
+
+.rpc-suggestion:hover {
+  background: var(--bg-hover);
+}
+
+.rpc-suggestion__name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.rpc-suggestion__desc {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* Queue tab and panel - compact collapsible queue */
+.chat-queue-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 14px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: #000;
+  border: none;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  align-self: flex-start;
+  margin-left: 14px;
+  margin-bottom: 0;
+  position: relative;
+  z-index: 2;
+  transition: color 0.15s ease;
+  /* Extend touch target */
+  min-height: 28px;
+}
+
+:root[data-theme="light"] .chat-queue-tab {
+  background: #e5e5e5;
+  color: #555;
+}
+
+.chat-queue-tab:hover {
+  color: var(--text);
+}
+
+.chat-queue-panel {
+  background: #000;
+  border-radius: 0 8px 0 0;
+  margin: 0 14px;
+  margin-bottom: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 120px;
+  overflow-y: auto;
+  border: none;
+  /* Drawer effect: overlaps input area at bottom */
+  position: relative;
+  z-index: 1;
+  padding-bottom: 12px;
+}
+
+:root[data-theme="light"] .chat-queue-panel {
+  background: #e5e5e5;
+}
+
+.chat-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+:root[data-theme="light"] .chat-queue-item {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.chat-queue-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Chat controls - moved to content-header area, left aligned */
