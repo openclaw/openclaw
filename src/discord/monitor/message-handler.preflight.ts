@@ -467,12 +467,18 @@ export async function preflightDiscordMessage(
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isGuildMessage && shouldRequireMention) {
-    if (botId && mentionGate.shouldSkip) {
-      logVerbose(`discord: drop guild message (mention required, botId=${botId})`);
+    if (mentionGate.shouldSkip) {
+      logVerbose(
+        `discord: drop guild message (mention required, botId=${botId ?? "unknown"})`,
+      );
       logger.info(
         {
           channelId: message.channelId,
           reason: "no-mention",
+          requireMention: Boolean(shouldRequireMention),
+          canDetectMention,
+          wasMentioned,
+          effectiveWasMentioned,
         },
         "discord: skipping guild message",
       );
