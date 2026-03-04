@@ -13,7 +13,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 ## Table of contents
 
 - [Quick start and first-run setup]
-  - [Im stuck what's the fastest way to get unstuck?](#im-stuck-whats-the-fastest-way-to-get-unstuck)
+  - [I'm stuck, what's the fastest way to get unstuck?](#im-stuck-whats-the-fastest-way-to-get-unstuck)
   - [What's the recommended way to install and set up OpenClaw?](#whats-the-recommended-way-to-install-and-set-up-openclaw)
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
   - [How do I authenticate the dashboard (token) on localhost vs remote?](#how-do-i-authenticate-the-dashboard-token-on-localhost-vs-remote)
