@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { createServer } from "node:http";
 import { delimiter, dirname, join } from "node:path";
-import { fetchWithSsrFGuard, isWSL2Sync } from "openclaw/plugin-sdk";
+import { fetchWithSsrFGuard, isWSL2Sync } from "openclaw/plugin-sdk/google-gemini-cli-auth";
 
 const CLIENT_ID_KEYS = ["OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "GEMINI_CLI_OAUTH_CLIENT_ID"];
 const CLIENT_SECRET_KEYS = [
@@ -224,14 +224,16 @@ function generatePkce(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-function resolvePlatform(): "WINDOWS" | "MACOS" | "LINUX" {
+function resolvePlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
   if (process.platform === "win32") {
     return "WINDOWS";
   }
-  if (process.platform === "linux") {
-    return "LINUX";
+  if (process.platform === "darwin") {
+    return "MACOS";
   }
-  return "MACOS";
+  // Google's loadCodeAssist API rejects "LINUX" as an invalid Platform enum value.
+  // Use "PLATFORM_UNSPECIFIED" for Linux and other platforms to match the pi-ai runtime.
+  return "PLATFORM_UNSPECIFIED";
 }
 
 async function fetchWithTimeout(

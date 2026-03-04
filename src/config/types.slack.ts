@@ -187,9 +187,13 @@ export type SlackAccountConfig = {
    * Slack uses shortcodes (e.g., "eyes") rather than unicode emoji.
    */
   ackReaction?: string;
+  /** Reaction emoji added while processing a reply (e.g. "hourglass_flowing_sand"). Removed when done. Useful as a typing indicator fallback when assistant mode is not enabled. */
+  typingReaction?: string;
 };
 
 export type SlackConfig = {
   /** Optional per-account Slack configuration (multi-account). */
   accounts?: Record<string, SlackAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & SlackAccountConfig;

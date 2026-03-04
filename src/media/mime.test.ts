@@ -6,6 +6,7 @@ import {
   extensionForMime,
   imageMimeFromFormat,
   isAudioFileName,
+  kindFromMime,
   normalizeMimeType,
 } from "./mime.js";
 
@@ -130,5 +131,9 @@ describe("mediaKindFromMime", () => {
     { mime: "model/gltf+json", expected: "unknown" },
   ] as const)("classifies $mime", ({ mime, expected }) => {
     expect(mediaKindFromMime(mime)).toBe(expected);
+  });
+
+  it("normalizes MIME strings before kind classification", () => {
+    expect(kindFromMime(" Audio/Ogg; codecs=opus ")).toBe("audio");
   });
 });
