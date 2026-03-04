@@ -790,6 +790,7 @@ describe("runReplyAgent claude-cli routing", () => {
   function createRun(params?: {
     typingMode?: "instant" | "thinking";
     opts?: {
+      onAssistantMessageStart?: () => Promise<void> | void;
       onReasoningStream?: (payload: {
         text?: string;
         isReasoning?: boolean;
@@ -956,6 +957,90 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(thinkingEvents).toEqual(["Check_*files*\n\nThen_more"]);
     expect(toolPhases).toEqual(expect.arrayContaining(["start", "result"]));
     expect(result).toMatchObject({ text: "Final answer" });
+  });
+
+  it("bridges cli system init to assistant message start once", async () => {
+    const callbackOrder: string[] = [];
+    const onAssistantMessageStart = vi.fn(() => {
+      callbackOrder.push("start");
+    });
+    const onReasoningStream = vi.fn(() => {
+      callbackOrder.push("reasoning");
+    });
+    const onToolStart = vi.fn(() => {
+      callbackOrder.push("tool");
+    });
+
+    runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        onSystemInit?: (payload: { subtype: string; sessionId?: string }) => void;
+        onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
+        onToolUseEvent?: (payload: { name: string; toolUseId?: string; input?: unknown }) => void;
+        onAssistantTurn?: (text: string) => void;
+      }) => {
+        params.onSystemInit?.({ subtype: "init", sessionId: "cli-session-1" });
+        params.onThinkingTurn?.({ text: "step", delta: "step" });
+        params.onToolUseEvent?.({ name: "Read", toolUseId: "toolu_1" });
+        params.onAssistantTurn?.("Answer");
+        return {
+          payloads: [{ text: "Answer" }],
+          meta: {
+            agentMeta: {
+              provider: "claude-cli",
+              model: "opus-4.5",
+            },
+          },
+        };
+      },
+    );
+
+    const result = await createRun({
+      typingMode: "thinking",
+      opts: {
+        onAssistantMessageStart,
+        onReasoningStream,
+        onToolStart,
+      },
+    });
+
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(callbackOrder[0]).toBe("start");
+    expect(callbackOrder).toEqual(expect.arrayContaining(["reasoning", "tool"]));
+    expect(result).toMatchObject({ text: "Answer" });
+  });
+
+  it("strips reply directive tags from cli partial replies (including split tags)", async () => {
+    const onPartialReply = vi.fn();
+    runCliAgentMock.mockImplementationOnce(
+      async (params: { onAssistantTurn?: (text: string) => void }) => {
+        params.onAssistantTurn?.("[[reply_to_cur");
+        params.onAssistantTurn?.("rent]]7452136093975117843 请确认一下");
+        return {
+          payloads: [{ text: "[[reply_to_current]]7452136093975117843 请确认一下" }],
+          meta: {
+            agentMeta: {
+              provider: "claude-cli",
+              model: "opus-4.5",
+            },
+          },
+        };
+      },
+    );
+
+    const result = await createRun({
+      opts: {
+        onPartialReply,
+      },
+    });
+
+    const partialTexts = onPartialReply.mock.calls
+      .map((call) => call[0]?.text)
+      .filter((value): value is string => typeof value === "string");
+    expect(partialTexts).toEqual(["7452136093975117843 请确认一下"]);
+    expect(partialTexts.some((value) => value.includes("[[reply_to"))).toBe(false);
+    expect(result).toMatchObject({
+      text: "7452136093975117843 请确认一下",
+    });
   });
 
   it("closes reasoning stream when cli runner throws after thinking", async () => {

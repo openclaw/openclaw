@@ -137,6 +137,37 @@ describe("FeishuConfigSchema replyInThread", () => {
   });
 });
 
+describe("FeishuConfigSchema streamingInThread", () => {
+  it("accepts streamingInThread at top level", () => {
+    const result = FeishuConfigSchema.parse({ streamingInThread: "disabled" });
+    expect(result.streamingInThread).toBe("disabled");
+  });
+
+  it("defaults streamingInThread to undefined when not set", () => {
+    const result = FeishuConfigSchema.parse({});
+    expect(result.streamingInThread).toBeUndefined();
+  });
+
+  it("rejects invalid streamingInThread value", () => {
+    const result = FeishuConfigSchema.safeParse({ streamingInThread: "always" });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts streamingInThread in group config", () => {
+    const result = FeishuGroupSchema.parse({ streamingInThread: "disabled" });
+    expect(result.streamingInThread).toBe("disabled");
+  });
+
+  it("accepts streamingInThread in account config", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: { streamingInThread: "disabled" },
+      },
+    });
+    expect(result.accounts?.main?.streamingInThread).toBe("disabled");
+  });
+});
+
 describe("FeishuConfigSchema optimization flags", () => {
   it("defaults top-level typingIndicator and resolveSenderNames to true", () => {
     const result = FeishuConfigSchema.parse({});

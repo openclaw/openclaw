@@ -135,6 +135,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         },
         topicSessionMode: { type: "string", enum: ["disabled", "enabled"] },
         replyInThread: { type: "string", enum: ["disabled", "enabled"] },
+        streamingInThread: { type: "string", enum: ["disabled", "enabled"] },
         historyLimit: { type: "integer", minimum: 0 },
         dmHistoryLimit: { type: "integer", minimum: 0 },
         textChunkLimit: { type: "integer", minimum: 1 },
@@ -158,6 +159,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               webhookPath: { type: "string" },
               webhookPort: { type: "integer", minimum: 1 },
               dispatchMode: { type: "string", enum: ["auto", "plugin"] },
+              streamingInThread: { type: "string", enum: ["disabled", "enabled"] },
               pluginMode: {
                 type: "object",
                 additionalProperties: false,

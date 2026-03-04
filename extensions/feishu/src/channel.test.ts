@@ -48,6 +48,18 @@ describe("feishuPlugin.status.probeAccount", () => {
 });
 
 describe("feishuPlugin.configSchema", () => {
+  it("exposes top-level streamingInThread in channel schema", () => {
+    const schema = feishuPlugin.configSchema?.schema as
+      | {
+          properties?: Record<string, unknown>;
+        }
+      | undefined;
+    const streamingInThread = schema?.properties?.streamingInThread as
+      | { enum?: string[] }
+      | undefined;
+    expect(streamingInThread?.enum).toEqual(["disabled", "enabled"]);
+  });
+
   it("exposes account-level dispatchMode in channel schema", () => {
     const schema = feishuPlugin.configSchema?.schema as
       | {
@@ -65,6 +77,23 @@ describe("feishuPlugin.configSchema", () => {
       ?.dispatchMode as { enum?: string[] } | undefined;
 
     expect(dispatchMode?.enum).toEqual(["auto", "plugin"]);
+  });
+
+  it("exposes account-level streamingInThread in channel schema", () => {
+    const schema = feishuPlugin.configSchema?.schema as
+      | {
+          properties?: {
+            accounts?: {
+              additionalProperties?: {
+                properties?: Record<string, unknown>;
+              };
+            };
+          };
+        }
+      | undefined;
+    const streamingInThread = schema?.properties?.accounts?.additionalProperties?.properties
+      ?.streamingInThread as { enum?: string[] } | undefined;
+    expect(streamingInThread?.enum).toEqual(["disabled", "enabled"]);
   });
 
   it("exposes account-level pluginMode.forwardControlCommands in channel schema", () => {

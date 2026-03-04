@@ -250,6 +250,7 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
 }
 
 export type StreamJsonCallbacks = {
+  onSystemInit?: (payload: { subtype: string; sessionId?: string }) => void;
   onAssistantTurn?: (text: string) => void;
   onToolUse?: (toolName: string) => void;
   onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
@@ -589,6 +590,9 @@ export function createStreamJsonProcessor(
     if (type === "system") {
       const subtype = typeof parsed.subtype === "string" ? parsed.subtype : "";
       log.debug(`stream-json system: subtype=${subtype} sessionId=${sessionId ?? "none"}`);
+      if (subtype === "init") {
+        callbacks?.onSystemInit?.({ subtype, sessionId });
+      }
       return;
     }
     if (type === "rate_limit_event") {

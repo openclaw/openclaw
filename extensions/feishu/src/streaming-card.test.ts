@@ -1,30 +1,52 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-}));
-
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 
-function installFetchMock(): void {
-  fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
-    if (url.includes("/auth/v3/tenant_access_token/internal")) {
-      return {
-        response: {
-          json: async () => ({ code: 0, tenant_access_token: "token", expire: 7200 }),
-        },
-        release: async () => {},
-      };
-    }
-    return {
-      response: {
-        json: async () => ({ code: 0, msg: "ok", data: {} }),
+function createClientMock() {
+  const messageDelete = vi.fn(async () => ({ code: 0, msg: "ok" }));
+  const messageCreate = vi.fn(async () => ({
+    code: 0,
+    msg: "ok",
+    data: { message_id: "message-id" },
+  }));
+  const messageReply = vi.fn(async () => ({
+    code: 0,
+    msg: "ok",
+    data: { message_id: "message-id" },
+  }));
+  const cardCreate = vi.fn(async () => ({ code: 0, msg: "ok", data: { card_id: "card-id" } }));
+  const cardSettings = vi.fn(async () => ({ code: 0, msg: "ok" }));
+  const cardElementContent = vi.fn(async () => ({ code: 0, msg: "ok" }));
+
+  const client = {
+    im: {
+      message: {
+        delete: messageDelete,
+        create: messageCreate,
+        reply: messageReply,
       },
-      release: async () => {},
-    };
-  });
+    },
+    cardkit: {
+      v1: {
+        card: {
+          create: cardCreate,
+          settings: cardSettings,
+        },
+        cardElement: {
+          content: cardElementContent,
+        },
+      },
+    },
+  };
+
+  return {
+    client: client as never,
+    messageDelete,
+    messageCreate,
+    messageReply,
+    cardCreate,
+    cardSettings,
+    cardElementContent,
+  };
 }
 
 describe("mergeStreamingText", () => {
@@ -46,11 +68,11 @@ describe("mergeStreamingText", () => {
 describe("FeishuStreamingSession.update", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    installFetchMock();
   });
 
   it("supports replace mode to overwrite transient status text", async () => {
-    const session = new FeishuStreamingSession({} as never, {
+    const { client } = createClientMock();
+    const session = new FeishuStreamingSession(client, {
       appId: "app",
       appSecret: "secret",
     });
@@ -74,14 +96,40 @@ describe("FeishuStreamingSession.update", () => {
   });
 });
 
+describe("FeishuStreamingSession.discard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("deletes the interactive message instead of leaving an empty card", async () => {
+    const { client, messageDelete } = createClientMock();
+    const session = new FeishuStreamingSession(client, {
+      appId: "app",
+      appSecret: "secret",
+    });
+    (session as any).state = {
+      cardId: "card-id",
+      messageId: "message-id",
+      sequence: 1,
+      currentText: "💭 思考中...",
+    };
+
+    await session.discard();
+
+    expect(messageDelete).toHaveBeenCalledWith({
+      path: { message_id: "message-id" },
+    });
+  });
+});
+
 describe("FeishuStreamingSession.close", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    installFetchMock();
   });
 
   it("treats explicit empty final text as authoritative", async () => {
-    const session = new FeishuStreamingSession({} as never, {
+    const { client } = createClientMock();
+    const session = new FeishuStreamingSession(client, {
       appId: "app",
       appSecret: "secret",
     });
@@ -103,7 +151,8 @@ describe("FeishuStreamingSession.close", () => {
   });
 
   it("keeps pending merge behavior when final text is omitted", async () => {
-    const session = new FeishuStreamingSession({} as never, {
+    const { client } = createClientMock();
+    const session = new FeishuStreamingSession(client, {
       appId: "app",
       appSecret: "secret",
     });
@@ -125,7 +174,8 @@ describe("FeishuStreamingSession.close", () => {
   });
 
   it("respects pending replace updates when final text is omitted", async () => {
-    const session = new FeishuStreamingSession({} as never, {
+    const { client } = createClientMock();
+    const session = new FeishuStreamingSession(client, {
       appId: "app",
       appSecret: "secret",
     });

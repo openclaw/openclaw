@@ -433,6 +433,29 @@ describe("createStreamJsonProcessor", () => {
     expect(output.text).toBe("message from unknown envelope type");
   });
 
+  it("emits system init callbacks with resolved session id", () => {
+    const onSystemInit = vi.fn();
+    const processor = createStreamJsonProcessor(createBackend(), {
+      onSystemInit,
+    });
+
+    processor.feed(
+      `${JSON.stringify({
+        type: "system",
+        subtype: "init",
+        session_id: "session-init-1",
+      })}\n`,
+    );
+
+    processor.finish();
+
+    expect(onSystemInit).toHaveBeenCalledTimes(1);
+    expect(onSystemInit).toHaveBeenCalledWith({
+      subtype: "init",
+      sessionId: "session-init-1",
+    });
+  });
+
   it("ignores rate_limit_event envelopes while preserving assistant stream output", () => {
     const onAssistantTurn = vi.fn();
     const processor = createStreamJsonProcessor(createBackend(), {

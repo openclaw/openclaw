@@ -1655,6 +1655,48 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyInThread: true,
+        streamingInThread: false,
+        threadReply: true,
+      }),
+    );
+  });
+
+  it("passes streamingInThread=false to dispatcher for thread replies when configured", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group",
+              replyInThread: "disabled",
+              streamingInThread: "disabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-thread-stream-off" } },
+      message: {
+        message_id: "msg-thread-stream-off",
+        chat_id: "oc-group",
+        chat_type: "group",
+        thread_id: "omt_topic_stream_off",
+        message_type: "text",
+        content: JSON.stringify({ text: "thread content" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyInThread: true,
+        streamingInThread: false,
         threadReply: true,
       }),
     );
