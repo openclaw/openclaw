@@ -180,7 +180,7 @@ export async function setupSearch(
   });
 
   const defaultProvider: SearchProvider = (() => {
-    if (existingProvider) {
+    if (existingProvider && SEARCH_PROVIDER_OPTIONS.some((e) => e.value === existingProvider)) {
       return existingProvider;
     }
     const detected = SEARCH_PROVIDER_OPTIONS.find(

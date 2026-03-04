@@ -183,10 +183,13 @@ async function promptWebToolsConfig(
     return hasExistingKey(nextConfig, provider as SP) || hasKeyInEnv(entry);
   };
 
-  const existingProvider: string =
-    existingSearch?.provider ??
-    SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ??
-    "perplexity";
+  const existingProvider: string = (() => {
+    const stored = existingSearch?.provider;
+    if (stored && SEARCH_PROVIDER_OPTIONS.some((e) => e.value === stored)) {
+      return stored;
+    }
+    return SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ?? "perplexity";
+  })();
 
   note(
     [
