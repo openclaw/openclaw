@@ -132,7 +132,7 @@ Your `openclaw.json` uses the same `${VAR_NAME}` pattern shown above.
 
 For Vault, use OpenClaw's `exec` SecretRef provider to call the Vault CLI directly. This eliminates the need for a custom resolver script.
 
-````json5
+```json5
 {
   secrets: {
     providers: {
@@ -155,6 +155,7 @@ For Vault, use OpenClaw's `exec` SecretRef provider to call the Vault CLI direct
     },
   },
 }
+```
 
 The exec provider uses protocol payloads on stdin/stdout. See [Configuration Reference](/gateway/configuration-reference#secret-providers-config) for the full exec contract.
 
@@ -164,7 +165,7 @@ The exec provider uses protocol payloads on stdin/stdout. See [Configuration Ref
 
 ```bash
 infisical run -- openclaw gateway --port 18789
-````
+```
 
 Store keys in your Infisical project, reference them as `${VAR_NAME}` in config.
 
