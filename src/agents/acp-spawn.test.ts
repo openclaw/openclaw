@@ -247,7 +247,7 @@ describe("spawnAcpDirect", () => {
     hoisted.sessionBindingResolveByConversationMock.mockReset().mockReturnValue(null);
     hoisted.sessionBindingListBySessionMock.mockReset().mockReturnValue([]);
     hoisted.sessionBindingUnbindMock.mockReset().mockResolvedValue([]);
-    hoisted.startAcpSpawnParentStreamRelayMock.mockReset();
+    hoisted.startAcpSpawnParentStreamRelayMock.mockReset().mockReturnValue(vi.fn());
     hoisted.resolveAcpSpawnStreamLogPathMock
       .mockReset()
       .mockReturnValue("/tmp/sess-main.acp-stream.jsonl");
@@ -459,18 +459,63 @@ describe("spawnAcpDirect", () => {
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
+    const agentCallIndex = hoisted.callGatewayMock.mock.calls.findIndex(
+      (call: unknown[]) => (call[0] as { method?: string }).method === "agent",
+    );
+    const relayCallOrder = hoisted.startAcpSpawnParentStreamRelayMock.mock.invocationCallOrder[0];
+    const agentCallOrder = hoisted.callGatewayMock.mock.invocationCallOrder[agentCallIndex];
     expect(agentCall?.params?.deliver).toBe(false);
+    expect(typeof relayCallOrder).toBe("number");
+    expect(typeof agentCallOrder).toBe("number");
+    expect(relayCallOrder < agentCallOrder).toBe(true);
     expect(hoisted.startAcpSpawnParentStreamRelayMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        runId: "run-1",
         parentSessionKey: "agent:main:main",
         agentId: "codex",
         logPath: "/tmp/sess-main.acp-stream.jsonl",
       }),
     );
+    const relayRuns = hoisted.startAcpSpawnParentStreamRelayMock.mock.calls.map(
+      (call: unknown[]) => (call[0] as { runId?: string }).runId,
+    );
+    expect(relayRuns).toContain(agentCall?.params?.idempotencyKey);
+    expect(relayRuns).toContain(result.runId);
     expect(hoisted.resolveAcpSpawnStreamLogPathMock).toHaveBeenCalledWith({
       childSessionKey: expect.stringMatching(/^agent:codex:acp:/),
     });
+  });
+
+  it("disposes pre-registered parent relay when initial ACP dispatch fails", async () => {
+    const relayDispose = vi.fn();
+    hoisted.startAcpSpawnParentStreamRelayMock.mockReturnValueOnce(relayDispose);
+    hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
+      const args = argsUnknown as { method?: string };
+      if (args.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (args.method === "agent") {
+        throw new Error("agent dispatch failed");
+      }
+      if (args.method === "sessions.delete") {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        streamTo: "parent",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("agent dispatch failed");
+    expect(relayDispose).toHaveBeenCalledTimes(1);
   });
 
   it('rejects streamTo="parent" without requester session context', async () => {
