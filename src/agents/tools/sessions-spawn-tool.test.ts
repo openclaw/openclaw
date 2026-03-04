@@ -141,6 +141,30 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("passes notifyChannel and notifyTarget to subagent spawn", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+      agentAccountId: "default",
+      agentTo: "channel:123",
+    });
+
+    await tool.execute("call-notify", {
+      task: "background work",
+      notifyChannel: "telegram",
+      notifyTarget: "-1001234567890",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "background work",
+        notifyChannel: "telegram",
+        notifyTarget: "-1001234567890",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("rejects attachments for ACP runtime", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

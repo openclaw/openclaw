@@ -35,6 +35,14 @@ const SessionsSpawnToolSchema = Type.Object({
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
 
+  // External channel notification on completion.
+  notifyChannel: Type.Optional(
+    Type.String({ description: "Channel to notify on completion (e.g., 'discord', 'telegram')" }),
+  ),
+  notifyTarget: Type.Optional(
+    Type.String({ description: "Target channel/chat ID for completion notification" }),
+  ),
+
   // Inline attachments (snapshot-by-value).
   // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
   attachments: Type.Optional(
@@ -109,6 +117,8 @@ export function createSessionsSpawnTool(opts?: {
           ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : undefined;
       const thread = params.thread === true;
+      const notifyChannel = readStringParam(params, "notifyChannel");
+      const notifyTarget = readStringParam(params, "notifyTarget");
       const attachments = Array.isArray(params.attachments)
         ? (params.attachments as Array<{
             name: string;
@@ -161,6 +171,8 @@ export function createSessionsSpawnTool(opts?: {
           cleanup,
           sandbox,
           expectsCompletionMessage: true,
+          notifyChannel,
+          notifyTarget,
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"

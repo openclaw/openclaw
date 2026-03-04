@@ -419,6 +419,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.keepRecentTokens": "Compaction Keep Recent Tokens",
   "agents.defaults.compaction.reserveTokensFloor": "Compaction Reserve Token Floor",
   "agents.defaults.compaction.maxHistoryShare": "Compaction Max History Share",
+  "agents.defaults.compaction.recentTurnsPreserve": "Compaction Recent Turns Preserve",
   "agents.defaults.compaction.identifierPolicy": "Compaction Identifier Policy",
   "agents.defaults.compaction.identifierInstructions": "Compaction Identifier Instructions",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",

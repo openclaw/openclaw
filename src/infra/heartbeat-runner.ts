@@ -743,8 +743,12 @@ export async function runHeartbeatOnce(opts: {
 
     const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
+    // Default to lightweight bootstrap context for heartbeat runs.
+    // Heartbeats typically only need HEARTBEAT.md, not the full bootstrap
+    // (AGENTS.md, SOUL.md, USER.md, etc.), saving significant tokens per run.
+    // Set lightContext: false explicitly to opt out of this optimization.
     const bootstrapContextMode: "lightweight" | undefined =
-      heartbeat?.lightContext === true ? "lightweight" : undefined;
+      heartbeat?.lightContext === false ? undefined : "lightweight";
     const replyOpts = heartbeatModelOverride
       ? {
           isHeartbeat: true,
