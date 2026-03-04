@@ -30,42 +30,44 @@ export function createWebOnMessageHandler(params: {
   baseMentionConfig: MentionConfig;
   account: { authDir?: string; accountId?: string };
 }) {
-  const processForRoute = async (
-    msg: WebInboundMsg,
-    route: ReturnType<typeof resolveAgentRoute>,
-    groupHistoryKey: string,
-    opts?: {
-      groupHistory?: GroupHistoryEntry[];
-      suppressGroupHistoryClear?: boolean;
-    },
-  ) =>
-    processMessage({
-      cfg: params.cfg,
-      msg,
-      route,
-      groupHistoryKey,
-      groupHistories: params.groupHistories,
-      groupMemberNames: params.groupMemberNames,
-      connectionId: params.connectionId,
-      verbose: params.verbose,
-      maxMediaBytes: params.maxMediaBytes,
-      replyResolver: params.replyResolver,
-      replyLogger: params.replyLogger,
-      backgroundTasks: params.backgroundTasks,
-      rememberSentText: params.echoTracker.rememberText,
-      echoHas: params.echoTracker.has,
-      echoForget: params.echoTracker.forget,
-      buildCombinedEchoKey: params.echoTracker.buildCombinedKey,
-      groupHistory: opts?.groupHistory,
-      suppressGroupHistoryClear: opts?.suppressGroupHistoryClear,
-    });
-
   return async (msg: WebInboundMsg) => {
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
-    // Fresh config for bindings lookup; other routing inputs are payload-derived.
+    // Fresh config per-message so runtime changes are picked up without restart.
+    const cfg = loadConfig();
+
+    const processForRoute = async (
+      inMsg: WebInboundMsg,
+      route: ReturnType<typeof resolveAgentRoute>,
+      ghKey: string,
+      opts?: {
+        groupHistory?: GroupHistoryEntry[];
+        suppressGroupHistoryClear?: boolean;
+      },
+    ) =>
+      processMessage({
+        cfg,
+        msg: inMsg,
+        route,
+        groupHistoryKey: ghKey,
+        groupHistories: params.groupHistories,
+        groupMemberNames: params.groupMemberNames,
+        connectionId: params.connectionId,
+        verbose: params.verbose,
+        maxMediaBytes: params.maxMediaBytes,
+        replyResolver: params.replyResolver,
+        replyLogger: params.replyLogger,
+        backgroundTasks: params.backgroundTasks,
+        rememberSentText: params.echoTracker.rememberText,
+        echoHas: params.echoTracker.has,
+        echoForget: params.echoTracker.forget,
+        buildCombinedEchoKey: params.echoTracker.buildCombinedKey,
+        groupHistory: opts?.groupHistory,
+        suppressGroupHistoryClear: opts?.suppressGroupHistoryClear,
+      });
+
     const route = resolveAgentRoute({
-      cfg: loadConfig(),
+      cfg,
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
@@ -113,7 +115,7 @@ export function createWebOnMessageHandler(params: {
         OriginatingTo: conversationId,
       } satisfies MsgContext;
       updateLastRouteInBackground({
-        cfg: params.cfg,
+        cfg,
         backgroundTasks: params.backgroundTasks,
         storeAgentId: route.agentId,
         sessionKey: route.sessionKey,
@@ -125,7 +127,7 @@ export function createWebOnMessageHandler(params: {
       });
 
       const gating = applyGroupGating({
-        cfg: params.cfg,
+        cfg,
         msg,
         conversationId,
         groupHistoryKey,
@@ -153,7 +155,7 @@ export function createWebOnMessageHandler(params: {
     // Does not bypass group mention/activation gating above.
     if (
       await maybeBroadcastMessage({
-        cfg: params.cfg,
+        cfg,
         msg,
         peerId,
         route,
