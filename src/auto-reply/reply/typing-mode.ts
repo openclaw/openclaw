@@ -128,7 +128,19 @@ export function createTypingSignaler(params: {
     if (disabled) {
       return;
     }
-    // Start typing as soon as tools begin executing, even before the first text delta.
+    // In "message" or "thinking" mode, tool execution should not start the
+    // typing indicator on its own.  Only refresh the TTL when typing is
+    // already active (started by a prior text/reasoning delta).  Without
+    // this guard, long sequences of tool calls (web searches, exec, etc.)
+    // keep the typing indicator alive for minutes even though no reply text
+    // has been emitted yet — which is confusing on channels like Telegram.
+    if (shouldStartOnMessageStart || shouldStartOnReasoning) {
+      if (typing.isActive()) {
+        typing.refreshTypingTtl();
+      }
+      return;
+    }
+    // "instant" mode: start typing as soon as tools begin executing.
     if (!typing.isActive()) {
       await typing.startTypingLoop();
       typing.refreshTypingTtl();
