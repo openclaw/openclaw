@@ -306,6 +306,9 @@ export function parseTtsDirectives(
               seed: normalizeSeed(Number.parseInt(rawValue, 10)),
             };
             break;
+          // NOTE: instructions directive intentionally not supported here because
+          // the parser splits on whitespace, which would truncate multi-word instructions.
+          // Use config `tts.openai.instructions` instead for reliable behavior.
           default:
             break;
         }
@@ -595,8 +598,9 @@ export async function openaiTTS(params: {
   voice: string;
   responseFormat: "mp3" | "opus" | "pcm";
   timeoutMs: number;
+  instructions?: string;
 }): Promise<Buffer> {
-  const { text, apiKey, model, voice, responseFormat, timeoutMs } = params;
+  const { text, apiKey, model, voice, responseFormat, timeoutMs, instructions } = params;
 
   if (!isValidOpenAIModel(model)) {
     throw new Error(`Invalid model: ${model}`);
@@ -608,6 +612,19 @@ export async function openaiTTS(params: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
+  // instructions parameter supported by gpt-4o-mini-tts model
+  // Also allow for custom endpoints (they may support instruction-compatible models)
+  const supportsInstructions = model === "gpt-4o-mini-tts" || isCustomOpenAIEndpoint();
+  const body: Record<string, unknown> = {
+    model,
+    input: text,
+    voice,
+    response_format: responseFormat,
+  };
+  if (supportsInstructions && instructions) {
+    body.instructions = instructions;
+  }
+
   try {
     const response = await fetch(`${getOpenAITtsBaseUrl()}/audio/speech`, {
       method: "POST",
@@ -615,12 +632,7 @@ export async function openaiTTS(params: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model,
-        input: text,
-        voice,
-        response_format: responseFormat,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
 
