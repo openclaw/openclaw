@@ -1,8 +1,4 @@
-import {
-  DEFAULT_RETRY_POLICY,
-  parseProviderError,
-  retryWithBackoff,
-} from "./provider-error.js";
+import { DEFAULT_RETRY_POLICY, parseProviderError, retryWithBackoff } from "./provider-error.js";
 import type { RetryPolicy } from "./provider-error.js";
 import { PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageProviderId } from "./provider-usage.types.js";
@@ -52,12 +48,7 @@ export async function fetchJsonWithRetry(
     providerErr,
     onRetry ? (attempt, max, delayMs) => onRetry(attempt, max, delayMs) : undefined,
   ).catch((err: unknown) => {
-    if (
-      typeof err === "object" &&
-      err !== null &&
-      "httpStatus" in err &&
-      "raw" in err
-    ) {
+    if (typeof err === "object" && err !== null && "httpStatus" in err && "raw" in err) {
       const provErr = err as { httpStatus: number; raw: unknown };
       return new Response(JSON.stringify(provErr.raw ?? null), {
         status: provErr.httpStatus,

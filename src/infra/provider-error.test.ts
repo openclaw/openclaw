@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_RETRY_POLICY,
-  parseProviderError,
-  retryWithBackoff,
-} from "./provider-error.js";
+import { DEFAULT_RETRY_POLICY, parseProviderError, retryWithBackoff } from "./provider-error.js";
 import type { ProviderError, RetryPolicy } from "./provider-error.js";
 
 // ---------------------------------------------------------------------------
@@ -201,9 +197,14 @@ describe("retryWithBackoff", () => {
       return "ok";
     });
 
-    const promise = retryWithBackoff(fn, DEFAULT_RETRY_POLICY, providerErr, (_attempt, _max, delayMs) => {
-      delays.push(delayMs);
-    });
+    const promise = retryWithBackoff(
+      fn,
+      DEFAULT_RETRY_POLICY,
+      providerErr,
+      (_attempt, _max, delayMs) => {
+        delays.push(delayMs);
+      },
+    );
     await vi.runAllTimersAsync();
     await promise;
     expect(delays[0]).toBe(5000);
@@ -232,9 +233,16 @@ describe("retryWithBackoff", () => {
       throw providerErr;
     });
 
-    const promise = retryWithBackoff(fn, DEFAULT_RETRY_POLICY, providerErr, (_attempt, _max, delayMs) => {
-      delays.push(delayMs);
-    }).catch(() => { /* expected */ });
+    const promise = retryWithBackoff(
+      fn,
+      DEFAULT_RETRY_POLICY,
+      providerErr,
+      (_attempt, _max, delayMs) => {
+        delays.push(delayMs);
+      },
+    ).catch(() => {
+      /* expected */
+    });
     await vi.runAllTimersAsync();
     await promise;
     expect(delays).toEqual([2000, 4000, 8000]);

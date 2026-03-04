@@ -166,10 +166,7 @@ export async function retryWithBackoff<T>(
 
   // Attempts 2..maxRetries
   for (let attempt = 2; attempt <= maxRetries; attempt++) {
-    const delayMs = Math.min(
-      baseDelayMs * Math.pow(backoffMultiplier, attempt - 1),
-      maxDelayMs,
-    );
+    const delayMs = Math.min(baseDelayMs * Math.pow(backoffMultiplier, attempt - 1), maxDelayMs);
 
     onRetry?.(attempt, maxRetries, delayMs, lastError);
     await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
