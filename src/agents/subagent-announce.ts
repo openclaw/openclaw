@@ -48,6 +48,13 @@ const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 const FAST_TEST_REPLY_CHANGE_WAIT_MS = 20;
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 60_000;
+/**
+ * Maximum characters for subagent findings in announce messages.
+ * Prevents Telegram 4096 char limit errors and context bloat.
+ * Truncated output remains available in session history (unless cleanup=delete).
+ * @see https://github.com/openclaw/openclaw/issues/25110
+ */
+const MAX_ANNOUNCE_FINDINGS_CHARS = 3000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 let subagentRegistryRuntimePromise: Promise<
   typeof import("./subagent-registry-runtime.js")
@@ -1265,7 +1272,17 @@ export async function runSubagentAnnounceFlow(params: {
     const taskLabel = params.label || params.task || "task";
     const subagentName = resolveAgentIdFromSessionKey(params.childSessionKey);
     const announceSessionId = childSessionId || "unknown";
-    const findings = reply || "(no output)";
+    // Truncate long output to prevent Telegram message-too-long errors (#25110).
+    // Adjust message based on cleanup setting to avoid misleading users about
+    // session history availability when transcript will be deleted.
+    const findings = (() => {
+      const raw = reply || "(no output)";
+      if (raw.length <= MAX_ANNOUNCE_FINDINGS_CHARS) return raw;
+      const truncationSuffix = params.cleanup === "delete"
+        ? "\n\n(output truncated — content deleted per cleanup settings)"
+        : "\n\n(output truncated — full result in session history)";
+      return raw.slice(0, MAX_ANNOUNCE_FINDINGS_CHARS) + truncationSuffix;
+    })();
     let completionMessage = "";
     let triggerMessage = "";
     let steerMessage = "";
