@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/compat";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/zalouser";
 import type { ZcaUserInfo } from "./types.js";
 import { getZaloUserInfo } from "./zalo-js.js";
 

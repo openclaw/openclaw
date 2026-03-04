@@ -3,7 +3,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/compat";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/zalouser";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
 import { checkZaloAuthenticated, getZaloUserInfo } from "./zalo-js.js";
 
