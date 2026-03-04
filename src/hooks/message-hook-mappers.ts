@@ -55,6 +55,7 @@ export type CanonicalSentMessageHookContext = {
   messageId?: string;
   isGroup?: boolean;
   groupId?: string;
+  sessionKey?: string;
 };
 
 export function deriveInboundMessageHookContext(
@@ -126,6 +127,7 @@ export function buildCanonicalSentMessageHookContext(params: {
   messageId?: string;
   isGroup?: boolean;
   groupId?: string;
+  sessionKey?: string;
 }): CanonicalSentMessageHookContext {
   return {
     to: params.to,
@@ -138,6 +140,7 @@ export function buildCanonicalSentMessageHookContext(params: {
     messageId: params.messageId,
     isGroup: params.isGroup,
     groupId: params.groupId,
+    sessionKey: params.sessionKey,
   };
 }
 
