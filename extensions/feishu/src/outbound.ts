@@ -4,7 +4,7 @@ import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
+import { sendCardFeishu, sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -43,6 +43,45 @@ function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
+/**
+ * Detect if text is a Feishu interactive card JSON.
+ * Returns the parsed card object if valid, null otherwise.
+ */
+function tryParseInteractiveCard(text: string): Record<string, unknown> | null {
+  const trimmed = text?.trim();
+  if (!trimmed || !trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+
+    // Feishu card schema 2.0: must have schema and body.elements
+    if (
+      parsed.schema === "2.0" &&
+      typeof parsed.body === "object" &&
+      parsed.body !== null &&
+      Array.isArray((parsed.body as Record<string, unknown>).elements)
+    ) {
+      return parsed;
+    }
+
+    // Legacy card format: must have elements array at root or config.wide_screen_mode
+    if (
+      Array.isArray(parsed.elements) ||
+      (typeof parsed.config === "object" &&
+        parsed.config !== null &&
+        "wide_screen_mode" in (parsed.config as Record<string, unknown>))
+    ) {
+      return parsed;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function sendOutboundText(params: {
   cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
   to: string;
@@ -52,6 +91,12 @@ async function sendOutboundText(params: {
   const { cfg, to, text, accountId } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
+
+  // Check if text is a pre-formatted interactive card JSON
+  const cardJson = tryParseInteractiveCard(text);
+  if (cardJson) {
+    return sendCardFeishu({ cfg, to, card: cardJson, accountId });
+  }
 
   if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
     return sendMarkdownCardFeishu({ cfg, to, text, accountId });
