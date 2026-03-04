@@ -1630,6 +1630,12 @@ async function dispatchDiscordCommandInteraction(params: {
     cfg,
     dispatcherOptions: {
       ...prefixOptions,
+      cfg,
+      destination: {
+        channel: "discord",
+        to: isDirectMessage ? `user:${user.id}` : `channel:${channelId}`,
+        ...(effectiveRoute.accountId ? { accountId: effectiveRoute.accountId } : {}),
+      },
       humanDelay: resolveHumanDelayConfig(cfg, effectiveRoute.agentId),
       deliver: async (payload) => {
         if (suppressReplies) {

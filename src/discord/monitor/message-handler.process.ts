@@ -596,6 +596,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
       ...prefixOptions,
+      cfg,
+      destination: {
+        channel: "discord",
+        to: deliverTarget,
+        ...(accountId ? { accountId } : {}),
+      },
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       typingCallbacks,
       deliver: async (payload: ReplyPayload, info) => {

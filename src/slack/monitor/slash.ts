@@ -626,6 +626,12 @@ export async function registerSlackMonitorSlashCommands(params: {
         cfg,
         dispatcherOptions: {
           ...prefixOptions,
+          cfg,
+          destination: {
+            channel: "slack",
+            to: `user:${command.user_id}`,
+            ...(route.accountId ? { accountId: route.accountId } : {}),
+          },
           deliver: async (payload) => deliverSlashPayloads([payload]),
           onError: (err, info) => {
             runtime.error?.(danger(`slack slash ${info.kind} reply failed: ${String(err)}`));

@@ -91,7 +91,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     }
 
     try {
-      await runMessageAction({
+      const editResult = await runMessageAction({
         cfg: params.cfg,
         action: "edit",
         params: {
@@ -104,6 +104,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         },
         sessionKey: params.ctx.SessionKey,
       });
+      if (editResult.kind === "policy") {
+        return false;
+      }
       state.routedCounts.tool += 1;
       return true;
     } catch (error) {

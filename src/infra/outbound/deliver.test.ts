@@ -208,6 +208,70 @@ describe("deliverOutboundPayloads", () => {
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
   });
+  it("rewrites protected destinations to relay targets before delivery", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg = {
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+      session: {
+        relayRouting: {
+          targets: {
+            ops: { channel: "whatsapp", to: "+1666" },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "ops",
+              match: { channel: "whatsapp", chatId: "+1555" },
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hi" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith("+1666", "hi", expect.any(Object));
+    expect(results).toHaveLength(1);
+  });
+
+  it("returns no-op for protected destinations without relay targets", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg = {
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+      session: {
+        relayRouting: {
+          rules: [
+            {
+              mode: "read-only",
+              match: { channel: "whatsapp", chatId: "+1555" },
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hi" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(results).toEqual([]);
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+  });
+
   it("chunks telegram markdown and passes through accountId", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
     await withEnvAsync({ TELEGRAM_BOT_TOKEN: "" }, async () => {

@@ -40,6 +40,57 @@ const whatsappConfig = {
   },
 } as OpenClawConfig;
 
+const readOnlyRelayConfig = {
+  channels: {
+    slack: {
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+    },
+  },
+  session: {
+    relayRouting: {
+      targets: {
+        ops: {
+          channel: "slack",
+          to: "channel:C-RELAY",
+        },
+      },
+      rules: [
+        {
+          mode: "read-only",
+          relayTo: "ops",
+          match: {
+            channel: "slack",
+            chatId: "*",
+          },
+        },
+      ],
+    },
+  },
+} as OpenClawConfig;
+
+const readOnlyWithoutRelayConfig = {
+  channels: {
+    slack: {
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+    },
+  },
+  session: {
+    relayRouting: {
+      rules: [
+        {
+          mode: "read-only",
+          match: {
+            channel: "slack",
+            chatId: "*",
+          },
+        },
+      ],
+    },
+  },
+} as OpenClawConfig;
+
 async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
   try {
@@ -248,6 +299,62 @@ describe("runMessageAction context isolation", () => {
     });
 
     expect(result.kind).toBe("send");
+  });
+
+  it("rewrites send targets to relay destinations when policy redirects", async () => {
+    const result = await runMessageAction({
+      cfg: readOnlyRelayConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "#C12345678",
+        message: "hello",
+      },
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("send");
+    if (result.kind !== "send") {
+      throw new Error("expected send result");
+    }
+    expect(result.to).toBe("channel:C-RELAY");
+  });
+
+  it("suppresses read actions for protected destinations", async () => {
+    const result = await runMessageAction({
+      cfg: readOnlyRelayConfig,
+      action: "read",
+      params: {
+        channel: "slack",
+        target: "#C12345678",
+      },
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("policy");
+    if (result.kind !== "policy") {
+      throw new Error("expected policy result");
+    }
+    expect(result.payload.status).toBe("suppressed");
+  });
+
+  it("returns denied policy results when no relay target is available", async () => {
+    const result = await runMessageAction({
+      cfg: readOnlyWithoutRelayConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "#C12345678",
+        message: "hello",
+      },
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("policy");
+    if (result.kind !== "policy") {
+      throw new Error("expected policy result");
+    }
+    expect(result.payload.status).toBe("denied");
   });
 
   it("blocks thread-reply when channelId differs from current channel", async () => {

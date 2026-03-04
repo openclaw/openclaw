@@ -991,6 +991,12 @@ async function dispatchDiscordComponentEvent(params: {
     replyOptions: { onModelSelected },
     dispatcherOptions: {
       ...prefixOptions,
+      cfg: ctx.cfg,
+      destination: {
+        channel: "discord",
+        to: deliverTarget,
+        ...(accountId ? { accountId } : {}),
+      },
       humanDelay: resolveHumanDelayConfig(ctx.cfg, agentId),
       deliver: async (payload) => {
         const replyToId = replyReference.use();

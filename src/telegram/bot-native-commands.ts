@@ -658,6 +658,12 @@ export const registerTelegramNativeCommands = ({
             cfg,
             dispatcherOptions: {
               ...prefixOptions,
+              cfg,
+              destination: {
+                channel: "telegram",
+                to: String(chatId),
+                ...(route.accountId ? { accountId: route.accountId } : {}),
+              },
               deliver: async (payload, _info) => {
                 const result = await deliverReplies({
                   replies: [payload],

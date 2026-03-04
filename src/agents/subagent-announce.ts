@@ -11,6 +11,7 @@ import {
 import { callGateway } from "../gateway/call.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
+import { decideWrite, getProtectedDestinationMap } from "../infra/outbound/write-policy.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -213,6 +214,38 @@ async function runAnnounceDeliveryWithRetry<T>(params: {
       await waitForAnnounceRetryDelay(delayMs, params.signal);
     }
   }
+}
+
+function resolveAnnounceWriteDestination(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  channel: string;
+  to: string;
+  accountId?: string;
+}): { channel: string; to: string; accountId?: string } | null {
+  const decision = decideWrite(
+    "announce",
+    {
+      channel: params.channel,
+      to: params.to,
+      accountId: params.accountId,
+    },
+    getProtectedDestinationMap(params.cfg),
+  );
+  if (decision.kind === "redirect") {
+    return {
+      channel: decision.target.channel,
+      to: decision.target.to,
+      accountId: decision.target.accountId,
+    };
+  }
+  if (decision.kind === "suppress" || decision.kind === "deny") {
+    return null;
+  }
+  return {
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId,
+  };
 }
 
 function extractToolResultText(content: unknown): string {
@@ -597,8 +630,29 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const requesterDepth = getSubagentDepthFromSessionStore(item.sessionKey);
   const requesterIsSubagent = requesterDepth >= 1;
   const origin = item.origin;
+  let channel = requesterIsSubagent ? undefined : origin?.channel;
+  let accountId = requesterIsSubagent ? undefined : origin?.accountId;
+  let to = requesterIsSubagent ? undefined : origin?.to;
+  const originalChannel = channel;
+  const originalTo = to;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
+  if (!requesterIsSubagent && channel && to) {
+    const policyDestination = resolveAnnounceWriteDestination({
+      cfg,
+      channel,
+      to,
+      accountId: accountId ?? undefined,
+    });
+    if (!policyDestination) {
+      return;
+    }
+    channel = policyDestination.channel;
+    to = policyDestination.to;
+    accountId = policyDestination.accountId;
+  }
+  const shouldForwardThreadId =
+    !requesterIsSubagent && Boolean(threadId) && channel === originalChannel && to === originalTo;
   // Share one announce identity across direct and queued delivery paths so
   // gateway dedupe suppresses true retries without collapsing distinct events.
   const idempotencyKey = buildAnnounceIdempotencyKey(
@@ -613,10 +667,10 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     params: {
       sessionKey: item.sessionKey,
       message: item.prompt,
-      channel: requesterIsSubagent ? undefined : origin?.channel,
-      accountId: requesterIsSubagent ? undefined : origin?.accountId,
-      to: requesterIsSubagent ? undefined : origin?.to,
-      threadId: requesterIsSubagent ? undefined : threadId,
+      channel,
+      accountId,
+      to,
+      threadId: shouldForwardThreadId ? threadId : undefined,
       deliver: !requesterIsSubagent,
       internalEvents: item.internalEvents,
       idempotencyKey,
@@ -762,12 +816,13 @@ async function sendSubagentAnnounceDirectly(params: {
       typeof completionDirectOrigin?.channel === "string"
         ? completionDirectOrigin.channel.trim()
         : "";
-    const completionChannel =
+    let completionChannel =
       completionChannelRaw && isDeliverableMessageChannel(completionChannelRaw)
         ? completionChannelRaw
         : "";
-    const completionTo =
+    let completionTo =
       typeof completionDirectOrigin?.to === "string" ? completionDirectOrigin.to.trim() : "";
+    let completionAccountId = completionDirectOrigin?.accountId;
     const hasCompletionDirectTarget =
       !params.requesterIsSubagent && Boolean(completionChannel) && Boolean(completionTo);
 
@@ -811,10 +866,29 @@ async function sendSubagentAnnounceDirectly(params: {
       }
 
       if (shouldSendCompletionDirectly) {
-        const completionThreadId =
+        const policyDestination = resolveAnnounceWriteDestination({
+          cfg,
+          channel: completionChannel,
+          to: completionTo,
+          accountId: completionAccountId,
+        });
+        if (!policyDestination) {
+          return {
+            delivered: true,
+            path: "direct",
+          };
+        }
+        const completionThreadIdRaw =
           completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
             ? String(completionDirectOrigin.threadId)
             : undefined;
+        const completionThreadId =
+          completionThreadIdRaw && policyDestination.channel === completionChannel
+            ? completionThreadIdRaw
+            : undefined;
+        completionChannel = policyDestination.channel;
+        completionTo = policyDestination.to;
+        completionAccountId = policyDestination.accountId;
         if (params.signal?.aborted) {
           return {
             delivered: false,
@@ -830,7 +904,7 @@ async function sendSubagentAnnounceDirectly(params: {
               params: {
                 channel: completionChannel,
                 to: completionTo,
-                accountId: completionDirectOrigin?.accountId,
+                accountId: completionAccountId,
                 threadId: completionThreadId,
                 sessionKey: canonicalRequesterSessionKey,
                 message: params.completionMessage,
@@ -850,18 +924,39 @@ async function sendSubagentAnnounceDirectly(params: {
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
     const directChannelRaw =
       typeof directOrigin?.channel === "string" ? directOrigin.channel.trim() : "";
-    const directChannel =
+    let directChannel =
       directChannelRaw && isDeliverableMessageChannel(directChannelRaw) ? directChannelRaw : "";
-    const directTo = typeof directOrigin?.to === "string" ? directOrigin.to.trim() : "";
+    let directTo = typeof directOrigin?.to === "string" ? directOrigin.to.trim() : "";
+    let directAccountId = directOrigin?.accountId;
     const hasDeliverableDirectTarget =
       !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
-    const shouldDeliverExternally =
+    let shouldDeliverExternally =
       !params.requesterIsSubagent &&
       (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
     const threadId =
       directOrigin?.threadId != null && directOrigin.threadId !== ""
         ? String(directOrigin.threadId)
         : undefined;
+    const originalDirectChannel = directChannel;
+    if (shouldDeliverExternally && directChannel && directTo) {
+      const policyDestination = resolveAnnounceWriteDestination({
+        cfg,
+        channel: directChannel,
+        to: directTo,
+        accountId: directAccountId,
+      });
+      if (!policyDestination) {
+        return {
+          delivered: true,
+          path: "direct",
+        };
+      }
+      directChannel = policyDestination.channel;
+      directTo = policyDestination.to;
+      directAccountId = policyDestination.accountId;
+    }
+    const outboundThreadId =
+      threadId && directChannel === originalDirectChannel ? threadId : undefined;
     if (params.signal?.aborted) {
       return {
         delivered: false,
@@ -881,9 +976,9 @@ async function sendSubagentAnnounceDirectly(params: {
             bestEffortDeliver: params.bestEffortDeliver,
             internalEvents: params.internalEvents,
             channel: shouldDeliverExternally ? directChannel : undefined,
-            accountId: shouldDeliverExternally ? directOrigin?.accountId : undefined,
+            accountId: shouldDeliverExternally ? directAccountId : undefined,
             to: shouldDeliverExternally ? directTo : undefined,
-            threadId: shouldDeliverExternally ? threadId : undefined,
+            threadId: shouldDeliverExternally ? outboundThreadId : undefined,
             idempotencyKey: params.directIdempotencyKey,
           },
           expectFinal: true,

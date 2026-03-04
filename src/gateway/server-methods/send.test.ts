@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
+  loadConfig: vi.fn(),
+  decideWrite: vi.fn(() => ({ kind: "allow" })),
+  getProtectedDestinationMap: vi.fn(() => new Map()),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -21,7 +24,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    loadConfig: () => ({}),
+    loadConfig: () => mocks.loadConfig(),
   };
 });
 
@@ -76,6 +79,11 @@ vi.mock("../../infra/outbound/channel-selection.js", () => ({
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+}));
+
+vi.mock("../../infra/outbound/write-policy.js", () => ({
+  decideWrite: mocks.decideWrite,
+  getProtectedDestinationMap: mocks.getProtectedDestinationMap,
 }));
 
 vi.mock("../../config/sessions.js", async () => {
@@ -151,6 +159,11 @@ describe("gateway send mirroring", () => {
       channel: "slack",
       configured: ["slack"],
     });
+    mocks.loadConfig.mockReturnValue({});
+    mocks.decideWrite.mockReset();
+    mocks.decideWrite.mockReturnValue({ kind: "allow" });
+    mocks.getProtectedDestinationMap.mockReset();
+    mocks.getProtectedDestinationMap.mockReturnValue(new Map());
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
     mocks.getChannelPlugin.mockReturnValue({ outbound: { sendPoll: mocks.sendPoll } });
   });
@@ -273,6 +286,51 @@ describe("gateway send mirroring", () => {
     expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined, {
       channel: "slack",
     });
+  });
+
+  it("redirects poll delivery to relay target destinations", async () => {
+    mocks.decideWrite.mockReturnValueOnce({
+      kind: "redirect",
+      target: { channel: "slack", to: "channel:C-RELAY", accountId: "default" },
+    });
+
+    await runPoll({
+      to: "channel:C1",
+      question: "Q?",
+      options: ["A", "B"],
+      channel: "slack",
+      idempotencyKey: "idem-poll-redirect",
+    });
+
+    expect(mocks.sendPoll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "channel:C-RELAY",
+      }),
+    );
+  });
+
+  it("returns a no-op poll response when write policy denies delivery", async () => {
+    mocks.decideWrite.mockReturnValueOnce({
+      kind: "deny",
+      reason: "no relay",
+    });
+    const { respond } = await runPoll({
+      to: "channel:C1",
+      question: "Q?",
+      options: ["A", "B"],
+      channel: "slack",
+      idempotencyKey: "idem-poll-noop",
+    });
+
+    expect(mocks.sendPoll).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        noOp: true,
+      }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
   });
 
   it("returns invalid request when poll channel selection is ambiguous", async () => {

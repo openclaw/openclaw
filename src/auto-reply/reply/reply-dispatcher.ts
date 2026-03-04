@@ -1,5 +1,9 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channel-resolution.js";
+import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { decideWrite, getProtectedDestinationMap } from "../../infra/outbound/write-policy.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
@@ -16,9 +20,15 @@ type ReplyDispatchSkipHandler = (
   info: { kind: ReplyDispatchKind; reason: NormalizeReplySkipReason },
 ) => void;
 
+export type ReplyDispatchDestination = {
+  channel: string;
+  to: string;
+  accountId?: string;
+};
+
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
-  info: { kind: ReplyDispatchKind },
+  info: { kind: ReplyDispatchKind; destination: ReplyDispatchDestination },
 ) => Promise<void>;
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
@@ -41,6 +51,8 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
 }
 
 export type ReplyDispatcherOptions = {
+  cfg: OpenClawConfig;
+  destination: ReplyDispatchDestination;
   deliver: ReplyDispatchDeliverer;
   responsePrefix?: string;
   /** Static context for response prefix template interpolation. */
@@ -155,9 +167,35 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
-        // Safe: deliver is called inside an async .then() callback, so even a synchronous
-        // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        await options.deliver(normalized, { kind });
+        const decision = decideWrite(
+          "announce",
+          options.destination,
+          getProtectedDestinationMap(options.cfg),
+        );
+        if (decision.kind === "allow") {
+          // Safe: deliver is called inside an async .then() callback, so even a synchronous
+          // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
+          await options.deliver(normalized, {
+            kind,
+            destination: options.destination,
+          });
+          return;
+        }
+        if (decision.kind === "redirect") {
+          const redirectChannel = normalizeDeliverableOutboundChannel(decision.target.channel);
+          if (!redirectChannel) {
+            return;
+          }
+          await deliverOutboundPayloads({
+            cfg: options.cfg,
+            channel: redirectChannel,
+            to: decision.target.to,
+            accountId: decision.target.accountId,
+            payloads: [normalized],
+          });
+          return;
+        }
+        // Suppress/deny: do not invoke the closure-based deliverer.
       })
       .catch((err) => {
         options.onError?.(err, { kind });

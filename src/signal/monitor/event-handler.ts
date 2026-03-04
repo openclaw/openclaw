@@ -247,6 +247,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
       ...prefixOptions,
+      cfg: deps.cfg,
+      destination: {
+        channel: "signal",
+        to: ctxPayload.To ?? ctxPayload.From,
+        ...(deps.accountId ? { accountId: deps.accountId } : {}),
+      },
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
       deliver: async (payload) => {

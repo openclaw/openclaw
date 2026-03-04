@@ -509,6 +509,12 @@ export const dispatchTelegramMessage = async ({
       cfg,
       dispatcherOptions: {
         ...prefixOptions,
+        cfg,
+        destination: {
+          channel: "telegram",
+          to: String(chatId),
+          ...(route.accountId ? { accountId: route.accountId } : {}),
+        },
         typingCallbacks,
         deliver: async (payload, info) => {
           if (info.kind === "final") {

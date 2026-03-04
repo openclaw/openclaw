@@ -293,6 +293,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     ...prefixOptions,
+    cfg,
+    destination: {
+      channel: "slack",
+      to: prepared.replyTarget,
+      ...(account.accountId ? { accountId: account.accountId } : {}),
+    },
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
     deliver: async (payload) => {

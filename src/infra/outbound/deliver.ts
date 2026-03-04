@@ -43,6 +43,7 @@ import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
+import { decideWrite, getProtectedDestinationMap } from "./write-policy.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
@@ -464,22 +465,48 @@ async function applyMessageSendingHook(params: {
 export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
-  const { channel, to, payloads } = params;
+  const { payloads } = params;
+  let channel = params.channel;
+  let to = params.to;
+  let accountId = params.accountId;
+
+  const writeDecision = decideWrite(
+    "deliver",
+    {
+      channel,
+      to,
+      accountId,
+    },
+    getProtectedDestinationMap(params.cfg),
+  );
+  if (writeDecision.kind === "redirect") {
+    channel = writeDecision.target.channel as Exclude<OutboundChannel, "none">;
+    to = writeDecision.target.to;
+    accountId = writeDecision.target.accountId;
+  } else if (writeDecision.kind === "suppress" || writeDecision.kind === "deny") {
+    return [];
+  }
+  const effectiveParams = {
+    ...params,
+    channel,
+    to,
+    accountId,
+  };
 
   // Write-ahead delivery queue: persist before sending, remove after success.
-  const queueId = params.skipQueue
+  const queueId = effectiveParams.skipQueue
     ? null
     : await enqueueDelivery({
         channel,
         to,
-        accountId: params.accountId,
+        accountId,
         payloads,
-        threadId: params.threadId,
-        replyToId: params.replyToId,
-        bestEffort: params.bestEffort,
-        gifPlayback: params.gifPlayback,
-        silent: params.silent,
-        mirror: params.mirror,
+        threadId: effectiveParams.threadId,
+        replyToId: effectiveParams.replyToId,
+        bestEffort: effectiveParams.bestEffort,
+        gifPlayback: effectiveParams.gifPlayback,
+        silent: effectiveParams.silent,
+        mirror: effectiveParams.mirror,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
   // Wrap onError to detect partial failures under bestEffort mode.
@@ -487,15 +514,15 @@ export async function deliverOutboundPayloads(
   // without throwing — so the outer try/catch never fires. We track whether any
   // payload failed so we can call failDelivery instead of ackDelivery.
   let hadPartialFailure = false;
-  const wrappedParams = params.onError
+  const wrappedParams = effectiveParams.onError
     ? {
-        ...params,
+        ...effectiveParams,
         onError: (err: unknown, payload: NormalizedOutboundPayload) => {
           hadPartialFailure = true;
-          params.onError!(err, payload);
+          effectiveParams.onError!(err, payload);
         },
       }
-    : params;
+    : effectiveParams;
 
   try {
     const results = await deliverOutboundPayloadsCore(wrappedParams);
