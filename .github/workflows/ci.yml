@@ -207,15 +207,13 @@ jobs:
       - name: Configure Node test resources
         if: matrix.task == 'test' && matrix.runtime == 'node'
         run: |
-          # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns 3 vitest
-          # groups in parallel (unit-fast, unit-isolated, extensions) then gateway
-          # serially. Each group gets BOT_TEST_WORKERS worker processes.
-          # Individual tests need >1 GB live heap, so per-worker heap must be ≥2048 MB.
-          # Use serial profile (1 worker/group) to keep total processes low:
-          # 2 groups × (1 parent + 1 worker) × 2048 MB = ~8 GB, fits in 14 GB pod.
-          # History: 2 workers×2048=OOM, 2×1536=OOM, 2×1024=OOM, 1×2048=too slow (80min).
+          # `pnpm test` runs `scripts/test-parallel.mjs`, which spawns vitest
+          # groups with BOT_TEST_WORKERS worker processes each.
+          # Tests need >2 GB live heap per worker (OOM at 2048 MB limit).
+          # Use serial profile (1 worker/group) + default 4096 MB heap:
+          # 2 parallel groups × (parent + 1 worker) ≈ 10 GB peak, fits 14 GB pod.
+          # History: 2w×2048=OOM, 2w×1536=OOM, 1w×2048=OOM, 1w×1024=OOM.
           echo "BOT_TEST_PROFILE=serial" >> "$GITHUB_ENV"
-          echo "BOT_TEST_MAX_OLD_SPACE_SIZE_MB=2048" >> "$GITHUB_ENV"
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         continue-on-error: ${{ matrix.runtime == 'bun' }}
