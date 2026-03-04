@@ -40,10 +40,15 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import {
   buildAgentSessionKey,
+  pickFirstExistingAgentId,
   resolveAgentRoute,
   type ResolvedAgentRoute,
 } from "../routing/resolve-route.js";
-import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  buildAgentMainSessionKey,
+  resolveThreadSessionKeys,
+} from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
@@ -215,8 +220,10 @@ export const buildTelegramMessageContext = async ({
     parentPeer,
   });
   // Per-topic agentId override: re-derive session key under the topic's agent.
-  const topicAgentId = topicConfig?.agentId?.trim();
-  if (topicAgentId) {
+  const rawTopicAgentId = topicConfig?.agentId?.trim();
+  if (rawTopicAgentId) {
+    // Validate agentId against configured agents; falls back to default if not found.
+    const topicAgentId = pickFirstExistingAgentId(freshCfg, rawTopicAgentId);
     const overrideSessionKey = buildAgentSessionKey({
       agentId: topicAgentId,
       channel: "telegram",
@@ -225,10 +232,14 @@ export const buildTelegramMessageContext = async ({
       dmScope: freshCfg.session?.dmScope,
       identityLinks: freshCfg.session?.identityLinks,
     }).toLowerCase();
+    const overrideMainSessionKey = buildAgentMainSessionKey({
+      agentId: topicAgentId,
+    }).toLowerCase();
     route = {
       ...route,
       agentId: topicAgentId,
       sessionKey: overrideSessionKey,
+      mainSessionKey: overrideMainSessionKey,
     };
     logVerbose(
       `telegram: per-topic agent override: topic=${resolvedThreadId ?? dmThreadId} agent=${topicAgentId} sessionKey=${overrideSessionKey}`,
