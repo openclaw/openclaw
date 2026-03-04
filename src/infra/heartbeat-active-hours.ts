@@ -24,10 +24,11 @@ function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
 }
 
 function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number | null {
-  if (!raw || !ACTIVE_HOURS_TIME_PATTERN.test(raw)) {
+  const trimmed = raw?.trim();
+  if (!trimmed || !ACTIVE_HOURS_TIME_PATTERN.test(trimmed)) {
     return null;
   }
-  const [hourStr, minuteStr] = raw.split(":");
+  const [hourStr, minuteStr] = trimmed.split(":");
   const hour = Number(hourStr);
   const minute = Number(minuteStr);
   if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
