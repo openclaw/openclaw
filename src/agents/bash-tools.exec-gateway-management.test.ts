@@ -684,6 +684,20 @@ describe("detectGatewayManagementExecCommand", () => {
     });
   });
 
+  it("does not detect default launchctl label when OPENCLAW_LAUNCHD_LABEL override is set", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "launchctl kickstart -k gui/501/ai.openclaw.gateway",
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.custom",
+      },
+      platform: "darwin",
+    });
+
+    expect(detected).toBeNull();
+  });
+
   it("does not detect launchctl commands on non-darwin platforms", () => {
     const detected = detectGatewayManagementExecCommand({
       command: "launchctl kickstart -k gui/501/ai.openclaw.gateway",
@@ -740,6 +754,20 @@ describe("detectGatewayManagementExecCommand", () => {
       hard: false,
       complex: false,
     });
+  });
+
+  it("does not detect default schtasks task name when OPENCLAW_WINDOWS_TASK_NAME override is set", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: 'schtasks /Run /TN "OpenClaw Gateway"',
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Dev",
+      },
+      platform: "win32",
+    });
+
+    expect(detected).toBeNull();
   });
 
   it("detects schtasks task name for the active profile on windows", () => {
@@ -914,6 +942,20 @@ describe("detectGatewayManagementExecCommand", () => {
       hard: false,
       complex: false,
     });
+  });
+
+  it("does not detect default systemctl unit when OPENCLAW_SYSTEMD_UNIT override is set", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl restart openclaw-gateway.service",
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-prod.service",
+      },
+      platform: "linux",
+    });
+
+    expect(detected).toBeNull();
   });
 
   it("does not detect systemctl commands on non-linux platforms", () => {
