@@ -34,8 +34,10 @@ Notes:
 
 ```bash
 # From repo root; set release IDs so Sparkle feed is enabled.
+# This command builds release artifacts without notarization.
 # APP_BUILD must be numeric + monotonic for Sparkle compare.
 # Default is auto-derived from APP_VERSION when omitted.
+SKIP_NOTARIZE=1 \
 BUNDLE_ID=ai.openclaw.mac \
 APP_VERSION=2026.3.8 \
 BUILD_CONFIG=release \
