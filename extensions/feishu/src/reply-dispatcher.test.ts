@@ -185,7 +185,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("suppresses internal block payload delivery", async () => {
+  it("defers non-streamable block payloads instead of sending immediately", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -200,6 +200,35 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("flushes accumulated plain-text blocks as a single message on idle (#34093)", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    // Simulate blockStreamingDefault="on" sending multiple block chunks
+    await options.deliver({ text: "Hello " }, { kind: "block" });
+    await options.deliver({ text: "world!" }, { kind: "block" });
+
+    // Blocks are accumulated, not sent yet
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+
+    // Idle fires after all blocks
+    await options.onIdle?.();
+
+    // Accumulated text is flushed as a single message
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "oc_chat",
+        text: "Hello \nworld!",
+      }),
+    );
   });
 
   it("uses streaming session for auto mode markdown payloads", async () => {

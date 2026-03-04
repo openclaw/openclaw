@@ -146,6 +146,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
 
+  // Accumulates block-reply text that cannot be sent via a streaming card
+  // (e.g. plain text in auto/raw render mode).  Flushed as a single regular
+  // message on idle so blockStreamingDefault="on" still delivers (#34093).
+  let pendingBlockText = "";
+
   const mergeStreamingText = (nextText: string) => {
     if (!streamText) {
       streamText = nextText;
@@ -265,14 +270,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
           if (info?.kind === "block") {
-            // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content.
-            if (!(streamingEnabled && useCard)) {
+            if (streamingEnabled && useCard) {
+              // Consume as streaming-card content.
+              startStreaming();
+              if (streamingStartPromise) {
+                await streamingStartPromise;
+              }
+            } else {
+              // Cannot stream this block (plain text or streaming disabled).
+              // Accumulate so onIdle can flush a single message (#34093).
+              pendingBlockText += (pendingBlockText ? "\n" : "") + text;
               return;
-            }
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
             }
           }
 
@@ -370,6 +378,61 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       },
       onIdle: async () => {
         await closeStreaming();
+        // Flush accumulated plain-text blocks that were not handled by a
+        // streaming card.  Without this, blockStreamingDefault="on" silently
+        // drops replies when the text doesn't qualify for card rendering (#34093).
+        // Note: onIdle is invoked fire-and-forget by the core dispatcher, so we
+        // wrap the flush in try/catch to surface errors and prevent unhandled
+        // rejections (#34093 review feedback).
+        if (pendingBlockText.trim()) {
+          const flushText = pendingBlockText;
+          pendingBlockText = "";
+          try {
+            const useCard =
+              renderMode === "card" || (renderMode === "auto" && shouldUseCard(flushText));
+            let first = true;
+            if (useCard) {
+              for (const chunk of core.channel.text.chunkTextWithMode(
+                flushText,
+                textChunkLimit,
+                chunkMode,
+              )) {
+                await sendMarkdownCardFeishu({
+                  cfg,
+                  to: chatId,
+                  text: chunk,
+                  replyToMessageId: sendReplyToMessageId,
+                  replyInThread: effectiveReplyInThread,
+                  mentions: first ? mentionTargets : undefined,
+                  accountId,
+                });
+                first = false;
+              }
+            } else {
+              const converted = core.channel.text.convertMarkdownTables(flushText, tableMode);
+              for (const chunk of core.channel.text.chunkTextWithMode(
+                converted,
+                textChunkLimit,
+                chunkMode,
+              )) {
+                await sendMessageFeishu({
+                  cfg,
+                  to: chatId,
+                  text: chunk,
+                  replyToMessageId: sendReplyToMessageId,
+                  replyInThread: effectiveReplyInThread,
+                  mentions: first ? mentionTargets : undefined,
+                  accountId,
+                });
+                first = false;
+              }
+            }
+          } catch (err) {
+            params.runtime.error?.(
+              `feishu[${account.accountId}] block-text flush failed: ${String(err)}`,
+            );
+          }
+        }
         typingCallbacks.onIdle?.();
       },
       onCleanup: () => {
