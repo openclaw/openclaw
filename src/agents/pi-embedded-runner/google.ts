@@ -15,6 +15,7 @@ import {
   formatAssistantErrorForTranscript,
   isCompactionFailureError,
   isGoogleModelApi,
+  isRawApiErrorPayload,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
 } from "../pi-embedded-helpers.js";
@@ -223,7 +224,10 @@ function normalizeAssistantErrorContent(params: {
       typeof params.rawError === "string" &&
       params.rawError.length > 0 &&
       text.includes(params.rawError);
-    const shouldReplace = hasRawError || text.length > 280;
+    const looksLikeRawErrorPayload =
+      text.length > 280 &&
+      (isRawApiErrorPayload(text) || text.toLowerCase().includes("<!doctype html"));
+    const shouldReplace = hasRawError || looksLikeRawErrorPayload;
     if (!shouldReplace) {
       return block;
     }
@@ -234,6 +238,23 @@ function normalizeAssistantErrorContent(params: {
     };
   });
   return changed ? next : params.content;
+}
+
+function addRepeatedSuffixWithCap(params: {
+  base: string;
+  repeatedCount: number;
+  maxChars?: number;
+}): string {
+  const maxChars = params.maxChars ?? 220;
+  const suffix = ` (repeated x${params.repeatedCount})`;
+  if (params.base.length + suffix.length <= maxChars) {
+    return `${params.base}${suffix}`;
+  }
+  const keep = Math.max(0, maxChars - suffix.length - 1);
+  if (keep === 0) {
+    return suffix.trimStart().slice(0, maxChars);
+  }
+  return `${params.base.slice(0, keep)}…${suffix}`;
 }
 
 function sanitizeAssistantErrorsForTranscript(messages: AgentMessage[]): AgentMessage[] {
@@ -266,7 +287,10 @@ function sanitizeAssistantErrorsForTranscript(messages: AgentMessage[]): AgentMe
     let normalizedForMessage = normalized;
     if (fingerprint === previousFingerprint) {
       repeatedCount += 1;
-      normalizedForMessage = `${normalized} (repeated x${repeatedCount})`;
+      normalizedForMessage = addRepeatedSuffixWithCap({
+        base: normalized,
+        repeatedCount,
+      });
     } else {
       previousFingerprint = fingerprint;
       repeatedCount = 1;
