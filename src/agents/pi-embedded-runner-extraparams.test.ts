@@ -1,7 +1,13 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
+import {
+  applyExtraParamsToAgent,
+  getSanitizedHeadersForCustomProviderUpstream,
+  isKnownFirstPartyHost,
+  resolveExtraParams,
+  shouldSanitizeHeadersForCustomProvider,
+} from "./pi-embedded-runner.js";
 
 describe("resolveExtraParams", () => {
   it("returns undefined with no model config", () => {
@@ -1242,4 +1248,142 @@ describe("applyExtraParamsToAgent", () => {
       expect(run().store).toBe(false);
     },
   );
+});
+
+describe("custom provider header sanitization (#31720)", () => {
+  it("isKnownFirstPartyHost returns true for known first-party hosts", () => {
+    expect(isKnownFirstPartyHost("https://api.openai.com/v1")).toBe(true);
+    expect(isKnownFirstPartyHost("https://openrouter.ai/api/v1")).toBe(true);
+    expect(isKnownFirstPartyHost("https://api.groq.com/openai/v1")).toBe(true);
+    expect(isKnownFirstPartyHost("https://foo.openai.azure.com/openai/v1")).toBe(true);
+  });
+
+  it("isKnownFirstPartyHost returns false for transit station / custom provider hosts", () => {
+    expect(isKnownFirstPartyHost("https://api.akc.to/v1")).toBe(false);
+    expect(isKnownFirstPartyHost("https://custom-proxy.example.com/v1")).toBe(false);
+    expect(isKnownFirstPartyHost("https://transit.example.org/api/v1")).toBe(false);
+  });
+
+  it("shouldSanitizeHeadersForCustomProvider returns true for custom openai-completions", () => {
+    expect(
+      shouldSanitizeHeadersForCustomProvider({
+        api: "openai-completions",
+        baseUrl: "https://api.akc.to/v1",
+      }),
+    ).toBe(true);
+  });
+
+  it("shouldSanitizeHeadersForCustomProvider returns false for known first-party", () => {
+    expect(
+      shouldSanitizeHeadersForCustomProvider({
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSanitizeHeadersForCustomProvider({
+        api: "openai-responses",
+        baseUrl: "https://openrouter.ai/api/v1",
+      }),
+    ).toBe(false);
+  });
+
+  it("shouldSanitizeHeadersForCustomProvider returns false for non-OpenAI APIs", () => {
+    expect(
+      shouldSanitizeHeadersForCustomProvider({
+        api: "anthropic-messages",
+        baseUrl: "https://custom.example.com",
+      }),
+    ).toBe(false);
+  });
+
+  it("getSanitizedHeadersForCustomProviderUpstream removes x-stainless-* and sets User-Agent", () => {
+    const headers = getSanitizedHeadersForCustomProviderUpstream();
+    expect(headers["User-Agent"]).toBe(
+      "OpenClaw/1.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/122.0.0.0",
+    );
+    expect(headers["X-Stainless-Retry-Count"]).toBeNull();
+    expect(headers["X-Stainless-Runtime"]).toBeNull();
+    expect(headers["X-Stainless-Lang"]).toBeNull();
+  });
+
+  it("applyExtraParamsToAgent injects sanitized headers for custom provider (api.akc.to)", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "custom-akc", "gpt-4");
+
+    const model = {
+      api: "openai-completions",
+      provider: "custom-akc",
+      id: "gpt-4",
+      baseUrl: "https://api.akc.to/v1",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    const headers = calls[0]?.headers as Record<string, string | null> | undefined;
+    expect(headers).toBeDefined();
+    expect(headers?.["User-Agent"]).toBe(
+      "OpenClaw/1.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/122.0.0.0",
+    );
+    expect(headers?.["X-Stainless-Retry-Count"]).toBeNull();
+  });
+
+  it("applyExtraParamsToAgent preserves user-supplied User-Agent over sanitized default", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "custom-akc", "gpt-4");
+
+    const model = {
+      api: "openai-completions",
+      provider: "custom-akc",
+      id: "gpt-4",
+      baseUrl: "https://api.akc.to/v1",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, { headers: { "User-Agent": "MyCustomAgent/2.0" } });
+
+    expect(calls).toHaveLength(1);
+    const headers = calls[0]?.headers as Record<string, string | null> | undefined;
+    expect(headers).toBeDefined();
+    // User-supplied User-Agent must win over the sanitizer's benign default
+    expect(headers?.["User-Agent"]).toBe("MyCustomAgent/2.0");
+    // X-Stainless-* must still be nulled out even when user headers are present
+    expect(headers?.["X-Stainless-Retry-Count"]).toBeNull();
+  });
+
+  it("applyExtraParamsToAgent does NOT inject sanitized headers for api.openai.com", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-4");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openai",
+      id: "gpt-4",
+      baseUrl: "https://api.openai.com/v1",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    const headers = calls[0]?.headers;
+    expect(headers).toBeUndefined();
+  });
 });

@@ -9,6 +9,124 @@ const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "HTTP-Referer": "https://openclaw.ai",
   "X-Title": "OpenClaw",
 };
+
+/**
+ * Hosts that use the OpenAI SDK but are known first-party; no header sanitization.
+ * Transit stations and custom proxies (e.g. api.akc.to) behind Cloudflare need
+ * sanitization to avoid bot detection from x-stainless-* and SDK User-Agent.
+ * See: https://github.com/openclaw/openclaw/issues/31720
+ */
+const KNOWN_FIRST_PARTY_HOSTS = new Set([
+  "api.openai.com",
+  "openrouter.ai",
+  "chatgpt.com",
+  "api.groq.com",
+  "api.cerebras.ai",
+  "inference.cerebras.ai",
+  "api.together.xyz",
+  "api.x.ai",
+  "api.mistral.ai",
+  "api.anthropic.com",
+  "api.siliconflow.cn",
+  "api.minimax.chat",
+  "api.minimax.xyz",
+  "api.volcengineapi.com",
+  "ark.cn-beijing.volces.com",
+  "dashscope.aliyuncs.com",
+  "api.moonshot.cn",
+  "api.deepseek.com",
+  "api.lingyiwanwu.com",
+  "open.bigmodel.cn",
+  "api.cloudflare.com",
+  "api.vllm.ai",
+]);
+
+/** Benign User-Agent for custom provider requests to bypass Cloudflare bot detection. */
+const CUSTOM_PROVIDER_USER_AGENT =
+  "OpenClaw/1.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/122.0.0.0";
+
+/** Headers the OpenAI SDK adds that trigger Cloudflare bot detection; pass null to remove. */
+const STAINLESS_HEADERS_TO_REMOVE = [
+  "X-Stainless-Retry-Count",
+  "X-Stainless-Timeout",
+  "X-Stainless-Lang",
+  "X-Stainless-Package-Version",
+  "X-Stainless-OS",
+  "X-Stainless-Arch",
+  "X-Stainless-Runtime",
+  "X-Stainless-Runtime-Version",
+  "X-Stainless-Helper-Method",
+  "X-Stainless-Poll-Helper",
+  "X-Stainless-Custom-Poll-Interval",
+] as const;
+
+/** @internal Exported for testing */
+export function isKnownFirstPartyHost(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return true;
+  }
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    if (KNOWN_FIRST_PARTY_HOSTS.has(host)) {
+      return true;
+    }
+    if (host.endsWith(".openai.azure.com")) {
+      return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/** @internal Exported for testing */
+export function shouldSanitizeHeadersForCustomProvider(model: {
+  api?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  const api = model.api;
+  if (api !== "openai-completions" && api !== "openai-responses") {
+    return false;
+  }
+  return !isKnownFirstPartyHost(model.baseUrl);
+}
+
+/**
+ * Headers to inject for custom provider upstream requests.
+ * Removes x-stainless-* (Cloudflare bot triggers) and sets benign User-Agent.
+ * OpenAI SDK's buildHeaders treats null as "delete header".
+ *
+ * @internal Exported for testing
+ */
+export function getSanitizedHeadersForCustomProviderUpstream(): Record<string, string | null> {
+  const headers: Record<string, string | null> = {
+    "User-Agent": CUSTOM_PROVIDER_USER_AGENT,
+  };
+  for (const name of STAINLESS_HEADERS_TO_REMOVE) {
+    headers[name] = null;
+  }
+  return headers;
+}
+
+function createCustomProviderHeadersSanitizerWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldSanitizeHeadersForCustomProvider(model)) {
+      return underlying(model, context, options);
+    }
+    const sanitized = getSanitizedHeadersForCustomProviderUpstream();
+    // sanitized first so user-supplied headers win (e.g. custom User-Agent is preserved).
+    const mergedHeaders = {
+      ...sanitized,
+      ...options?.headers,
+    };
+    return underlying(model, context, {
+      ...options,
+      headers: mergedHeaders as Record<string, string>,
+    });
+  };
+}
+
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 // NOTE: We only force `store=true` for *direct* OpenAI Responses.
@@ -867,6 +985,7 @@ export function applyExtraParamsToAgent(
   thinkingLevel?: ThinkLevel,
   agentId?: string,
 ): void {
+  agent.streamFn = createCustomProviderHeadersSanitizerWrapper(agent.streamFn);
   const extraParams = resolveExtraParams({
     cfg,
     provider,
