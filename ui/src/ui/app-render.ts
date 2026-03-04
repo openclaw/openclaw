@@ -734,7 +734,9 @@ export function renderApp(state: AppViewState) {
                     updateConfigFormValue(state, slot.seedPath, slot.seedValue);
                   }
                   const index = slot.index;
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  const list = (
+                    (state.configForm ?? configValue) as { agents?: { list?: unknown[] } }
+                  ).agents?.list;
                   const entry =
                     Array.isArray(list) && index < list.length
                       ? (list[index] as { skills?: unknown })
@@ -746,7 +748,7 @@ export function renderApp(state: AppViewState) {
                   const allSkills =
                     state.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
                     [];
-                  const existing = Array.isArray(entry.skills)
+                  const existing = Array.isArray(entry?.skills)
                     ? entry.skills.map((name) => String(name).trim()).filter(Boolean)
                     : undefined;
                   const base = existing ?? allSkills;
