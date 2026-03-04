@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
@@ -271,6 +273,43 @@ export function emitExecSystemEvent(
   requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
 }
 
+// --- Exec blocked paths guard (L2.5 defense) ---
+// Block commands that reference sensitive paths. Loaded once from config file.
+let _execBlockedPaths: string[] | null = null;
+function getExecBlockedPaths(): string[] {
+  if (_execBlockedPaths !== null) {
+    return _execBlockedPaths;
+  }
+  const configPath = path.join(os.homedir(), ".config", "openclaw", "exec-blocked-paths.json");
+  try {
+    const raw = fs.readFileSync(configPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.every((p) => typeof p === "string")) {
+      _execBlockedPaths = parsed;
+    } else {
+      logWarn(`exec-blocked-paths: invalid format in ${configPath}, expected string[]`);
+      _execBlockedPaths = [];
+    }
+  } catch {
+    _execBlockedPaths = [];
+  }
+  return _execBlockedPaths;
+}
+
+export function checkExecBlockedPath(command: string): string | null {
+  for (const blocked of getExecBlockedPaths()) {
+    if (command.includes(blocked)) {
+      return blocked;
+    }
+  }
+  return null;
+}
+
+/** @internal Reset cached blocked paths (for testing) */
+export function _resetExecBlockedPaths(): void {
+  _execBlockedPaths = null;
+}
+
 export async function runExecProcess(opts: {
   command: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
@@ -291,6 +330,59 @@ export async function runExecProcess(opts: {
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
+  // L2.5: Block commands referencing sensitive paths before spawning any process
+  const blockedPath = checkExecBlockedPath(opts.command);
+  if (blockedPath) {
+    const msg = `Access denied: blocked path (${blockedPath})`;
+    logWarn(`exec-blocked: "${opts.command}" → ${msg}`);
+    const startedAt = Date.now();
+    const sessionId = createSessionSlug();
+    const session: ProcessSession = {
+      id: sessionId,
+      command: opts.command,
+      scopeKey: opts.scopeKey,
+      sessionKey: opts.sessionKey,
+      notifyOnExit: false,
+      notifyOnExitEmptySuccess: false,
+      exitNotified: true,
+      child: undefined,
+      stdin: undefined,
+      pid: undefined,
+      startedAt,
+      cwd: opts.workdir,
+      maxOutputChars: 0,
+      pendingMaxOutputChars: 0,
+      totalOutputChars: 0,
+      pendingStdout: [],
+      pendingStderr: [],
+      pendingStdoutChars: 0,
+      pendingStderrChars: 0,
+      aggregated: msg,
+      tail: msg,
+      exited: true,
+      exitCode: 1,
+      exitSignal: undefined as NodeJS.Signals | number | null | undefined,
+      truncated: false,
+      backgrounded: false,
+    };
+    addSession(session);
+    return {
+      session,
+      startedAt,
+      pid: undefined,
+      promise: Promise.resolve({
+        status: "failed" as const,
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 0,
+        aggregated: msg,
+        timedOut: false,
+        reason: msg,
+      }),
+      kill: () => {},
+    };
+  }
+
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
   const execCommand = opts.execCommand ?? opts.command;
