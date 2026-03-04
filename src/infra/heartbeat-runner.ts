@@ -237,6 +237,25 @@ export function resolveHeartbeatIntervalMs(
   return ms;
 }
 
+/** Resolve jitter for cold-start staggering. Explicit config or 10% of interval. */
+export function resolveHeartbeatJitterMs(
+  heartbeat: HeartbeatConfig | undefined,
+  intervalMs: number,
+): number {
+  const raw = heartbeat?.jitter?.trim();
+  if (raw) {
+    try {
+      const ms = parseDurationMs(raw, { defaultUnit: "m" });
+      if (ms > 0) {
+        return ms;
+      }
+    } catch {
+      // fall through to default
+    }
+  }
+  return Math.floor(intervalMs * 0.1);
+}
+
 export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
   return resolveHeartbeatPromptText(heartbeat?.prompt ?? cfg.agents?.defaults?.heartbeat?.prompt);
 }
@@ -1000,14 +1019,20 @@ export function startHeartbeatRunner(opts: {
   };
   let initialized = false;
 
-  const resolveNextDue = (now: number, intervalMs: number, prevState?: HeartbeatAgentState) => {
+  const resolveNextDue = (
+    now: number,
+    intervalMs: number,
+    jitterMs: number,
+    prevState?: HeartbeatAgentState,
+  ) => {
     if (typeof prevState?.lastRunMs === "number") {
       return prevState.lastRunMs + intervalMs;
     }
     if (prevState && prevState.intervalMs === intervalMs && prevState.nextDueMs > now) {
       return prevState.nextDueMs;
     }
-    return now + intervalMs;
+    // Cold start: stagger with jitter to avoid thundering herd
+    return now + intervalMs + Math.floor(Math.random() * jitterMs);
   };
 
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
@@ -1060,7 +1085,8 @@ export function startHeartbeatRunner(opts: {
       }
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);
-      const nextDueMs = resolveNextDue(now, intervalMs, prevState);
+      const jitterMs = resolveHeartbeatJitterMs(agent.heartbeat, intervalMs);
+      const nextDueMs = resolveNextDue(now, intervalMs, jitterMs, prevState);
       nextAgents.set(agent.agentId, {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,
