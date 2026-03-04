@@ -134,14 +134,14 @@ describe("shouldSuppressMessagingToolReplies", () => {
     ).toBe(false);
   });
 
-  it("suppresses telegram topic-origin replies when target omits topic metadata", () => {
+  it("does not suppress telegram topic-origin replies when target omits topic metadata", () => {
     expect(
       shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123:topic:77",
         messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "-100123" }],
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("suppresses telegram replies when chatId matches but target forms differ", () => {

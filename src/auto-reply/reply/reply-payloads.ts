@@ -209,9 +209,8 @@ function targetsMatchForSuppression(params: {
   if (originThreadId && targetThreadId != null) {
     return originThreadId === targetThreadId;
   }
-  // Telegram chat-level sends can be auto-threaded into the active topic.
   if (originThreadId && targetThreadId == null) {
-    return true;
+    return false;
   }
   if (!originThreadId && targetThreadId != null) {
     return false;

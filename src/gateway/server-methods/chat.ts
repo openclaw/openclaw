@@ -84,6 +84,7 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "thread",
   "topic",
 ]);
+const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
@@ -862,18 +863,22 @@ export const chatHandlers: GatewayRequestHandlers = {
         entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
       const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
       const parsedSessionKey = parseAgentSessionKey(sessionKey);
-      const sessionScopeHead = (parsedSessionKey?.rest ?? sessionKey).split(":").filter(Boolean)[0];
+      const sessionScopeParts = (parsedSessionKey?.rest ?? sessionKey).split(":").filter(Boolean);
+      const sessionScopeHead = sessionScopeParts[0];
       const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
+      const sessionPeerShape = sessionScopeParts[1]?.trim().toLowerCase();
       const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
         (sessionScopeHead ?? "").trim().toLowerCase(),
       );
+      const isChannelScopedSession = CHANNEL_SCOPED_SESSION_SHAPES.has(sessionPeerShape ?? "");
       // Only inherit prior external route metadata for channel-scoped sessions.
       // Channel-agnostic sessions (main, direct:<peer>, etc.) can otherwise
       // leak stale routes across surfaces.
       const canInheritDeliverableRoute = Boolean(
         sessionChannelHint &&
         sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
-        !isChannelAgnosticSessionScope,
+        !isChannelAgnosticSessionScope &&
+        isChannelScopedSession,
       );
       const hasDeliverableRoute =
         canInheritDeliverableRoute &&

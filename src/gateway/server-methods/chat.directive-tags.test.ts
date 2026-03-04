@@ -447,4 +447,37 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }),
     );
   });
+
+  it("chat.send does not inherit external delivery context for non-channel custom sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-custom-no-cross-route-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "discord",
+        to: "discord:1234567890",
+        accountId: "default",
+      },
+      lastChannel: "discord",
+      lastTo: "discord:1234567890",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-custom-no-cross-route",
+      sessionKey: "agent:main:work",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        AccountId: undefined,
+      }),
+    );
+  });
 });
