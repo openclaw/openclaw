@@ -40,6 +40,38 @@
       "types": "./dist/plugin-sdk/index.d.ts",
       "default": "./dist/plugin-sdk/index.js"
     },
+    "./plugin-sdk/core": {
+      "types": "./dist/plugin-sdk/core.d.ts",
+      "default": "./dist/plugin-sdk/core.js"
+    },
+    "./plugin-sdk/telegram": {
+      "types": "./dist/plugin-sdk/telegram.d.ts",
+      "default": "./dist/plugin-sdk/telegram.js"
+    },
+    "./plugin-sdk/discord": {
+      "types": "./dist/plugin-sdk/discord.d.ts",
+      "default": "./dist/plugin-sdk/discord.js"
+    },
+    "./plugin-sdk/slack": {
+      "types": "./dist/plugin-sdk/slack.d.ts",
+      "default": "./dist/plugin-sdk/slack.js"
+    },
+    "./plugin-sdk/signal": {
+      "types": "./dist/plugin-sdk/signal.d.ts",
+      "default": "./dist/plugin-sdk/signal.js"
+    },
+    "./plugin-sdk/imessage": {
+      "types": "./dist/plugin-sdk/imessage.d.ts",
+      "default": "./dist/plugin-sdk/imessage.js"
+    },
+    "./plugin-sdk/whatsapp": {
+      "types": "./dist/plugin-sdk/whatsapp.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp.js"
+    },
+    "./plugin-sdk/line": {
+      "types": "./dist/plugin-sdk/line.d.ts",
+      "default": "./dist/plugin-sdk/line.js"
+    },
     "./plugin-sdk/account-id": {
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
@@ -63,7 +95,7 @@
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
     "build:strict-smoke": "pnpm canvas:a2ui:bundle && tsdown && pnpm build:plugin-sdk:dts",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
-    "check": "pnpm format:check && pnpm tsgo && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope && pnpm check:host-env-policy:swift",
+    "check": "pnpm format:check && pnpm tsgo && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope && pnpm check:host-env-policy:swift",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-links",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
@@ -107,6 +139,7 @@
     "lint:docs": "pnpm dlx markdownlint-cli2",
     "lint:docs:fix": "pnpm dlx markdownlint-cli2 --fix",
     "lint:fix": "oxlint --type-aware --fix && pnpm format",
+    "lint:plugins:no-monolithic-plugin-sdk-entry-imports": "node --import tsx scripts/check-no-monolithic-plugin-sdk-entry-imports.ts",
     "lint:plugins:no-register-http-handler": "node scripts/check-no-register-http-handler.mjs",
     "lint:swift": "swiftlint lint --config .swiftlint.yml && (cd apps/ios && swiftlint lint --config .swiftlint.yml)",
     "lint:tmp:channel-agnostic-boundaries": "node scripts/check-channel-agnostic-boundaries.mjs",
@@ -246,9 +279,6 @@
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.16.2"
-  },
-  "optionalDependencies": {
-    "@discordjs/opus": "^0.10.0"
   },
   "engines": {
     "node": ">=22.12.0"
