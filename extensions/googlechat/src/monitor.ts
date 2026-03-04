@@ -284,8 +284,7 @@ async function processMessageWithPipeline(params: {
   let typingMessageName: string | undefined;
 
   // Resolve replyToMode — only thread outbound messages when mode is not "off".
-  const replyToMode =
-    (config.channels?.["googlechat"] as { replyToMode?: string } | undefined)?.replyToMode ?? "off";
+  const replyToMode = config.channels?.["googlechat"]?.replyToMode ?? "off";
   const effectiveThread = replyToMode !== "off" ? message.thread?.name : undefined;
 
   // Start typing indicator (message mode only, reaction mode not supported with app auth)
@@ -378,7 +377,7 @@ async function deliverGoogleChatReply(params: {
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
-  replyToMode?: string;
+  replyToMode?: "off" | "first" | "all";
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
     params;
