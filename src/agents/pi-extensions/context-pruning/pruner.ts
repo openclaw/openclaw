@@ -249,14 +249,24 @@ export function softTrimFileBlocksInText(
         return match;
       }
       
-      const name = nameMatch[1];
-      const mime = mimeMatch ? mimeMatch[1] : undefined;
-      
       const head = body.slice(0, h);
       const tail = body.slice(body.length - t);
+      
+      // Build the trimmed content with marker
+      const marker = `[File block trimmed: kept first ${h} and last ${t} of ${body.length} chars]`;
+      const trimmedContent = `${head}\n...\n${marker}\n...${tail}`;
+      
+      // Only apply trim if it actually reduces the message size
+      const originalLength = `<file${attrs}>${body}</file>`.length;
+      const trimmedLength = `<file${attrs}>${trimmedContent}</file>`.length;
+      
+      if (trimmedLength >= originalLength) {
+        return match;
+      }
+      
       trimmedChars += body.length - h - t;
       // Preserve all original attributes to avoid losing metadata (size, encoding, etc.)
-      return `<file${attrs}>${head}\n...\n[File block trimmed: kept first ${h} and last ${t} of ${body.length} chars]\n...${tail}</file>`;
+      return `<file${attrs}>${trimmedContent}</file>`;
     },
   );
   return { text: result, trimmedChars };
