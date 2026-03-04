@@ -159,13 +159,11 @@ export async function setupSearch(
     if (existingProvider) {
       return existingProvider;
     }
-    if (opts?.quickstartDefaults) {
-      const detected = SEARCH_PROVIDER_OPTIONS.find(
-        (e) => Boolean(resolveExistingKey(config, e.value)) || hasKeyInEnv(e),
-      );
-      if (detected) {
-        return detected.value;
-      }
+    const detected = SEARCH_PROVIDER_OPTIONS.find(
+      (e) => Boolean(resolveExistingKey(config, e.value)) || hasKeyInEnv(e),
+    );
+    if (detected) {
+      return detected.value;
     }
     return "perplexity";
   })();

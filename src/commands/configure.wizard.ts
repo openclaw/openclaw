@@ -166,8 +166,6 @@ async function promptWebToolsConfig(
 ): Promise<OpenClawConfig> {
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const existingProvider = existingSearch?.provider ?? "perplexity";
-
   const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey, applySearchKey, hasKeyInEnv } =
     await import("./onboard-search.js");
   type SP = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
@@ -179,6 +177,11 @@ async function promptWebToolsConfig(
     }
     return Boolean(resolveExistingKey(nextConfig, provider as SP)) || hasKeyInEnv(entry);
   };
+
+  const existingProvider: string =
+    existingSearch?.provider ??
+    SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ??
+    "perplexity";
 
   note(
     [
