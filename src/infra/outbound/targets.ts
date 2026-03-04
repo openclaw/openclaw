@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import { parseDiscordTarget } from "../../discord/targets.js";
-import { normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeAccountId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseSlackTarget } from "../../slack/targets.js";
 import { parseTelegramTarget, resolveTelegramTargetChatType } from "../../telegram/targets.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.js";
@@ -240,6 +240,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  sessionKey?: string;
 }): OutboundTarget {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
@@ -299,6 +300,16 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   if (!resolvedTarget.channel || !resolvedTarget.to) {
+    const keyDerived = deriveDeliveryFromSessionKey(params.sessionKey);
+    if (keyDerived && isDeliverableMessageChannel(keyDerived.channel)) {
+      return {
+        channel: keyDerived.channel,
+        to: keyDerived.to,
+        accountId: effectiveAccountId,
+        chatType: keyDerived.kind === "group" ? ("group" as ChatType) : undefined,
+        threadId: undefined,
+      };
+    }
     return buildNoHeartbeatDeliveryTarget({
       reason: "no-target",
       accountId: effectiveAccountId,
@@ -546,4 +557,22 @@ export function resolveHeartbeatSenderContext(params: {
   });
 
   return { sender, provider, allowFrom };
+}
+
+function deriveDeliveryFromSessionKey(
+  sessionKey?: string,
+): { channel: string; to: string; kind: string } | undefined {
+  if (!sessionKey) {
+    return undefined;
+  }
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = parsed?.rest ?? sessionKey;
+  const parts = rest.split(":").filter(Boolean);
+  if (parts.length >= 3) {
+    const [channel, kind, ...idParts] = parts;
+    if (kind === "group" || kind === "channel") {
+      return { channel, to: `${kind}:${idParts.join(":")}`, kind };
+    }
+  }
+  return undefined;
 }

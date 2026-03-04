@@ -531,6 +531,29 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.to).toBe("-10063448508");
     expect(resolved.threadId).toBe(1008013);
   });
+
+  it("derives delivery target from channel session key when entry has no delivery context", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: undefined,
+      heartbeat: { target: "last" },
+      sessionKey: "agent:main:slack:channel:c0aka9rbsau",
+    });
+    expect(resolved.channel).toBe("slack");
+    expect(resolved.to).toBe("channel:c0aka9rbsau");
+  });
+
+  it("returns no-target when session key has no parseable channel info", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: undefined,
+      heartbeat: { target: "last" },
+      sessionKey: "agent:main:main",
+    });
+    expect(resolved.channel).toBe("none");
+  });
 });
 
 describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", () => {

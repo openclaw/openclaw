@@ -637,7 +637,7 @@ export async function runHeartbeatOnce(opts: {
   }
   const { entry, sessionKey, storePath } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
-  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
+  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat, sessionKey });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
