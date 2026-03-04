@@ -270,13 +270,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       textAlias: "/whoami",
       category: "status",
     }),
-    defineChatCommand({
-      key: "groupid",
-      nativeName: "groupid",
-      description: "Show the current group's chat ID (Telegram only).",
-      textAlias: "/groupid",
-      category: "status",
-    }),
+    // groupid is Telegram-only; registered manually in bot-native-commands.ts
+    // defineChatCommand({
+    //   key: "groupid",
+    //   nativeName: "groupid",
+    //   description: "Show the current group's chat ID (Telegram only).",
+    //   textAlias: "/groupid",
+    //   category: "status",
+    // }),
     defineChatCommand({
       key: "session",
       nativeName: "session",
