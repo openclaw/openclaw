@@ -38,6 +38,7 @@ import {
   resolveMemoryFlushPromptForRun,
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
+  computeContextHash,
 } from "./memory-flush.js";
 import type { FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -448,6 +449,32 @@ export async function runMemoryFlushIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
+  // --- Content hash dedup (state-based) ---
+  // Read the tail of the session transcript and compute a lightweight hash.
+  // If the hash matches the last flush, the context hasn't materially changed
+  // and flushing again would produce duplicate memory entries (#30115).
+  const sessionFilePath = resolveSessionFilePathForFlush(
+    params.followupRun.run.sessionId,
+    entry ?? params.sessionEntry,
+    params.storePath,
+  );
+  if (sessionFilePath) {
+    try {
+      const tailMessages = readTranscriptTailMessages(sessionFilePath, 10);
+      const contextHash = computeContextHash(tailMessages);
+      const previousHash = entry?.memoryFlushContextHash;
+      if (previousHash && contextHash === previousHash) {
+        logVerbose(
+          `memoryFlush skipped (context hash unchanged): sessionKey=${params.sessionKey} hash=${contextHash}`,
+        );
+        return entry ?? params.sessionEntry;
+      }
+    } catch (err) {
+      // If we can't read the transcript, fall through and allow the flush.
+      logVerbose(`memoryFlush hash check failed, proceeding with flush: ${String(err)}`);
+    }
+  }
+
   logVerbose(
     `memoryFlush triggered: sessionKey=${params.sessionKey} tokenCount=${tokenCountForFlush ?? "undefined"} threshold=${flushThreshold}`,
   );
@@ -514,7 +541,7 @@ export async function runMemoryFlushIfNeeded(params: {
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              if (phase === "end") {
+              if (phase === "end" && !evt.data?.willRetry) {
                 memoryCompactionCompleted = true;
               }
             }
@@ -549,6 +576,18 @@ export async function runMemoryFlushIfNeeded(params: {
           update: async () => ({
             memoryFlushAt: Date.now(),
             memoryFlushCompactionCount,
+            ...(sessionFilePath
+              ? {
+                  memoryFlushContextHash: (() => {
+                    try {
+                      const msgs = readTranscriptTailMessages(sessionFilePath, 10);
+                      return computeContextHash(msgs);
+                    } catch {
+                      return undefined;
+                    }
+                  })(),
+                }
+              : {}),
           }),
         });
         if (updatedEntry) {
@@ -563,4 +602,63 @@ export async function runMemoryFlushIfNeeded(params: {
   }
 
   return activeSessionEntry;
+}
+
+/**
+ * Resolve the session transcript file path for flush hash computation.
+ */
+function resolveSessionFilePathForFlush(
+  sessionId: string | undefined,
+  entry: SessionEntry | undefined,
+  storePath: string | undefined,
+): string | undefined {
+  if (!sessionId) {
+    return undefined;
+  }
+  const sessionFile = entry?.sessionFile?.trim();
+  if (sessionFile && fs.existsSync(sessionFile)) {
+    return sessionFile;
+  }
+  if (!storePath) {
+    return undefined;
+  }
+  try {
+    const resolved = resolveSessionFilePath(
+      sessionId,
+      entry,
+      resolveSessionFilePathOptions({ storePath }),
+    );
+    return fs.existsSync(resolved) ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Read the last N messages (with role + content) from a session transcript JSONL file.
+ * Only returns entries that have a `message` field with a `role`.
+ */
+function readTranscriptTailMessages(
+  filePath: string,
+  maxMessages: number,
+): Array<{ role?: string; content?: unknown }> {
+  const content = fs.readFileSync(filePath, "utf-8");
+  const lines = content.split(/\r?\n/);
+  const messages: Array<{ role?: string; content?: unknown }> = [];
+  // Read from the end for efficiency — we only need the tail.
+  for (let i = lines.length - 1; i >= 0 && messages.length < maxMessages; i--) {
+    const line = lines[i].trim();
+    if (!line) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed?.message?.role) {
+        messages.unshift({ role: parsed.message.role, content: parsed.message.content });
+      }
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return messages;
 }
