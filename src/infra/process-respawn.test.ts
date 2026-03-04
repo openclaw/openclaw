@@ -167,9 +167,9 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
     const result = restartGatewayProcessWithFreshPid();
 
-    expect(result.mode).toBe("supervised");
+    // OPENCLAW_TASK_SCRIPT alone is not a supervisor hint, so it falls through to spawn
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
-    expect(spawnMock).not.toHaveBeenCalled();
+    expect(result.mode).toBe("spawned");
   });
 
   it("returns failed when win32 schtasks restart fails", () => {

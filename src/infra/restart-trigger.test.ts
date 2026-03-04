@@ -31,8 +31,8 @@ beforeEach(() => {
   spawnMock.mockReset();
   spawnSyncMock.mockReset();
   writeFileSyncMock.mockReset();
-  // Return a mock child with unref
-  spawnMock.mockReturnValue({ unref: vi.fn() });
+  // Return a mock child with unref and on
+  spawnMock.mockReturnValue({ unref: vi.fn(), on: vi.fn() });
   // Bypass test-mode guard
   delete process.env.VITEST;
   delete process.env.NODE_ENV;

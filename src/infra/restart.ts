@@ -349,6 +349,7 @@ del "%~f0"
           stdio: "ignore",
           windowsHide: true,
         });
+        child.on("error", () => {});
         child.unref();
         tried.push(`schtasks restart via ${scriptPath}`);
         return { ok: true, method: "schtasks", tried };

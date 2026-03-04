@@ -6,8 +6,8 @@ describe("hasSupervisorHint", () => {
     expect(hasSupervisorHint({ OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway" })).toBe(true);
   });
 
-  it("detects Windows task script marker", () => {
-    expect(hasSupervisorHint({ OPENCLAW_TASK_SCRIPT: "gateway.cmd" })).toBe(true);
+  it("does not treat OPENCLAW_TASK_SCRIPT as supervisor hint", () => {
+    expect(hasSupervisorHint({ OPENCLAW_TASK_SCRIPT: "gateway.cmd" })).toBe(false);
   });
 
   it("returns false for empty env", () => {
