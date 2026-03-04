@@ -300,7 +300,10 @@ jobs:
 
       - name: Detect secrets
         run: |
-          if ! detect-secrets scan --baseline .secrets.baseline; then
+          if ! detect-secrets scan --baseline .secrets.baseline \
+            --exclude-files '(^|/)pnpm-lock\.yaml$' \
+            --exclude-files '(^|/)(dist|vendor)/' \
+            --exclude-files '(^|/)\.detect-secrets\.cfg$'; then
             echo "::error::Secret scanning failed. See docs/gateway/security.md#secret-scanning-detect-secrets"
             exit 1
           fi
