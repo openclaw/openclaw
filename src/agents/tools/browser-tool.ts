@@ -269,7 +269,12 @@ function resolveBrowserBaseUrl(params: {
       "Browser control is disabled. Set browser.enabled=true in ~/.openclaw/openclaw.json.",
     );
   }
-  return `http://127.0.0.1:${resolved.controlPort}`;
+  // Return undefined to use in-process dispatcher path.
+  // Returning an absolute URL here would force host requests onto the HTTP branch in fetchBrowserJson,
+  // which assumes a separately running HTTP browser server. However, embedded agent runs
+  // (runEmbeddedAttempt using createOpenClawCodingTools) do not start that server,
+  // so host-target browser actions would fail with connection timeout/refused.
+  return undefined;
 }
 
 export function createBrowserTool(opts?: {
