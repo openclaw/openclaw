@@ -285,10 +285,20 @@ export function applyJobResult(
     delivered?: boolean;
     startedAt: number;
     endedAt: number;
+    /** When true, this was a manual trigger (e.g. `openclaw cron run`).
+     *  The schedule anchor should not be displaced — next run is computed
+     *  from the existing anchor / lastRunAtMs rather than the manual start time. */
+    manual?: boolean;
   },
 ): boolean {
   job.state.runningAtMs = undefined;
-  job.state.lastRunAtMs = result.startedAt;
+  // For manual triggers, preserve the existing lastRunAtMs so that the
+  // schedule anchor is not displaced.  The next automatic run should still
+  // fire at its original cadence (e.g. 07:00 daily) rather than being
+  // shifted to `now + interval` (#33940).
+  if (!result.manual) {
+    job.state.lastRunAtMs = result.startedAt;
+  }
   job.state.lastRunStatus = result.status;
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
