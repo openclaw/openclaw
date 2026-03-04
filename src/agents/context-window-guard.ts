@@ -34,12 +34,27 @@ export function resolveContextWindowInfo(params: {
     const match = models.find((m) => m?.id === params.modelId);
     return normalizePositiveInt(match?.contextWindow);
   })();
+
   const fromModel = normalizePositiveInt(params.modelContextWindow);
-  const baseInfo = fromModelsConfig
-    ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
-    : fromModel
-      ? { tokens: fromModel, source: "model" as const }
-      : { tokens: Math.floor(params.defaultTokens), source: "default" as const };
+
+  const baseInfo = (() => {
+    if (fromModelsConfig) {
+      return { tokens: fromModelsConfig, source: "modelsConfig" as const };
+    }
+
+    // Try a scoped lookup in the model cache (composite key: provider::modelId)
+    const { lookupContextTokens } = require("./context.js");
+    const cachedTokens = lookupContextTokens(params.modelId, params.provider);
+    if (cachedTokens) {
+      return { tokens: cachedTokens, source: "model" as const };
+    }
+
+    if (fromModel) {
+      return { tokens: fromModel, source: "model" as const };
+    }
+
+    return { tokens: Math.floor(params.defaultTokens), source: "default" as const };
+  })();
 
   const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
   if (capTokens && capTokens < baseInfo.tokens) {
