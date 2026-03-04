@@ -1390,8 +1390,9 @@ export async function writeConfigFile(
     const bindingsExplicitlyUnset = (options.unsetPaths ?? []).some(
       (path) => Array.isArray(path) && path.length > 0 && path[0] === "bindings",
     );
+    const bindingsKeyPresent = Object.prototype.hasOwnProperty.call(cfg, "bindings");
     const cfgForPatch =
-      cfg.bindings === undefined &&
+      !bindingsKeyPresent &&
       runtimeConfigSnapshot.bindings !== undefined &&
       !bindingsExplicitlyUnset
         ? { ...cfg, bindings: runtimeConfigSnapshot.bindings }
