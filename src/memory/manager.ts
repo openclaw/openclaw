@@ -107,6 +107,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
+  private static readonly SESSION_WARM_MAX = 500;
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
   private readonlyRecoveryAttempts = 0;
@@ -233,6 +234,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       log.warn(`memory sync failed (session-start): ${String(err)}`);
     });
     if (key) {
+      if (this.sessionWarm.size >= MemoryIndexManager.SESSION_WARM_MAX) {
+        // Evict oldest entry (first inserted)
+        const first = this.sessionWarm.values().next().value;
+        if (first !== undefined) {
+          this.sessionWarm.delete(first);
+        }
+      }
       this.sessionWarm.add(key);
     }
   }
