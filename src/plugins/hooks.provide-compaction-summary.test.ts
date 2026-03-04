@@ -3,7 +3,7 @@
  *
  * Exercises the sequential modifying-hook pattern:
  * - Single plugin returning summary
- * - Multiple plugins — last summary wins, skipCompaction OR-logic
+ * - Multiple plugins — highest-priority summary wins, skipCompaction OR-logic
  * - Plugin returning void (no-op)
  * - Error in one plugin doesn't block others
  */
@@ -70,17 +70,17 @@ describe("provide_compaction_summary merge logic", () => {
     expect(result?.summary).toBeUndefined();
   });
 
-  it("last summary wins when multiple plugins provide summaries", async () => {
+  it("highest-priority summary wins when multiple plugins provide summaries", async () => {
     addCompactionSummaryHook(registry, "plugin-a", () => ({ summary: "Summary from A" }), 1);
     addCompactionSummaryHook(registry, "plugin-b", () => ({ summary: "Summary from B" }), 10);
 
     const runner = createHookRunner(registry);
     const result = await runner.runProvideCompactionSummary(dummyEvent, dummyCtx);
 
-    // Higher priority runs first in modifying hooks, then lower priority.
-    // The merge function uses next.summary ?? acc.summary, so the last
-    // non-undefined summary wins.
-    expect(result?.summary).toBe("Summary from A");
+    // Higher priority runs first in modifying hooks.
+    // The merge function uses acc.summary ?? next.summary, so the first
+    // non-undefined summary (highest priority) wins.
+    expect(result?.summary).toBe("Summary from B");
   });
 
   it("skipCompaction uses OR-logic across plugins", async () => {

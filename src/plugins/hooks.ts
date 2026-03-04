@@ -389,7 +389,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       event,
       ctx,
       (acc, next) => ({
-        summary: next.summary ?? acc?.summary,
+        // Match modifying-hook precedence: earlier (higher-priority) summary wins.
+        summary: acc?.summary ?? next.summary,
         // OR-logic: any plugin requesting skip wins
         skipCompaction: next.skipCompaction || acc?.skipCompaction,
       }),
