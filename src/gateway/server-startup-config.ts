@@ -6,6 +6,7 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 
@@ -18,7 +19,7 @@ function formatValidationIssues(snapshot: ConfigFileSnapshot): string {
   if (snapshot.issues.length === 0) {
     return "Unknown validation issue.";
   }
-  return snapshot.issues.map((issue) => `${issue.path || "<root>"}: ${issue.message}`).join("\n");
+  return formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n");
 }
 
 function assertSnapshotValid(snapshot: ConfigFileSnapshot): asserts snapshot is ConfigFileSnapshot {
