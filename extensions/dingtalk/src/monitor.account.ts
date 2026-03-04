@@ -6,7 +6,7 @@ import { monitorStream } from "./monitor.transport.js";
 import type { ResolvedDingtalkAccount, DingtalkRobotMessage } from "./types.js";
 
 // 消息去重缓存（防止 Stream 重试导致重复处理） / Dedupe cache to prevent duplicate processing from Stream retries
-const dedupeCache = createDedupeCache<string>({ maxSize: 500, ttlMs: 60_000 });
+const dedupeCache = createDedupeCache({ maxSize: 500, ttlMs: 60_000 });
 
 /**
  * 启动单账号的消息监控 / Start message monitoring for a single account
@@ -31,13 +31,10 @@ export async function monitorSingleAccount(params: {
         const msg = JSON.parse(downstream.data) as DingtalkRobotMessage;
         const messageId = msg.msgId ?? downstream.headers?.messageId;
 
-        // 消息去重 / Deduplicate messages
-        if (messageId && dedupeCache.has(messageId)) {
+        // 消息去重：check() 返回 true 表示已存在（重复），同时自动标记新 key
+        if (messageId && dedupeCache.check(messageId)) {
           log(`dingtalk[${account.accountId}]: skipping duplicate message ${messageId}`);
           return;
-        }
-        if (messageId) {
-          dedupeCache.set(messageId, messageId);
         }
 
         // 异步处理消息 / Process message asynchronously
