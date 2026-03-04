@@ -6,6 +6,8 @@ export type PendingToolCall = { id: string; name?: string };
  * - functions.read:0 -> read
  * - functions.read0 -> read
  * - functionsread3 -> read
+ * - functions.write1 -> write
+ * - functionswrite4 -> write
  * - toolCall_abc123 -> abc123
  */
 export function extractToolNameFromId(id: string): string | undefined {
@@ -20,8 +22,11 @@ export function extractToolNameFromId(id: string): string | undefined {
   }
 
   // Remove common prefixes: "functions.", "toolCall_", "toolUse_", "functionCall_"
+  // Also handles cases where "functions" is directly concatenated without separator (e.g., "functionsread")
   let normalized = trimmed
     .replace(/^(functions\.|toolCall_|toolUse_|functionCall_)/i, "")
+    // Handle "functions" prefix without separator (e.g., "functionsread" -> "read")
+    .replace(/^functions/i, "")
     // Remove index suffix after ":" or "_" or numeric suffix
     .replace(/:\d+$/, "")
     .replace(/_\d+$/, "")
