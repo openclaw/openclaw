@@ -223,13 +223,11 @@ async function execSystemctlUser(
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const machineUser = resolveSystemctlMachineScopeUser(env);
   const sudoUser = env.SUDO_USER?.trim();
+  const machineScopeArgs = machineUser ? resolveSystemctlMachineUserScopeArgs(machineUser) : [];
 
   // Under sudo, prefer the invoking non-root user's scope directly.
-  if (sudoUser && sudoUser !== "root" && machineUser) {
-    const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
-    if (machineScopeArgs.length > 0) {
-      return await execSystemctl([...machineScopeArgs, ...args]);
-    }
+  if (sudoUser && sudoUser !== "root" && machineScopeArgs.length > 0) {
+    return await execSystemctl([...machineScopeArgs, ...args]);
   }
 
   const directResult = await execSystemctl([...resolveSystemctlDirectUserScopeArgs(), ...args]);
@@ -238,17 +236,12 @@ async function execSystemctlUser(
   }
 
   const detail = `${directResult.stderr} ${directResult.stdout}`.trim();
-  if (!machineUser || !shouldFallbackToMachineUserScope(detail)) {
+  if (machineScopeArgs.length === 0 || !shouldFallbackToMachineUserScope(detail)) {
     return directResult;
   }
 
-  const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
-  if (machineScopeArgs.length === 0) {
-    return directResult;
-  }
   return await execSystemctl([...machineScopeArgs, ...args]);
 }
-
 export async function isSystemdUserServiceAvailable(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<boolean> {
