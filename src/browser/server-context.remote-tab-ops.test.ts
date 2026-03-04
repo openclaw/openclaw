@@ -27,6 +27,8 @@ function makeState(
       cdpProtocol: profile === "remote" ? "https" : "http",
       cdpHost: profile === "remote" ? "browserless.example" : "127.0.0.1",
       cdpIsLoopback: profile !== "remote",
+      cdpPortRangeStart: 18800,
+      cdpPortRangeEnd: 18810,
       remoteCdpTimeoutMs: 1500,
       remoteCdpHandshakeTimeoutMs: 3000,
       evaluateEnabled: false,
