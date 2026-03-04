@@ -5,118 +5,39 @@ import Testing
 @testable import OpenClaw
 
 @Suite struct GatewayConnectionTests {
-    private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
-        private let connectRequestID = OSAllocatedUnfairLock<String?>(initialState: nil)
-        private let pendingReceiveHandler =
-            OSAllocatedUnfairLock<(@Sendable (Result<URLSessionWebSocketTask.Message, Error>)
-                    -> Void)?>(initialState: nil)
-        private let cancelCount = OSAllocatedUnfairLock(initialState: 0)
-        private let sendCount = OSAllocatedUnfairLock(initialState: 0)
-        private let helloDelayMs: Int
-
-        var state: URLSessionTask.State = .suspended
-
-        init(helloDelayMs: Int = 0) {
-            self.helloDelayMs = helloDelayMs
-        }
-
-        func snapshotCancelCount() -> Int {
-            self.cancelCount.withLock { $0 }
-        }
-
-        func resume() {
-            self.state = .running
-        }
-
-        func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-            _ = (closeCode, reason)
-            self.state = .canceling
-            self.cancelCount.withLock { $0 += 1 }
-            let handler = self.pendingReceiveHandler.withLock { handler in
-                defer { handler = nil }
-                return handler
-            }
-            handler?(Result<URLSessionWebSocketTask.Message, Error>.failure(URLError(.cancelled)))
-        }
-
-        func send(_ message: URLSessionWebSocketTask.Message) async throws {
-            let currentSendCount = self.sendCount.withLock { count in
-                defer { count += 1 }
-                return count
-            }
-
-            // First send is the connect handshake request. Subsequent sends are request frames.
-            if currentSendCount == 0 {
-                if let id = GatewayWebSocketTestSupport.connectRequestID(from: message) {
-                    self.connectRequestID.withLock { $0 = id }
-                }
-                return
-            }
-
-            guard case let .data(data) = message else { return }
-            guard
-                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                (obj["type"] as? String) == "req",
-                let id = obj["id"] as? String
-            else {
-                return
-            }
-
-            let response = GatewayWebSocketTestSupport.okResponseData(id: id)
-            let handler = self.pendingReceiveHandler.withLock { $0 }
-            handler?(Result<URLSessionWebSocketTask.Message, Error>.success(.data(response)))
-        }
-
-        func receive() async throws -> URLSessionWebSocketTask.Message {
-            if self.helloDelayMs > 0 {
-                try await Task.sleep(nanoseconds: UInt64(self.helloDelayMs) * 1_000_000)
-            }
-            let id = self.connectRequestID.withLock { $0 } ?? "connect"
-            return .data(GatewayWebSocketTestSupport.connectOkData(id: id))
-        }
-
-        func receive(
-            completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
-        {
-            self.pendingReceiveHandler.withLock { $0 = completionHandler }
-        }
-
-        func emitIncoming(_ data: Data) {
-            let handler = self.pendingReceiveHandler.withLock { $0 }
-            handler?(Result<URLSessionWebSocketTask.Message, Error>.success(.data(data)))
-        }
+    private func makeConnection(
+        session: GatewayTestWebSocketSession,
+        token: String? = nil) throws -> (GatewayConnection, ConfigSource)
+    {
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let cfg = ConfigSource(token: token)
+        let conn = GatewayConnection(
+            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        return (conn, cfg)
     }
 
-    private final class FakeWebSocketSession: WebSocketSessioning, @unchecked Sendable {
-        private let makeCount = OSAllocatedUnfairLock(initialState: 0)
-        private let tasks = OSAllocatedUnfairLock(initialState: [FakeWebSocketTask]())
-        private let helloDelayMs: Int
-
-        init(helloDelayMs: Int = 0) {
-            self.helloDelayMs = helloDelayMs
-        }
-
-        func snapshotMakeCount() -> Int {
-            self.makeCount.withLock { $0 }
-        }
-
-        func snapshotCancelCount() -> Int {
-            self.tasks.withLock { tasks in
-                tasks.reduce(0) { $0 + $1.snapshotCancelCount() }
-            }
-        }
-
-        func latestTask() -> FakeWebSocketTask? {
-            self.tasks.withLock { $0.last }
-        }
-
-        func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-            _ = url
-            self.makeCount.withLock { $0 += 1 }
-            let task = FakeWebSocketTask(helloDelayMs: self.helloDelayMs)
-            self.tasks.withLock { $0.append(task) }
-            return WebSocketTaskBox(task: task)
-        }
+    private func makeSession(helloDelayMs: Int = 0) -> GatewayTestWebSocketSession {
+        GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0 else { return }
+                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                        let response = GatewayWebSocketTestSupport.okResponseData(id: id)
+                        task.emitReceiveSuccess(.data(response))
+                    },
+                    receiveHook: { task, receiveIndex in
+                        if receiveIndex == 0 {
+                            return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                        }
+                        if helloDelayMs > 0 {
+                            try await Task.sleep(nanoseconds: UInt64(helloDelayMs) * 1_000_000)
+                        }
+                        let id = task.snapshotConnectRequestID() ?? "connect"
+                        return .data(GatewayWebSocketTestSupport.connectOkData(id: id))
+                    })
+            })
     }
 
     private final class ConfigSource: @unchecked Sendable {
@@ -136,12 +57,8 @@ import Testing
     }
 
     @Test func requestReusesSingleWebSocketForSameConfig() async throws {
-        let session = FakeWebSocketSession()
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let cfg = ConfigSource(token: nil)
-        let conn = GatewayConnection(
-            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        let session = self.makeSession()
+        let (conn, _) = try self.makeConnection(session: session)
 
         _ = try await conn.request(method: "status", params: nil)
         #expect(session.snapshotMakeCount() == 1)
@@ -152,12 +69,8 @@ import Testing
     }
 
     @Test func requestReconfiguresAndCancelsOnTokenChange() async throws {
-        let session = FakeWebSocketSession()
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let cfg = ConfigSource(token: "a")
-        let conn = GatewayConnection(
-            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        let session = self.makeSession()
+        let (conn, cfg) = try self.makeConnection(session: session, token: "a")
 
         _ = try await conn.request(method: "status", params: nil)
         #expect(session.snapshotMakeCount() == 1)
@@ -169,12 +82,8 @@ import Testing
     }
 
     @Test func concurrentRequestsStillUseSingleWebSocket() async throws {
-        let session = FakeWebSocketSession(helloDelayMs: 150)
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let cfg = ConfigSource(token: nil)
-        let conn = GatewayConnection(
-            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        let session = self.makeSession(helloDelayMs: 150)
+        let (conn, _) = try self.makeConnection(session: session)
 
         async let r1: Data = conn.request(method: "status", params: nil)
         async let r2: Data = conn.request(method: "status", params: nil)
@@ -184,12 +93,8 @@ import Testing
     }
 
     @Test func subscribeReplaysLatestSnapshot() async throws {
-        let session = FakeWebSocketSession()
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let cfg = ConfigSource(token: nil)
-        let conn = GatewayConnection(
-            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        let session = self.makeSession()
+        let (conn, _) = try self.makeConnection(session: session)
 
         _ = try await conn.request(method: "status", params: nil)
 
@@ -205,12 +110,8 @@ import Testing
     }
 
     @Test func subscribeEmitsSeqGapBeforeEvent() async throws {
-        let session = FakeWebSocketSession()
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let cfg = ConfigSource(token: nil)
-        let conn = GatewayConnection(
-            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
-            sessionBox: WebSocketSessionBox(session: session))
+        let session = self.makeSession()
+        let (conn, _) = try self.makeConnection(session: session)
 
         let stream = await conn.subscribe(bufferingNewest: 10)
         var iterator = stream.makeAsyncIterator()
@@ -222,7 +123,7 @@ import Testing
             """
             {"type":"event","event":"presence","payload":{"presence":[]},"seq":1}
             """.utf8)
-        session.latestTask()?.emitIncoming(evt1)
+        session.latestTask()?.emitReceiveSuccess(.data(evt1))
 
         let firstEvent = await iterator.next()
         guard case let .event(firstFrame) = firstEvent else {
@@ -235,7 +136,7 @@ import Testing
             """
             {"type":"event","event":"presence","payload":{"presence":[]},"seq":3}
             """.utf8)
-        session.latestTask()?.emitIncoming(evt3)
+        session.latestTask()?.emitReceiveSuccess(.data(evt3))
 
         let gap = await iterator.next()
         guard case let .seqGap(expected, received) = gap else {

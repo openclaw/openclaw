@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   listTelegramAccountIds,
+  resetMissingDefaultWarnFlag,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
 } from "./accounts.js";
@@ -10,6 +11,10 @@ import {
 const { warnMock } = vi.hoisted(() => ({
   warnMock: vi.fn(),
 }));
+
+function warningLines(): string[] {
+  return warnMock.mock.calls.map(([line]) => String(line));
+}
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
@@ -24,6 +29,7 @@ vi.mock("../logging/subsystem.js", () => ({
 describe("resolveTelegramAccount", () => {
   afterEach(() => {
     warnMock.mockClear();
+    resetMissingDefaultWarnFlag();
   });
 
   it("falls back to the first configured account when accountId is omitted", () => {
@@ -105,6 +111,94 @@ describe("resolveTelegramAccount", () => {
 });
 
 describe("resolveDefaultTelegramAccountId", () => {
+  beforeEach(() => {
+    resetMissingDefaultWarnFlag();
+  });
+
+  afterEach(() => {
+    warnMock.mockClear();
+    resetMissingDefaultWarnFlag();
+  });
+
+  it("warns when accounts.default is missing in multi-account setup (#32137)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: { work: { botToken: "tok-work" }, alerts: { botToken: "tok-alerts" } },
+        },
+      },
+    };
+
+    const result = resolveDefaultTelegramAccountId(cfg);
+    expect(result).toBe("alerts");
+    expect(warnMock).toHaveBeenCalledWith(expect.stringContaining("accounts.default is missing"));
+  });
+
+  it("does not warn when accounts.default exists", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: { default: { botToken: "tok-default" }, work: { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    resolveDefaultTelegramAccountId(cfg);
+    expect(warningLines().every((line) => !line.includes("accounts.default is missing"))).toBe(
+      true,
+    );
+  });
+
+  it("does not warn when defaultAccount is explicitly set", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "work",
+          accounts: { work: { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    resolveDefaultTelegramAccountId(cfg);
+    expect(warningLines().every((line) => !line.includes("accounts.default is missing"))).toBe(
+      true,
+    );
+  });
+
+  it("does not warn when only one non-default account is configured", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: { work: { botToken: "tok-work" } },
+        },
+      },
+    };
+
+    resolveDefaultTelegramAccountId(cfg);
+    expect(warningLines().every((line) => !line.includes("accounts.default is missing"))).toBe(
+      true,
+    );
+  });
+
+  it("warns only once per process lifetime", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: { work: { botToken: "tok-work" }, alerts: { botToken: "tok-alerts" } },
+        },
+      },
+    };
+
+    resolveDefaultTelegramAccountId(cfg);
+    resolveDefaultTelegramAccountId(cfg);
+    resolveDefaultTelegramAccountId(cfg);
+
+    const missingDefaultWarns = warningLines().filter((line) =>
+      line.includes("accounts.default is missing"),
+    );
+    expect(missingDefaultWarns).toHaveLength(1);
+  });
+
   it("prefers channels.telegram.defaultAccount when it matches a configured account", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -215,6 +309,33 @@ describe("resolveTelegramAccount allowFrom precedence", () => {
 });
 
 describe("resolveTelegramAccount groups inheritance (#30673)", () => {
+  const createMultiAccountGroupsConfig = (): OpenClawConfig => ({
+    channels: {
+      telegram: {
+        groups: { "-100123": { requireMention: false } },
+        accounts: {
+          default: { botToken: "123:default" },
+          dev: { botToken: "456:dev" },
+        },
+      },
+    },
+  });
+
+  const createDefaultAccountGroupsConfig = (includeDevAccount: boolean): OpenClawConfig => ({
+    channels: {
+      telegram: {
+        groups: { "-100999": { requireMention: true } },
+        accounts: {
+          default: {
+            botToken: "123:default",
+            groups: { "-100123": { requireMention: false } },
+          },
+          ...(includeDevAccount ? { dev: { botToken: "456:dev" } } : {}),
+        },
+      },
+    },
+  });
+
   it("inherits channel-level groups in single-account setup", () => {
     const resolved = resolveTelegramAccount({
       cfg: {
@@ -235,17 +356,7 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
 
   it("does NOT inherit channel-level groups to secondary account in multi-account setup", () => {
     const resolved = resolveTelegramAccount({
-      cfg: {
-        channels: {
-          telegram: {
-            groups: { "-100123": { requireMention: false } },
-            accounts: {
-              default: { botToken: "123:default" },
-              dev: { botToken: "456:dev" },
-            },
-          },
-        },
-      },
+      cfg: createMultiAccountGroupsConfig(),
       accountId: "dev",
     });
 
@@ -254,17 +365,7 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
 
   it("does NOT inherit channel-level groups to default account in multi-account setup", () => {
     const resolved = resolveTelegramAccount({
-      cfg: {
-        channels: {
-          telegram: {
-            groups: { "-100123": { requireMention: false } },
-            accounts: {
-              default: { botToken: "123:default" },
-              dev: { botToken: "456:dev" },
-            },
-          },
-        },
-      },
+      cfg: createMultiAccountGroupsConfig(),
       accountId: "default",
     });
 
@@ -273,20 +374,7 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
 
   it("uses account-level groups even in multi-account setup", () => {
     const resolved = resolveTelegramAccount({
-      cfg: {
-        channels: {
-          telegram: {
-            groups: { "-100999": { requireMention: true } },
-            accounts: {
-              default: {
-                botToken: "123:default",
-                groups: { "-100123": { requireMention: false } },
-              },
-              dev: { botToken: "456:dev" },
-            },
-          },
-        },
-      },
+      cfg: createDefaultAccountGroupsConfig(true),
       accountId: "default",
     });
 
@@ -295,19 +383,7 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
 
   it("account-level groups takes priority over channel-level in single-account setup", () => {
     const resolved = resolveTelegramAccount({
-      cfg: {
-        channels: {
-          telegram: {
-            groups: { "-100999": { requireMention: true } },
-            accounts: {
-              default: {
-                botToken: "123:default",
-                groups: { "-100123": { requireMention: false } },
-              },
-            },
-          },
-        },
-      },
+      cfg: createDefaultAccountGroupsConfig(false),
       accountId: "default",
     });
 
