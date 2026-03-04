@@ -303,6 +303,23 @@ export function resolveWebFetchDetail(args: unknown): string | undefined {
   return suffix ? `from ${url} (${suffix})` : `from ${url}`;
 }
 
+export function resolveWebResearchDetail(args: unknown): string | undefined {
+  const record = asRecord(args);
+  if (!record) {
+    return undefined;
+  }
+
+  const input = typeof record.input === "string" ? record.input.trim() : undefined;
+  if (!input) {
+    return undefined;
+  }
+
+  const effort =
+    typeof record.research_effort === "string" ? record.research_effort.trim() : undefined;
+  const truncated = input.length > 80 ? `${input.slice(0, 77)}...` : input;
+  return effort ? `"${truncated}" (${effort})` : `"${truncated}"`;
+}
+
 function stripOuterQuotes(value: string | undefined): string | undefined {
   if (!value) {
     return value;
@@ -1174,7 +1191,9 @@ export function resolveToolVerbAndDetail(params: {
       ? "search"
       : params.toolKey === "web_fetch"
         ? "fetch"
-        : params.toolKey.replace(/_/g, " ").replace(/\./g, " ");
+        : params.toolKey === "web_research"
+          ? "research"
+          : params.toolKey.replace(/_/g, " ").replace(/\./g, " ");
   const verb = normalizeVerb(actionSpec?.label ?? params.action ?? fallbackVerb);
 
   let detail: string | undefined;
@@ -1195,6 +1214,9 @@ export function resolveToolVerbAndDetail(params: {
   }
   if (!detail && params.toolKey === "web_fetch") {
     detail = resolveWebFetchDetail(params.args);
+  }
+  if (!detail && params.toolKey === "web_research") {
+    detail = resolveWebResearchDetail(params.args);
   }
 
   const detailKeys =

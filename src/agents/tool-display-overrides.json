@@ -92,6 +92,11 @@
       "title": "Web Fetch",
       "detailKeys": ["url", "extractMode", "maxChars"]
     },
+    "web_research": {
+      "emoji": "🔬",
+      "title": "Web Research",
+      "detailKeys": ["input", "research_effort"]
+    },
     "message": {
       "emoji": "✉️",
       "title": "Message",

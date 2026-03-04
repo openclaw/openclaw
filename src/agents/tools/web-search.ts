@@ -21,7 +21,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi", "you"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -264,6 +264,29 @@ type KimiSearchResponse = {
   }>;
 };
 
+type YouConfig = {
+  apiKey?: string;
+};
+
+type YouSearchResult = {
+  url?: string;
+  title?: string;
+  description?: string;
+  snippets?: string[];
+  page_age?: string;
+};
+
+type YouSearchResponse = {
+  results?: {
+    web?: YouSearchResult[];
+  };
+  metadata?: {
+    latency?: number;
+  };
+};
+
+const YOU_SEARCH_ENDPOINT = "https://api.you.com/v1/agents/search";
+
 type PerplexitySearchApiResult = {
   title?: string;
   url?: string;
@@ -439,6 +462,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   if (raw === "kimi") {
     return "kimi";
   }
+  if (raw === "you") {
+    return "you";
+  }
   if (raw === "brave") {
     return "brave";
   }
@@ -485,6 +511,11 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "grok";
     }
+    // 6. You.com (free tier; always available but placed last so keyed providers take priority)
+    logVerbose(
+      'web_search: no provider configured, auto-detected "you" (free tier, no API key required)',
+    );
+    return "you";
   }
 
   return "brave";
@@ -612,6 +643,43 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
   const fromConfig =
     gemini && "model" in gemini && typeof gemini.model === "string" ? gemini.model.trim() : "";
   return fromConfig || DEFAULT_GEMINI_MODEL;
+}
+
+function resolveYouConfig(search?: WebSearchConfig): YouConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const you = "you" in search ? search.you : undefined;
+  if (!you || typeof you !== "object") {
+    return {};
+  }
+  return you as YouConfig;
+}
+
+function resolveYouApiKey(you?: YouConfig): string | undefined {
+  const fromConfig = normalizeApiKey(you?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.YDC_API_KEY);
+  return fromEnv || undefined;
+}
+
+/**
+ * Map normalized freshness values (pd/pw/pm/py) to You.com's
+ * freshness parameter values (day/week/month/year).
+ */
+function freshnessToYouRecency(freshness: string | undefined): string | undefined {
+  if (!freshness) {
+    return undefined;
+  }
+  const map: Record<string, string> = {
+    pd: "day",
+    pw: "week",
+    pm: "month",
+    py: "year",
+  };
+  return map[freshness] ?? undefined;
 }
 
 async function withTrustedWebSearchEndpoint<T>(
@@ -806,7 +874,7 @@ function normalizeFreshness(
   }
 
   if (PERPLEXITY_RECENCY_VALUES.has(lower)) {
-    return provider === "perplexity" ? lower : RECENCY_TO_FRESHNESS[lower];
+    return provider === "perplexity" || provider === "you" ? lower : RECENCY_TO_FRESHNESS[lower];
   }
 
   // Brave date range support
@@ -1149,6 +1217,68 @@ async function runKimiSearch(params: {
   };
 }
 
+async function runYouSearch(params: {
+  query: string;
+  count: number;
+  apiKey?: string;
+  timeoutSeconds: number;
+  country?: string;
+  freshness?: string;
+}): Promise<{ results: Array<Record<string, unknown>>; tookMs?: number }> {
+  const url = new URL(YOU_SEARCH_ENDPOINT);
+  url.searchParams.set("query", params.query);
+  url.searchParams.set("count", String(params.count));
+  if (params.country) {
+    url.searchParams.set("country", params.country);
+  }
+  // freshness already normalized to day/week/month/year by normalizeFreshness()
+  if (params.freshness) {
+    url.searchParams.set("freshness", params.freshness);
+  }
+
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+  };
+  if (params.apiKey) {
+    headers["X-API-Key"] = params.apiKey;
+  }
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: url.toString(),
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "GET",
+        headers,
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "You.com Search");
+      }
+
+      const data = (await res.json()) as YouSearchResponse;
+      const webResults = Array.isArray(data.results?.web) ? (data.results?.web ?? []) : [];
+      const mapped = webResults.map((entry) => {
+        const description = entry.description ?? "";
+        const title = entry.title ?? "";
+        const entryUrl = entry.url ?? "";
+        const rawSiteName = resolveSiteName(entryUrl);
+        const snippet = entry.snippets?.join(" ") ?? "";
+        return {
+          title: title ? wrapWebContent(title, "web_search") : "",
+          url: entryUrl,
+          description:
+            description || snippet ? wrapWebContent(description || snippet, "web_search") : "",
+          published: entry.page_age || undefined,
+          siteName: rawSiteName || undefined,
+        };
+      });
+      return { results: mapped, tookMs: data.metadata?.latency };
+    },
+  );
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -1304,6 +1434,33 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "you") {
+    const youResult = await runYouSearch({
+      query: params.query,
+      count: params.count,
+      apiKey: params.apiKey || undefined,
+      timeoutSeconds: params.timeoutSeconds,
+      country: params.country,
+      freshness: params.freshness,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: youResult.results.length,
+      tookMs: youResult.tookMs ?? Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: youResult.results,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1401,6 +1558,7 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const youConfig = resolveYouConfig(search);
 
   const description =
     provider === "perplexity"
@@ -1411,7 +1569,9 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : provider === "you"
+              ? "Search the web using You.com Search API. Returns titles, URLs, descriptions, and snippets for fast research."
+              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1430,9 +1590,12 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "you"
+                  ? resolveYouApiKey(youConfig)
+                  : resolveSearchApiKey(search);
 
-      if (!apiKey) {
+      // You.com has a free tier — no API key required for search
+      if (!apiKey && provider !== "you") {
         return jsonResult(missingSearchKeyPayload(provider));
       }
       const params = args as Record<string, unknown>;
@@ -1440,10 +1603,10 @@ export function createWebSearchTool(options?: {
       const count =
         readNumberParam(params, "count", { integer: true }) ?? search?.maxResults ?? undefined;
       const country = readStringParam(params, "country");
-      if (country && provider !== "brave" && provider !== "perplexity") {
+      if (country && provider !== "brave" && provider !== "perplexity" && provider !== "you") {
         return jsonResult({
           error: "unsupported_country",
-          message: `country filtering is not supported by the ${provider} provider. Only Brave and Perplexity support country filtering.`,
+          message: `country filtering is not supported by the ${provider} provider. Only Brave, Perplexity, and You.com support country filtering.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1487,10 +1650,10 @@ export function createWebSearchTool(options?: {
       const resolvedSearchLang = normalizedBraveLanguageParams.search_lang;
       const resolvedUiLang = normalizedBraveLanguageParams.ui_lang;
       const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
+      if (rawFreshness && provider !== "brave" && provider !== "perplexity" && provider !== "you") {
         return jsonResult({
           error: "unsupported_freshness",
-          message: `freshness filtering is not supported by the ${provider} provider. Only Brave and Perplexity support freshness.`,
+          message: `freshness filtering is not supported by the ${provider} provider. Only Brave, Perplexity, and You.com support freshness.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1577,7 +1740,7 @@ export function createWebSearchTool(options?: {
       const result = await runWebSearch({
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-        apiKey,
+        apiKey: apiKey ?? "",
         timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         provider,
@@ -1619,5 +1782,7 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveYouApiKey,
+  freshnessToYouRecency,
   resolveRedirectUrl: resolveCitationRedirectUrl,
 } as const;

@@ -41,6 +41,7 @@ const DEFAULT_ERROR_MAX_CHARS = 4_000;
 const DEFAULT_ERROR_MAX_BYTES = 64_000;
 const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 const DEFAULT_FIRECRAWL_MAX_AGE_MS = 172_800_000;
+const YOU_CONTENTS_ENDPOINT = "https://ydc-index.io/v1/contents";
 const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
@@ -187,6 +188,99 @@ function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): nu
     return resolved;
   }
   return DEFAULT_FIRECRAWL_MAX_AGE_MS;
+}
+
+type YouFetchConfig =
+  | {
+      enabled?: boolean;
+      apiKey?: string;
+      timeoutSeconds?: number;
+    }
+  | undefined;
+
+function resolveYouFetchConfig(fetch?: WebFetchConfig): YouFetchConfig {
+  if (!fetch || typeof fetch !== "object") {
+    return undefined;
+  }
+  const you = "you" in fetch ? fetch.you : undefined;
+  if (!you || typeof you !== "object") {
+    return undefined;
+  }
+  return you as YouFetchConfig;
+}
+
+function resolveYouFetchApiKey(you?: YouFetchConfig): string | undefined {
+  const fromConfig =
+    you && "apiKey" in you && typeof you.apiKey === "string"
+      ? normalizeSecretInput(you.apiKey)
+      : "";
+  const fromEnv = normalizeSecretInput(process.env.YDC_API_KEY);
+  return fromConfig || fromEnv || undefined;
+}
+
+function resolveYouFetchEnabled(params: { you?: YouFetchConfig; apiKey?: string }): boolean {
+  if (typeof params.you?.enabled === "boolean") {
+    return params.you.enabled;
+  }
+  return Boolean(params.apiKey);
+}
+
+async function fetchYouContents(params: {
+  url: string;
+  apiKey: string;
+  timeoutSeconds: number;
+}): Promise<{ text: string; title?: string }> {
+  const res = await fetch(YOU_CONTENTS_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": params.apiKey,
+    },
+    body: JSON.stringify({
+      urls: [params.url],
+      formats: ["markdown"],
+    }),
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+    const detail = detailResult.text;
+    throw new Error(`You.com Contents API error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const data = (await res.json()) as Array<{
+    url?: string;
+    title?: string;
+    markdown?: string | null;
+  }>;
+
+  const first = Array.isArray(data) ? data[0] : undefined;
+  const text = typeof first?.markdown === "string" ? first.markdown : "";
+  return { text, title: first?.title };
+}
+
+async function tryYouContentsFallback(params: {
+  url: string;
+  youEnabled: boolean;
+  youApiKey?: string;
+  youTimeoutSeconds: number;
+  extractMode: ExtractMode;
+}): Promise<{ text: string; title?: string } | null> {
+  if (!params.youEnabled || !params.youApiKey) {
+    return null;
+  }
+  try {
+    const result = await fetchYouContents({
+      url: params.url,
+      apiKey: params.youApiKey,
+      timeoutSeconds: params.youTimeoutSeconds,
+    });
+    const text = params.extractMode === "text" ? markdownToText(result.text) : result.text;
+    return { text, title: result.title };
+  } catch {
+    return null;
+  }
 }
 
 function resolveMaxChars(value: unknown, fallback: number, cap: number): number {
@@ -436,17 +530,24 @@ type FirecrawlRuntimeParams = {
   firecrawlTimeoutSeconds: number;
 };
 
-type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
-  url: string;
-  extractMode: ExtractMode;
-  maxChars: number;
-  maxResponseBytes: number;
-  maxRedirects: number;
-  timeoutSeconds: number;
-  cacheTtlMs: number;
-  userAgent: string;
-  readabilityEnabled: boolean;
+type YouFetchRuntimeParams = {
+  youEnabled: boolean;
+  youApiKey?: string;
+  youTimeoutSeconds: number;
 };
+
+type WebFetchRuntimeParams = FirecrawlRuntimeParams &
+  YouFetchRuntimeParams & {
+    url: string;
+    extractMode: ExtractMode;
+    maxChars: number;
+    maxResponseBytes: number;
+    maxRedirects: number;
+    timeoutSeconds: number;
+    cacheTtlMs: number;
+    userAgent: string;
+    readabilityEnabled: boolean;
+  };
 
 function toFirecrawlContentParams(
   params: FirecrawlRuntimeParams & { url: string; extractMode: ExtractMode },
@@ -617,15 +718,25 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           title = readable.title;
           extractor = "readability";
         } else {
-          const firecrawl = await tryFirecrawlFallback({ ...params, url: finalUrl });
-          if (firecrawl) {
-            text = firecrawl.text;
-            title = firecrawl.title;
-            extractor = "firecrawl";
+          const youContents = await tryYouContentsFallback({
+            ...params,
+            url: finalUrl,
+          });
+          if (youContents) {
+            text = youContents.text;
+            title = youContents.title;
+            extractor = "you-contents";
           } else {
-            throw new Error(
-              "Web fetch extraction failed: Readability and Firecrawl returned no content.",
-            );
+            const firecrawl = await tryFirecrawlFallback({ ...params, url: finalUrl });
+            if (firecrawl) {
+              text = firecrawl.text;
+              title = firecrawl.title;
+              extractor = "firecrawl";
+            } else {
+              throw new Error(
+                "Web fetch extraction failed: Readability, You.com Contents, and Firecrawl returned no content.",
+              );
+            }
           }
         }
       } else {
@@ -728,6 +839,13 @@ export function createWebFetchTool(options?: {
     firecrawl?.timeoutSeconds ?? fetch?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
+  const youFetchConfig = resolveYouFetchConfig(fetch);
+  const youApiKey = resolveYouFetchApiKey(youFetchConfig);
+  const youEnabled = resolveYouFetchEnabled({ you: youFetchConfig, apiKey: youApiKey });
+  const youTimeoutSeconds = resolveTimeoutSeconds(
+    youFetchConfig?.timeoutSeconds ?? fetch?.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS,
+  );
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
@@ -766,6 +884,9 @@ export function createWebFetchTool(options?: {
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
+        youEnabled,
+        youApiKey,
+        youTimeoutSeconds,
       });
       return jsonResult(result);
     },

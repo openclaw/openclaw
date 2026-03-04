@@ -2,7 +2,7 @@ import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { __testing as webSearchTesting } from "./web-search.js";
-import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
+import { createWebFetchTool, createWebResearchTool, createWebSearchTool } from "./web-tools.js";
 
 function installMockFetch(payload: unknown) {
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
@@ -137,6 +137,54 @@ describe("web tools defaults", () => {
   it("enables web_search by default", () => {
     const tool = createWebSearchTool({ config: {}, sandboxed: false });
     expect(tool?.name).toBe("web_search");
+  });
+
+  it("disables web_research when no API key is set", () => {
+    const priorEnv = process.env.YDC_API_KEY;
+    process.env.YDC_API_KEY = "";
+    try {
+      const tool = createWebResearchTool({ config: {}, sandboxed: false });
+      expect(tool).toBeNull();
+    } finally {
+      if (priorEnv !== undefined) {
+        process.env.YDC_API_KEY = priorEnv;
+      } else {
+        delete process.env.YDC_API_KEY;
+      }
+    }
+  });
+
+  it("enables web_research when API key is set", () => {
+    const priorEnv = process.env.YDC_API_KEY;
+    process.env.YDC_API_KEY = "test-ydc-key";
+    try {
+      const tool = createWebResearchTool({ config: {}, sandboxed: false });
+      expect(tool?.name).toBe("web_research");
+    } finally {
+      if (priorEnv !== undefined) {
+        process.env.YDC_API_KEY = priorEnv;
+      } else {
+        delete process.env.YDC_API_KEY;
+      }
+    }
+  });
+
+  it("disables web_research when explicitly disabled", () => {
+    const priorEnv = process.env.YDC_API_KEY;
+    process.env.YDC_API_KEY = "test-ydc-key";
+    try {
+      const tool = createWebResearchTool({
+        config: { tools: { web: { research: { enabled: false } } } },
+        sandboxed: false,
+      });
+      expect(tool).toBeNull();
+    } finally {
+      if (priorEnv !== undefined) {
+        process.env.YDC_API_KEY = priorEnv;
+      } else {
+        delete process.env.YDC_API_KEY;
+      }
+    }
   });
 });
 

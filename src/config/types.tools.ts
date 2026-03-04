@@ -440,8 +440,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
-      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+      /** Search provider ("brave", "perplexity", "grok", "gemini", "kimi", or "you"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "you";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -484,6 +484,11 @@ export type ToolsConfig = {
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
       };
+      /** You.com-specific configuration (used when provider="you"). */
+      you?: {
+        /** You.com API key (optional; defaults to YDC_API_KEY env var). Free tier works without a key. */
+        apiKey?: string;
+      };
     };
     fetch?: {
       /** Enable web fetch tool (default: true). */
@@ -516,6 +521,28 @@ export type ToolsConfig = {
         /** Timeout in seconds for Firecrawl requests. */
         timeoutSeconds?: number;
       };
+      /** You.com Contents API fallback (default: true when apiKey is set). */
+      you?: {
+        /** Enable You.com Contents fallback. */
+        enabled?: boolean;
+        /** You.com API key (defaults to YDC_API_KEY env var). */
+        apiKey?: string;
+        /** Timeout in seconds for You.com Contents requests. */
+        timeoutSeconds?: number;
+      };
+    };
+    /** You.com Research API configuration. */
+    research?: {
+      /** Enable web research tool (default: true when apiKey is set). */
+      enabled?: boolean;
+      /** You.com API key (defaults to YDC_API_KEY env var). */
+      apiKey?: string;
+      /** Timeout in seconds for research requests. */
+      timeoutSeconds?: number;
+      /** Cache TTL in minutes for research results. */
+      cacheTtlMinutes?: number;
+      /** Default research effort level. */
+      defaultEffort?: "lite" | "standard" | "deep" | "exhaustive";
     };
   };
   media?: MediaToolsConfig;
