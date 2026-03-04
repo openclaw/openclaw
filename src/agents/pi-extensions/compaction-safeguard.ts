@@ -555,6 +555,21 @@ function sanitizeExtractedIdentifier(value: string): string {
     .replace(/[)\]"'`,;:.!?<>]+$/, "");
 }
 
+function isPureHexIdentifier(value: string): boolean {
+  return /^[A-Fa-f0-9]{8,}$/.test(value);
+}
+
+function normalizeOpaqueIdentifier(value: string): string {
+  return isPureHexIdentifier(value) ? value.toUpperCase() : value;
+}
+
+function summaryIncludesIdentifier(summary: string, identifier: string): boolean {
+  if (isPureHexIdentifier(identifier)) {
+    return summary.toUpperCase().includes(identifier.toUpperCase());
+  }
+  return summary.includes(identifier);
+}
+
 function extractOpaqueIdentifiers(text: string): string[] {
   const matches =
     text.match(
@@ -564,6 +579,7 @@ function extractOpaqueIdentifiers(text: string): string[] {
     new Set(
       matches
         .map((value) => sanitizeExtractedIdentifier(value))
+        .map((value) => normalizeOpaqueIdentifier(value))
         .filter((value) => value.length >= 4),
     ),
   ).slice(0, MAX_EXTRACTED_IDENTIFIERS);
@@ -642,7 +658,9 @@ function auditSummaryQuality(params: {
   }
   const enforceIdentifiers = (params.identifierPolicy ?? "strict") === "strict";
   if (enforceIdentifiers) {
-    const missingIdentifiers = params.identifiers.filter((id) => !params.summary.includes(id));
+    const missingIdentifiers = params.identifiers.filter(
+      (id) => !summaryIncludesIdentifier(params.summary, id),
+    );
     if (missingIdentifiers.length > 0) {
       reasons.push(`missing_identifiers:${missingIdentifiers.slice(0, 3).join(",")}`);
     }

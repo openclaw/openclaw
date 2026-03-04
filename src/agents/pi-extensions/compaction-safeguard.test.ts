@@ -685,6 +685,13 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(quality.ok).toBe(true);
   });
 
+  it("dedupes pure-hex identifiers across case variants", () => {
+    const identifiers = extractOpaqueIdentifiers(
+      "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and again a1b2c3d4e5f6",
+    );
+    expect(identifiers.filter((id) => id === "A1B2C3D4E5F6")).toHaveLength(1);
+  });
+
   it("dedupes identifiers before applying the result cap", () => {
     const noisyPrefix = Array.from({ length: 10 }, () => "a0b0c0d0").join(" ");
     const uniqueTail = Array.from(
@@ -695,8 +702,8 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(identifiers).toHaveLength(12);
     expect(new Set(identifiers).size).toBe(12);
-    expect(identifiers).toContain("a0b0c0d0");
-    expect(identifiers).toContain(uniqueTail[10]);
+    expect(identifiers).toContain("A0B0C0D0");
+    expect(identifiers).toContain(uniqueTail[10]?.toUpperCase());
   });
 
   it("filters ordinary short numbers and trims wrapped punctuation", () => {
@@ -784,6 +791,28 @@ describe("compaction-safeguard recent-turn preservation", () => {
       identifiers: ["api-key-abcdef123456"],
       latestAsk: "Share summary.",
       identifierPolicy: "custom",
+    });
+
+    expect(quality.ok).toBe(true);
+  });
+
+  it("matches pure-hex identifiers case-insensitively in retention checks", () => {
+    const quality = auditSummaryQuality({
+      summary: [
+        "## Decisions",
+        "Keep current flow.",
+        "## Open TODOs",
+        "None.",
+        "## Constraints/Rules",
+        "Preserve hex IDs.",
+        "## Pending user asks",
+        "Provide status.",
+        "## Exact identifiers",
+        "a1b2c3d4e5f6",
+      ].join("\n"),
+      identifiers: ["A1B2C3D4E5F6"],
+      latestAsk: "Provide status.",
+      identifierPolicy: "strict",
     });
 
     expect(quality.ok).toBe(true);
