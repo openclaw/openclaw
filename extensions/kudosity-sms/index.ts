@@ -7,7 +7,7 @@
  * @see https://developers.kudosity.com
  */
 
-import type { ChannelPlugin, OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { ChannelPlugin, OpenClawPluginApi } from "openclaw/plugin-sdk/kudosity-sms";
 import { kudositySmsPlugin } from "./src/channel.js";
 import { setKudositySmsRuntime } from "./src/runtime.js";
 

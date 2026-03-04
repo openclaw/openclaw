@@ -212,7 +212,11 @@
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
     },
-    "./cli-entry": "./openclaw.mjs"
+    "./cli-entry": "./openclaw.mjs",
+    "./plugin-sdk/kudosity-sms": {
+      "types": "./dist/plugin-sdk/kudosity-sms.d.ts",
+      "default": "./dist/plugin-sdk/kudosity-sms.js"
+    }
   },
   "scripts": {
     "android:assemble": "cd apps/android && ./gradlew :app:assembleDebug",
