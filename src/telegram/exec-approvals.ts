@@ -172,11 +172,22 @@ function describeCommand(command: string): string {
   return `Run "${base}"`;
 }
 
+function resolveAllowlistBinary(request: ExecApprovalRequest): string | null {
+  const resolvedPath = request.request.resolvedPath;
+  if (resolvedPath) {
+    return resolvedPath;
+  }
+  // Fall back to first token of the command
+  const first = request.request.command.trim().split(/\s+/)[0];
+  return first?.startsWith("/") ? first : null;
+}
+
 function buildRequestMessageText(request: ExecApprovalRequest, nowMs: number): string {
   const command = request.request.command;
   const description = describeCommand(command);
   const preview = formatCommandPreview(command, 300);
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMs) / 1000));
+  const allowlistBinary = resolveAllowlistBinary(request);
 
   const lines: string[] = [
     `\u{1F512} <b>Exec Approval Required</b>`,
@@ -197,11 +208,17 @@ function buildRequestMessageText(request: ExecApprovalRequest, nowMs: number): s
     lines.push(`<b>Env overrides:</b> ${escapeHtml(request.request.envKeys.join(", "))}`);
   }
   lines.push("");
-  lines.push(
-    `\u26A0\uFE0F <i>Allow once</i> = run this command once. ` +
-      `<i>Always allow</i> = add to allowlist. ` +
-      `<i>Deny</i> = block execution.`,
-  );
+  lines.push(`<b>Allow once</b> = run this command only.`);
+  if (allowlistBinary) {
+    lines.push(
+      `<b>Always allow</b> = permanently allow <b>all</b> future ` +
+        `<code>${escapeHtml(allowlistBinary)}</code> commands without asking.`,
+    );
+  } else {
+    lines.push(`<b>Always allow</b> = permanently allow this binary for all future commands.`);
+  }
+  lines.push(`<b>Deny</b> = block execution.`);
+  lines.push("");
   lines.push(`\u23F3 Expires in ${expiresIn}s \u2022 ID: ${request.id}`);
   return lines.join("\n");
 }
