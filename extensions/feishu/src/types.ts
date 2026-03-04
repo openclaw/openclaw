@@ -67,10 +67,22 @@ export type FeishuMediaInfo = {
 
 export type FeishuToolsConfig = {
   doc?: boolean;
+  chat?: boolean;
+  message?: boolean;
   wiki?: boolean;
   drive?: boolean;
   perm?: boolean;
   scopes?: boolean;
+  task?: boolean;
+};
+
+/** Persisted user OAuth token data for user_access_token APIs. */
+export type FeishuUserToken = {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+  openId: string;
+  obtainedAt: number;
 };
 
 export type DynamicAgentCreationConfig = {

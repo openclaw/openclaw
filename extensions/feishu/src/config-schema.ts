@@ -82,10 +82,13 @@ const DynamicAgentCreationSchema = z
 const FeishuToolsConfigSchema = z
   .object({
     doc: z.boolean().optional(), // Document operations (default: true)
+    chat: z.boolean().optional(), // Chat info + member query operations (default: true)
     wiki: z.boolean().optional(), // Knowledge base operations (default: true, requires doc)
     drive: z.boolean().optional(), // Cloud storage operations (default: true)
     perm: z.boolean().optional(), // Permission management (default: false, sensitive)
     scopes: z.boolean().optional(), // App scopes diagnostic (default: true)
+    task: z.boolean().optional(), // Create/manage Feishu tasks (default: false)
+    message: z.boolean().optional(), // Message list/get operations (default: true)
   })
   .strict()
   .optional();
@@ -172,6 +175,8 @@ export const FeishuConfigSchema = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     requireMention: z.boolean().optional().default(true),
     topicSessionMode: TopicSessionModeSchema,
+    // OAuth callback URL for user authorization (e.g. for feishu_task)
+    oauthCallbackUrl: z.string().url().optional(),
     // Dynamic agent creation for DM users
     dynamicAgentCreation: DynamicAgentCreationSchema,
     // Multi-account configuration
