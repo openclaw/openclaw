@@ -440,7 +440,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     };
   }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
-  if (hasSigusr1Listener) {
+  if (hasSigusr1Listener && process.platform !== "win32") {
     scheduleGatewaySigusr1Restart({ reason: "/restart" });
     return {
       shouldContinue: false,
