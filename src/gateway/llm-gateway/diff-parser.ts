@@ -323,18 +323,18 @@ export function generateDiff(
         const hunkLines = result.slice(hunkStart, hunkEnd);
 
         let delCount = 0;
-        let addCount = 0;
+        let _addCount = 0;
         for (const l of hunkLines) {
           if (l.type === "-") {
             delCount++;
           }
           if (l.type === "+") {
-            addCount++;
+            _addCount++;
           }
         }
 
         diff.push(
-          `@@ -${1 + hunkStart},${hunkLines.length - addCount} ` +
+          `@@ -${1 + oldStart},${oldCount} +${1 + newStart},${newCount} ` +
             `+${1 + hunkStart},${hunkLines.length - delCount} @@`,
         );
 
@@ -352,18 +352,18 @@ export function generateDiff(
     const hunkLines = result.slice(hunkStart);
 
     let delCount = 0;
-    let addCount = 0;
+    let _addCount = 0;
     for (const l of hunkLines) {
       if (l.type === "-") {
         delCount++;
       }
       if (l.type === "+") {
-        addCount++;
+        _addCount++;
       }
     }
 
     diff.push(
-      `@@ -${1 + hunkStart},${hunkLines.length - addCount} ` +
+      `@@ -${1 + oldStart},${oldCount} +${1 + newStart},${newCount} ` +
         `+${1 + hunkStart},${hunkLines.length - delCount} @@`,
     );
 
