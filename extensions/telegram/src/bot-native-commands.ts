@@ -600,6 +600,25 @@ export const registerTelegramNativeCommands = ({
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
 
+          // Special handling for /groupid command
+          if (command.name === "groupid") {
+            if (!isGroup) {
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                runtime,
+                fn: () => bot.api.sendMessage(chatId, "⚠️ This command only works in group chats.", threadParams),
+              });
+              return;
+            }
+            const groupIdText = `🆔 **Group Chat ID:** \`${chatId}\`\n\nYou can use this ID in your OpenClaw configuration.`;
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () => bot.api.sendMessage(chatId, groupIdText, { parse_mode: "Markdown", ...threadParams }),
+            });
+            return;
+          }
+
           const commandDefinition = findCommandByNativeName(command.name, "telegram");
           const rawText = ctx.match?.trim() ?? "";
           const commandArgs = commandDefinition
