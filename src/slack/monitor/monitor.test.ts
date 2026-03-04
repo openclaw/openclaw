@@ -184,6 +184,53 @@ describe("resolveSlackSystemEventSessionKey", () => {
       "agent:main:slack:channel:c123",
     );
   });
+
+  it("routes channel system events through account bindings", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      accountId: "work",
+      cfg: {
+        bindings: [
+          {
+            agentId: "ops",
+            match: {
+              channel: "slack",
+              accountId: "work",
+            },
+          },
+        ],
+      },
+    });
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({ channelId: "C123", channelType: "channel" }),
+    ).toBe("agent:ops:slack:channel:c123");
+  });
+
+  it("routes DM system events through direct-peer bindings when sender is known", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      accountId: "work",
+      cfg: {
+        bindings: [
+          {
+            agentId: "ops-dm",
+            match: {
+              channel: "slack",
+              accountId: "work",
+              peer: { kind: "direct", id: "U123" },
+            },
+          },
+        ],
+      },
+    });
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "D123",
+        channelType: "im",
+        senderId: "U123",
+      }),
+    ).toBe("agent:ops-dm:main");
+  });
 });
 
 describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
