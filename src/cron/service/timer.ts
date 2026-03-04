@@ -391,7 +391,16 @@ export function applyJobResult(
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
       let normalNext: number | undefined;
       try {
-        normalNext = computeJobNextRunAtMs(job, result.endedAt);
+        if (opts?.preserveSchedule && job.schedule.kind === "every") {
+          job.state.lastRunAtMs = prevLastRunAtMs;
+          try {
+            normalNext = computeJobNextRunAtMs(job, result.endedAt);
+          } finally {
+            job.state.lastRunAtMs = result.startedAt;
+          }
+        } else {
+          normalNext = computeJobNextRunAtMs(job, result.endedAt);
+        }
       } catch (err) {
         // If the schedule expression/timezone throws (croner edge cases),
         // record the schedule error (auto-disables after repeated failures)
@@ -422,8 +431,11 @@ export function applyJobResult(
           // path in computeJobNextRunAtMs would return startedAt + everyMs
           // instead of the next aligned occurrence.
           job.state.lastRunAtMs = prevLastRunAtMs;
-          naturalNext = computeJobNextRunAtMs(job, result.endedAt);
-          job.state.lastRunAtMs = result.startedAt;
+          try {
+            naturalNext = computeJobNextRunAtMs(job, result.endedAt);
+          } finally {
+            job.state.lastRunAtMs = result.startedAt;
+          }
         } else {
           naturalNext = computeJobNextRunAtMs(job, result.endedAt);
         }
