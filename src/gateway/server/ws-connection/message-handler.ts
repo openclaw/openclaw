@@ -1051,6 +1051,8 @@ export function attachGatewayWsMessageHandler(params: {
             maxBufferedBytes: MAX_BUFFERED_BYTES,
             tickIntervalMs: TICK_INTERVAL_MS,
           },
+          // Negotiation placeholder: server remains JSON transport for now.
+          transport: "json-ws",
         };
 
         clearHandshakeTimer();
