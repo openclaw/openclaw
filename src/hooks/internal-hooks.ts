@@ -39,6 +39,24 @@ export type GatewayStartupHookEvent = InternalHookEvent & {
   context: GatewayStartupHookContext;
 };
 
+/**
+ * Gateway ready hook context - fired after all channels and services are fully initialized.
+ * This is the reliable hook to use for post-restart actions like resuming tasks.
+ */
+export type GatewayReadyHookContext = {
+  cfg?: OpenClawConfig;
+  deps?: CliDeps;
+  workspaceDir?: string;
+  /** Whether this startup followed a gateway restart */
+  isRestart?: boolean;
+};
+
+export type GatewayReadyHookEvent = InternalHookEvent & {
+  type: "gateway";
+  action: "ready";
+  context: GatewayReadyHookContext;
+};
+
 // ============================================================================
 // Message Hook Events
 // ============================================================================
@@ -389,6 +407,13 @@ export function isGatewayStartupEvent(event: InternalHookEvent): event is Gatewa
     return false;
   }
   return Boolean(getHookContext<GatewayStartupHookContext>(event));
+}
+
+export function isGatewayReadyEvent(event: InternalHookEvent): event is GatewayReadyHookEvent {
+  if (!isHookEventTypeAndAction(event, "gateway", "ready")) {
+    return false;
+  }
+  return Boolean(getHookContext<GatewayReadyHookContext>(event));
 }
 
 export function isMessageReceivedEvent(
