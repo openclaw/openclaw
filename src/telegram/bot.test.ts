@@ -1,3 +1,4 @@
+import type { LookupAddress, LookupAllOptions, LookupOneOptions, LookupOptions } from "node:dns";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
@@ -29,12 +30,37 @@ const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 const resolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
 
+function mockPinnedTelegramLookup(hostname: string): Promise<LookupAddress>;
+function mockPinnedTelegramLookup(hostname: string, family: number): Promise<LookupAddress>;
+function mockPinnedTelegramLookup(
+  hostname: string,
+  options: LookupOneOptions,
+): Promise<LookupAddress>;
+function mockPinnedTelegramLookup(
+  hostname: string,
+  options: LookupAllOptions,
+): Promise<LookupAddress[]>;
+function mockPinnedTelegramLookup(
+  hostname: string,
+  options: LookupOptions,
+): Promise<LookupAddress | LookupAddress[]>;
+function mockPinnedTelegramLookup(
+  hostname: string,
+  options?: number | LookupOneOptions | LookupAllOptions | LookupOptions,
+): Promise<LookupAddress | LookupAddress[]> {
+  void hostname;
+  if (typeof options === "object" && options?.all === true) {
+    return Promise.resolve([{ address: "93.184.216.34", family: 4 }]);
+  }
+  return Promise.resolve({ address: "93.184.216.34", family: 4 });
+}
+
 function mockTelegramDnsResolution() {
   return vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(
     async (hostname, params = {}) =>
       await resolvePinnedHostnameWithPolicy(hostname, {
         ...params,
-        lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
+        lookupFn: mockPinnedTelegramLookup,
       }),
   );
 }
