@@ -150,4 +150,27 @@ describe("DiscordMessageListener", () => {
       vi.useRealTimers();
     }
   });
+
+  it("does not emit slow-listener warnings when timeout already fired", async () => {
+    vi.useFakeTimers();
+    try {
+      const never = new Promise<void>(() => {});
+      const handler = vi.fn(async () => {
+        await never;
+      });
+      const logger = createLogger();
+      const listener = new DiscordMessageListener(handler as never, logger as never, undefined, {
+        timeoutMs: 31_000,
+      });
+
+      await listener.handle(fakeEvent("ch-1"), {} as never);
+      await vi.advanceTimersByTimeAsync(31_100);
+      await vi.waitFor(() => {
+        expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("timed out after"));
+      });
+      expect(logger.warn).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

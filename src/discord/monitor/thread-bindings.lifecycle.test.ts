@@ -954,6 +954,82 @@ describe("thread binding lifecycle", () => {
     expect(manager.getByThreadId("thread-acp-running-uncertain")).toBeDefined();
   });
 
+  it("starts ACP health probes in parallel during startup reconciliation", async () => {
+    const manager = createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    });
+
+    await manager.bindTarget({
+      threadId: "thread-acp-probe-1",
+      channelId: "parent-1",
+      targetKind: "acp",
+      targetSessionKey: "agent:codex:acp:probe-1",
+      agentId: "codex",
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+    });
+    await manager.bindTarget({
+      threadId: "thread-acp-probe-2",
+      channelId: "parent-1",
+      targetKind: "acp",
+      targetSessionKey: "agent:codex:acp:probe-2",
+      agentId: "codex",
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+    });
+
+    hoisted.readAcpSessionEntry.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: `runtime:${sessionKey}`,
+          mode: "persistent",
+          state: "running",
+          lastActivityAt: Date.now(),
+        },
+      };
+    });
+
+    let resolveFirstProbe: ((value: { status: "healthy" }) => void) | undefined;
+    const firstProbe = new Promise<{ status: "healthy" }>((resolve) => {
+      resolveFirstProbe = resolve;
+    });
+    let probeCallCount = 0;
+    let secondProbeStartedBeforeFirstResolved = false;
+
+    const reconcilePromise = reconcileAcpThreadBindingsOnStartup({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+      healthProbe: async () => {
+        probeCallCount += 1;
+        if (probeCallCount === 1) {
+          return await firstProbe;
+        }
+        secondProbeStartedBeforeFirstResolved = true;
+        return { status: "healthy" as const };
+      },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    const observedParallelStart = secondProbeStartedBeforeFirstResolved;
+
+    resolveFirstProbe?.({ status: "healthy" });
+    const result = await reconcilePromise;
+
+    expect(observedParallelStart).toBe(true);
+    expect(result.checked).toBe(2);
+    expect(result.removed).toBe(0);
+  });
+
   it("migrates legacy expiresAt bindings to idle/max-age semantics", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));

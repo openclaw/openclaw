@@ -500,6 +500,73 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("agent.wait ignores stale chat dedupe when an agent run with the same runId is in flight", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    let resolveAgentRun: (() => void) | undefined;
+    const blockedAgentRun = new Promise<void>((resolve) => {
+      resolveAgentRun = resolve;
+    });
+    const agentSpy = vi.mocked(agentCommand);
+    agentSpy.mockImplementationOnce(async () => {
+      await blockedAgentRun;
+      return undefined;
+    });
+
+    try {
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const runId = "idem-wait-chat-vs-agent";
+      const sendRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/context list",
+        idempotencyKey: runId,
+      });
+      expect(sendRes.ok).toBe(true);
+      expect(sendRes.payload?.status).toBe("started");
+
+      const chatWaitRes = await rpcReq(ws, "agent.wait", {
+        runId,
+        timeoutMs: 1_000,
+      });
+      expect(chatWaitRes.ok).toBe(true);
+      expect(chatWaitRes.payload?.status).toBe("ok");
+
+      const agentRes = await rpcReq(ws, "agent", {
+        sessionKey: "main",
+        message: "hold this run open",
+        idempotencyKey: runId,
+      });
+      expect(agentRes.ok).toBe(true);
+      expect(agentRes.payload?.status).toBe("accepted");
+
+      const waitWhileAgentInFlight = await rpcReq(ws, "agent.wait", {
+        runId,
+        timeoutMs: 40,
+      });
+      expectAgentWaitTimeout(waitWhileAgentInFlight);
+
+      resolveAgentRun?.();
+      const waitAfterAgentCompletion = await rpcReq(ws, "agent.wait", {
+        runId,
+        timeoutMs: 1_000,
+      });
+      expect(waitAfterAgentCompletion.ok).toBe(true);
+      expect(waitAfterAgentCompletion.payload?.status).toBe("ok");
+    } finally {
+      resolveAgentRun?.();
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("agent events include sessionKey and agent.wait covers lifecycle flows", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");

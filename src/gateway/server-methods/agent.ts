@@ -117,17 +117,22 @@ function readTerminalSnapshotFromGatewayDedupe(params: {
   dedupe: Map<string, DedupeEntry>;
   runId: string;
 }): AgentWaitTerminalSnapshot | null {
-  for (const key of [`agent:${params.runId}`, `chat:${params.runId}`]) {
-    const entry = params.dedupe.get(key);
-    if (!entry) {
-      continue;
+  const agentEntry = params.dedupe.get(`agent:${params.runId}`);
+  if (agentEntry) {
+    const agentSnapshot = readTerminalSnapshotFromDedupeEntry(agentEntry);
+    if (agentSnapshot) {
+      return agentSnapshot;
     }
-    const snapshot = readTerminalSnapshotFromDedupeEntry(entry);
-    if (snapshot) {
-      return snapshot;
-    }
+    // If an agent run has an in-flight dedupe entry, never fall back to any
+    // stale chat dedupe record for the same run id.
+    return null;
   }
-  return null;
+
+  const chatEntry = params.dedupe.get(`chat:${params.runId}`);
+  if (!chatEntry) {
+    return null;
+  }
+  return readTerminalSnapshotFromDedupeEntry(chatEntry);
 }
 
 async function waitForTerminalGatewayDedupe(params: {

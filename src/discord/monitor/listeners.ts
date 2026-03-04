@@ -187,13 +187,15 @@ async function runDiscordListenerWithSlowLog(params: {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
     }
-    logSlowDiscordListener({
-      logger: params.logger,
-      listener: params.listener,
-      event: params.event,
-      durationMs: Date.now() - startedAt,
-      context: params.context,
-    });
+    if (!timedOut) {
+      logSlowDiscordListener({
+        logger: params.logger,
+        listener: params.listener,
+        event: params.event,
+        durationMs: Date.now() - startedAt,
+        context: params.context,
+      });
+    }
   }
 }
 

@@ -301,6 +301,11 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
 
   const acpBindings = manager.listBindings().filter((binding) => binding.targetKind === "acp");
   const staleBindings: ThreadBindingRecord[] = [];
+  const probeTargets: Array<{
+    binding: ThreadBindingRecord;
+    sessionKey: string;
+    session: AcpSessionStoreEntry;
+  }> = [];
 
   for (const binding of acpBindings) {
     const sessionKey = binding.targetSessionKey.trim();
@@ -329,24 +334,38 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
     if (!params.healthProbe) {
       continue;
     }
+    probeTargets.push({ binding, sessionKey, session });
+  }
 
-    let probeStatus: AcpThreadBindingHealthStatus = "uncertain";
-    try {
-      const result = await params.healthProbe({
-        cfg: params.cfg,
-        accountId: manager.accountId,
-        sessionKey,
-        binding,
-        session,
-      });
-      probeStatus = result.status;
-    } catch {
-      // Treat probe failures as uncertain and keep the binding.
-      probeStatus = "uncertain";
-    }
+  if (params.healthProbe && probeTargets.length > 0) {
+    const probeResults = await Promise.all(
+      probeTargets.map(async ({ binding, sessionKey, session }) => {
+        try {
+          const result = await params.healthProbe?.({
+            cfg: params.cfg,
+            accountId: manager.accountId,
+            sessionKey,
+            binding,
+            session,
+          });
+          return {
+            binding,
+            status: result?.status ?? ("uncertain" satisfies AcpThreadBindingHealthStatus),
+          };
+        } catch {
+          // Treat probe failures as uncertain and keep the binding.
+          return {
+            binding,
+            status: "uncertain" satisfies AcpThreadBindingHealthStatus,
+          };
+        }
+      }),
+    );
 
-    if (probeStatus === "stale") {
-      staleBindings.push(binding);
+    for (const probeResult of probeResults) {
+      if (probeResult.status === "stale") {
+        staleBindings.push(probeResult.binding);
+      }
     }
   }
 
