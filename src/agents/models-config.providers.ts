@@ -234,6 +234,27 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   return trimmed.replace(/\/v1$/i, "");
 }
 
+/**
+ * Quick reachability check for a local Ollama server.
+ * Returns true if the `/api/tags` endpoint responds within the timeout.
+ * Used for keyless auto-discovery: when no API key is configured, we probe
+ * the default (or configured) Ollama URL before registering the provider.
+ */
+export async function isOllamaReachable(baseUrl: string): Promise<boolean> {
+  // Skip in test environments (same guard as discoverOllamaModels)
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return false;
+  }
+  try {
+    const response = await fetch(`${baseUrl}/api/tags`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionConfig[]> {
   // Skip Ollama discovery in test environments
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -910,15 +931,33 @@ export async function resolveImplicitProviders(params: {
     break;
   }
 
-  // Ollama provider - only add if explicitly configured.
+  // Ollama provider - register when an API key exists OR when a local
+  // Ollama server is reachable (keyless auto-discovery for local setups).
   // Use the user's configured baseUrl (from explicit providers) for model
   // discovery so that remote / non-default Ollama instances are reachable.
-  const ollamaKey =
-    resolveEnvApiKeyVarName("ollama") ??
-    resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
-  if (ollamaKey) {
-    const ollamaBaseUrl = params.explicitProviders?.ollama?.baseUrl;
-    providers.ollama = { ...(await buildOllamaProvider(ollamaBaseUrl)), apiKey: ollamaKey };
+  if (!params.explicitProviders?.ollama) {
+    const ollamaKey =
+      resolveEnvApiKeyVarName("ollama") ??
+      resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
+    if (ollamaKey) {
+      const ollamaBaseUrl = params.explicitProviders?.ollama?.baseUrl;
+      providers.ollama = { ...(await buildOllamaProvider(ollamaBaseUrl)), apiKey: ollamaKey };
+    } else {
+      // No key configured — probe the local Ollama server for keyless registration.
+      const ollamaBaseUrl = resolveOllamaApiBase(params.explicitProviders?.ollama?.baseUrl);
+      if (await isOllamaReachable(ollamaBaseUrl)) {
+        providers.ollama = { ...(await buildOllamaProvider()), apiKey: "local" };
+      }
+    }
+  } else {
+    // Explicit provider exists; still inject implicit key + model discovery.
+    const ollamaKey =
+      resolveEnvApiKeyVarName("ollama") ??
+      resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
+    if (ollamaKey) {
+      const ollamaBaseUrl = params.explicitProviders.ollama.baseUrl;
+      providers.ollama = { ...(await buildOllamaProvider(ollamaBaseUrl)), apiKey: ollamaKey };
+    }
   }
 
   // vLLM provider - OpenAI-compatible local server (opt-in via env/profile).
