@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { GatewayServiceEnv } from "../../../daemon/service-types.js";
 import { resolveGatewayService } from "../../../daemon/service.js";
+import { withSystemdSystemScopeEnv } from "../../../daemon/systemd-scope.js";
 import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "../../daemon-install-helpers.js";
@@ -18,10 +20,18 @@ export async function installGatewayDaemonNonInteractive(params: {
   if (!opts.installDaemon) {
     return;
   }
+  const useSystemScope = process.platform === "linux" && Boolean(opts.daemonSystem);
+  const serviceEnv = withSystemdSystemScopeEnv(process.env as GatewayServiceEnv, {
+    system: useSystemScope,
+  });
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
   const systemdAvailable =
-    process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
+    process.platform === "linux"
+      ? useSystemScope
+        ? true
+        : await isSystemdUserServiceAvailable(serviceEnv)
+      : true;
   if (process.platform === "linux" && !systemdAvailable) {
     runtime.log("Systemd user services are unavailable; skipping service install.");
     return;
@@ -35,7 +45,7 @@ export async function installGatewayDaemonNonInteractive(params: {
 
   const service = resolveGatewayService();
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: process.env,
+    env: serviceEnv,
     port,
     token: gatewayToken,
     runtime: daemonRuntimeRaw,
@@ -44,7 +54,7 @@ export async function installGatewayDaemonNonInteractive(params: {
   });
   try {
     await service.install({
-      env: process.env,
+      env: serviceEnv,
       stdout: process.stdout,
       programArguments,
       workingDirectory,
@@ -55,5 +65,7 @@ export async function installGatewayDaemonNonInteractive(params: {
     runtime.log(gatewayInstallErrorHint());
     return;
   }
-  await ensureSystemdUserLingerNonInteractive({ runtime });
+  if (!useSystemScope) {
+    await ensureSystemdUserLingerNonInteractive({ runtime });
+  }
 }
