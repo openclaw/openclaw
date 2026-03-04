@@ -431,7 +431,7 @@ describe("detectGatewayManagementExecCommand", () => {
 
   it("marks systemctl gateway restart commands with unsupported shell tokens as complex", () => {
     const detected = detectGatewayManagementExecCommand({
-      command: "systemctl --user restart openclaw-gateway.service > /tmp/out",
+      command: "systemctl restart openclaw-gateway.service > /tmp/out",
       cwd: process.cwd(),
       env: process.env,
       platform: "linux",
@@ -562,7 +562,7 @@ describe("detectGatewayManagementExecCommand", () => {
 
   it("detects systemctl restart commands for gateway units", () => {
     const detected = detectGatewayManagementExecCommand({
-      command: "systemctl --user restart openclaw-gateway.service",
+      command: "systemctl restart openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
       platform: "linux",
@@ -578,7 +578,7 @@ describe("detectGatewayManagementExecCommand", () => {
 
   it("detects systemctl --no-block restart commands for gateway units", () => {
     const detected = detectGatewayManagementExecCommand({
-      command: "systemctl --user restart --no-block openclaw-gateway.service",
+      command: "systemctl restart --no-block openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
       platform: "linux",
@@ -594,7 +594,7 @@ describe("detectGatewayManagementExecCommand", () => {
 
   it("does not detect systemctl default unit when current profile is non-default", () => {
     const detected = detectGatewayManagementExecCommand({
-      command: "systemctl --user restart openclaw-gateway.service",
+      command: "systemctl restart openclaw-gateway.service",
       cwd: process.cwd(),
       env: { ...process.env, OPENCLAW_PROFILE: "dev" },
       platform: "linux",
@@ -605,7 +605,7 @@ describe("detectGatewayManagementExecCommand", () => {
 
   it("detects systemctl unit for the active profile", () => {
     const detected = detectGatewayManagementExecCommand({
-      command: "systemctl --user restart openclaw-gateway-dev.service",
+      command: "systemctl restart openclaw-gateway-dev.service",
       cwd: process.cwd(),
       env: { ...process.env, OPENCLAW_PROFILE: "dev" },
       platform: "linux",
@@ -617,6 +617,28 @@ describe("detectGatewayManagementExecCommand", () => {
       hard: false,
       complex: false,
     });
+  });
+
+  it("does not detect explicit user-scope systemctl commands", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --user restart openclaw-gateway.service",
+      cwd: process.cwd(),
+      env: process.env,
+      platform: "linux",
+    });
+
+    expect(detected).toBeNull();
+  });
+
+  it("does not detect explicit system-scope systemctl commands", () => {
+    const detected = detectGatewayManagementExecCommand({
+      command: "systemctl --system restart openclaw-gateway.service",
+      cwd: process.cwd(),
+      env: process.env,
+      platform: "linux",
+    });
+
+    expect(detected).toBeNull();
   });
 
   it("detects launchctl kickstart commands for gateway labels", () => {
@@ -793,7 +815,7 @@ describe("detectGatewayManagementExecCommand", () => {
 
   it("does not detect non-gateway systemctl commands", () => {
     const detected = detectGatewayManagementExecCommand({
-      command: "systemctl --user restart ssh.service",
+      command: "systemctl restart ssh.service",
       cwd: process.cwd(),
       env: process.env,
       platform: "linux",
@@ -804,7 +826,7 @@ describe("detectGatewayManagementExecCommand", () => {
 
   it("does not detect mixed-unit systemctl commands", () => {
     const detected = detectGatewayManagementExecCommand({
-      command: "systemctl --user restart openclaw-gateway.service nginx.service",
+      command: "systemctl restart openclaw-gateway.service nginx.service",
       cwd: process.cwd(),
       env: process.env,
       platform: "linux",
@@ -866,7 +888,7 @@ describe("detectGatewayManagementExecCommand", () => {
 
   it("does not match prefixed systemctl units unless explicitly configured", () => {
     const detected = detectGatewayManagementExecCommand({
-      command: "systemctl --user restart openclaw-gateway-prod.service",
+      command: "systemctl restart openclaw-gateway-prod.service",
       cwd: process.cwd(),
       env: process.env,
       platform: "linux",
@@ -877,7 +899,7 @@ describe("detectGatewayManagementExecCommand", () => {
 
   it("matches configured OPENCLAW_SYSTEMD_UNIT exactly", () => {
     const detected = detectGatewayManagementExecCommand({
-      command: "systemctl --user restart openclaw-gateway-prod.service",
+      command: "systemctl restart openclaw-gateway-prod.service",
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -896,7 +918,7 @@ describe("detectGatewayManagementExecCommand", () => {
 
   it("does not detect systemctl commands on non-linux platforms", () => {
     const detected = detectGatewayManagementExecCommand({
-      command: "systemctl --user restart openclaw-gateway.service",
+      command: "systemctl restart openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
       platform: "darwin",
@@ -918,7 +940,7 @@ describe("detectGatewayManagementExecCommand", () => {
 
   it("does not detect systemctl commands when option values are missing", () => {
     const detected = detectGatewayManagementExecCommand({
-      command: "systemctl --user --lines --quiet restart openclaw-gateway.service",
+      command: "systemctl --lines --quiet restart openclaw-gateway.service",
       cwd: process.cwd(),
       env: process.env,
       platform: "linux",
@@ -1100,7 +1122,7 @@ describe("exec gateway management interception", () => {
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
       const result = await tool.execute("call3-systemctl", {
-        command: "systemctl --user restart openclaw-gateway.service",
+        command: "systemctl restart openclaw-gateway.service",
       });
 
       const text = result.content.find((part) => part.type === "text")?.text ?? "";

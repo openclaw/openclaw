@@ -384,6 +384,22 @@ function hasSystemctlRemoteScope(argv: string[]): boolean {
   return false;
 }
 
+function hasSystemctlManagerScope(argv: string[]): boolean {
+  for (let idx = 1; idx < argv.length; idx += 1) {
+    const token = normalizeLower(argv[idx]);
+    if (!token) {
+      continue;
+    }
+    if (token === FLAG_TERMINATOR) {
+      break;
+    }
+    if (token === "--system" || token === "--user") {
+      return true;
+    }
+  }
+  return false;
+}
+
 function hasSystemctlHelpOrVersion(argv: string[]): boolean {
   for (let idx = 1; idx < argv.length; idx += 1) {
     const token = normalizeLower(argv[idx]);
@@ -965,6 +981,9 @@ function parseGatewayActionFromSystemctlArgv(
   if (hasSystemctlRemoteScope(argv)) {
     return null;
   }
+  if (hasSystemctlManagerScope(argv)) {
+    return null;
+  }
 
   const positionals = collectSystemctlPositionals(argv);
   if (!positionals || positionals.length < 2) {
@@ -1103,6 +1122,9 @@ function parseGatewayActionFromSystemctlFallbackArgv(
     return null;
   }
   if (hasSystemctlRemoteScope(argv)) {
+    return null;
+  }
+  if (hasSystemctlManagerScope(argv)) {
     return null;
   }
 
