@@ -7,12 +7,18 @@ import type { GoogleChatReaction } from "./types.js";
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
 
-const headersToObject = (headers?: HeadersInit): Record<string, string> =>
-  headers instanceof Headers
-    ? Object.fromEntries(headers.entries())
-    : Array.isArray(headers)
-      ? Object.fromEntries(headers)
-      : headers || {};
+const headersToObject = (headers?: HeadersInit): Record<string, string> => {
+  if (!headers) {
+    return {};
+  }
+  if (headers instanceof Headers) {
+    return Object.fromEntries(headers.entries());
+  }
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers);
+  }
+  return headers;
+};
 
 async function fetchJson<T>(
   account: ResolvedGoogleChatAccount,
