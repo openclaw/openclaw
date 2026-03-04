@@ -27,6 +27,8 @@ type DoctorPrompterLike = {
   }) => Promise<boolean>;
 };
 
+const ORPHAN_TRANSCRIPT_MIN_AGE_MS = 1000 * 60 * 60 * 6; // 6h
+
 function existsDir(dir: string): boolean {
   try {
     return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
@@ -765,10 +767,21 @@ export async function noteStateIntegrity(
       }
     }
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    const now = Date.now();
     const orphanTranscriptPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
       .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
-      .filter((filePath) => !referencedTranscriptPaths.has(filePath));
+      .filter((filePath) => {
+        if (referencedTranscriptPaths.has(filePath)) {
+          return false;
+        }
+        try {
+          const stat = fs.statSync(filePath);
+          return now - stat.mtimeMs >= ORPHAN_TRANSCRIPT_MIN_AGE_MS;
+        } catch {
+          return true;
+        }
+      });
     if (orphanTranscriptPaths.length > 0) {
       warnings.push(
         `- Found ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}. They are not referenced by sessions.json and can consume disk over time.`,

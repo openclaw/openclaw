@@ -143,7 +143,10 @@ describe("doctor state integrity oauth dir checks", () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(cfg, process.env, process.env.HOME ?? "");
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
-    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+    const orphanPath = path.join(sessionsDir, "orphan-session.jsonl");
+    fs.writeFileSync(orphanPath, '{"type":"session"}\n');
+    const staleTime = new Date(Date.now() - 1000 * 60 * 60 * 7);
+    fs.utimesSync(orphanPath, staleTime, staleTime);
     const confirmSkipInNonInteractive = vi.fn(async (params: { message: string }) =>
       params.message.includes("orphan transcript file"),
     );
@@ -156,6 +159,17 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     const files = fs.readdirSync(sessionsDir);
     expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
+  });
+
+  it("does not flag fresh unreferenced transcripts as orphaned", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(path.join(sessionsDir, "recent-untracked.jsonl"), '{"type":"session"}\n');
+
+    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive: vi.fn(async () => false) });
+
+    expect(stateIntegrityText()).not.toContain("orphan transcript file");
   });
 
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
