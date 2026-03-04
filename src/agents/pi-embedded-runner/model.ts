@@ -5,7 +5,7 @@ import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
-import { normalizeModelCompat } from "../model-compat.js";
+import { normalizeAnthropicBaseUrl, normalizeModelCompat } from "../model-compat.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
@@ -129,12 +129,17 @@ export function resolveModel(
   const resolved = normalizeModelCompat(model);
   const providerOverrides = cfg?.models?.providers?.[provider];
   if (providerOverrides) {
+    const patched = { ...resolved };
     if (providerOverrides.baseUrl) {
-      resolved.baseUrl = providerOverrides.baseUrl;
+      patched.baseUrl =
+        resolved.api === "anthropic-messages"
+          ? normalizeAnthropicBaseUrl(providerOverrides.baseUrl)
+          : providerOverrides.baseUrl;
     }
     if (providerOverrides.headers) {
-      resolved.headers = { ...providerOverrides.headers, ...resolved.headers };
+      patched.headers = { ...providerOverrides.headers, ...resolved.headers };
     }
+    return { model: patched as Model<Api>, authStorage, modelRegistry };
   }
   return { model: resolved, authStorage, modelRegistry };
 }

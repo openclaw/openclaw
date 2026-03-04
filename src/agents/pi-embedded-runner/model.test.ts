@@ -299,7 +299,7 @@ describe("resolveModel", () => {
     expect(result.model?.headers).toEqual({ "X-Api-Key": "secret-key" });
   });
 
-  it("merges provider and model headers in generic fallback, model takes precedence", () => {
+  it("merges provider and model headers via inline match, model takes precedence", () => {
     const cfg = {
       models: {
         providers: {
@@ -324,6 +324,89 @@ describe("resolveModel", () => {
       "X-Provider": "yes",
       "X-Model": "yes",
     });
+  });
+
+  it("applies provider header overrides to registry-resolved model without mutating the original", () => {
+    const originalModel = {
+      id: "test-model",
+      name: "Test Model",
+      provider: "custom-provider",
+      api: "openai-responses",
+      baseUrl: "https://original.example.com",
+      reasoning: false,
+      input: ["text"] as const,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 4096,
+      headers: { "X-Original": "keep-me" },
+    };
+
+    mockDiscoveredModel({
+      provider: "custom-provider",
+      modelId: "test-model",
+      templateModel: originalModel,
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "custom-provider": {
+            baseUrl: "https://override.example.com",
+            headers: { "X-Override": "added", "X-Original": "from-provider" },
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("custom-provider", "test-model", "/tmp/agent", cfg);
+
+    expect(result.model?.baseUrl).toBe("https://override.example.com");
+    expect(result.model?.headers).toEqual({
+      "X-Override": "added",
+      "X-Original": "keep-me", // model-level header takes precedence
+    });
+
+    // Verify original registry object is NOT mutated
+    expect(originalModel.baseUrl).toBe("https://original.example.com");
+    expect(originalModel.headers).toEqual({ "X-Original": "keep-me" });
+  });
+
+  it("normalizes anthropic baseUrl override with trailing /v1", () => {
+    const originalModel = {
+      id: "claude-test",
+      name: "Claude Test",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 200000,
+      maxTokens: 64000,
+    };
+
+    mockDiscoveredModel({
+      provider: "anthropic",
+      modelId: "claude-test",
+      templateModel: originalModel,
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com/v1",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("anthropic", "claude-test", "/tmp/agent", cfg);
+
+    // /v1 should be stripped to prevent /v1/v1/messages
+    expect(result.model?.baseUrl).toBe("https://api.anthropic.com");
   });
 
   it("builds an openai-codex fallback for gpt-5.3-codex", () => {

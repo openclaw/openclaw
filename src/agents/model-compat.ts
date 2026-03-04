@@ -33,7 +33,7 @@ function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-
  * Strip a single trailing `/v1` (with optional trailing slash) from the
  * baseUrl for anthropic-messages models so users with either format work.
  */
-function normalizeAnthropicBaseUrl(baseUrl: string): string {
+export function normalizeAnthropicBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/v1\/?$/, "");
 }
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
