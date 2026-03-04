@@ -121,4 +121,33 @@ describe("DiscordMessageListener", () => {
       );
     });
   });
+
+  it("continues same-channel processing after handler timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const never = new Promise<void>(() => {});
+      const handler = vi.fn(async () => {
+        if (handler.mock.calls.length === 1) {
+          await never;
+          return;
+        }
+      });
+      const logger = createLogger();
+      const listener = new DiscordMessageListener(handler as never, logger as never, undefined, {
+        timeoutMs: 50,
+      });
+
+      await listener.handle(fakeEvent("ch-1"), {} as never);
+      await listener.handle(fakeEvent("ch-1"), {} as never);
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60);
+      await vi.waitFor(() => {
+        expect(handler).toHaveBeenCalledTimes(2);
+      });
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("timed out after"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

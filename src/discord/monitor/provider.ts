@@ -10,6 +10,7 @@ import {
 import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
 import { Routes } from "discord-api-types/v10";
+import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import type { NativeCommandSpec } from "../../auto-reply/commands-registry.js";
 import { listNativeCommandSpecsForConfig } from "../../auto-reply/commands-registry.js";
@@ -173,6 +174,67 @@ function appendPluginCommandSpecs(params: {
     });
   }
   return merged;
+}
+
+const DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS = 8_000;
+const DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS = 2 * 60 * 1000;
+
+async function probeDiscordAcpBindingHealth(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  storedState?: "idle" | "running" | "error";
+  lastActivityAt?: number;
+}): Promise<{ status: "healthy" | "stale" | "uncertain"; reason?: string }> {
+  const manager = getAcpSessionManager();
+  const statusPromise = manager
+    .getSessionStatus({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    })
+    .then((status) => ({ kind: "status" as const, status }))
+    .catch((error: unknown) => ({ kind: "error" as const, error }));
+
+  let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
+    timeoutTimer = setTimeout(
+      () => resolve({ kind: "timeout" }),
+      DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS,
+    );
+    timeoutTimer.unref?.();
+  });
+  const result = await Promise.race([statusPromise, timeoutPromise]);
+  if (timeoutTimer) {
+    clearTimeout(timeoutTimer);
+  }
+  const runningForMs =
+    params.storedState === "running" && Number.isFinite(params.lastActivityAt)
+      ? Date.now() - Math.max(0, Math.floor(params.lastActivityAt ?? 0))
+      : 0;
+  const isStaleRunning =
+    params.storedState === "running" && runningForMs >= DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS;
+
+  if (result.kind === "timeout") {
+    return isStaleRunning
+      ? { status: "stale", reason: "status-timeout-running-stale" }
+      : { status: "uncertain", reason: "status-timeout" };
+  }
+  if (result.kind === "error") {
+    const error = result.error;
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      message.includes("Session is not ACP-enabled") ||
+      message.includes("ACP session metadata missing")
+    ) {
+      return { status: "stale", reason: "session-missing" };
+    }
+    return isStaleRunning
+      ? { status: "stale", reason: "status-error-running-stale" }
+      : { status: "uncertain", reason: "status-error" };
+  }
+  if (result.status.state === "error") {
+    return { status: "stale", reason: "status-error-state" };
+  }
+  return { status: "healthy" };
 }
 
 async function deployDiscordCommands(params: {
@@ -382,14 +444,32 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       })
     : createNoopThreadBindingManager(account.accountId);
   if (threadBindingsEnabled) {
-    const reconciliation = reconcileAcpThreadBindingsOnStartup({
+    const uncertainProbeKeys = new Set<string>();
+    const reconciliation = await reconcileAcpThreadBindingsOnStartup({
       cfg,
       accountId: account.accountId,
       sendFarewell: false,
+      healthProbe: async ({ sessionKey, session }) => {
+        const probe = await probeDiscordAcpBindingHealth({
+          cfg,
+          sessionKey,
+          storedState: session.acp?.state,
+          lastActivityAt: session.acp?.lastActivityAt,
+        });
+        if (probe.status === "uncertain") {
+          uncertainProbeKeys.add(`${sessionKey}${probe.reason ? ` (${probe.reason})` : ""}`);
+        }
+        return probe;
+      },
     });
     if (reconciliation.removed > 0) {
       logVerbose(
-        `discord: removed ${reconciliation.removed}/${reconciliation.checked} stale ACP thread bindings on startup for account ${account.accountId}`,
+        `discord: removed ${reconciliation.removed}/${reconciliation.checked} stale ACP thread bindings on startup for account ${account.accountId}: ${reconciliation.staleSessionKeys.join(", ")}`,
+      );
+    }
+    if (uncertainProbeKeys.size > 0) {
+      logVerbose(
+        `discord: ACP thread-binding health probe uncertain for account ${account.accountId}: ${[...uncertainProbeKeys].join(", ")}`,
       );
     }
   }
@@ -623,7 +703,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     registerDiscordListener(
       client.listeners,
-      new DiscordMessageListener(messageHandler, logger, trackInboundEvent),
+      new DiscordMessageListener(messageHandler, logger, trackInboundEvent, {
+        timeoutMs: eventQueueOpts.listenerTimeout,
+      }),
     );
     const reactionListenerOptions = {
       cfg,

@@ -66,13 +66,50 @@ type DiscordReactionRoutingParams = {
 };
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
+const DISCORD_DEFAULT_LISTENER_TIMEOUT_MS = 120_000;
 const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
+
+function normalizeDiscordListenerTimeoutMs(raw: number | undefined): number {
+  if (!Number.isFinite(raw) || (raw ?? 0) <= 0) {
+    return DISCORD_DEFAULT_LISTENER_TIMEOUT_MS;
+  }
+  return Math.max(1_000, Math.floor(raw!));
+}
+
+function formatListenerContextValue(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  return null;
+}
+
+function formatListenerContextSuffix(context?: Record<string, unknown>): string {
+  if (!context) {
+    return "";
+  }
+  const entries = Object.entries(context).flatMap(([key, value]) => {
+    const formatted = formatListenerContextValue(value);
+    return formatted ? [`${key}=${formatted}`] : [];
+  });
+  if (entries.length === 0) {
+    return "";
+  }
+  return ` (${entries.join(" ")})`;
+}
 
 function logSlowDiscordListener(params: {
   logger: Logger | undefined;
   listener: string;
   event: string;
   durationMs: number;
+  context?: Record<string, unknown>;
 }) {
   if (params.durationMs < DISCORD_SLOW_LISTENER_THRESHOLD_MS) {
     return;
@@ -88,7 +125,8 @@ function logSlowDiscordListener(params: {
     event: params.event,
     durationMs: params.durationMs,
     duration,
-    consoleMessage: message,
+    ...params.context,
+    consoleMessage: `${message}${formatListenerContextSuffix(params.context)}`,
   });
 }
 
@@ -97,11 +135,48 @@ async function runDiscordListenerWithSlowLog(params: {
   listener: string;
   event: string;
   run: () => Promise<void>;
+  timeoutMs?: number;
+  context?: Record<string, unknown>;
   onError?: (err: unknown) => void;
 }) {
   const startedAt = Date.now();
+  const timeoutMs = normalizeDiscordListenerTimeoutMs(params.timeoutMs);
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  const logger = params.logger ?? discordEventQueueLog;
+  const runPromise = params.run().catch((err) => {
+    if (timedOut) {
+      logger.error(
+        danger(
+          `discord handler failed after timeout: ${String(err)}${formatListenerContextSuffix(params.context)}`,
+        ),
+      );
+      return;
+    }
+    throw err;
+  });
+
   try {
-    await params.run();
+    const timeoutPromise = new Promise<"timeout">((resolve) => {
+      timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
+      timeoutHandle.unref?.();
+    });
+    const result = await Promise.race([
+      runPromise.then(() => "completed" as const),
+      timeoutPromise,
+    ]);
+    if (result === "timeout") {
+      timedOut = true;
+      logger.error(
+        danger(
+          `discord handler timed out after ${formatDurationSeconds(timeoutMs, {
+            decimals: 1,
+            unit: "seconds",
+          })}${formatListenerContextSuffix(params.context)}`,
+        ),
+      );
+      return;
+    }
   } catch (err) {
     if (params.onError) {
       params.onError(err);
@@ -109,11 +184,15 @@ async function runDiscordListenerWithSlowLog(params: {
     }
     throw err;
   } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
     logSlowDiscordListener({
       logger: params.logger,
       listener: params.listener,
       event: params.event,
       durationMs: Date.now() - startedAt,
+      context: params.context,
     });
   }
 }
@@ -128,18 +207,26 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
 
 export class DiscordMessageListener extends MessageCreateListener {
   private readonly channelQueue = new KeyedAsyncQueue();
+  private readonly listenerTimeoutMs: number;
 
   constructor(
     private handler: DiscordMessageHandler,
     private logger?: Logger,
     private onEvent?: () => void,
+    options?: { timeoutMs?: number },
   ) {
     super();
+    this.listenerTimeoutMs = normalizeDiscordListenerTimeoutMs(options?.timeoutMs);
   }
 
   async handle(data: DiscordMessageEvent, client: Client) {
     this.onEvent?.();
     const channelId = data.channel_id;
+    const context = {
+      channelId,
+      messageId: (data as { id?: string }).id,
+      guildId: (data as { guild_id?: string }).guild_id,
+    } satisfies Record<string, unknown>;
     // Serialize messages within the same channel to preserve ordering,
     // but allow different channels to proceed in parallel so that
     // channel-bound agents are not blocked by each other.
@@ -148,6 +235,8 @@ export class DiscordMessageListener extends MessageCreateListener {
         logger: this.logger,
         listener: this.constructor.name,
         event: this.type,
+        timeoutMs: this.listenerTimeoutMs,
+        context,
         run: () => this.handler(data, client),
         onError: (err) => {
           const logger = this.logger ?? discordEventQueueLog;
