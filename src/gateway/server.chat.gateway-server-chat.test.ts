@@ -636,6 +636,75 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("agent.wait keeps lifecycle wait active while same-runId chat.send is active", async () => {
+    await withMainSessionStore(async () => {
+      const runId = "idem-wait-chat-active-with-agent-lifecycle";
+      let releaseBlockedReply: (() => void) | undefined;
+      const blockedReply = new Promise<void>((resolve) => {
+        releaseBlockedReply = resolve;
+      });
+      const replySpy = vi.mocked(getReplyFromConfig);
+      replySpy.mockImplementationOnce(async (_ctx, opts) => {
+        await new Promise<void>((resolve) => {
+          let settled = false;
+          const finish = () => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            resolve();
+          };
+          void blockedReply.then(finish);
+          if (opts?.abortSignal?.aborted) {
+            finish();
+            return;
+          }
+          opts?.abortSignal?.addEventListener("abort", finish, { once: true });
+        });
+        return undefined;
+      });
+
+      try {
+        const chatRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "hold chat run open",
+          idempotencyKey: runId,
+        });
+        expect(chatRes.ok).toBe(true);
+        expect(chatRes.payload?.status).toBe("started");
+
+        const waitP = rpcReq(ws, "agent.wait", {
+          runId,
+          timeoutMs: 1_000,
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "start", startedAt: 1 },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "end", startedAt: 1, endedAt: 2 },
+        });
+
+        const waitRes = await waitP;
+        expect(waitRes.ok).toBe(true);
+        expect(waitRes.payload?.status).toBe("ok");
+
+        const abortRes = await rpcReq(ws, "chat.abort", {
+          sessionKey: "main",
+          runId,
+        });
+        expect(abortRes.ok).toBe(true);
+      } finally {
+        releaseBlockedReply?.();
+      }
+    });
+  });
+
   test("agent events include sessionKey and agent.wait covers lifecycle flows", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");

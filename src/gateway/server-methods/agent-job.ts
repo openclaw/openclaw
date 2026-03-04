@@ -145,10 +145,11 @@ export async function waitForAgentJob(params: {
   runId: string;
   timeoutMs: number;
   signal?: AbortSignal;
+  ignoreCachedSnapshot?: boolean;
 }): Promise<AgentRunSnapshot | null> {
-  const { runId, timeoutMs, signal } = params;
+  const { runId, timeoutMs, signal, ignoreCachedSnapshot = false } = params;
   ensureAgentRunListener();
-  const cached = getCachedAgentRun(runId);
+  const cached = ignoreCachedSnapshot ? undefined : getCachedAgentRun(runId);
   if (cached) {
     return cached;
   }
@@ -190,7 +191,7 @@ export async function waitForAgentJob(params: {
       clearPendingErrorTimer();
       const effectiveDelay = Math.max(1, Math.min(Math.floor(delayMs), 2_147_483_647));
       pendingErrorTimer = setTimeout(() => {
-        const latest = getCachedAgentRun(runId);
+        const latest = ignoreCachedSnapshot ? undefined : getCachedAgentRun(runId);
         if (latest) {
           finish(latest);
           return;
@@ -201,9 +202,11 @@ export async function waitForAgentJob(params: {
       pendingErrorTimer.unref?.();
     };
 
-    const pending = getPendingAgentRunError(runId);
-    if (pending) {
-      scheduleErrorFinish(pending.snapshot, pending.dueAt - Date.now());
+    if (!ignoreCachedSnapshot) {
+      const pending = getPendingAgentRunError(runId);
+      if (pending) {
+        scheduleErrorFinish(pending.snapshot, pending.dueAt - Date.now());
+      }
     }
 
     const unsubscribe = onAgentEvent((evt) => {
@@ -221,7 +224,7 @@ export async function waitForAgentJob(params: {
       if (phase !== "end" && phase !== "error") {
         return;
       }
-      const latest = getCachedAgentRun(runId);
+      const latest = ignoreCachedSnapshot ? undefined : getCachedAgentRun(runId);
       if (latest) {
         finish(latest);
         return;

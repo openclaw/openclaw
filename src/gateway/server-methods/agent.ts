@@ -785,13 +785,14 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const lifecycleAbortController = new AbortController();
     const dedupeAbortController = new AbortController();
-    const lifecyclePromise = hasActiveChatRun
-      ? Promise.resolve<Awaited<ReturnType<typeof waitForAgentJob>> | null>(null)
-      : waitForAgentJob({
-          runId,
-          timeoutMs,
-          signal: lifecycleAbortController.signal,
-        });
+    const lifecyclePromise = waitForAgentJob({
+      runId,
+      timeoutMs,
+      signal: lifecycleAbortController.signal,
+      // When chat.send is active with the same runId, ignore cached lifecycle
+      // snapshots so stale agent results do not preempt the active chat run.
+      ignoreCachedSnapshot: hasActiveChatRun,
+    });
     const dedupePromise = waitForTerminalGatewayDedupe({
       dedupe: context.dedupe,
       runId,
