@@ -278,14 +278,17 @@ async function resolveTelegramCommandAuth(params: {
     storeAllowFrom: isGroup ? [] : storeAllowFrom,
     dmPolicy: effectiveDmPolicy,
   });
-  const senderAllowed = isSenderAllowed({
-    allow: dmAllow,
+  // Use configuredGroupAllowFrom for group command auth, dmAllow for DM command auth
+  // (matches pattern in bot-message-context.ts)
+  const allowForCommands = isGroup ? configuredGroupAllowFrom : dmAllow;
+  const senderAllowedForCommands = isSenderAllowed({
+    allow: allowForCommands,
     senderId,
     senderUsername,
   });
   const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups,
-    authorizers: [{ configured: dmAllow.hasEntries, allowed: senderAllowed }],
+    authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
     modeWhenAccessGroupsOff: "configured",
   });
   if (requireAuth && !commandAuthorized) {
