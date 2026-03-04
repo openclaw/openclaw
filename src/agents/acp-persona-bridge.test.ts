@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { bridgeAgentPersonaToClaudeMd } from "./acp-persona-bridge.js";
 
 // Minimal config type stub — only the fields we need
@@ -51,7 +52,7 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
     });
 
     const result = await bridgeAgentPersonaToClaudeMd({
-      cfg: cfg as any,
+      cfg: cfg as OpenClawConfig,
       agentId: "test-agent",
       sessionCwd,
     });
@@ -69,7 +70,7 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
     });
 
     const result = await bridgeAgentPersonaToClaudeMd({
-      cfg: cfg as any,
+      cfg: cfg as OpenClawConfig,
       agentId: "test-agent",
       sessionCwd,
     });
@@ -87,7 +88,7 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
     });
 
     const result = await bridgeAgentPersonaToClaudeMd({
-      cfg: cfg as any,
+      cfg: cfg as OpenClawConfig,
       agentId: "test-agent",
       sessionCwd,
     });
@@ -106,7 +107,7 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
     await fs.writeFile(path.join(sessionCwd, "CLAUDE.md"), "existing content", "utf-8");
 
     const result = await bridgeAgentPersonaToClaudeMd({
-      cfg: cfg as any,
+      cfg: cfg as OpenClawConfig,
       agentId: "test-agent",
       sessionCwd,
     });
@@ -121,7 +122,7 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
     const { cfg, sessionCwd } = await setup({});
 
     const result = await bridgeAgentPersonaToClaudeMd({
-      cfg: cfg as any,
+      cfg: cfg as OpenClawConfig,
       agentId: "test-agent",
       sessionCwd,
     });
@@ -137,7 +138,7 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
 
     // First bridge
     await bridgeAgentPersonaToClaudeMd({
-      cfg: cfg as any,
+      cfg: cfg as OpenClawConfig,
       agentId: "test-agent",
       sessionCwd,
     });
@@ -149,7 +150,7 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
     await fs.writeFile(path.join(agentWorkspace, "SOUL.md"), "# Agent B\nI am agent B.", "utf-8");
 
     const result = await bridgeAgentPersonaToClaudeMd({
-      cfg: cfg as any,
+      cfg: cfg as OpenClawConfig,
       agentId: "test-agent",
       sessionCwd,
     });
@@ -167,7 +168,7 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
 
     // First bridge creates CLAUDE.md
     await bridgeAgentPersonaToClaudeMd({
-      cfg: cfg as any,
+      cfg: cfg as OpenClawConfig,
       agentId: "test-agent",
       sessionCwd,
     });
@@ -177,7 +178,7 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
     await fs.unlink(path.join(agentWorkspace, "SOUL.md"));
 
     const result = await bridgeAgentPersonaToClaudeMd({
-      cfg: cfg as any,
+      cfg: cfg as OpenClawConfig,
       agentId: "test-agent",
       sessionCwd,
     });
@@ -188,6 +189,31 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
     await expect(fs.access(path.join(sessionCwd, "CLAUDE.md"))).rejects.toThrow();
   });
 
+  it("skips persona files exceeding 256KB", async () => {
+    const { agentWorkspace, sessionCwd } = makeWorkspaceDirs();
+    await fs.mkdir(agentWorkspace, { recursive: true });
+    await fs.mkdir(sessionCwd, { recursive: true });
+
+    // Write a SOUL.md that exceeds the 256KB safety cap
+    const oversized = "x".repeat(256 * 1024 + 1);
+    await fs.writeFile(path.join(agentWorkspace, "SOUL.md"), oversized, "utf-8");
+
+    const cfg = {
+      agents: {
+        list: [{ id: "test-agent", workspace: agentWorkspace }],
+      },
+    };
+
+    const result = await bridgeAgentPersonaToClaudeMd({
+      cfg: cfg as OpenClawConfig,
+      agentId: "test-agent",
+      sessionCwd,
+    });
+
+    expect(result.bridged).toBe(false);
+    expect(result.reason).toBe("no-persona-files");
+  });
+
   it("skips empty persona files", async () => {
     const { cfg, sessionCwd } = await setup({
       "SOUL.md": "   ",
@@ -195,7 +221,7 @@ describe("bridgeAgentPersonaToClaudeMd", () => {
     });
 
     const result = await bridgeAgentPersonaToClaudeMd({
-      cfg: cfg as any,
+      cfg: cfg as OpenClawConfig,
       agentId: "test-agent",
       sessionCwd,
     });

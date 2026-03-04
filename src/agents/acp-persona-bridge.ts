@@ -28,12 +28,14 @@ export async function bridgeAgentPersonaToClaudeMd(params: {
   const claudeMdPath = path.join(sessionCwd, CLAUDE_MD_FILENAME);
 
   // Check existing CLAUDE.md — only skip if it's a user/project file (no bridge marker)
+  let existingIsBridgeFile = false;
   try {
     const existing = await fs.readFile(claudeMdPath, "utf-8");
     if (!existing.includes(BRIDGE_MARKER)) {
       return { bridged: false, reason: "existing-claude-md" };
     }
     // Bridge-generated file exists — will refresh it for the new agent
+    existingIsBridgeFile = true;
   } catch {
     // File doesn't exist — proceed
   }
@@ -47,16 +49,15 @@ export async function bridgeAgentPersonaToClaudeMd(params: {
   if (!soulContent && !agentsContent) {
     // Clean up stale bridge file if it exists — prevents previous agent's persona
     // from leaking into a new agent that has no persona files.
-    try {
-      const existing = await fs.readFile(claudeMdPath, "utf-8").catch(() => null);
-      if (existing?.includes(BRIDGE_MARKER)) {
+    if (existingIsBridgeFile) {
+      try {
         await fs.unlink(claudeMdPath);
         logVerbose(
           `acp-persona-bridge: removed stale bridge CLAUDE.md for agent "${agentId}" (no persona files)`,
         );
+      } catch {
+        // Best effort cleanup
       }
-    } catch {
-      // Best effort cleanup
     }
     return { bridged: false, reason: "no-persona-files" };
   }
@@ -83,9 +84,7 @@ export async function bridgeAgentPersonaToClaudeMd(params: {
 
   try {
     await fs.writeFile(claudeMdPath, content, { encoding: "utf-8" });
-    logVerbose(
-      `acp-persona-bridge: bridged persona for agent "${agentId}" to ${claudeMdPath}`,
-    );
+    logVerbose(`acp-persona-bridge: bridged persona for agent "${agentId}" to ${claudeMdPath}`);
     return { bridged: true };
   } catch (err) {
     logVerbose(
