@@ -397,12 +397,18 @@ export async function maybeCreateDiscordAutoThread(params: {
       params.baseText || params.combinedBody || "Thread",
       params.message.id,
     );
+
+    // Parse archive duration from config, default to 60 minutes
+    const archiveDuration = params.channelConfig?.autoArchiveDuration
+      ? Number(params.channelConfig.autoArchiveDuration)
+      : 60;
+
     const created = (await params.client.rest.post(
       `${Routes.channelMessage(messageChannelId, params.message.id)}/threads`,
       {
         body: {
           name: threadName,
-          auto_archive_duration: 60,
+          auto_archive_duration: archiveDuration,
         },
       },
     )) as { id?: string };
