@@ -37,8 +37,7 @@ const KIMI_WEB_SEARCH_TOOL = {
   function: { name: "$web_search" },
 } as const;
 
-const DEFAULT_PARALLEL_BASE_URL = "https://api.parallel.ai";
-const PARALLEL_BETA_HEADER = "search-extract-2025-10-10";
+import { DEFAULT_PARALLEL_BASE_URL, PARALLEL_BETA_HEADER } from "./parallel-shared.js";
 
 type ParallelConfig = {
   apiKey?: string;

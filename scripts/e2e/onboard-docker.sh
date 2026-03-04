@@ -556,9 +556,9 @@ NODE
 
   select_web_provider_brave() {
     # Web search provider: select "Brave Search" (first option).
-    # initialValue is "skip" (last). Up once wraps to first = brave.
+    # initialValue is "skip" (last). Down once wraps to first = brave.
     wait_for_log "Search provider" 30 true || true
-    send $'"'"'\e[A\r'"'"' 0.6
+    send $'"'"'\e[B\r'"'"' 0.6
     # API key prompt: enter a dummy key.
     wait_for_log "API key" 15 true || true
     send $'"'"'BSA-test-dummy-key\r'"'"' 0.6
