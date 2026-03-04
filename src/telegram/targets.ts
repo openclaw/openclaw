@@ -52,8 +52,11 @@ export function normalizeTelegramLookupTarget(raw: string): string | undefined {
   if (isNumericTelegramChatId(stripped)) {
     return stripped;
   }
-  const tmeMatch = /^(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]+)$/i.exec(stripped);
+  const tmeMatch = /^(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]+)(?:\/\d+)?\/?$/i.exec(stripped);
   if (tmeMatch?.[1]) {
+    if (!TELEGRAM_USERNAME_REGEX.test(tmeMatch[1])) {
+      return undefined;
+    }
     return `@${tmeMatch[1]}`;
   }
   if (stripped.startsWith("@")) {
