@@ -7,6 +7,8 @@ export type GatewayServiceInstallArgs = {
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
   description?: string;
+  /** For macOS LaunchDaemon: user to run as (default: current user). */
+  runAsUser?: string;
 };
 
 export type GatewayServiceManageArgs = {

@@ -17,11 +17,15 @@ function resolveInstallOptions(
   const parentForce = inheritOptionFromParent<boolean>(command, "force");
   const parentPort = inheritOptionFromParent<string>(command, "port");
   const parentToken = inheritOptionFromParent<string>(command, "token");
+  const parentLaunchDaemon = inheritOptionFromParent<boolean>(command, "launchDaemon");
+  const parentRunAsUser = inheritOptionFromParent<string>(command, "runAsUser");
   return {
     ...cmdOpts,
     force: Boolean(cmdOpts.force || parentForce),
     port: cmdOpts.port ?? parentPort,
     token: cmdOpts.token ?? parentToken,
+    launchDaemon: Boolean(cmdOpts.launchDaemon ?? parentLaunchDaemon),
+    runAsUser: cmdOpts.runAsUser ?? parentRunAsUser,
   };
 }
 
@@ -62,6 +66,15 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--token <token>", "Gateway token (token auth)")
     .option("--force", "Reinstall/overwrite if already installed", false)
+    .option(
+      "--launch-daemon",
+      "macOS only: install as LaunchDaemon (starts at boot without login; requires sudo)",
+      false,
+    )
+    .option(
+      "--run-as-user <user>",
+      "macOS LaunchDaemon: user to run as (default: current user)",
+    )
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
       await runDaemonInstall(resolveInstallOptions(cmdOpts, command));

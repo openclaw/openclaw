@@ -47,6 +47,38 @@ Replace the label with `ai.openclaw.<profile>` when running a named profile.
 If the LaunchAgent isn’t installed, enable it from the app or run
 `openclaw gateway install`.
 
+#### Auto-start and FileVault
+
+By default the Gateway is installed as a **LaunchAgent** (per-user). LaunchAgents start only
+**after** the user logs in to the macOS GUI. With **FileVault** enabled, the system disk is
+encrypted until login, so the Gateway will not start at boot until someone logs in.
+
+**Options:**
+
+1. **LaunchDaemon (starts at boot without login)**  
+   For headless or always-on Macs (e.g. without FileVault, or where the disk is unlocked at boot),
+   you can install as a LaunchDaemon so the Gateway starts at boot before any user logs in:
+
+   ```bash
+   sudo openclaw gateway install --launch-daemon
+   ```
+
+   Optional: `--run-as-user <username>` to run as a specific user (default: current user).
+   The plist is installed under `/Library/LaunchDaemons/`. Use `openclaw gateway status` to confirm;
+   after install, status will show "LaunchDaemon" and control (stop/restart/uninstall) will apply to it.
+
+2. **Auto-login**  
+   With FileVault **off**, you can enable auto-login in **System Settings → Users & Groups → Login Options**
+   so the Mac logs in automatically after boot; the LaunchAgent will then start.
+
+3. **Sleep instead of shutdown**  
+   Keeping the Mac in sleep preserves the user session and the running Gateway.
+
+4. **Manual login**  
+   After reboot, log in once to start the LaunchAgent; no config change.
+
+See also [FAQ: FileVault and gateway auto-start](/help/faq#filevault-and-gateway-auto-start).
+
 ## Node capabilities (mac)
 
 The macOS app presents itself as a node. Common commands:

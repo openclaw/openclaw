@@ -1,11 +1,19 @@
 import {
   installLaunchAgent,
+  installLaunchDaemon,
   isLaunchAgentLoaded,
+  isLaunchDaemonLoaded,
+  launchDaemonPlistExistsSync,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
+  readLaunchDaemonProgramArguments,
+  readLaunchDaemonRuntime,
   restartLaunchAgent,
+  restartLaunchDaemon,
   stopLaunchAgent,
+  stopLaunchDaemon,
   uninstallLaunchAgent,
+  uninstallLaunchDaemon,
 } from "./launchd.js";
 import {
   installScheduledTask,
@@ -66,6 +74,29 @@ export type GatewayService = {
 
 export function resolveGatewayService(): GatewayService {
   if (process.platform === "darwin") {
+    const env = process.env as Record<string, string | undefined>;
+    if (launchDaemonPlistExistsSync(env)) {
+      return {
+        label: "LaunchDaemon",
+        loadedText: "loaded",
+        notLoadedText: "not loaded",
+        install: ignoreInstallResult(async (args) => {
+          await installLaunchDaemon({
+            ...args,
+            runAsUser:
+              args.runAsUser ??
+              process.env.USER ??
+              String(process.getuid?.() ?? "nobody"),
+          });
+        }),
+        uninstall: uninstallLaunchDaemon,
+        stop: stopLaunchDaemon,
+        restart: restartLaunchDaemon,
+        isLoaded: isLaunchDaemonLoaded,
+        readCommand: readLaunchDaemonProgramArguments,
+        readRuntime: readLaunchDaemonRuntime,
+      };
+    }
     return {
       label: "LaunchAgent",
       loadedText: "loaded",

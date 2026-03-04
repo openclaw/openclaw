@@ -1,5 +1,7 @@
 // Default service labels (canonical + legacy compatibility)
 export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
+/** Label for LaunchDaemon (macOS system-wide; starts at boot without user login). */
+export const GATEWAY_LAUNCH_DAEMON_LABEL = "ai.openclaw.gateway";
 export const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
 export const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
 export const GATEWAY_SERVICE_MARKER = "openclaw";
@@ -36,6 +38,11 @@ export function resolveGatewayLaunchAgentLabel(profile?: string): string {
     return GATEWAY_LAUNCH_AGENT_LABEL;
   }
   return `ai.openclaw.${normalized}`;
+}
+
+/** Resolve LaunchDaemon label (same as agent label; profile suffix applied when set). */
+export function resolveGatewayLaunchDaemonLabel(profile?: string): string {
+  return resolveGatewayLaunchAgentLabel(profile);
 }
 
 export function resolveLegacyGatewayLaunchAgentLabels(profile?: string): string[] {

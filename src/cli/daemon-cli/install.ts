@@ -11,6 +11,7 @@ import {
   writeConfigFile,
 } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
+import { installLaunchDaemon, isLaunchDaemonLoaded } from "../../daemon/launchd.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -49,15 +50,18 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
 
+  const useLaunchDaemon = process.platform === "darwin" && Boolean(opts.launchDaemon);
   const service = resolveGatewayService();
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ env: process.env });
+    loaded = useLaunchDaemon
+      ? await isLaunchDaemonLoaded({ env: process.env })
+      : await service.isLoaded({ env: process.env });
   } catch (err) {
     fail(`Gateway service check failed: ${String(err)}`);
     return;
   }
-  if (loaded) {
+  if (loaded && !useLaunchDaemon) {
     if (!opts.force) {
       emit({
         ok: true,
@@ -69,6 +73,23 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
         defaultRuntime.log(
           `Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`,
+        );
+      }
+      return;
+    }
+  }
+  if (useLaunchDaemon && loaded) {
+    if (!opts.force) {
+      emit({
+        ok: true,
+        result: "already-installed",
+        message: "Gateway LaunchDaemon already loaded.",
+        service: buildDaemonServiceSnapshot(service, loaded),
+      });
+      if (!json) {
+        defaultRuntime.log("Gateway LaunchDaemon already loaded.");
+        defaultRuntime.log(
+          `Reinstall with: ${formatCliCommand("openclaw gateway install --force --launch-daemon")}`,
         );
       }
       return;
@@ -157,6 +178,32 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     },
     config: cfg,
   });
+
+  const runAsUser =
+    opts.runAsUser?.trim() ||
+    process.env.USER ||
+    String(process.getuid?.() ?? "nobody");
+
+  if (useLaunchDaemon) {
+    await installDaemonServiceAndEmit({
+      serviceNoun: "Gateway",
+      service: { ...service, label: "LaunchDaemon" },
+      warnings,
+      emit,
+      fail,
+      install: async () => {
+        await installLaunchDaemon({
+          env: process.env,
+          stdout,
+          programArguments,
+          workingDirectory,
+          environment,
+          runAsUser,
+        });
+      },
+    });
+    return;
+  }
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",

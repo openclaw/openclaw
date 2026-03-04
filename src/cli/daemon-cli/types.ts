@@ -20,6 +20,10 @@ export type DaemonInstallOptions = {
   token?: string;
   force?: boolean;
   json?: boolean;
+  /** macOS only: install as LaunchDaemon (starts at boot without login; requires sudo). */
+  launchDaemon?: boolean;
+  /** macOS LaunchDaemon: user to run as (default: current user). */
+  runAsUser?: string;
 };
 
 export type DaemonLifecycleOptions = {

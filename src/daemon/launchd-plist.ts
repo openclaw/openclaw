@@ -115,3 +115,42 @@ export function buildLaunchAgentPlist({
   const envXml = renderEnvDict(environment);
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${plistEscape(label)}</string>\n    ${commentXml}\n    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <true/>\n    <key>ThrottleInterval</key>\n    <integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>\n    <key>Umask</key>\n    <integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>\n    <key>ProgramArguments</key>\n    <array>${argsXml}\n    </array>\n    ${workingDirXml}\n    <key>StandardOutPath</key>\n    <string>${plistEscape(stdoutPath)}</string>\n    <key>StandardErrorPath</key>\n    <string>${plistEscape(stderrPath)}</string>${envXml}\n  </dict>\n</plist>\n`;
 }
+
+/**
+ * Build a LaunchDaemon plist for /Library/LaunchDaemons.
+ * Requires UserName so the daemon runs as that user (starts at boot without login).
+ */
+export function buildLaunchDaemonPlist({
+  label,
+  comment,
+  programArguments,
+  workingDirectory,
+  stdoutPath,
+  stderrPath,
+  environment,
+  runAsUser,
+}: {
+  label: string;
+  comment?: string;
+  programArguments: string[];
+  workingDirectory?: string;
+  stdoutPath: string;
+  stderrPath: string;
+  environment?: Record<string, string | undefined>;
+  runAsUser: string;
+}): string {
+  const argsXml = programArguments
+    .map((arg) => `\n      <string>${plistEscape(arg)}</string>`)
+    .join("");
+  const workingDirXml = workingDirectory
+    ? `\n    <key>WorkingDirectory</key>\n    <string>${plistEscape(workingDirectory)}</string>`
+    : "";
+  const commentXml = comment?.trim()
+    ? `\n    <key>Comment</key>\n    <string>${plistEscape(comment.trim())}</string>`
+    : "";
+  const envXml = renderEnvDict(environment);
+  const userXml = runAsUser.trim()
+    ? `\n    <key>UserName</key>\n    <string>${plistEscape(runAsUser.trim())}</string>`
+    : "";
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${plistEscape(label)}</string>\n    ${commentXml}\n    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <true/>\n    <key>ProgramArguments</key>\n    <array>${argsXml}\n    </array>\n    ${workingDirXml}\n    <key>StandardOutPath</key>\n    <string>${plistEscape(stdoutPath)}</string>\n    <key>StandardErrorPath</key>\n    <string>${plistEscape(stderrPath)}</string>${userXml}${envXml}\n  </dict>\n</plist>\n`;
+}

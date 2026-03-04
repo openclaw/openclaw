@@ -2469,6 +2469,12 @@ openclaw gateway install --force
 
 Run that from the same `--profile` / environment you want the service to use.
 
+### FileVault and gateway auto-start (OpenClaw doesn't start after reboot on macOS)
+
+On macOS the default install is a **LaunchAgent**, which starts only **after** you log in. With **FileVault** on, the disk is locked until login, so the Gateway will not run at boot until someone logs in.
+
+**Workarounds:** (1) Install as a LaunchDaemon so it starts at boot: `sudo openclaw gateway install --launch-daemon` (see [macOS App → Auto-start and FileVault](/platforms/macos#auto-start-and-filevault)). (2) Turn off FileVault and use auto-login. (3) Keep the Mac in sleep instead of shutting down. (4) Log in manually after each reboot.
+
 ### What does another gateway instance is already listening mean
 
 OpenClaw enforces a runtime lock by binding the WebSocket listener immediately on startup (default `ws://127.0.0.1:18789`). If the bind fails with `EADDRINUSE`, it throws `GatewayLockError` indicating another instance is already listening.
