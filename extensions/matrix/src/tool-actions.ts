@@ -26,6 +26,11 @@ const messageActions = new Set(["sendMessage", "editMessage", "deleteMessage", "
 const reactionActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 
+function readOptionalBoolean(params: Record<string, unknown>, key: string): boolean | undefined {
+  const value = params[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function readRoomId(params: Record<string, unknown>, required = true): string {
   const direct = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
   if (direct) {
@@ -82,10 +87,13 @@ export async function handleMatrixAction(
         const replyToId =
           readStringParam(params, "replyToId") ?? readStringParam(params, "replyTo");
         const threadId = readStringParam(params, "threadId");
+        const audioAsVoice =
+          readOptionalBoolean(params, "audioAsVoice") ?? readOptionalBoolean(params, "asVoice");
         const result = await sendMatrixMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,
+          audioAsVoice: audioAsVoice ?? undefined,
         });
         return jsonResult({ ok: true, result });
       }

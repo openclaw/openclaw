@@ -11,6 +11,11 @@ import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { handleMatrixAction } from "./tool-actions.js";
 import type { CoreConfig } from "./types.js";
 
+function readOptionalBoolean(params: Record<string, unknown>, key: string): boolean | undefined {
+  const value = params[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
 export const matrixMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
     const account = resolveMatrixAccount({ cfg: cfg as CoreConfig });
@@ -69,6 +74,8 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       const mediaUrl = readStringParam(params, "media", { trim: false });
       const replyTo = readStringParam(params, "replyTo");
       const threadId = readStringParam(params, "threadId");
+      const audioAsVoice =
+        readOptionalBoolean(params, "audioAsVoice") ?? readOptionalBoolean(params, "asVoice");
       return await handleMatrixAction(
         {
           action: "sendMessage",
@@ -77,6 +84,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           mediaUrl: mediaUrl ?? undefined,
           replyToId: replyTo ?? undefined,
           threadId: threadId ?? undefined,
+          audioAsVoice: audioAsVoice ?? undefined,
         },
         cfg as CoreConfig,
       );

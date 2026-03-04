@@ -131,6 +131,21 @@ describe("message tool path passthrough", () => {
     expect(call?.params?.[field]).toBe(value);
     expect(call?.params?.media).toBeUndefined();
   });
+
+  it("passes audioAsVoice alias through send params", async () => {
+    mockSendResult({ to: "matrix:!room:example.org" });
+
+    const call = await executeSend({
+      action: {
+        target: "matrix:!room:example.org",
+        media: "https://example.org/voice.ogg",
+        message: "",
+        audioAsVoice: true,
+      },
+    });
+
+    expect(call?.params?.audioAsVoice).toBe(true);
+  });
 });
 
 describe("message tool schema scoping", () => {
@@ -212,6 +227,7 @@ describe("message tool schema scoping", () => {
       expect(properties.pollId).toBeDefined();
       expect(properties.pollOptionIndex).toBeDefined();
       expect(properties.pollOptionId).toBeDefined();
+      expect(properties.audioAsVoice).toBeDefined();
     },
   );
 });

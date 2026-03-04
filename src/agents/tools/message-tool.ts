@@ -194,6 +194,11 @@ function buildSendSchema(options: {
     replyTo: Type.Optional(Type.String()),
     threadId: Type.Optional(Type.String()),
     asVoice: Type.Optional(Type.Boolean()),
+    audioAsVoice: Type.Optional(
+      Type.Boolean({
+        description: "Alias for asVoice. When true, send audio as a voice message when supported.",
+      }),
+    ),
     silent: Type.Optional(Type.Boolean()),
     quoteText: Type.Optional(
       Type.String({ description: "Quote text for Telegram reply_parameters" }),
