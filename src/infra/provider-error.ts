@@ -43,7 +43,7 @@ function parseRetryAfterMs(headerValue: string | null): number | null {
   if (headerValue === null || headerValue.trim() === "") return null;
 
   const numeric = parseInt(headerValue.trim(), 10);
-  if (!isNaN(numeric) && String(numeric) === headerValue.trim()) {
+  if (!isNaN(numeric) && /^\d+$/.test(headerValue.trim())) {
     return Math.max(0, numeric * 1000);
   }
 
