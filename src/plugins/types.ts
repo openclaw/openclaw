@@ -1891,6 +1891,8 @@ export type PluginHookContextAssembledEvent = {
   prompt: string;
   messages: AgentMessage[];
   messageCount: number;
+  /** Number of images attached to the prompt. */
+  imageCount: number;
   /** Always 1 — this hook fires once per run before the first LLM call.
    *  Use loop_iteration_start for per-turn iteration tracking. */
   iteration: number;

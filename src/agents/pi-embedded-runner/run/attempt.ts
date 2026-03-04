@@ -2583,6 +2583,7 @@ export async function runEmbeddedAttempt(
       // Subscribe for loop iteration tracking hooks
       let hookTurnIteration = 0;
       let hookTurnMessageCount = 0;
+      let hookPendingToolResults = 0;
       const hookEventUnsub =
         hookRunner?.hasHooks("loop_iteration_start") || hookRunner?.hasHooks("loop_iteration_end")
           ? activeSession.subscribe((event) => {
@@ -2594,6 +2595,8 @@ export async function runEmbeddedAttempt(
                     {
                       iteration: hookTurnIteration,
                       messageCount: activeSession.messages.length,
+                      // Tool results from previous turn that triggered this iteration
+                      pendingToolResults: hookPendingToolResults,
                     },
                     hookCtx,
                   )
@@ -2601,6 +2604,8 @@ export async function runEmbeddedAttempt(
               }
               if (event.type === "turn_end") {
                 const toolResults = event.toolResults ?? [];
+                // Capture for next turn_start
+                hookPendingToolResults = toolResults.length;
                 hookRunner
                   .runLoopIterationEnd(
                     {
@@ -2851,13 +2856,16 @@ export async function runEmbeddedAttempt(
           // because subsequent turns reuse the same session context with appended
           // messages; use loop_iteration_start for per-turn tracking.
           if (hookRunner?.hasHooks("context_assembled")) {
+            // Snapshot messages array to avoid mutation during async hook handling
+            const messagesSnapshot = activeSession.messages.slice();
             hookRunner
               .runContextAssembled(
                 {
                   systemPrompt: systemPromptText,
                   prompt: effectivePrompt,
-                  messages: activeSession.messages,
-                  messageCount: activeSession.messages.length,
+                  messages: messagesSnapshot,
+                  messageCount: messagesSnapshot.length,
+                  imageCount: imageResult.images.length,
                   iteration: 1,
                 },
                 hookCtx,
