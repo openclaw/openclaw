@@ -97,7 +97,10 @@ export function wrapHostEditToolWithMismatchContent(
       signal: AbortSignal | undefined,
       onUpdate?: AgentToolUpdateCallback<unknown>,
     ) => {
-      const result = await base.execute(toolCallId, params, signal, onUpdate);
+      const result = (await base.execute(toolCallId, params, signal, onUpdate)) as {
+        isError?: boolean;
+        content: unknown[];
+      };
 
       // Check if edit failed due to oldText mismatch
       if (
