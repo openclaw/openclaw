@@ -89,10 +89,11 @@ export function createGatewayTool(opts?: {
         if (!isRestartEnabled(opts?.config)) {
           throw new Error("Gateway restart is disabled (commands.restart=false).");
         }
-        const sessionKey =
+        const explicitSessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
             ? params.sessionKey.trim()
-            : opts?.agentSessionKey?.trim() || undefined;
+            : undefined;
+        const sessionKey = (explicitSessionKey ?? opts?.agentSessionKey?.trim()) || undefined;
         const delayMs =
           typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
             ? Math.floor(params.delayMs)
@@ -109,8 +110,17 @@ export function createGatewayTool(opts?: {
         // runs to { channel: "webchat", to: "heartbeat" }, causing the
         // sentinel to write stale routing data that fails post-restart.
         // See #18612.
+        //
+        // Only apply the live context when the restart targets this agent's
+        // own session. When an explicit sessionKey points to a different
+        // session, the live context belongs to the wrong session and would
+        // misroute the post-restart reply. Fall back to extractDeliveryInfo()
+        // so the server uses the correct routing for the target session.
+        const isTargetingOtherSession =
+          explicitSessionKey != null &&
+          explicitSessionKey !== (opts?.agentSessionKey?.trim() || undefined);
         const liveContext =
-          opts?.agentChannel != null && String(opts.agentChannel).trim()
+          !isTargetingOtherSession && opts?.agentChannel != null && String(opts.agentChannel).trim()
             ? {
                 channel: String(opts.agentChannel).trim(),
                 to: opts?.agentTo ?? undefined,
@@ -178,17 +188,26 @@ export function createGatewayTool(opts?: {
         restartDelayMs: number | undefined;
         deliveryContext: typeof liveDeliveryContextForRpc;
       } => {
-        const sessionKey =
+        const explicitSessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
             ? params.sessionKey.trim()
-            : opts?.agentSessionKey?.trim() || undefined;
+            : undefined;
+        const sessionKey = (explicitSessionKey ?? opts?.agentSessionKey?.trim()) || undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
         const restartDelayMs =
           typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
             ? Math.floor(params.restartDelayMs)
             : undefined;
-        return { sessionKey, note, restartDelayMs, deliveryContext: liveDeliveryContextForRpc };
+        // Only forward live context when the target session is this agent's
+        // own session. When an explicit sessionKey points to a different
+        // session, omit deliveryContext so the server falls back to
+        // extractDeliveryInfo(sessionKey) which uses that session's routing.
+        const isTargetingOtherSession =
+          explicitSessionKey != null &&
+          explicitSessionKey !== (opts?.agentSessionKey?.trim() || undefined);
+        const deliveryContext = isTargetingOtherSession ? undefined : liveDeliveryContextForRpc;
+        return { sessionKey, note, restartDelayMs, deliveryContext };
       };
 
       const resolveConfigWriteParams = async (): Promise<{
