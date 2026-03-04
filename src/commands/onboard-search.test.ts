@@ -156,6 +156,17 @@ describe("setupSearch", () => {
     expect(prompter.text).not.toHaveBeenCalled();
   });
 
+  it("quickstart falls through to key prompt when no key and no env var", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({ selectValue: "grok", textValue: "" });
+    const result = await setupSearch(cfg, runtime, prompter, {
+      quickstartDefaults: true,
+    });
+    expect(prompter.text).toHaveBeenCalled();
+    expect(result.tools?.web?.search?.provider).toBe("grok");
+    expect(result.tools?.web?.search?.enabled).toBe(false);
+  });
+
   it("quickstart skips key prompt when env var is available", async () => {
     const orig = process.env.BRAVE_API_KEY;
     process.env.BRAVE_API_KEY = "env-brave-key";
