@@ -114,6 +114,14 @@ type GeminiCandidate = {
   content?: { parts?: Array<{ text?: string }> };
 };
 
+function normalizeGeminiBaseUrl(rawBaseUrl?: string): string {
+  const trimmedBaseUrl = (rawBaseUrl ?? "https://generativelanguage.googleapis.com").replace(
+    /\/+$/,
+    "",
+  );
+  return /\/v1beta(?:\/|$)/.test(trimmedBaseUrl) ? trimmedBaseUrl : `${trimmedBaseUrl}/v1beta`;
+}
+
 export async function geminiAnalyzePdf(params: {
   apiKey: string;
   modelId: string;
@@ -137,11 +145,8 @@ export async function geminiAnalyzePdf(params: {
   }
   parts.push({ text: params.prompt });
 
-  const baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com").replace(
-    /\/+$/,
-    "",
-  );
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const baseUrl = normalizeGeminiBaseUrl(params.baseUrl);
+  const url = `${baseUrl}/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const res = await fetch(url, {
     method: "POST",
