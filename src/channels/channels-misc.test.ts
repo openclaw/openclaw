@@ -19,6 +19,7 @@ describe("normalizeChatType", () => {
   const cases: Array<{ name: string; value: string | undefined; expected: string | undefined }> = [
     { name: "normalizes direct", value: "direct", expected: "direct" },
     { name: "normalizes dm alias", value: "dm", expected: "direct" },
+    { name: "normalizes p2p alias", value: "p2p", expected: "direct" },
     { name: "normalizes group", value: "group", expected: "group" },
     { name: "normalizes channel", value: "channel", expected: "channel" },
     { name: "returns undefined for undefined", value: undefined, expected: undefined },
@@ -38,6 +39,7 @@ describe("normalizeChatType", () => {
       // Legacy config/input may use "dm" with non-canonical casing/spacing.
       expect(normalizeChatType("DM")).toBe("direct");
       expect(normalizeChatType(" dm ")).toBe("direct");
+      expect(normalizeChatType(" P2P ")).toBe("direct");
     });
   });
 });

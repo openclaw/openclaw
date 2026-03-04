@@ -5,7 +5,8 @@ export function normalizeChatType(raw?: string): ChatType | undefined {
   if (!value) {
     return undefined;
   }
-  if (value === "direct" || value === "dm") {
+  // Feishu reports 1:1 chats as "p2p".
+  if (value === "direct" || value === "dm" || value === "p2p") {
     return "direct";
   }
   if (value === "group") {
