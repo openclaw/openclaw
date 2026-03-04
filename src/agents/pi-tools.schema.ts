@@ -2,6 +2,31 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
 import { isXaiProvider, stripXaiUnsupportedKeywords } from "./schema/clean-for-xai.js";
 
+const TOOL_SCHEMA_MAX_LENGTH_FOR_GRAMMAR = 2048;
+
+function stripOversizedStringBounds(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map((entry) => stripOversizedStringBounds(entry));
+  }
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+  const record = schema as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (
+      key === "maxLength" &&
+      typeof value === "number" &&
+      Number.isFinite(value) &&
+      value > TOOL_SCHEMA_MAX_LENGTH_FOR_GRAMMAR
+    ) {
+      continue;
+    }
+    next[key] = stripOversizedStringBounds(value);
+  }
+  return next;
+}
+
 function extractEnumValues(schema: unknown): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
     return undefined;
@@ -91,13 +116,14 @@ export function normalizeToolParameters(
   const isXai = isXaiProvider(options?.modelProvider, options?.modelId);
 
   function applyProviderCleaning(s: unknown): unknown {
+    let next = s;
     if (isGeminiProvider && !isAnthropicProvider) {
-      return cleanSchemaForGemini(s);
+      next = cleanSchemaForGemini(next);
     }
     if (isXai) {
-      return stripXaiUnsupportedKeywords(s);
+      next = stripXaiUnsupportedKeywords(next);
     }
-    return s;
+    return stripOversizedStringBounds(next);
   }
 
   // If schema already has type + properties (no top-level anyOf to merge),
