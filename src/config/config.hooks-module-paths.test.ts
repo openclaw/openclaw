@@ -11,6 +11,23 @@ describe("config hooks module paths", () => {
     expect(res.issues.some((iss) => iss.path === expectedPath)).toBe(true);
   };
 
+  it("accepts hooks.mappings[].channel=feishu", () => {
+    const res = validateConfigObjectWithPlugins({
+      agents: { list: [{ id: "pi" }] },
+      hooks: {
+        mappings: [
+          {
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "email",
+            channel: "feishu",
+          },
+        ],
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects absolute hooks.mappings[].transform.module", () => {
     expectRejectedIssuePath(
       {

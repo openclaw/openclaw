@@ -74,4 +74,20 @@ describe("config validation allowed-values metadata", () => {
       expect(issue?.message).not.toContain("(allowed:");
     }
   });
+
+  it("includes feishu for hooks.mappings[].channel allowed values", () => {
+    const result = validateConfigObjectRaw({
+      hooks: {
+        mappings: [{ action: "agent", messageTemplate: "hello", channel: "invalid-channel" }],
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find((entry) => entry.path === "hooks.mappings.0.channel");
+      expect(issue).toBeDefined();
+      expect(issue?.allowedValues).toContain("feishu");
+      expect(issue?.message).toContain('"feishu"');
+    }
+  });
 });
