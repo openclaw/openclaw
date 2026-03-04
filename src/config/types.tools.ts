@@ -454,6 +454,10 @@ export type ToolsConfig = {
       perplexity?: {
         /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
         apiKey?: string;
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
+        baseUrl?: string;
+        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
+        model?: string;
       };
       /** Grok-specific configuration (used when provider="grok"). */
       grok?: {
