@@ -275,7 +275,9 @@ commit_stage_merge() {
   protected_summary="$(printf '%s ' "${MB_PROTECTED_PATTERNS[@]}")"
 
   # Commit hooks depend on local dev tooling that may not exist in ephemeral stage worktrees.
-  git -C "$STAGE_DIR" commit --no-verify -m "chore: safe upstream merge $MERGE_DATE (fail-closed)\n\nMB-protected patterns: $protected_summary"
+  git -C "$STAGE_DIR" commit --no-verify \
+    -m "chore: safe upstream merge $MERGE_DATE (fail-closed)" \
+    -m "MB-protected patterns: $protected_summary"
   ok "Stage merge committed"
 }
 
