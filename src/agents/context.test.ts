@@ -13,8 +13,8 @@ describe("applyDiscoveredContextWindows", () => {
     applyDiscoveredContextWindows({
       cache,
       models: [
-        { id: "claude-sonnet-4-5", contextWindow: 1_000_000 },
-        { id: "claude-sonnet-4-5", contextWindow: 200_000 },
+        { id: "claude-sonnet-4-5", provider: "anthropic", contextWindow: 1_000_000 },
+        { id: "claude-sonnet-4-5", provider: "anthropic", contextWindow: 200_000 },
       ],
     });
 
