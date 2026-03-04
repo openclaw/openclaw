@@ -387,13 +387,17 @@ function getEvaluatedBindingIndexForChannelAccount(
 }
 
 function normalizePeerConstraint(
-  peer: { kind?: string; id?: string } | undefined,
+  peer: { kind?: string; id?: string; topic?: string | number } | undefined,
 ): NormalizedPeerConstraint {
   if (!peer) {
     return { state: "none" };
   }
   const kind = normalizeChatType(peer.kind);
-  const id = normalizeId(peer.id);
+  const baseId = normalizeId(peer.id);
+  const topic = peer.topic != null ? String(peer.topic).trim() : "";
+  // Combine id and topic into the canonical peer ID used by Telegram forum groups
+  // (e.g. "-100123456789:topic:42"), matching buildTelegramGroupPeerId output.
+  const id = topic ? `${baseId}:topic:${topic}` : baseId;
   if (!kind || !id) {
     return { state: "invalid" };
   }
@@ -404,7 +408,7 @@ function normalizeBindingMatch(
   match:
     | {
         accountId?: string | undefined;
-        peer?: { kind?: string; id?: string } | undefined;
+        peer?: { kind?: string; id?: string; topic?: string | number } | undefined;
         guildId?: string | undefined;
         teamId?: string | undefined;
         roles?: string[] | undefined;
