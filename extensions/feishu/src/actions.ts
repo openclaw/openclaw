@@ -1,4 +1,5 @@
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "openclaw/plugin-sdk";
+import { jsonResult } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { addReactionFeishu } from "./reactions.js";
 
@@ -53,10 +54,7 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
         accountId: resolvedAccountId,
       });
 
-      return {
-        ok: true as const,
-        data: { action: "react", messageId, emojiType, ...result },
-      };
+      return jsonResult({ ok: true, action: "react", messageId, emojiType, ...result });
     }
 
     throw new Error(`Unsupported feishu action: ${action}`);

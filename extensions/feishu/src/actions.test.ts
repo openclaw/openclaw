@@ -47,15 +47,16 @@ describe("feishuMessageActions", () => {
         params: { messageId: "om_abc123", emoji: "THUMBSUP" },
       });
 
-      expect(result).toEqual({
+      expect(result.details).toEqual({
         ok: true,
-        data: {
-          action: "react",
-          messageId: "om_abc123",
-          emojiType: "THUMBSUP",
-          reactionId: "mock-reaction-id",
-        },
+        action: "react",
+        messageId: "om_abc123",
+        emojiType: "THUMBSUP",
+        reactionId: "mock-reaction-id",
       });
+      expect(result.content).toEqual([
+        { type: "text", text: expect.stringContaining('"ok": true') },
+      ]);
       expect(addReactionFeishu).toHaveBeenCalledWith({
         cfg: mockCfg,
         messageId: "om_abc123",
@@ -105,10 +106,9 @@ describe("feishuMessageActions", () => {
           emojiType: "HEART",
         }),
       );
-      expect(result).toEqual({
-        ok: true,
-        data: expect.objectContaining({ messageId: "om_context_msg" }),
-      });
+      expect(result.details).toEqual(
+        expect.objectContaining({ ok: true, messageId: "om_context_msg" }),
+      );
     });
 
     it("throws when no messageId and no tool context", async () => {
