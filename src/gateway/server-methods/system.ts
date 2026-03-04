@@ -5,6 +5,7 @@ import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/sys
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
+import { canonicalizeWakeSessionKey } from "../session-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const systemHandlers: GatewayRequestHandlers = {
@@ -37,7 +38,11 @@ export const systemHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "text required"));
       return;
     }
-    const sessionKey = resolveMainSessionKeyFromConfig();
+    const mainSessionKey = resolveMainSessionKeyFromConfig();
+    const rawSessionKey =
+      typeof params.sessionKey === "string" && params.sessionKey.trim()
+        ? params.sessionKey.trim()
+        : undefined;
     const deviceId = typeof params.deviceId === "string" ? params.deviceId : undefined;
     const instanceId = typeof params.instanceId === "string" ? params.instanceId : undefined;
     const host = typeof params.host === "string" ? params.host : undefined;
@@ -97,7 +102,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       const reasonChanged = changed.has("reason") && !ignoreReason;
       const hasChanges = hostChanged || ipChanged || versionChanged || modeChanged || reasonChanged;
       if (hasChanges) {
-        const contextChanged = isSystemEventContextChanged(sessionKey, presenceUpdate.key);
+        const contextChanged = isSystemEventContextChanged(mainSessionKey, presenceUpdate.key);
         const parts: string[] = [];
         if (contextChanged || hostChanged || ipChanged) {
           const hostLabel = next.host?.trim() || "Unknown";
@@ -116,13 +121,24 @@ export const systemHandlers: GatewayRequestHandlers = {
         const deltaText = parts.join(" · ");
         if (deltaText) {
           enqueueSystemEvent(deltaText, {
-            sessionKey,
+            sessionKey: mainSessionKey,
             contextKey: presenceUpdate.key,
           });
         }
       }
     } else {
-      enqueueSystemEvent(text, { sessionKey });
+      let targetSessionKey: string;
+      if (rawSessionKey) {
+        try {
+          targetSessionKey = canonicalizeWakeSessionKey(rawSessionKey);
+        } catch (err) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, (err as Error).message));
+          return;
+        }
+      } else {
+        targetSessionKey = mainSessionKey;
+      }
+      enqueueSystemEvent(text, { sessionKey: targetSessionKey });
     }
     broadcastPresenceSnapshot({
       broadcast: context.broadcast,

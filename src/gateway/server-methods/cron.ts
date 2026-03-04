@@ -6,6 +6,8 @@ import {
 } from "../../cron/run-log.js";
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   ErrorCodes,
   errorShape,
@@ -19,6 +21,7 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../protocol/index.js";
+import { canonicalizeWakeSessionKey } from "../session-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const cronHandlers: GatewayRequestHandlers = {
@@ -37,9 +40,40 @@ export const cronHandlers: GatewayRequestHandlers = {
     const p = params as {
       mode: "now" | "next-heartbeat";
       text: string;
+      sessionKey?: string;
     };
-    const result = context.cron.wake({ mode: p.mode, text: p.text });
-    respond(true, result, undefined);
+    const rawSessionKey =
+      typeof p.sessionKey === "string" && p.sessionKey.trim() ? p.sessionKey.trim() : undefined;
+
+    if (rawSessionKey) {
+      // Targeted dispatch — canonicalize and send directly
+      const trimmedText = p.text.trim();
+      if (!trimmedText) {
+        respond(true, { ok: false, error: "text required" }, undefined);
+        return;
+      }
+      let sessionKey: string;
+      try {
+        sessionKey = canonicalizeWakeSessionKey(rawSessionKey);
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, (err as Error).message));
+        return;
+      }
+      enqueueSystemEvent(trimmedText, { sessionKey });
+      if (p.mode === "now") {
+        requestHeartbeatNow({ reason: "wake", sessionKey });
+      }
+      respond(true, { ok: true, mode: p.mode }, undefined);
+    } else {
+      // Fan-out: all agents
+      const trimmedText = p.text.trim();
+      if (!trimmedText) {
+        respond(true, { ok: false, error: "text required" }, undefined);
+        return;
+      }
+      const result = context.cron.wake({ mode: p.mode, text: trimmedText });
+      respond(true, { ok: result.ok, mode: p.mode }, undefined);
+    }
   },
   "cron.list": async ({ params, respond, context }) => {
     if (!validateCronListParams(params)) {

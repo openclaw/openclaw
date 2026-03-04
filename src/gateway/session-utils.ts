@@ -27,6 +27,8 @@ import {
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
@@ -66,6 +68,38 @@ export type {
   SessionsPreviewEntry,
   SessionsPreviewResult,
 } from "./session-utils.types.js";
+
+/**
+ * Canonicalize a raw session key for wake/system-event dispatch.
+ * Mirrors the two-step canonicalization that resolveHeartbeatSession
+ * performs, ensuring the key matches what the heartbeat runner will use.
+ */
+export function canonicalizeWakeSessionKey(rawKey: string): string {
+  const cfg = loadConfig();
+  if (cfg.session?.scope === "global") {
+    return "global";
+  }
+  const agentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+  const candidate = toAgentStoreSessionKey({
+    agentId,
+    requestKey: rawKey,
+    mainKey: cfg.session?.mainKey,
+  });
+  const canonical = canonicalizeMainSessionAlias({
+    cfg,
+    agentId,
+    sessionKey: candidate,
+  });
+  if (canonical !== "global") {
+    const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
+    if (normalizeAgentId(sessionAgentId) !== agentId) {
+      throw new Error(
+        `canonicalizeWakeSessionKey: session key "${rawKey}" targets agent "${sessionAgentId}" but the default agent is "${agentId}". Cross-agent wake is not supported.`,
+      );
+    }
+  }
+  return canonical;
+}
 
 const DERIVED_TITLE_MAX_LEN = 60;
 
