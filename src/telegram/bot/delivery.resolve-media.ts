@@ -2,7 +2,7 @@ import { GrammyError } from "grammy";
 import { logVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
-import { fetchRemoteMedia } from "../../media/fetch.js";
+import { MediaFetchError, fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
@@ -247,6 +247,17 @@ export async function resolveMedia(
   const m = resolveMediaFileRef(msg);
   if (!m?.file_id) {
     return null;
+  }
+
+  // Pre-download size check: Telegram provides file_size in the message metadata.
+  // Reject early to avoid downloading large files we'll discard anyway (#26246).
+  if (maxBytes && "file_size" in m && typeof m.file_size === "number" && m.file_size > maxBytes) {
+    const sizeMb = (m.file_size / (1024 * 1024)).toFixed(1);
+    const limitMb = (maxBytes / (1024 * 1024)).toFixed(0);
+    throw new MediaFetchError(
+      "max_bytes",
+      `File size ${sizeMb}MB exceeds maxBytes limit of ${limitMb}MB`,
+    );
   }
 
   const file = await resolveTelegramFileWithRetry(ctx);
