@@ -34,6 +34,8 @@ export function attachMediaRoutes(
 
   app.get("/media/:id", async (req, res) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("Cache-Control", "no-store, must-revalidate");
     const id = req.params.id;
     if (!isValidMediaId(id)) {
       res.status(400).send("invalid path");
@@ -106,6 +108,7 @@ export async function startMediaServer(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<Server> {
   const app = express();
+  app.disable("x-powered-by");
   attachMediaRoutes(app, ttlMs, runtime);
   return await new Promise((resolve, reject) => {
     const server = app.listen(port, "127.0.0.1");
