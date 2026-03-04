@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/compat";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import type { BlueBubblesCoreRuntime, WebhookTarget } from "./monitor-shared.js";
 
