@@ -44,7 +44,7 @@ function parseRetryAfterMs(headerValue: string | null): number | null {
 
   const numeric = parseInt(headerValue.trim(), 10);
   if (!isNaN(numeric) && String(numeric) === headerValue.trim()) {
-    return numeric * 1000;
+    return Math.max(0, numeric * 1000);
   }
 
   const parsed = Date.parse(headerValue);
@@ -105,6 +105,11 @@ export async function parseProviderError(
     retryable = false;
     retryAfterMs = null;
     message = `${label} Bad request (400).`;
+  } else if (httpStatus === 500 || httpStatus === 502 || httpStatus === 504) {
+    category = "resource-exhaustion";
+    retryable = true;
+    retryAfterMs = null;
+    message = `${label} Server error (${httpStatus}). Retrying with backoff...`;
   } else {
     category = "unknown";
     retryable = false;
@@ -140,7 +145,7 @@ export async function retryWithBackoff<T>(
   error: ProviderError,
   onRetry?: (attempt: number, maxRetries: number, delayMs: number, error: ProviderError) => void,
 ): Promise<T> {
-  if (!error.retryable) {
+  if (!isProviderError(error) || !error.retryable) {
     throw error;
   }
 
@@ -166,7 +171,14 @@ export async function retryWithBackoff<T>(
 
   // Attempts 2..maxRetries
   for (let attempt = 2; attempt <= maxRetries; attempt++) {
+<<<<<<< HEAD
     const delayMs = Math.min(baseDelayMs * Math.pow(backoffMultiplier, attempt - 1), maxDelayMs);
+=======
+    const delayMs =
+      lastError.retryAfterMs !== null
+        ? lastError.retryAfterMs
+        : Math.min(baseDelayMs * Math.pow(backoffMultiplier, attempt - 1), maxDelayMs);
+>>>>>>> mcclean/fix/provider-error-retry-bugs-2
 
     onRetry?.(attempt, maxRetries, delayMs, lastError);
     await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
