@@ -1,4 +1,5 @@
 import type { Guild, Message, User } from "@buape/carbon";
+import { Routes } from "discord-api-types/v10";
 import { resolveTimestampMs } from "./format.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 
@@ -10,17 +11,33 @@ export type DiscordReplyContext = {
   timestamp?: number;
 };
 
-export function resolveReplyContext(
+export async function resolveReplyContext(
   message: Message,
   resolveDiscordMessageText: (message: Message, options?: { includeForwarded?: boolean }) => string,
-): DiscordReplyContext | null {
+  client?: { rest: { get: (path: string) => Promise<unknown> } },
+): Promise<DiscordReplyContext | null> {
   const referenced = message.referencedMessage;
   if (!referenced?.author) {
     return null;
   }
-  const referencedText = resolveDiscordMessageText(referenced, {
+  let referencedText = resolveDiscordMessageText(referenced, {
     includeForwarded: true,
   });
+
+  // Gateway partial: content empty but message exists — fetch full via REST
+  if (!referencedText && referenced.id && referenced.channelId && client) {
+    try {
+      const full = (await client.rest.get(
+        Routes.channelMessage(referenced.channelId, referenced.id),
+      )) as { content?: string };
+      if (full?.content) {
+        referencedText = full.content;
+      }
+    } catch {
+      // Graceful degradation — no reply context rather than crashing
+    }
+  }
+
   if (!referencedText) {
     return null;
   }
