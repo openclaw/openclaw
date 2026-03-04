@@ -142,7 +142,7 @@ async function runResearch(params: {
         .filter((s) => typeof s.url === "string" && s.url)
         .map((s) => ({
           url: s.url!,
-          title: s.title || undefined,
+          title: s.title ? wrapWebContent(s.title, "web_research") : undefined,
         }));
 
       return {

@@ -134,7 +134,10 @@ describe("web_research tool execution", () => {
       effort?: string;
     };
     expect(details.content).toContain("Research result content");
-    expect(details.sources).toEqual([{ url: "https://example.com", title: "Example" }]);
+    expect(details.sources).toHaveLength(1);
+    expect(details.sources?.[0]?.url).toBe("https://example.com");
+    // Title is wrapped with external content markers for prompt-injection safety
+    expect(details.sources?.[0]?.title).toContain("Example");
     expect(details.effort).toBe("deep");
   });
 });
