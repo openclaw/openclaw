@@ -503,10 +503,24 @@ export type PluginHookAgentContext = {
   sessionId?: string;
   workspaceDir?: string;
   messageProvider?: string;
+  /** Original message source (e.g. "heartbeat", "cron-event", "exec-event").
+   *  Unlike messageProvider (which may reflect the delivery channel), this
+   *  preserves the true origin for security classification. */
+  sourceProvider?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", or "memory". */
   trigger?: string;
   /** Channel identifier (e.g. "telegram", "discord", "whatsapp"). */
   channelId?: string;
+  /** Sender's platform-specific ID (e.g. Discord user ID, Slack user ID). */
+  senderId?: string | null;
+  /** Sender's display name. */
+  senderName?: string | null;
+  /** Whether the sender is a configured owner (from ownerNumbers). */
+  senderIsOwner?: boolean;
+  /** Group/channel ID if this is a group chat (null for DMs). */
+  groupId?: string | null;
+  /** Parent session key if this is a sub-agent session. */
+  spawnedBy?: string | null;
 };
 
 // before_model_resolve hook
@@ -663,6 +677,7 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  sessionKey?: string;
 };
 
 // message_received hook

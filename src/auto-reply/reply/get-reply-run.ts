@@ -492,6 +492,7 @@ export async function runPreparedReply(
         // still reflects the active channel that should own tool routing.
         provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
       }),
+      sourceProvider: sessionCtx.Provider?.trim().toLowerCase() || undefined,
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),

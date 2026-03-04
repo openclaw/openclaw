@@ -2314,8 +2314,14 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           workspaceDir: params.workspaceDir,
           messageProvider: params.messageProvider ?? undefined,
+          sourceProvider: params.sourceProvider ?? undefined,
           trigger: params.trigger,
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+          senderId: params.senderId ?? undefined,
+          senderName: params.senderName ?? undefined,
+          senderIsOwner: params.senderIsOwner ?? undefined,
+          groupId: params.groupId ?? undefined,
+          spawnedBy: params.spawnedBy ?? undefined,
         };
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
