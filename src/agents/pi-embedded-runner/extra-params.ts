@@ -544,6 +544,8 @@ function createOpenAIResponsesContextManagementWrapper(
             const mergedInstructions = instructionParts.join("\n\n").trim();
             payloadObj.instructions = mergedInstructions || "You are a helpful assistant.";
           }
+
+          logFinalOpenAIResponsesPayload(model, payloadObj);
         }
         originalOnPayload?.(payload);
       },
@@ -757,6 +759,221 @@ type PayloadMessage = {
   role?: string;
   content?: unknown;
 };
+
+type OpenAIResponsesInputItem = {
+  type: "message";
+  role: "user" | "assistant";
+  content: Array<{ type: "input_text"; text: string }>;
+};
+
+type DebugOpenAIResponsesInputSummary = {
+  count: number;
+  itemTypes: string[];
+  roles: string[];
+};
+
+function summarizeOpenAIResponsesInput(input: unknown): DebugOpenAIResponsesInputSummary {
+  if (!Array.isArray(input)) {
+    return {
+      count: 0,
+      itemTypes: [],
+      roles: [],
+    };
+  }
+
+  const itemTypes = new Set<string>();
+  const roles = new Set<string>();
+  for (const entry of input) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const typedEntry = entry as Record<string, unknown>;
+    if (typeof typedEntry.type === "string" && typedEntry.type.trim()) {
+      itemTypes.add(typedEntry.type);
+    }
+    if (typeof typedEntry.role === "string" && typedEntry.role.trim()) {
+      roles.add(typedEntry.role);
+    }
+  }
+
+  return {
+    count: input.length,
+    itemTypes: [...itemTypes].toSorted(),
+    roles: [...roles].toSorted(),
+  };
+}
+
+function logFinalOpenAIResponsesPayload(
+  model: { api?: unknown; provider?: unknown; id?: unknown },
+  payloadObj: Record<string, unknown>,
+): void {
+  if (model.api !== "openai-responses" || !log.isEnabled("debug")) {
+    return;
+  }
+
+  const provider = typeof model.provider === "string" ? model.provider : "";
+  const modelId = typeof model.id === "string" ? model.id : "";
+  const inputSummary = summarizeOpenAIResponsesInput(payloadObj.input);
+  const messageCount = Array.isArray(payloadObj.messages) ? payloadObj.messages.length : 0;
+  const toolsCount = Array.isArray(payloadObj.tools) ? payloadObj.tools.length : 0;
+  const instructions =
+    typeof payloadObj.instructions === "string" ? payloadObj.instructions.trim() : "";
+
+  log.debug("final OpenAI Responses payload", {
+    provider,
+    modelId,
+    stream: payloadObj.stream,
+    store: payloadObj.store,
+    hasInstructions: instructions.length > 0,
+    instructionsChars: instructions.length,
+    hasInputArray: Array.isArray(payloadObj.input),
+    inputCount: inputSummary.count,
+    inputItemTypes: inputSummary.itemTypes,
+    inputRoles: inputSummary.roles,
+    hasMessages: Array.isArray(payloadObj.messages),
+    messageCount,
+    toolsCount,
+    toolChoice: payloadObj.tool_choice,
+    hasPreviousResponseId:
+      typeof payloadObj.previous_response_id === "string" &&
+      payloadObj.previous_response_id.trim().length > 0,
+    hasContextManagement: payloadObj.context_management !== undefined,
+    consoleMessage:
+      `final OpenAI Responses payload: provider=${provider} ` +
+      `model=${modelId} stream=${String(payloadObj.stream)} ` +
+      `instructions=${instructions.length > 0 ? "yes" : "no"} ` +
+      `input=${Array.isArray(payloadObj.input) ? `array(${inputSummary.count})` : typeof payloadObj.input} ` +
+      `messages=${Array.isArray(payloadObj.messages) ? messageCount : 0}`,
+  });
+}
+
+function shouldApplySub2apiGpt52PayloadCompat(params: {
+  provider: string;
+  modelId: string;
+}): boolean {
+  const provider = params.provider.trim().toLowerCase();
+  const modelId = params.modelId.trim().toLowerCase();
+  return provider.startsWith("sub2api") && modelId === "gpt-5.2";
+}
+
+function extractPlainTextFromMessageContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const chunks: string[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    const text = (part as Record<string, unknown>).text;
+    if (typeof text === "string" && text.trim()) {
+      chunks.push(text);
+    }
+  }
+  return chunks.join("\n").trim();
+}
+
+function normalizeMessagesToResponsesInput(messages: PayloadMessage[]): OpenAIResponsesInputItem[] {
+  const normalized: OpenAIResponsesInputItem[] = [];
+  for (const msg of messages) {
+    const role = (msg.role ?? "").toLowerCase();
+    if (role !== "user" && role !== "assistant") {
+      continue;
+    }
+    const text = extractPlainTextFromMessageContent(msg.content).trim();
+    if (!text) {
+      continue;
+    }
+    normalized.push({
+      type: "message",
+      role,
+      content: [{ type: "input_text", text }],
+    });
+  }
+  return normalized;
+}
+
+function normalizeSub2apiGpt52Payload(payloadObj: Record<string, unknown>): void {
+  const messages = Array.isArray(payloadObj.messages)
+    ? (payloadObj.messages as PayloadMessage[])
+    : undefined;
+
+  if (
+    (typeof payloadObj.instructions !== "string" || !payloadObj.instructions.trim()) &&
+    messages
+  ) {
+    const instructionText = messages
+      .filter((msg) => {
+        const role = (msg.role ?? "").toLowerCase();
+        return role === "system" || role === "developer";
+      })
+      .map((msg) => extractPlainTextFromMessageContent(msg.content))
+      .filter((text) => text.trim().length > 0)
+      .join("\n\n")
+      .trim();
+    payloadObj.instructions = instructionText || "You are a helpful assistant.";
+  }
+
+  if (!Array.isArray(payloadObj.input) && messages) {
+    const normalizedInput = normalizeMessagesToResponsesInput(messages);
+    if (normalizedInput.length > 0) {
+      payloadObj.input = normalizedInput;
+    }
+  }
+
+  if (Array.isArray(payloadObj.input) && messages) {
+    delete payloadObj.messages;
+  }
+
+  if (payloadObj.stream !== true) {
+    payloadObj.stream = true;
+  }
+}
+
+function createSub2apiGpt52PayloadCompatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (
+          payload &&
+          typeof payload === "object" &&
+          typeof model.provider === "string" &&
+          typeof model.id === "string" &&
+          shouldApplySub2apiGpt52PayloadCompat({ provider: model.provider, modelId: model.id })
+        ) {
+          const payloadObj = payload as Record<string, unknown>;
+          normalizeSub2apiGpt52Payload(payloadObj);
+
+          if (!Array.isArray(payloadObj.input)) {
+            const contextMessages = Array.isArray((context as { messages?: unknown[] }).messages)
+              ? ((context as { messages?: PayloadMessage[] }).messages ?? [])
+              : [];
+            const normalizedInput = normalizeMessagesToResponsesInput(contextMessages);
+            if (normalizedInput.length > 0) {
+              payloadObj.input = normalizedInput;
+            }
+          }
+
+          if (typeof payloadObj.instructions !== "string" || !payloadObj.instructions.trim()) {
+            const contextSystemPrompt = (context as { systemPrompt?: unknown }).systemPrompt;
+            if (typeof contextSystemPrompt === "string" && contextSystemPrompt.trim()) {
+              payloadObj.instructions = contextSystemPrompt;
+            } else if (!Array.isArray(payloadObj.input)) {
+              payloadObj.instructions = "You are a helpful assistant.";
+            }
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
 
 /**
  * Inject cache_control into the system message for OpenRouter Anthropic models.
@@ -1371,6 +1588,11 @@ export function applyExtraParamsToAgent(
   if (openAIServiceTier) {
     log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
     agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
+  }
+
+  if (shouldApplySub2apiGpt52PayloadCompat({ provider, modelId })) {
+    log.debug(`applying sub2api gpt-5.2 payload compatibility wrapper for ${provider}/${modelId}`);
+    agent.streamFn = createSub2apiGpt52PayloadCompatWrapper(agent.streamFn);
   }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.

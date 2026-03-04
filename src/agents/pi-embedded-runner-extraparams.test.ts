@@ -1746,6 +1746,43 @@ describe("applyExtraParamsToAgent", () => {
     ]);
   });
 
+  it("converts sub2api gpt-5.2 messages into responses input and forces stream", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "sub2api",
+      applyModelId: "gpt-5.2",
+      model: {
+        api: "openai-responses",
+        provider: "sub2api",
+        id: "gpt-5.2",
+      } as Model<"openai-responses">,
+      initialPayload: {
+        store: false,
+        stream: false,
+        messages: [
+          { role: "system", content: "system note" },
+          { role: "user", content: "hello" },
+          { role: "assistant", content: "world" },
+        ],
+      },
+    });
+
+    expect(payload.instructions).toBe("system note");
+    expect(payload.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "hello" }],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "world" }],
+      },
+    ]);
+    expect(payload.messages).toBeUndefined();
+    expect(payload.stream).toBe(true);
+  });
+
   it("downgrades required tool_choice to auto for sub2api-passthrough gpt-5.2 when tools are missing", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "sub2api-passthrough",
