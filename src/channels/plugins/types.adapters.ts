@@ -98,6 +98,7 @@ export type ChannelOutboundContext = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;
+  audioAsVoice?: boolean;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
