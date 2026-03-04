@@ -40,6 +40,29 @@ describe("systemd availability", () => {
     });
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(false);
   });
+
+  it("falls back to machine user scope when --user bus is unavailable", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        const err = new Error(
+          "Failed to connect to user scope bus via local transport",
+        ) as Error & {
+          stderr?: string;
+          code?: number;
+        };
+        err.stderr =
+          "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined";
+        err.code = 1;
+        cb(err, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--machine", "debian@", "--user", "status"]);
+        cb(null, "", "");
+      });
+
+    await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
+  });
 });
 
 describe("isSystemdServiceEnabled", () => {
@@ -288,6 +311,52 @@ describe("systemd service control", () => {
     const stdout = { write } as unknown as NodeJS.WritableStream;
 
     await restartSystemdService({ stdout, env: { SUDO_USER: "debian" } });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+  });
+
+  it("falls back to machine user scope for restart when user bus env is missing", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "status"]);
+        const err = new Error("Failed to connect to user scope bus") as Error & {
+          stderr?: string;
+          code?: number;
+        };
+        err.stderr =
+          "Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined";
+        err.code = 1;
+        cb(err, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--machine", "debian@", "--user", "status"]);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "restart", "openclaw-gateway.service"]);
+        const err = new Error("Failed to connect to user scope bus") as Error & {
+          stderr?: string;
+          code?: number;
+        };
+        err.stderr = "Failed to connect to user scope bus";
+        err.code = 1;
+        cb(err, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual([
+          "--machine",
+          "debian@",
+          "--user",
+          "restart",
+          "openclaw-gateway.service",
+        ]);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await restartSystemdService({ stdout, env: { USER: "debian" } });
 
     expect(write).toHaveBeenCalledTimes(1);
     expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
