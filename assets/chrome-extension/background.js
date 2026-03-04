@@ -60,6 +60,24 @@ async function getGatewayToken() {
   return token || ''
 }
 
+// Whether auto-attach is enabled. Defaults to true so the extension
+// attaches every eligible tab without a manual toolbar click.
+async function getAutoAttach() {
+  const stored = await chrome.storage.local.get(['autoAttach'])
+  return stored.autoAttach !== false
+}
+
+// Chrome-internal URLs that chrome.debugger cannot attach to.
+function isAutoAttachableUrl(url) {
+  if (!url) return false
+  if (url === 'about:blank') return false
+  if (url.startsWith('chrome://')) return false
+  if (url.startsWith('chrome-extension://')) return false
+  if (url.startsWith('chrome-error://')) return false
+  if (url.startsWith('devtools://')) return false
+  return true
+}
+
 function setBadge(tabId, kind) {
   const cfg = BADGE[kind]
   void chrome.action.setBadgeText({ tabId, text: cfg.text })
@@ -227,6 +245,7 @@ function scheduleReconnect() {
       reconnectAttempt = 0
       console.log('Reconnected successfully')
       await reannounceAttachedTabs()
+      await autoAttachAllTabs()
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.warn(`Reconnect attempt ${reconnectAttempt} failed: ${message}`)
@@ -487,6 +506,42 @@ async function detachTab(tabId, reason) {
   })
 
   await persistState()
+}
+
+// Auto-attach a single tab if eligible. Fails silently — auto-attach
+// should never show error badges or disrupt the user.
+async function autoAttachTab(tabId) {
+  if (!(await getAutoAttach())) return
+  if (tabs.has(tabId)) return
+  if (tabOperationLocks.has(tabId)) return
+  if (reattachPending.has(tabId)) return
+
+  tabOperationLocks.add(tabId)
+  try {
+    const tabInfo = await chrome.tabs.get(tabId).catch(() => null)
+    if (!tabInfo || !isAutoAttachableUrl(tabInfo.url)) return
+
+    await ensureRelayConnection()
+    await attachTab(tabId)
+    console.log(`Auto-attached tab ${tabId}: ${tabInfo.url}`)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.log(`Auto-attach tab ${tabId} skipped: ${message}`)
+  } finally {
+    tabOperationLocks.delete(tabId)
+  }
+}
+
+// Auto-attach all currently open tabs that aren't already attached.
+// Called on startup and after relay reconnects.
+async function autoAttachAllTabs() {
+  if (!(await getAutoAttach())) return
+  const allTabs = await chrome.tabs.query({})
+  for (const tab of allTabs) {
+    if (tab.id && !tabs.has(tab.id) && isAutoAttachableUrl(tab.url)) {
+      await autoAttachTab(tab.id)
+    }
+  }
 }
 
 async function connectOrToggleForActiveTab() {
@@ -798,13 +853,16 @@ chrome.debugger.onDetach.addListener((...args) => void whenReady(() => onDebugge
 
 chrome.action.onClicked.addListener(() => void whenReady(() => connectOrToggleForActiveTab()))
 
-// Refresh badge after navigation completes — service worker may have restarted
-// during navigation, losing ephemeral badge state.
-chrome.webNavigation.onCompleted.addListener(({ tabId, frameId }) => void whenReady(() => {
+// Refresh badge after navigation completes, and auto-attach newly loaded tabs
+// that aren't already connected. Service worker may have restarted during
+// navigation, losing ephemeral badge state.
+chrome.webNavigation.onCompleted.addListener(({ tabId, frameId, url }) => void whenReady(async () => {
   if (frameId !== 0) return
   const tab = tabs.get(tabId)
   if (tab?.state === 'connected') {
     setBadge(tabId, relayWs && relayWs.readyState === WebSocket.OPEN ? 'on' : 'connecting')
+  } else if (isAutoAttachableUrl(url)) {
+    await autoAttachTab(tabId)
   }
 }))
 
@@ -828,7 +886,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== 'relay-keepalive') return
   await initPromise
 
-  if (tabs.size === 0) return
+  const autoAttach = await getAutoAttach()
+  // Skip keepalive when nothing to do: no attached tabs and auto-attach disabled.
+  if (tabs.size === 0 && !autoAttach) return
 
   // Refresh badges (ephemeral in MV3).
   for (const [tabId, tab] of tabs.entries()) {
@@ -854,14 +914,17 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 })
 
 // Rehydrate state on service worker startup. Split: rehydration is the gate
-// (fast), relay reconnect runs in background (slow, non-blocking).
+// (fast), relay reconnect and auto-attach run in background (slow, non-blocking).
 const initPromise = rehydrateState()
 
-initPromise.then(() => {
-  if (tabs.size > 0) {
-    ensureRelayConnection().then(() => {
+initPromise.then(async () => {
+  const autoAttach = await getAutoAttach()
+  // Connect to relay if there are persisted tabs to reannounce or auto-attach is on.
+  if (tabs.size > 0 || autoAttach) {
+    ensureRelayConnection().then(async () => {
       reconnectAttempt = 0
-      return reannounceAttachedTabs()
+      await reannounceAttachedTabs()
+      if (autoAttach) await autoAttachAllTabs()
     }).catch(() => {
       scheduleReconnect()
     })
