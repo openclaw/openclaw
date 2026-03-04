@@ -891,7 +891,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   await updatePluginsAfterCoreUpdate({
-    root,
+    root: result.root ?? root,
     channel,
     configSnapshot,
     opts,
