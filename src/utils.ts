@@ -84,20 +84,19 @@ export function withWhatsAppPrefix(number: string): string {
   return number.startsWith("whatsapp:") ? number : `whatsapp:${number}`;
 }
 
+const normalizeE164Cache = new Map<string, string>();
+
 export function normalizeE164(number: string): string {
+  const cached = normalizeE164Cache.get(number);
+  if (cached !== undefined) {
+    return cached;
+  }
   const withoutPrefix = number.replace(/^whatsapp:/, "").trim();
   const digits = withoutPrefix.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) {
-    return `+${digits.slice(1)}`;
-  }
-  return `+${digits}`;
+  const result = digits.startsWith("+") ? `+${digits.slice(1)}` : `+${digits}`;
+  normalizeE164Cache.set(number, result);
+  return result;
 }
-
-/**
- * "Self-chat mode" heuristic (single phone): the gateway is logged in as the owner's own WhatsApp account,
- * and `channels.whatsapp.allowFrom` includes that same number. Used to avoid side-effects that make no sense when the
- * "bot" and the human are the same WhatsApp identity (e.g. auto read receipts, @mention JID triggers).
- */
 export function isSelfChatMode(
   selfE164: string | null | undefined,
   allowFrom?: Array<string | number> | null,
