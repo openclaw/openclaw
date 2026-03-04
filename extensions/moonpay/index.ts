@@ -32,7 +32,6 @@ const moonpayPlugin = {
   configSchema: emptyPluginConfigSchema(),
 
   register(api: OpenClawPluginApi) {
-    // Generic mp CLI tool — lets the agent run any mp command
     api.registerTool(
       () => ({
         name: "moonpay_cli",
@@ -45,7 +44,6 @@ const moonpayPlugin = {
           }),
         }),
         async execute({ args }: { args: string[] }) {
-          // Block dangerous/internal commands
           const blockedTopLevel = ["consent", "skill"];
           const blockedSubcommands: Record<string, string[]> = {
             wallet: ["delete", "export"],
@@ -92,7 +90,6 @@ const moonpayPlugin = {
       { names: ["moonpay_cli"] },
     );
 
-    // Register CLI extension so `openclaw moonpay` works
     api.registerCli(
       ({ program }) => {
         const cmd = program.command("moonpay").description("MoonPay crypto operations");
@@ -127,7 +124,6 @@ const moonpayPlugin = {
       { commands: ["moonpay"] },
     );
 
-    // Check if mp is installed on plugin load
     runMp(["--version"]).then(({ stdout, exitCode }) => {
       if (exitCode === 0) {
         api.logger.info(`MoonPay CLI ${stdout.trim()} available`);
