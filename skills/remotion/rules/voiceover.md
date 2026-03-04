@@ -82,11 +82,16 @@ export const calculateMetadata: CalculateMetadataFunction<Props> = async ({
 
   return {
     durationInFrames: Math.ceil(sceneDurations.reduce((sum, d) => sum + d, 0)),
+    // Pass sceneDurations to component via props
+    props: {
+      ...props,
+      sceneDurations,
+    },
   };
 };
 ```
 
-The computed `sceneDurations` are passed into the component via a `voiceover` prop so the component knows how long each scene should be.
+The computed `sceneDurations` are passed into the component via props so the component knows how long each scene should be.
 
 If the composition uses [`<TransitionSeries>`](./transitions.md), subtract the overlap from total duration: [./transitions.md#calculating-total-composition-duration](./transitions.md#calculating-total-composition-duration)
 
