@@ -179,8 +179,10 @@ function readFileAsDataUrl(file: File): Promise<ChatAttachment> {
   });
 }
 
+const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
+
 function addAttachments(files: File[], props: ChatProps) {
-  const imageFiles = files.filter((f) => f.type.startsWith("image/"));
+  const imageFiles = files.filter((f) => f.type.startsWith("image/") && f.size <= MAX_FILE_BYTES);
   if (imageFiles.length === 0 || !props.onAttachmentsChange) {
     return;
   }
@@ -209,7 +211,8 @@ function handleFileSelect(e: Event, props: ChatProps) {
   input.value = "";
 }
 
-function handleDragOver(e: DragEvent) {
+function handleDragOver(e: DragEvent, props: ChatProps) {
+  if (!props.connected) return;
   if (!e.dataTransfer?.types.includes("Files")) {
     return; // Only handle file drags, let text drags fall through
   }
@@ -498,7 +501,7 @@ export function renderChat(props: ChatProps) {
 
       <div
         class="chat-compose"
-        @dragover=${handleDragOver}
+        @dragover=${(e: DragEvent) => handleDragOver(e, props)}
         @dragleave=${handleDragLeave}
         @drop=${(e: DragEvent) => handleDrop(e, props)}
       >
