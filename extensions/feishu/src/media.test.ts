@@ -129,7 +129,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "file" }),
+        data: expect.objectContaining({ msg_type: "media" }),
       }),
     );
   });
@@ -188,7 +188,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "file" }),
+        data: expect.objectContaining({ msg_type: "media" }),
       }),
     );
 
@@ -208,7 +208,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "file", reply_in_thread: true }),
+        data: expect.objectContaining({ msg_type: "media", reply_in_thread: true }),
       }),
     );
   });
