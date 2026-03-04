@@ -166,9 +166,15 @@ export async function resolveDeliveryTarget(
     allowSendToOverride = whatsappAccount.allowSendTo;
 
     // When allowSendTo is defined, use it for implicit-mode target validation
-    // instead of allowFrom. A wildcard bypasses substitution entirely.
-    const effectiveSendList = allowSendToOverride ?? allowFromOverride;
-    const hasWildcard = effectiveSendList.some((e) => e === "*");
+    // instead of allowFrom. Normalize entries so comparison with the normalized
+    // toCandidate works regardless of config formatting.
+    const normalizedAllowSendTo = allowSendToOverride
+      ?.map((entry) => String(entry).trim())
+      .filter((entry) => entry && entry !== "*")
+      .map((entry) => normalizeWhatsAppTarget(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    const effectiveSendList = normalizedAllowSendTo ?? allowFromOverride;
+    const hasWildcard = (allowSendToOverride ?? allowFromOverride).includes("*");
 
     if (toCandidate && mode === "implicit" && effectiveSendList.length > 0 && !hasWildcard) {
       const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
