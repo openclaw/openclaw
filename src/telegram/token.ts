@@ -17,6 +17,28 @@ type ResolveTelegramTokenOpts = {
   logMissingFile?: (message: string) => void;
 };
 
+const LEGACY_ENV_TOKEN_REF_RE = /^\$([A-Z_][A-Z0-9_]*)$/;
+
+function resolveLegacyEnvTokenReference(params: {
+  token: string;
+  path: string;
+  env: NodeJS.ProcessEnv;
+}): string {
+  const token = params.token.trim();
+  const match = LEGACY_ENV_TOKEN_REF_RE.exec(token);
+  if (!match?.[1]) {
+    return token;
+  }
+  const envName = match[1];
+  const envValue = params.env[envName]?.trim();
+  if (!envValue) {
+    throw new Error(
+      `${params.path}: unresolved $${envName} token reference (env var "${envName}" is not set)`,
+    );
+  }
+  return envValue;
+}
+
 export function resolveTelegramToken(
   cfg?: OpenClawConfig,
   opts: ResolveTelegramTokenOpts = {},
@@ -71,7 +93,14 @@ export function resolveTelegramToken(
     path: `channels.telegram.accounts.${accountId}.botToken`,
   });
   if (accountToken) {
-    return { token: accountToken, source: "config" };
+    return {
+      token: resolveLegacyEnvTokenReference({
+        token: accountToken,
+        path: `channels.telegram.accounts.${accountId}.botToken`,
+        env: process.env,
+      }),
+      source: "config",
+    };
   }
 
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
@@ -97,7 +126,14 @@ export function resolveTelegramToken(
     path: "channels.telegram.botToken",
   });
   if (configToken) {
-    return { token: configToken, source: "config" };
+    return {
+      token: resolveLegacyEnvTokenReference({
+        token: configToken,
+        path: "channels.telegram.botToken",
+        env: process.env,
+      }),
+      source: "config",
+    };
   }
 
   const envToken = allowEnv ? (opts.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim() : "";
