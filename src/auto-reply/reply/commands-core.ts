@@ -42,6 +42,31 @@ let HANDLERS: CommandHandler[] | null = null;
 
 export type ResetCommandAction = "new" | "reset";
 
+export const DEFAULT_SMART_RESET_REVIEW_PROMPT =
+  "Review this conversation and save any important information before starting a fresh session.";
+
+function resolveSmartResetReviewConfig(cfg: unknown): {
+  enabled: boolean;
+  prompt: string;
+  wait: boolean;
+} {
+  const smartReset = (cfg as { session?: { smartReset?: unknown } } | undefined)?.session
+    ?.smartReset as
+    | {
+        enabled?: unknown;
+        prompt?: unknown;
+        wait?: unknown;
+      }
+    | undefined;
+  const enabled = smartReset?.enabled === true;
+  const prompt =
+    typeof smartReset?.prompt === "string" && smartReset.prompt.trim().length > 0
+      ? smartReset.prompt.trim()
+      : DEFAULT_SMART_RESET_REVIEW_PROMPT;
+  const wait = smartReset?.wait === true;
+  return { enabled, prompt, wait };
+}
+
 export async function emitResetCommandHooks(params: {
   action: ResetCommandAction;
   ctx: HandleCommandsParams["ctx"];
@@ -92,8 +117,8 @@ export async function emitResetCommandHooks(params: {
   if (hookRunner?.hasHooks("before_reset")) {
     const prevEntry = params.previousSessionEntry;
     const sessionFile = prevEntry?.sessionFile;
-    // Fire-and-forget: read old session messages and run hook
-    void (async () => {
+    const smartReset = resolveSmartResetReviewConfig(params.cfg);
+    const runBeforeReset = async () => {
       try {
         const messages: unknown[] = [];
         if (sessionFile) {
@@ -115,7 +140,12 @@ export async function emitResetCommandHooks(params: {
           logVerbose("before_reset: no session file available, firing hook with empty messages");
         }
         await hookRunner.runBeforeReset(
-          { sessionFile, messages, reason: params.action },
+          {
+            sessionFile,
+            messages,
+            reason: params.action,
+            reviewPrompt: smartReset.enabled ? smartReset.prompt : undefined,
+          },
           {
             agentId: params.sessionKey?.split(":")[0] ?? "main",
             sessionKey: params.sessionKey,
@@ -126,7 +156,13 @@ export async function emitResetCommandHooks(params: {
       } catch (err: unknown) {
         logVerbose(`before_reset hook failed: ${String(err)}`);
       }
-    })();
+    };
+
+    if (smartReset.enabled && smartReset.wait) {
+      await runBeforeReset();
+    } else {
+      void runBeforeReset();
+    }
   }
 }
 

@@ -22,6 +22,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
@@ -54,6 +55,86 @@ import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const DEFAULT_SMART_RESET_REVIEW_PROMPT =
+  "Review this conversation and save any important information before starting a fresh session.";
+
+function resolveSmartResetReviewConfig(cfg: ReturnType<typeof loadConfig>): {
+  enabled: boolean;
+  prompt: string;
+  wait: boolean;
+} {
+  const smartReset = cfg.session?.smartReset;
+  const enabled = smartReset?.enabled === true;
+  const prompt =
+    typeof smartReset?.prompt === "string" && smartReset.prompt.trim().length > 0
+      ? smartReset.prompt.trim()
+      : DEFAULT_SMART_RESET_REVIEW_PROMPT;
+  const wait = smartReset?.wait === true;
+  return { enabled, prompt, wait };
+}
+
+async function runBeforeResetPluginHook(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  action: "new" | "reset";
+  sessionKey: string;
+  sessionEntry?: SessionEntry;
+}): Promise<void> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("before_reset")) {
+    return;
+  }
+  const smartReset = resolveSmartResetReviewConfig(params.cfg);
+  const sessionFile = params.sessionEntry?.sessionFile;
+  const run = async () => {
+    try {
+      const messages: unknown[] = [];
+      if (sessionFile) {
+        try {
+          const content = await fs.promises.readFile(sessionFile, "utf-8");
+          for (const line of content.split("\n")) {
+            if (!line.trim()) {
+              continue;
+            }
+            try {
+              const entry = JSON.parse(line);
+              if (entry.type === "message" && entry.message) {
+                messages.push(entry.message);
+              }
+            } catch {
+              // skip malformed lines
+            }
+          }
+        } catch (err) {
+          logVerbose(`before_reset: failed to read session file: ${String(err)}`);
+        }
+      }
+
+      await hookRunner.runBeforeReset(
+        {
+          sessionFile,
+          messages,
+          reason: params.action,
+          reviewPrompt: smartReset.enabled ? smartReset.prompt : undefined,
+        },
+        {
+          agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionEntry?.sessionId,
+          workspaceDir: params.cfg.workspaceDir || process.cwd(),
+        },
+      );
+    } catch (err: unknown) {
+      logVerbose(`before_reset hook failed: ${String(err)}`);
+    }
+  };
+
+  if (smartReset.enabled && smartReset.wait) {
+    await run();
+  } else {
+    void run();
+  }
+}
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
   const raw =
@@ -471,6 +552,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
     );
     await triggerInternalHook(hookEvent);
+    await runBeforeResetPluginHook({
+      cfg,
+      action: commandReason,
+      sessionKey: target.canonicalKey ?? key,
+      sessionEntry: entry,
+    });
     const mutationCleanupError = await cleanupSessionBeforeMutation({
       cfg,
       key,

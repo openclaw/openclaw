@@ -102,6 +102,15 @@ export type SessionThreadBindingsConfig = {
   maxAgeHours?: number;
 };
 
+export type SessionSmartResetConfig = {
+  /** Enable smart reset review step on /new and /reset before session reset proceeds. */
+  enabled?: boolean;
+  /** Review prompt used for memory-extraction step before reset. */
+  prompt?: string;
+  /** If true, wait for review hook completion before reset continues. */
+  wait?: boolean;
+};
+
 export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
@@ -114,6 +123,8 @@ export type SessionConfig = {
   resetByType?: SessionResetByTypeConfig;
   /** Channel-specific reset overrides (e.g. { discord: { mode: "idle", idleMinutes: 10080 } }). */
   resetByChannel?: Record<string, SessionResetConfig>;
+  /** Optional smart pre-reset review step. Disabled by default. */
+  smartReset?: SessionSmartResetConfig;
   store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;

@@ -1018,6 +1018,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Defines reset policy for thread-scoped sessions, including focused channel thread workflows. Use this when thread sessions should expire faster or slower than other chat types.",
   "session.resetByChannel":
     "Provides channel-specific reset overrides keyed by provider/channel id for fine-grained behavior control. Use this only when one channel needs exceptional reset behavior beyond type-level policies.",
+  "session.smartReset":
+    "Optional smart reset behavior for /new and /reset that can run a review/memory step before session state is cleared. Disabled by default to preserve existing behavior.",
+  "session.smartReset.enabled":
+    "Enables smart reset review mode for /new and /reset. Keep disabled unless you want pre-reset memory extraction and have compatible hooks configured.",
+  "session.smartReset.prompt":
+    "Custom review instruction passed to before_reset hooks in smart mode, such as summarizing key decisions and todo items. Defaults to a built-in memory-focused prompt when omitted.",
+  "session.smartReset.wait":
+    "When true, block reset completion until the smart review hook finishes; when false, run review in the background. Use true for deterministic capture and false for lower perceived latency.",
   "session.store":
     "Sets the session storage file path used to persist session records across restarts. Use an explicit path only when you need custom disk layout, backup routing, or mounted-volume storage.",
   "session.typingIntervalSeconds":

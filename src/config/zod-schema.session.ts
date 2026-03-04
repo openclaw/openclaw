@@ -49,6 +49,14 @@ export const SessionSchema = z
       .strict()
       .optional(),
     resetByChannel: z.record(z.string(), SessionResetConfigSchema).optional(),
+    smartReset: z
+      .object({
+        enabled: z.boolean().optional(),
+        prompt: z.string().min(1).optional(),
+        wait: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     store: z.string().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
