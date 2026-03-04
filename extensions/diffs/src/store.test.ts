@@ -49,7 +49,7 @@ describe("DiffArtifactStore", () => {
     expect(loaded).toBeNull();
   });
 
-  it("updates the stored image path", async () => {
+  it("updates the stored file path", async () => {
     const artifact = await store.createArtifact({
       html: "<html>demo</html>",
       title: "Demo",
@@ -57,12 +57,13 @@ describe("DiffArtifactStore", () => {
       fileCount: 1,
     });
 
-    const imagePath = store.allocateImagePath(artifact.id);
-    const updated = await store.updateImagePath(artifact.id, imagePath);
-    expect(updated.imagePath).toBe(imagePath);
+    const filePath = store.allocateFilePath(artifact.id);
+    const updated = await store.updateFilePath(artifact.id, filePath);
+    expect(updated.filePath).toBe(filePath);
+    expect(updated.imagePath).toBe(filePath);
   });
 
-  it("rejects image paths that escape the store root", async () => {
+  it("rejects file paths that escape the store root", async () => {
     const artifact = await store.createArtifact({
       html: "<html>demo</html>",
       title: "Demo",
@@ -70,7 +71,7 @@ describe("DiffArtifactStore", () => {
       fileCount: 1,
     });
 
-    await expect(store.updateImagePath(artifact.id, "../outside.png")).rejects.toThrow(
+    await expect(store.updateFilePath(artifact.id, "../outside.png")).rejects.toThrow(
       "escapes store root",
     );
   });
@@ -91,10 +92,62 @@ describe("DiffArtifactStore", () => {
     await expect(store.readHtml(artifact.id)).rejects.toThrow("escapes store root");
   });
 
-  it("allocates standalone image paths outside artifact metadata", async () => {
-    const imagePath = store.allocateStandaloneImagePath();
-    expect(imagePath).toMatch(/preview\.png$/);
-    expect(imagePath).toContain(rootDir);
+  it("creates standalone file artifacts with managed metadata", async () => {
+    const standalone = await store.createStandaloneFileArtifact();
+    expect(standalone.filePath).toMatch(/preview\.png$/);
+    expect(standalone.filePath).toContain(rootDir);
+    expect(Date.parse(standalone.expiresAt)).toBeGreaterThan(Date.now());
+  });
+
+  it("expires standalone file artifacts using ttl metadata", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-02-27T16:00:00Z");
+    vi.setSystemTime(now);
+
+    const standalone = await store.createStandaloneFileArtifact({
+      format: "png",
+      ttlMs: 1_000,
+    });
+    await fs.writeFile(standalone.filePath, Buffer.from("png"));
+
+    vi.setSystemTime(new Date(now.getTime() + 2_000));
+    await store.cleanupExpired();
+
+    await expect(fs.stat(path.dirname(standalone.filePath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("supports image path aliases for backward compatibility", async () => {
+    const artifact = await store.createArtifact({
+      html: "<html>demo</html>",
+      title: "Demo",
+      inputKind: "before_after",
+      fileCount: 1,
+    });
+
+    const imagePath = store.allocateImagePath(artifact.id, "pdf");
+    expect(imagePath).toMatch(/preview\.pdf$/);
+    const standalone = await store.createStandaloneFileArtifact();
+    expect(standalone.filePath).toMatch(/preview\.png$/);
+
+    const updated = await store.updateImagePath(artifact.id, imagePath);
+    expect(updated.filePath).toBe(imagePath);
+    expect(updated.imagePath).toBe(imagePath);
+  });
+
+  it("allocates PDF file paths when format is pdf", async () => {
+    const artifact = await store.createArtifact({
+      html: "<html>demo</html>",
+      title: "Demo",
+      inputKind: "before_after",
+      fileCount: 1,
+    });
+
+    const artifactPdf = store.allocateFilePath(artifact.id, "pdf");
+    const standalonePdf = await store.createStandaloneFileArtifact({ format: "pdf" });
+    expect(artifactPdf).toMatch(/preview\.pdf$/);
+    expect(standalonePdf.filePath).toMatch(/preview\.pdf$/);
   });
 
   it("throttles cleanup sweeps across repeated artifact creation", async () => {

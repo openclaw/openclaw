@@ -7,8 +7,7 @@ import {
   parseCameraClipPayload,
   parseCameraSnapPayload,
   writeCameraClipPayloadToFile,
-  writeBase64ToFile,
-  writeUrlToFile,
+  writeCameraPayloadToFile,
 } from "../../cli/nodes-camera.js";
 import { parseEnvPairs, parseTimeoutMs } from "../../cli/nodes-run.js";
 import {
@@ -28,7 +27,7 @@ import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
-import { listNodes, resolveNodeIdFromList, resolveNodeId } from "./nodes-utils.js";
+import { listNodes, resolveNode, resolveNodeId, resolveNodeIdFromList } from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -230,7 +229,8 @@ export function createNodesTool(options?: {
           }
           case "camera_snap": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const resolvedNode = await resolveNode(gatewayOpts, node);
+            const nodeId = resolvedNode.nodeId;
             const facingRaw =
               typeof params.facing === "string" ? params.facing.toLowerCase() : "front";
             const facings: CameraFacing[] =
@@ -294,11 +294,12 @@ export function createNodesTool(options?: {
                 facing,
                 ext: isJpeg ? "jpg" : "png",
               });
-              if (payload.url) {
-                await writeUrlToFile(filePath, payload.url);
-              } else if (payload.base64) {
-                await writeBase64ToFile(filePath, payload.base64);
-              }
+              await writeCameraPayloadToFile({
+                filePath,
+                payload,
+                expectedHost: resolvedNode.remoteIp,
+                invalidPayloadMessage: "invalid camera.snap payload",
+              });
               content.push({ type: "text", text: `MEDIA:${filePath}` });
               if (payload.base64) {
                 content.push({
@@ -373,7 +374,8 @@ export function createNodesTool(options?: {
           }
           case "camera_clip": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const resolvedNode = await resolveNode(gatewayOpts, node);
+            const nodeId = resolvedNode.nodeId;
             const facing =
               typeof params.facing === "string" ? params.facing.toLowerCase() : "front";
             if (facing !== "front" && facing !== "back") {
@@ -407,6 +409,7 @@ export function createNodesTool(options?: {
             const filePath = await writeCameraClipPayloadToFile({
               payload,
               facing,
+              expectedHost: resolvedNode.remoteIp,
             });
             return {
               content: [{ type: "text", text: `FILE:${filePath}` }],

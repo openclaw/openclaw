@@ -174,7 +174,7 @@ Optional plugin tools:
 
 - [Lobster](/tools/lobster): typed workflow runtime with resumable approvals (requires the Lobster CLI on the gateway host).
 - [LLM Task](/tools/llm-task): JSON-only LLM step for structured workflow output (optional schema validation).
-- [Diffs](/tools/diffs): read-only diff viewer and PNG renderer for before/after text or unified patches.
+- [Diffs](/tools/diffs): read-only diff viewer and PNG or PDF file renderer for before/after text or unified patches.
 
 ## Tool inventory
 
@@ -396,6 +396,12 @@ Notes:
 
 - Only available when `agents.defaults.imageModel` is configured (primary or fallbacks), or when an implicit image model can be inferred from your default model + configured auth (best-effort pairing).
 - Uses the image model directly (independent of the main chat model).
+
+### `pdf`
+
+Analyze one or more PDF documents.
+
+For full behavior, limits, config, and examples, see [PDF tool](/tools/pdf).
 
 ### `message`
 

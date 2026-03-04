@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
   DEFAULT_DIFFS_TOOL_DEFAULTS,
+  resolveDiffImageRenderOptions,
   resolveDiffsPluginDefaults,
   resolveDiffsPluginSecurity,
 } from "./config.js";
@@ -24,7 +25,11 @@ describe("resolveDiffsPluginDefaults", () => {
           wordWrap: false,
           background: false,
           theme: "light",
-          mode: "view",
+          fileFormat: "pdf",
+          fileQuality: "hq",
+          fileScale: 2.6,
+          fileMaxWidth: 1280,
+          mode: "file",
         },
       }),
     ).toEqual({
@@ -37,7 +42,11 @@ describe("resolveDiffsPluginDefaults", () => {
       wordWrap: false,
       background: false,
       theme: "light",
-      mode: "view",
+      fileFormat: "pdf",
+      fileQuality: "hq",
+      fileScale: 2.6,
+      fileMaxWidth: 1280,
+      mode: "file",
     });
   });
 
@@ -72,6 +81,88 @@ describe("resolveDiffsPluginDefaults", () => {
       }),
     ).toMatchObject({
       lineSpacing: DEFAULT_DIFFS_TOOL_DEFAULTS.lineSpacing,
+    });
+  });
+
+  it("derives file defaults from quality preset and clamps explicit overrides", () => {
+    expect(
+      resolveDiffsPluginDefaults({
+        defaults: {
+          fileQuality: "print",
+        },
+      }),
+    ).toMatchObject({
+      fileQuality: "print",
+      fileScale: 3,
+      fileMaxWidth: 1400,
+    });
+
+    expect(
+      resolveDiffsPluginDefaults({
+        defaults: {
+          fileQuality: "hq",
+          fileScale: 99,
+          fileMaxWidth: 99999,
+        },
+      }),
+    ).toMatchObject({
+      fileQuality: "hq",
+      fileScale: 4,
+      fileMaxWidth: 2400,
+    });
+  });
+
+  it("falls back to png for invalid file format defaults", () => {
+    expect(
+      resolveDiffsPluginDefaults({
+        defaults: {
+          fileFormat: "invalid" as "png",
+        },
+      }),
+    ).toMatchObject({
+      fileFormat: "png",
+    });
+  });
+
+  it("resolves file render format from defaults and explicit overrides", () => {
+    const defaults = resolveDiffsPluginDefaults({
+      defaults: {
+        fileFormat: "pdf",
+      },
+    });
+
+    expect(resolveDiffImageRenderOptions({ defaults }).format).toBe("pdf");
+    expect(resolveDiffImageRenderOptions({ defaults, fileFormat: "png" }).format).toBe("png");
+    expect(resolveDiffImageRenderOptions({ defaults, format: "png" }).format).toBe("png");
+  });
+
+  it("accepts format as a config alias for fileFormat", () => {
+    expect(
+      resolveDiffsPluginDefaults({
+        defaults: {
+          format: "pdf",
+        },
+      }),
+    ).toMatchObject({
+      fileFormat: "pdf",
+    });
+  });
+
+  it("accepts image* config aliases for backward compatibility", () => {
+    expect(
+      resolveDiffsPluginDefaults({
+        defaults: {
+          imageFormat: "pdf",
+          imageQuality: "hq",
+          imageScale: 2.2,
+          imageMaxWidth: 1024,
+        },
+      }),
+    ).toMatchObject({
+      fileFormat: "pdf",
+      fileQuality: "hq",
+      fileScale: 2.2,
+      fileMaxWidth: 1024,
     });
   });
 });
