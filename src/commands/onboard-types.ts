@@ -9,6 +9,7 @@ export type AuthChoice =
   | "claude-cli"
   | "token"
   | "chutes"
+  | "chutes-api-key"
   | "vllm"
   | "openai-codex"
   | "openai-api-key"
@@ -134,6 +135,7 @@ export type OnboardOptions = {
   xaiApiKey?: string;
   volcengineApiKey?: string;
   byteplusApiKey?: string;
+  chutesApiKey?: string;
   qianfanApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;

@@ -39,7 +39,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
     value: "chutes",
     label: "Chutes",
     hint: "OAuth",
-    choices: ["chutes"],
+    choices: ["chutes", "chutes-api-key"],
   },
   {
     value: "vllm",

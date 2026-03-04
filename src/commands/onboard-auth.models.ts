@@ -225,3 +225,27 @@ export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
     maxTokens: KILOCODE_DEFAULT_MAX_TOKENS,
   };
 }
+
+export const CHUTES_BASE_URL = "https://llm.chutes.ai/v1";
+export const CHUTES_DEFAULT_MODEL_ID = "meta-llama/Llama-3.3-70B-Instruct";
+export const CHUTES_DEFAULT_MODEL_REF = `chutes/${CHUTES_DEFAULT_MODEL_ID}`;
+export const CHUTES_DEFAULT_CONTEXT_WINDOW = 128000;
+export const CHUTES_DEFAULT_MAX_TOKENS = 8192;
+export const CHUTES_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+export function buildChutesModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: CHUTES_DEFAULT_MODEL_ID,
+    name: "Llama 3.3 70B",
+    reasoning: false,
+    input: ["text"],
+    cost: CHUTES_DEFAULT_COST,
+    contextWindow: CHUTES_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: CHUTES_DEFAULT_MAX_TOKENS,
+  };
+}

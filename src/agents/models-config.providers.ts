@@ -23,6 +23,7 @@ import {
   BYTEPLUS_CODING_BASE_URL,
   BYTEPLUS_CODING_MODEL_CATALOG,
 } from "./byteplus-models.js";
+import { discoverChutesModels, CHUTES_BASE_URL } from "./chutes-models.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
@@ -765,6 +766,15 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
+async function buildChutesProvider(apiKey?: string): Promise<ProviderConfig> {
+  const models = await discoverChutesModels(apiKey);
+  return {
+    baseUrl: CHUTES_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 async function buildOllamaProvider(
   configuredBaseUrl?: string,
   opts?: { quiet?: boolean },
@@ -970,6 +980,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "venice", store: authStore });
   if (veniceKey) {
     providers.venice = { ...(await buildVeniceProvider()), apiKey: veniceKey };
+  }
+
+  const chutesKey =
+    resolveEnvApiKeyVarName("chutes") ??
+    resolveApiKeyFromProfiles({ provider: "chutes", store: authStore });
+  if (chutesKey) {
+    providers.chutes = { ...(await buildChutesProvider(chutesKey)), apiKey: chutesKey };
   }
 
   const qwenProfiles = listProfilesForProvider(authStore, "qwen-portal");

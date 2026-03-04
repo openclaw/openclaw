@@ -79,6 +79,9 @@ import {
   resolveZaiBaseUrl,
   XAI_BASE_URL,
   XAI_DEFAULT_MODEL_ID,
+  CHUTES_BASE_URL,
+  CHUTES_DEFAULT_MODEL_REF,
+  buildChutesModelDefinition,
 } from "./onboard-auth.models.js";
 
 export function applyZaiProviderConfig(
@@ -572,4 +575,28 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+}
+
+export function applyChutesProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[CHUTES_DEFAULT_MODEL_REF] = {
+    ...models[CHUTES_DEFAULT_MODEL_REF],
+    alias: models[CHUTES_DEFAULT_MODEL_REF]?.alias ?? "Chutes",
+  };
+
+  const defaultModel = buildChutesModelDefinition();
+
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "chutes",
+    api: "openai-completions",
+    baseUrl: CHUTES_BASE_URL,
+    defaultModel,
+    defaultModelId: CHUTES_DEFAULT_MODEL_REF,
+  });
+}
+
+export function applyChutesConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyChutesProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, CHUTES_DEFAULT_MODEL_REF);
 }
