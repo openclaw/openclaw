@@ -104,6 +104,7 @@ describe("applyAuthChoiceAnthropic", () => {
   });
 
   it("preserves auth.order when adding OAuth credentials", async () => {
+    await setupTempState();
     const prompter = createWizardPrompter({});
     const runtime = createExitThrowingRuntime();
 
