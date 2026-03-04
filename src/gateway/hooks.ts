@@ -4,17 +4,27 @@ import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
+import type { HooksAuthMode } from "../config/types.hooks.js";
+import {
+  readJsonBodyWithLimit,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+} from "../infra/http-body.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
+import { type HookSignatureProvider, resolveSignatureProviders } from "./hooks-signature.js";
 
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
 
 export type HooksConfigResolved = {
   basePath: string;
-  token: string;
+  auth: HooksAuthMode;
+  /** Required when auth is 'bearer'. */
+  token?: string;
+  /** Signature providers when auth is 'signature'. */
+  signatureProviders: HookSignatureProvider[];
   maxBodyBytes: number;
   mappings: HookMappingResolved[];
   agentPolicy: HookAgentPolicyResolved;
@@ -37,9 +47,22 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   if (cfg.hooks?.enabled !== true) {
     return null;
   }
+  const auth: HooksAuthMode = cfg.hooks?.auth ?? "bearer";
   const token = cfg.hooks?.token?.trim();
-  if (!token) {
+  if (auth === "bearer" && !token) {
     throw new Error("hooks.enabled requires hooks.token");
+  }
+  const signatureProviders =
+    auth === "signature" && cfg.hooks?.signatures
+      ? resolveSignatureProviders(cfg.hooks.signatures)
+      : [];
+  if (auth === "signature" && signatureProviders.length === 0) {
+    throw new Error("hooks.auth='signature' requires at least one hooks.signatures entry");
+  }
+  for (const provider of signatureProviders) {
+    if (!provider.secret.trim()) {
+      throw new Error(`hooks.signatures.${provider.name}.secret must not be empty`);
+    }
   }
   const rawPath = cfg.hooks?.path?.trim() || DEFAULT_HOOKS_PATH;
   const withSlash = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
@@ -77,7 +100,9 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   }
   return {
     basePath: trimmed,
+    auth,
     token,
+    signatureProviders,
     maxBodyBytes,
     mappings,
     agentPolicy: {
@@ -172,6 +197,51 @@ export function extractHookToken(req: IncomingMessage): string | undefined {
     return headerToken;
   }
   return undefined;
+}
+
+/**
+ * Read the raw request body as a string. Used for HMAC signature verification
+ * where the exact bytes must be hashed before JSON parsing.
+ */
+export async function readRawBody(
+  req: IncomingMessage,
+  maxBytes: number,
+): Promise<{ ok: true; raw: string } | { ok: false; error: string }> {
+  try {
+    const raw = await readRequestBodyWithLimit(req, { maxBytes });
+    return { ok: true, raw };
+  } catch (error) {
+    if (error instanceof Error && "code" in error) {
+      const code = (error as { code: string }).code;
+      if (code === "PAYLOAD_TOO_LARGE") {
+        return { ok: false, error: "payload too large" };
+      }
+      if (code === "REQUEST_BODY_TIMEOUT") {
+        return { ok: false, error: "request body timeout" };
+      }
+      if (code === "CONNECTION_CLOSED") {
+        return { ok: false, error: requestBodyErrorToText("CONNECTION_CLOSED") };
+      }
+    }
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Parse a raw body string as JSON.
+ */
+export function parseJsonBody(
+  raw: string,
+): { ok: true; value: unknown } | { ok: false; error: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { ok: true, value: {} };
+  }
+  try {
+    return { ok: true, value: JSON.parse(trimmed) as unknown };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export async function readJsonBody(

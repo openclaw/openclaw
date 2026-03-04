@@ -28,6 +28,7 @@ import {
   type ControlUiRootState,
 } from "./control-ui.js";
 import { applyHookMappings } from "./hooks-mapping.js";
+import { verifyHookSignature } from "./hooks-signature.js";
 import {
   extractHookToken,
   getHookAgentPolicyError,
@@ -38,7 +39,9 @@ import {
   normalizeAgentPayload,
   normalizeHookHeaders,
   normalizeWakePayload,
+  parseJsonBody,
   readJsonBody,
+  readRawBody,
   normalizeHookDispatchSessionKey,
   resolveHookSessionKey,
   resolveHookTargetAgentId,
@@ -319,7 +322,7 @@ export function createHooksRequestHandler(
       return false;
     }
 
-    if (url.searchParams.has("token")) {
+    if (hooksConfig.auth === "bearer" && url.searchParams.has("token")) {
       res.statusCode = 400;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end(
@@ -328,12 +331,15 @@ export function createHooksRequestHandler(
       return true;
     }
 
-    const token = extractHookToken(req);
     const clientKey = resolveHookClientKey(req);
-    if (!safeEqualSecret(token, hooksConfig.token)) {
-      const throttle = hookAuthLimiter.check(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
-      if (!throttle.allowed) {
-        const retryAfter = throttle.retryAfterMs > 0 ? Math.ceil(throttle.retryAfterMs / 1000) : 1;
+
+    // Pre-auth rate-limit check for signature mode only (body must be read before auth).
+    // Bearer mode checks after auth so valid tokens always succeed.
+    if (hooksConfig.auth === "signature") {
+      const preThrottle = hookAuthLimiter.check(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
+      if (!preThrottle.allowed) {
+        const retryAfter =
+          preThrottle.retryAfterMs > 0 ? Math.ceil(preThrottle.retryAfterMs / 1000) : 1;
         res.statusCode = 429;
         res.setHeader("Retry-After", String(retryAfter));
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -341,13 +347,7 @@ export function createHooksRequestHandler(
         logHooks.warn(`hook auth throttled for ${clientKey}; retry-after=${retryAfter}s`);
         return true;
       }
-      hookAuthLimiter.recordFailure(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
-      res.statusCode = 401;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Unauthorized");
-      return true;
     }
-    hookAuthLimiter.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
 
     if (req.method !== "POST") {
       res.statusCode = 405;
@@ -365,20 +365,79 @@ export function createHooksRequestHandler(
       return true;
     }
 
-    const body = await readJsonBody(req, hooksConfig.maxBodyBytes);
-    if (!body.ok) {
-      const status =
-        body.error === "payload too large"
-          ? 413
-          : body.error === "request body timeout"
-            ? 408
-            : 400;
-      sendJson(res, status, { ok: false, error: body.error });
-      return true;
+    // Auth + body reading. Signature auth must read the raw body before JSON parsing
+    // so the exact bytes can be hashed for HMAC verification.
+    let payload: Record<string, unknown> | object;
+    let headers: Record<string, string>;
+    if (hooksConfig.auth === "signature") {
+      const rawResult = await readRawBody(req, hooksConfig.maxBodyBytes);
+      if (!rawResult.ok) {
+        const status =
+          rawResult.error === "payload too large"
+            ? 413
+            : rawResult.error === "request body timeout"
+              ? 408
+              : 400;
+        sendJson(res, status, { ok: false, error: rawResult.error });
+        return true;
+      }
+      headers = normalizeHookHeaders(req);
+      const sigResult = verifyHookSignature({
+        rawBody: rawResult.raw,
+        headers,
+        providers: hooksConfig.signatureProviders,
+      });
+      if (!sigResult.ok) {
+        hookAuthLimiter.recordFailure(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
+        res.statusCode = 401;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Unauthorized");
+        return true;
+      }
+      hookAuthLimiter.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
+      const jsonResult = parseJsonBody(rawResult.raw);
+      if (!jsonResult.ok) {
+        sendJson(res, 400, { ok: false, error: jsonResult.error });
+        return true;
+      }
+      payload =
+        typeof jsonResult.value === "object" && jsonResult.value !== null ? jsonResult.value : {};
+    } else {
+      // Bearer token auth (default).
+      const token = extractHookToken(req);
+      if (!safeEqualSecret(token, hooksConfig.token)) {
+        const throttle = hookAuthLimiter.check(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
+        if (!throttle.allowed) {
+          const retryAfter =
+            throttle.retryAfterMs > 0 ? Math.ceil(throttle.retryAfterMs / 1000) : 1;
+          res.statusCode = 429;
+          res.setHeader("Retry-After", String(retryAfter));
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("Too Many Requests");
+          logHooks.warn(`hook auth throttled for ${clientKey}; retry-after=${retryAfter}s`);
+          return true;
+        }
+        hookAuthLimiter.recordFailure(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
+        res.statusCode = 401;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Unauthorized");
+        return true;
+      }
+      hookAuthLimiter.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
+      const body = await readJsonBody(req, hooksConfig.maxBodyBytes);
+      if (!body.ok) {
+        const status =
+          body.error === "payload too large"
+            ? 413
+            : body.error === "request body timeout"
+              ? 408
+              : 400;
+        sendJson(res, status, { ok: false, error: body.error });
+        return true;
+      }
+      payload = typeof body.value === "object" && body.value !== null ? body.value : {};
+      headers = normalizeHookHeaders(req);
     }
-
-    const payload = typeof body.value === "object" && body.value !== null ? body.value : {};
-    const headers = normalizeHookHeaders(req);
 
     if (subPath === "wake") {
       const normalized = normalizeWakePayload(payload as Record<string, unknown>);
