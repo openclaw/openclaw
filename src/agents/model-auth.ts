@@ -67,6 +67,10 @@ function resolveProviderAuthOverride(
   return undefined;
 }
 
+function isLikelyEnvVarPlaceholder(value: string): boolean {
+  return /^[A-Z][A-Z0-9_]*$/.test(value.trim());
+}
+
 function resolveEnvSourceLabel(params: {
   applied: Set<string>;
   envVars: string[];
@@ -167,6 +171,14 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
+  // Prefer explicit provider apiKey from config over stored profiles so
+  // key rotation in models config takes effect immediately after restart.
+  // Keep env-var placeholders (e.g. OPENAI_API_KEY) out of this fast path.
+  const customKey = getCustomProviderApiKey(cfg, provider);
+  if (customKey && !isLikelyEnvVarPlaceholder(customKey)) {
+    return { apiKey: customKey, source: "models.json", mode: "api-key" };
+  }
+
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -202,7 +214,6 @@ export async function resolveApiKeyForProvider(params: {
     };
   }
 
-  const customKey = getCustomProviderApiKey(cfg, provider);
   if (customKey) {
     return { apiKey: customKey, source: "models.json", mode: "api-key" };
   }
