@@ -175,28 +175,30 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
   );
 }
 
+function isSystemdUserUnavailable(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("failed to connect") ||
+    normalized.includes("not been booted with systemd") ||
+    normalized.includes("system has not been booted") ||
+    normalized.includes("no such file or directory") ||
+    normalized.includes("not supported")
+  );
+}
+
 export async function isSystemdUserServiceAvailable(): Promise<boolean> {
   const res = await execSystemctl(["--user", "status"]);
   if (res.code === 0) {
     return true;
   }
-  const detail = `${res.stderr} ${res.stdout}`.toLowerCase();
+  const detail = readSystemctlDetail(res);
   if (!detail) {
     return false;
   }
-  if (detail.includes("not found")) {
-    return false;
-  }
-  if (detail.includes("failed to connect")) {
-    return false;
-  }
-  if (detail.includes("not been booted")) {
-    return false;
-  }
-  if (detail.includes("no such file or directory")) {
-    return false;
-  }
-  if (detail.includes("not supported")) {
+  if (isSystemctlMissing(detail) || isSystemdUserUnavailable(detail)) {
     return false;
   }
   return false;
@@ -352,7 +354,11 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
     return true;
   }
   const detail = readSystemctlDetail(res);
-  if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
+  if (
+    isSystemctlMissing(detail) ||
+    isSystemdUnitNotEnabled(detail) ||
+    isSystemdUserUnavailable(detail)
+  ) {
     return false;
   }
   throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());

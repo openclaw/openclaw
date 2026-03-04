@@ -1,0 +1,1 @@
+- daemon/systemd: treat `systemctl --user is-enabled` "Failed to connect to bus" as unavailable (returns disabled) instead of throwing, improving Linux service checks in non-interactive shells.
