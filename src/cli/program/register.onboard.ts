@@ -112,6 +112,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
+    .option("--daemon-system", "Install/manage Linux gateway service in system scope")
     .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
@@ -185,6 +186,7 @@ export function registerOnboardCommand(program: Command) {
           reset: Boolean(opts.reset),
           resetScope: opts.resetScope as ResetScope | undefined,
           installDaemon,
+          daemonSystem: Boolean(opts.daemonSystem),
           daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
           skipChannels: Boolean(opts.skipChannels),
           skipSkills: Boolean(opts.skipSkills),
